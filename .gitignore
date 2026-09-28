@@ -1,0 +1,8 @@
+/node_modules/
+/src-tauri/target/
+/.jev/
+/.jev_cache/
+/.jev_performance.json
+*.log
+.env
+src-tauri/gen/

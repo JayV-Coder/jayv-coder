@@ -1,0 +1,77 @@
+# Jev AI Orchestrator Configuration
+
+jev:
+  default_strategy: auto
+  optimization:
+    minimize_tokens: true
+    prefer_local: true
+    allow_escalation: true
+
+providers:
+  # Default OpenAI provider
+  openai:
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    
+  # Default Anthropic provider  
+  anthropic:
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    
+  # Example OpenAI-compatible provider (LM Studio)
+  lmstudio:
+    type: openai-compatible
+    base_url: http://127.0.0.1:1234/v1
+    
+  # Example CLI provider (Claude CLI)
+  claude-cli:
+    type: cli
+    command: claude
+    auto_detect: true
+
+models:
+  # Local model for fast responses
+  local-fast:
+    provider: lmstudio
+    model: qwen
+    capabilities:
+      - chat
+      - code
+    cost_class: free
+    speed: fast
+    
+  # Premium coding model
+  coding-premium:
+    provider: anthropic
+    model: claude-3-opus
+    capabilities:
+      - code
+      - reasoning
+      - tools
+    cost_class: high
+    
+  # Reasoning model
+  reasoning-premium:
+    provider: openai
+    model: gpt-4-turbo
+    capabilities:
+      - reasoning
+      - tools
+    cost_class: high
+
+budgets:
+  trivial: 2000
+  simple: 5000
+  medium: 12000
+  complex: 30000
+
+permissions:
+  read: allow
+  search: allow
+  write: ask
+  shell: ask
+  git:
+    status: allow
+    diff: allow
+    commit: ask
+    push: deny

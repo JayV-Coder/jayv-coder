@@ -1,0 +1,67 @@
+jev:
+  default_strategy: auto
+  optimization:
+    minimize_tokens: true
+    prefer_local: true
+    allow_escalation: true
+  adaptive_routing:
+    enabled: true
+    confidence_threshold: 0.7
+  context:
+    fork_limit: 8000
+    cache_ttl: 3600
+    privacy_filtering: true
+
+providers:
+  # Preset da casa, e so ele: os dois CLIs que o desenvolvedor ja tem na maquina.
+  # Qualquer outro provedor (OpenAI, Anthropic, LM Studio, Ollama...) entra a mao,
+  # pela tela Configuracao ou aqui embaixo.
+  # NAO marque local: true em nenhum dos dois. Os dois binarios mandam o codigo
+  # para a nuvem; declara-los locais liberaria os arquivos de privacy.local_only.
+  # Num provedor proprio, `local: true` so vale se o binario nunca sair da
+  # maquina; em openai-compatible o valor e inferido do host de base_url.
+  claude:
+    type: cli
+    command: claude
+    args: ["--model", "{model}", "--print"]
+    timeout: 120
+  codex:
+    type: cli
+    command: codex
+    args: ["exec", "--model", "{model}", "-"]
+    timeout: 120
+
+models:
+  # Um modelo por CLI do preset. Os demais o desenvolvedor adiciona, pela tela
+  # Configuracao ou aqui.
+  claude:
+    provider: claude
+    model: claude-sonnet-4-5
+    capabilities: [chat, code, reasoning, tools]
+    cost_class: high
+    speed: medium
+    context_window: 200000
+  codex:
+    provider: codex
+    model: gpt-5-codex
+    capabilities: [chat, code, reasoning, tools]
+    cost_class: high
+    speed: medium
+    context_window: 128000
+
+budgets:
+  trivial: 2000
+  simple: 5000
+  medium: 12000
+  complex: 30000
+
+permissions:
+  read: allow
+  search: allow
+  write: ask
+  shell: ask
+
+privacy:
+  deny: [".env", "*.pem", ".ssh/**", "secrets/**", "*.key", "*.secret"]
+  local_only: ["internal/**", "private/**"]
+  redact_secrets: true

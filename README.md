@@ -1,0 +1,69 @@
+# Jev AI Orchestrator
+
+Jev is now a native Rust application with a Tauri 2 desktop interface and a CLI served by the same orchestration core. The former Python implementation is retained in `bkp/` only as migration evidence; it is not used at runtime.
+
+## Requirements
+
+- Rust 1.85 or newer
+- Node.js 20 or newer
+- Linux: GTK 3 and WebKitGTK 4.1 development/runtime packages, plus a running `xdg-desktop-portal` with a backend (`xdg-desktop-portal-gnome`, `-kde` or `-gtk`) — the folder picker goes through the portal
+
+## Run
+
+```bash
+npm install
+npm run dev
+```
+
+The desktop application opens when `jev` is started without a subcommand. CLI commands remain available:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml -- status
+cargo run --manifest-path src-tauri/Cargo.toml -- index
+cargo run --manifest-path src-tauri/Cargo.toml -- run "Review the authentication module"
+cargo run --manifest-path src-tauri/Cargo.toml -- version
+```
+
+Use `--config path/to/config.yaml` and `--root path/to/repository` to override discovery for CLI execution.
+
+## Desktop workspace
+
+The Tauri interface is the control plane for provider configuration. The shipped preset lists only the two CLI agents, `claude` and `codex`; every other provider and model is added by hand. Open **Configuração** to add, edit, enable, or remove OpenAI, Anthropic, OpenAI-compatible, and local CLI providers. API keys are masked after saving and are never sent back to the webview. On Unix, Jev writes the local configuration with owner-only permissions (`0600`).
+
+For OpenAI, Anthropic, and compatible APIs, **Carregar modelos disponíveis** queries the provider through Rust. Changing the API key or compatible base URL also starts discovery automatically. A discovered model can then be added to the router without manually copying its ID.
+
+Opening a project lands on its chat grid: one card per chat with the title, the creation date, the last gate pass recorded for it, and the most recent request sent in it. The gate log lives in session memory, so a card only shows a gate line once that chat has been used since the app started.
+
+Sending a message points the index at the folder of the project that owns the chat, so the context files, the project name in the prompt, and the exit scan all describe that repository and not the directory the app was launched from. The folder is re-indexed only when it actually changes, and a project without a folder falls back to the startup root. If the folder no longer exists, the send fails with that message instead of silently reading another repository.
+
+Projects, chats, and messages are persisted in the local SQLite database `.jev/workspace.sqlite3`. The app starts with an empty workspace instead of creating a project from the executable directory. Each project can contain any number of chats, and each chat has isolated conversational context. Existing JSON history is imported once; the generated empty `src-tauri` workspace is intentionally ignored.
+
+Chats can be deleted individually. Deleting a project also deletes all of its chats and messages through a database foreign-key cascade, after explicit confirmation in the UI. In the composer, `Enter` sends and `Shift + Enter` inserts a line break.
+
+Assistant responses render common Markdown structures as native chat blocks: headings, lists, quotes, tables, inline code, links, and fenced code with language labels and copy controls.
+
+Environment placeholders in existing YAML files remain supported for CLI compatibility, but desktop users do not need to edit YAML or `.env` files to configure providers.
+
+In this project, the Jev model is intended to power the local control plane specified by [`JEV_V1.md`](JEV_V1.md) and [`JEV_V2.md`](JEV_V2.md): Jev classifies and scores structured routing decisions, while OpenAI, Anthropic, local models, and CLI agents execute the selected work.
+
+The current Rust runtime loads `TYPESAFE_API_KEY`, but the System One HTTP client is not implemented yet. Until the runtime calls `POST https://api.typesafe.ai/v1/systemone`, routing continues to use the local keyword heuristics in `orchestrator.rs`.
+
+## Architecture
+
+- `src-tauri/src/orchestrator.rs`: intent, complexity, context, routing, execution, validation, and explanation pipeline.
+- `src-tauri/src/providers.rs`: OpenAI, Anthropic, OpenAI-compatible, and subprocess CLI providers.
+- `src-tauri/src/workspace.rs`: durable projects, chats, titles, and message histories.
+- `src-tauri/src/rag.rs`: repository indexing and lexical retrieval.
+- `src-tauri/src/firewall.rs`: deny/local-only policy and secret redaction.
+- `src-tauri/src/graph.rs`, `agents.rs`, `context_engine.rs`: execution graph, specialist selection, context forks, and value scoring.
+- `src-tauri/src/tools.rs`, `sandbox.rs`, `checkpoint.rs`: permission-aware tools, constrained subprocess workspace, and durable task checkpoints.
+- `src/`: Tauri desktop UI.
+
+## Validation
+
+```bash
+npm run test
+npm run build
+```
+
+`run` requires at least one configured and reachable provider. When no executable provider/model is configured, Jev returns local setup guidance without attempting an LLM request. Failures from a configured provider (for example, an unreachable endpoint or a rejected API request) are still returned as execution errors rather than synthetic success.

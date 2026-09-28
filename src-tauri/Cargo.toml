@@ -1,0 +1,53 @@
+[package]
+name = "jev-orchestrator"
+version = "0.6.0"
+description = "Local-first AI orchestration desktop and CLI"
+authors = ["Jev AI Team"]
+edition = "2024"
+license = "MIT"
+
+[lib]
+name = "jev_orchestrator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jev"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+globset = "0.4"
+hex = "0.4"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+
+# O seletor de pastas. No Windows e no macOS o rfd fala com o diálogo nativo do
+# sistema, mas no Linux o backend padrão (gtk3) abre a janela pela própria thread
+# GTK dele, que disputa o loop de eventos que o Tauri já roda — o diálogo nunca
+# chega à tela. O portal XDG conversa por D-Bus com o seletor do ambiente, não
+# toca em GTK e ainda funciona sob Wayland e dentro de Flatpak.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+tauri-plugin-dialog = { version = "2.8.0", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(not(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))'.dependencies]
+tauri-plugin-dialog = "2.8.0"
+
+[dev-dependencies]
+tempfile = "3"

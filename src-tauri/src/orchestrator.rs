@@ -1,0 +1,652 @@
+use crate::{
+    agents::AgentRegistry, cache::SemanticCache, config::Config,
+    context_engine::{optimize_for_budget, rank_fragments, ContextFragment},
+    firewall::ContextFirewall, graph::ExecutionGraph, jev, memory::MemoryManager,
+    model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
+    providers::{build_providers, Provider}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
+};
+use anyhow::{anyhow, Result};
+use chrono::Utc;
+use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, time::Instant};
+
+const SYSTEM_INSTRUCTIONS:&str="You are Jev, a senior software engineering orchestrator. Use supplied repository context only when relevant. Never reveal secrets. State uncertainty explicitly.";
+const REMOVAL_NOTE:&str="Context was filtered on purpose: [*_REDACTED] replaces secrets, [CONTEXT_TRUNCATED] marks a file cut to fit the token budget, and some files were withheld. Never guess removed content; say it is missing when it matters.";
+const TRUNCATION_MARKER:&str="\n[CONTEXT_TRUNCATED]";
+const PERFORMANCE_FILE:&str=".jev_performance.json";
+const DEFAULT_BUDGET:usize=12_000;
+const HISTORY_MESSAGES:usize=6;
+const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, same language as the request, no quotes, no trailing period, no explanation.";
+const TITLE_PROMPT_CHARS:usize=600;
+const REQUEST_MARGIN:usize=120;
+const SNIPPET_WRAPPER:usize=4;
+const NEUTRAL_SIGNAL:f64=0.5;
+const CLARIFY_NOTE:&str="Routing confidence was low. If the request is ambiguous, ask one specific clarifying question before assuming an approach.";
+const NO_REPOSITORY_NOTE:&str="No repository files were supplied: this request does not depend on them. Answer from general knowledge and never guess this codebase's contents.";
+const TOOLS_NOTE:&str="This asks for commands to run or files to change, which this orchestrator cannot execute. Hand back the exact commands or edits for the developer to apply.";
+const DESTRUCTIVE_NOTE:&str="This would overwrite or remove existing work. State the exact effect and how to undo it before giving the change.";
+const REPOSITORY_CONTEXT_THRESHOLD:f64=0.5;
+const TOOLS_THRESHOLD:f64=0.5;
+const DESTRUCTIVE_THRESHOLD:f64=0.35;
+const COMPLEXITY_MASS:f64=0.15;
+const ROUTING_TURNS:usize=4;
+const ROUTING_TURN_CHARS:usize=400;
+const ROUTING_CANDIDATES:usize=8;
+const SOURCE_JEV:&str="jev";
+const SOURCE_LOCAL:&str="heuristic";
+const SOURCE_FALLBACK:&str="heuristic_after_jev_error";
+
+pub enum RoutingMode { Auto, Local, Fixed(Box<jev::RoutingDecision>), Failed(String) }
+#[cfg(test)] fn default_routing_mode()->RoutingMode{RoutingMode::Local}
+#[cfg(not(test))] fn default_routing_mode()->RoutingMode{RoutingMode::Auto}
+
+pub struct Orchestrator {
+    pub config_path: PathBuf,
+    pub config: Config,
+    pub memory: MemoryManager,
+    pub rag: RepositoryRag,
+    pub cache: SemanticCache,
+    pub firewall: ContextFirewall,
+    pub agents: AgentRegistry,
+    pub graph: ExecutionGraph,
+    pub performance: PerformanceTracker,
+    pub routing_mode: RoutingMode,
+    /// A ressalva que o portão de entrada deixou para o próximo pedido, quando
+    /// ele foi liberado com semáforo amarelo. `process` a consome uma vez.
+    pub pending_gate_note: Option<String>,
+    performance_path: PathBuf,
+    providers: HashMap<String, Box<dyn Provider>>,
+    last_decision: Option<Decision>,
+}
+
+impl Orchestrator {
+    pub fn new(config_path: PathBuf, root: PathBuf) -> Result<Self> {
+        let config=Config::load(&config_path)?;
+        let firewall=ContextFirewall::new(config.privacy.clone());
+        let performance_path=root.join(PERFORMANCE_FILE);
+        let mut rag=RepositoryRag::new(root); rag.index(&firewall)?;
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers), config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, performance_path, last_decision:None })
+    }
+
+    pub fn reload(&mut self)->Result<()> { let config=Config::load(&self.config_path)?; self.providers=build_providers(&config.providers); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
+
+    /// Cada chat pertence a um projeto, e é a pasta desse projeto que precisa
+    /// entrar no contexto: sem isto o Jev descreveria o diretório de onde o
+    /// aplicativo subiu e mandaria os arquivos errados para o modelo. O cache
+    /// semântico é chaveado pela raiz, então trocar de projeto não reaproveita
+    /// resposta de outro repositório.
+    pub fn focus_on(&mut self,root:&Path)->Result<()> {
+        anyhow::ensure!(root.is_dir(),"a pasta do projeto não existe mais: {}",root.display());
+        self.rag.focus_on(root.to_path_buf(),&self.firewall)
+    }
+
+    pub fn executable_provider_count(&self)->usize { self.providers.len() }
+    pub fn executable_model_count(&self)->usize { self.config.models.values().filter(|model|model.enabled && self.providers.contains_key(&model.provider)).count() }
+
+    pub async fn process(&mut self,user_input:&str,session_id:Option<&str>)->ProcessResult {
+        let session_id=session_id.unwrap_or("default");
+        let normalized=user_input.trim().to_string();
+        if normalized.starts_with("/why") { return self.explanation_result(user_input,&normalized); }
+        self.memory.add_message(session_id,"user",normalized.clone());
+        let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
+        let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
+        let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
+        let notes=routing_notes(&signals);
+        let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens);
+        let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals);
+        let capabilities=routing_capabilities(&intent.intent,&signals);
+        let selection=select_model(&self.config,&intent.intent,&complexity,&context,&self.performance);
+        if let Some(guidance)=self.configuration_guidance(&selection) {
+            let response=ProviderResponse { response:guidance, input_tokens:0, output_tokens:0, model:"configuration".into(), provider:"jev".into(), latency_ms:0 };
+            self.memory.add_message(session_id,"assistant",response.response.clone());
+            let model_selection=ModelSelection { model_name:"configuration".into(), provider:"jev".into(), estimated_tokens:selection.estimated_tokens, score:0.0, reason:"LLM configuration is required before execution".into() };
+            let decision=Decision { model_provider:"jev".into(), model_name:"configuration".into(), estimated_tokens:model_selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
+            self.last_decision=Some(decision.clone());
+            return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
+        }
+        let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
+        let started=Instant::now();
+        let execution=self.execute(&normalized,&capabilities,&context,&selection,session_id).await;
+        let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(error.to_string()),false) };
+        self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now() });
+        let _=self.performance.save(&self.performance_path);
+        self.last_decision=Some(decision.clone());
+        ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy, model_selection:selection, result, validation:valid, decision, routing:signals, error }
+    }
+
+    async fn decide_routing(&self,input:&str,session_id:&str)->(IntentAnalysis,String,RoutingSignals) {
+        match &self.routing_mode {
+            RoutingMode::Local=>local_routing(input,None),
+            RoutingMode::Fixed(decision)=>self.jev_routing(decision),
+            RoutingMode::Failed(error)=>local_routing(input,Some(error.clone())),
+            RoutingMode::Auto=>{
+                if !jev::is_configured() { return local_routing(input,None); }
+                match jev::route(&self.routing_input(input,session_id)).await {
+                    Ok(decision)=>self.jev_routing(&decision),
+                    Err(error)=>local_routing(input,Some(error.to_string())),
+                }
+            }
+        }
+    }
+
+    pub fn routing_input(&self,input:&str,session_id:&str)->jev::RoutingInput {
+        let project=self.rag.project_info();
+        let turns=self.memory.conversation(session_id).iter().rev().skip(1).take(ROUTING_TURNS).rev().map(|message|format!("{}: {}",message.role,message.content.chars().take(ROUTING_TURN_CHARS).collect::<String>())).collect::<Vec<_>>();
+        jev::RoutingInput::new(input).with_project(project.name,project.languages).with_candidate_files(self.rag.search(input,ROUTING_CANDIDATES).into_iter().map(|snippet|snippet.path).collect()).with_recent_turns(turns)
+    }
+
+    pub fn jev_routing(&self,decision:&jev::RoutingDecision)->(IntentAnalysis,String,RoutingSignals) {
+        let threshold=self.config.jev.adaptive_routing.confidence_threshold;
+        let complexity=if decision.complexity_confidence>=threshold{decision.complexity.clone()}else{widen_complexity(decision)};
+        let widened=(complexity!=decision.complexity).then(||decision.complexity.clone());
+        let confident=decision.is_confident(threshold);
+        let scores=decision.intent_probabilities.iter().map(|(name,probability)|(name.clone(),(probability*100.0).round().clamp(0.0,100.0) as usize)).collect();
+        let notice=(!confident).then(||{
+            let mut actions=vec![format!("mantive a intenção `{}`",decision.intent)];
+            if let Some(before)=&widened { actions.push(format!("ampliei o orçamento de `{before}` para `{complexity}`")); }
+            actions.push("pedi ao modelo que faça uma pergunta de esclarecimento antes de supor".into());
+            format!("O Jev roteou com confiança baixa (intenção {:.0}%, complexidade {:.0}%): {}.",decision.intent_confidence*100.0,decision.complexity_confidence*100.0,actions.join(", "))
+        });
+        let signals=RoutingSignals{source:SOURCE_JEV.into(),intent_confidence:decision.intent_confidence,complexity_confidence:decision.complexity_confidence,confident,needs_repository_context:Some(decision.needs_repository_context),needs_tools:Some(decision.needs_tools),is_destructive:Some(decision.is_destructive),complexity_before_widening:widened,jev_model:Some(decision.model.clone()),jev_input_tokens:decision.usage.input_tokens,jev_output_tokens:decision.usage.output_tokens,notice};
+        (IntentAnalysis{intent:decision.intent.clone(),scores,confidence:decision.intent_confidence},complexity,signals)
+    }
+
+    fn request_overhead(&self,input:&str,session_id:&str)->usize { estimate_tokens(SYSTEM_INSTRUCTIONS)+estimate_tokens(input)+self.history_tokens(session_id)+REQUEST_MARGIN }
+    fn history_tokens(&self,session_id:&str)->usize { self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).map(|message|estimate_tokens(&message.content)).sum() }
+
+    fn assemble_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize,signals:&RoutingSignals)->Context {
+        let mut context=if repository_context_wanted(signals){self.build_context(input,plan,budget,reserved)}else{Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),project:self.rag.project_info(),relevant_files:vec![],snippets:vec![],estimated_tokens:reserved,repository_context_skipped:true}};
+        note_routing(&mut context,signals);
+        if let Some(note)=self.pending_gate_note.take() { context.system_instructions.push_str(&format!("\n{note}")); }
+        context
+    }
+
+    fn build_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize)->Context {
+        let mut context=self.retrieve_context(input,plan);
+        let pruned=prune_to_budget(&mut context,budget.saturating_sub(reserved));
+        context.estimated_tokens=reserved+context.snippets.iter().map(snippet_tokens).sum::<usize>();
+        if pruned||context.snippets.iter().any(|snippet|snippet.content.contains("_REDACTED]")) { note_removal(&mut context); }
+        context
+    }
+
+    fn retrieve_context(&mut self,input:&str,plan:&[String])->Context {
+        let hashes=self.rag.file_hashes(); let key=SemanticCache::request_key(input,&self.rag.project_info().root);
+        if let Some(context)=self.cache.get_valid(&key,&hashes){return context;}
+        let snippets=self.rag.search(input,if plan.contains(&"full_repository".to_string()){8}else{4});
+        let files=snippets.iter().map(|s|s.path.clone()).collect::<Vec<_>>();
+        let retrieved=snippets.len();
+        let context=Context { system_instructions:SYSTEM_INSTRUCTIONS.into(), project:self.rag.project_info(), relevant_files:files, estimated_tokens:snippets.iter().map(snippet_tokens).sum(), snippets, repository_context_skipped:false };
+        let mut context=self.firewall.filter_context(&context,false);
+        if context.snippets.len()<retrieved { note_removal(&mut context); }
+        self.cache.insert_tracked(key,context.clone(),&hashes); context
+    }
+
+    /// Batiza o chat. O modelo recebe o pedido junto com a leitura de intenção
+    /// do Jev e devolve só o título; nenhum arquivo do repositório entra nessa
+    /// chamada, ela vê apenas o que o desenvolvedor já digitou. Sem modelo
+    /// executável, ou com resposta que não serve como título, devolve nada e o
+    /// resumo local que já está no banco continua valendo.
+    pub async fn name_chat(&self,prompt:&str,intent:&str)->Option<String> {
+        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.providers.contains_key(&model.provider)).collect();
+        usable.sort_by(|(left,_),(right,_)|left.cmp(right));
+        let (_,model)=usable.first()?;
+        let provider=self.providers.get(&model.provider)?;
+        let request:String=prompt.trim().chars().take(TITLE_PROMPT_CHARS).collect();
+        let messages=[
+            ChatMessage{role:"system".into(),content:TITLE_INSTRUCTIONS.into()},
+            ChatMessage{role:"user".into(),content:format!("Intent read by Jev: {intent}\n\nRequest:\n{request}")},
+        ];
+        clean_title(&provider.chat(&messages,&model.model).await.ok()?.response)
+    }
+
+    async fn execute(&self,input:&str,capabilities:&[String],context:&Context,selection:&ModelSelection,session_id:&str)->Result<ProviderResponse> {
+        let provider=self.providers.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
+        let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
+        let agent=self.agents.select(capabilities);
+        let repository_context=safe_context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
+        let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
+        let user=if repository_context.is_empty(){input.into()}else{format!("TASK:\n{input}\n\nREPOSITORY CONTEXT:\n{repository_context}")};
+        let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
+        messages.extend(self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).rev().cloned());
+        messages.push(ChatMessage{role:"user".into(),content:user});
+        provider.chat(&messages,&selection.model_name).await
+    }
+
+    fn without_local_only(&self,context:&Context)->Context {
+        let mut filtered=context.clone();
+        filtered.relevant_files.retain(|path|!self.firewall.check_file(path).local_only);
+        filtered.snippets.retain(|snippet|filtered.relevant_files.contains(&snippet.path));
+        if filtered.snippets.len()<context.snippets.len() { filtered.estimated_tokens=filtered.estimated_tokens.saturating_sub(context.snippets.iter().filter(|s|!filtered.snippets.iter().any(|kept|kept.path==s.path)).map(snippet_tokens).sum()); note_removal(&mut filtered); }
+        filtered
+    }
+
+    fn configuration_guidance(&self, selection:&ModelSelection)->Option<String> {
+        let problem=if !self.config_path.is_file() {
+            "o arquivo de configuração não foi encontrado".to_string()
+        } else if self.config.models.is_empty() && self.providers.is_empty() {
+            "nenhum provedor de LLM nem modelo está configurado".to_string()
+        } else if self.config.models.is_empty() {
+            "há provedores declarados, mas nenhum modelo está configurado".to_string()
+        } else if self.providers.is_empty() {
+            "nenhum provedor habilitado está pronto; confira `type` e a credencial, `base_url` ou `command` exigido pelo adapter".to_string()
+        } else if selection.provider=="jev" {
+            "nenhum modelo configurado atende a esta solicitação; confira capacidades e `context_window`".to_string()
+        } else if !self.providers.contains_key(&selection.provider) {
+            format!("o modelo selecionado aponta para o provedor `{}`, mas ele não existe ou seu `type` não é suportado",selection.provider)
+        } else {
+            return None;
+        };
+        Some(format!(
+            "Não consegui executar sua solicitação porque {problem}.\n\nAbra a tela Configuração do Jev e cadastre um provedor e ao menos um modelo. Para OpenAI, Anthropic e APIs compatíveis, a própria tela pode consultar os modelos disponíveis depois que a API key e a URL forem informadas."
+        ))
+    }
+
+    fn explanation_result(&self,user_input:&str,normalized:&str)->ProcessResult {
+        let response=self.last_decision.as_ref().map(|d|format!("The last request used {} through {}. The context contained {} files and the estimated budget was {} tokens.",d.model_name,d.model_provider,d.context_files_count,d.estimated_tokens)).unwrap_or_else(||"There is no previous routing decision in this session.".into());
+        let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
+        ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
+    }
+}
+
+/// O que volta do modelo raramente é só o título: vem entre aspas, com marca
+/// de lista, às vezes com um parágrafo de justificativa embaixo. Fica a
+/// primeira linha limpa, e só se ela couber numa aba da barra lateral.
+fn clean_title(response:&str)->Option<String> {
+    let line=response.lines().map(str::trim).find(|line|!line.is_empty())?;
+    let line=line.trim_start_matches(['#','-','*','>']).trim();
+    let line=line.trim_matches(['"','\'','`','«','»']).trim();
+    let line=line.trim_end_matches(['.',':']).trim();
+    if line.is_empty()||line.chars().count()>80||line.lines().count()>1 {return None;}
+    Some(line.to_string())
+}
+
+pub fn analyze_intent(input:&str)->IntentAnalysis {
+    let lower=input.to_lowercase();
+    let groups:[(&str,&[&str]);8]=[
+        ("code", &["code","fix","implement","write","create","build","implemente","crie","corrija","código"]),
+        ("analysis", &["analyze","explain","investigate","analise","explique","investigue"]),
+        ("test", &["test","pytest","coverage","teste"]),
+        ("refactor", &["refactor","rewrite","optimize","cleanup","refatore","reescreva","otimize"]),
+        ("security", &["security","vulnerability","secure","segurança","vulnerabilidade"]),
+        ("frontend", &["react","vue","html","css","frontend","ui","ux","interface"]),
+        ("review", &["review","audit","critique","revise","audite"]),
+        ("general", &["help","what","how","why","ajuda","como","por que"]),
+    ];
+    let counted=groups.iter().map(|(name,words)|(*name,words.iter().filter(|word|lower.contains(**word)).count())).collect::<Vec<_>>();
+    let (intent,score)=counted.iter().fold(("general",0),|(best,top),(name,score)|if *score>top{(*name,*score)}else{(best,top)});
+    let scores=counted.into_iter().map(|(name,score)|(name.into(),score)).collect::<HashMap<String,usize>>();
+    IntentAnalysis{intent:if score==0{"general".into()}else{intent.into()},scores,confidence:(score as f64/8.0).min(1.0)}
+}
+pub fn analyze_complexity(input:&str,intent:&IntentAnalysis)->String { let words=input.split_whitespace().count(); let matched=intent.scores.values().sum::<usize>(); if words<8&&matched<=1{"trivial"}else if words<30&&matched<=3{"simple"}else if words<100{"medium"}else{"complex"}.into() }
+pub fn plan_context(intent:&str,complexity:&str)->Vec<String>{let mut p=match intent{"code"|"refactor"|"test"=>vec!["code_files".into(),"dependencies".into(),"tests".into()],"security"=>vec!["code_files".into(),"configuration".into(),"dependencies".into()],"frontend"=>vec!["frontend_files".into(),"styles".into()],_=>vec!["documentation".into()]};if complexity=="complex"{p.push("full_repository".into());}p}
+pub fn select_strategy(intent:&str,complexity:&str)->String { if complexity=="complex"{"execution_graph"}else if matches!(intent,"code"|"refactor"|"test"|"security"){"rag_first"}else{"single_model"}.into() }
+pub fn local_routing(input:&str,error:Option<String>)->(IntentAnalysis,String,RoutingSignals) {
+    let intent=analyze_intent(input); let complexity=analyze_complexity(input,&intent);
+    let signals=RoutingSignals{source:if error.is_some(){SOURCE_FALLBACK}else{SOURCE_LOCAL}.into(),intent_confidence:intent.confidence,notice:error.map(|error|format!("O Jev não pôde rotear esta solicitação e as heurísticas locais assumiram: {error}")),..Default::default()};
+    (intent,complexity,signals)
+}
+fn widen_complexity(decision:&jev::RoutingDecision)->String {
+    let base=jev::COMPLEXITY_BUCKETS.iter().position(|bucket|*bucket==decision.complexity).unwrap_or(0);
+    let supported=decision.complexity_probabilities.iter().filter(|(_,probability)|**probability>=COMPLEXITY_MASS).filter_map(|(level,_)|level.parse::<usize>().ok()).max().unwrap_or(base+1);
+    jev::COMPLEXITY_BUCKETS[supported.clamp(base,(base+1).min(jev::COMPLEXITY_BUCKETS.len()-1))].into()
+}
+fn jev_routed(signals:&RoutingSignals)->bool{signals.source==SOURCE_JEV}
+fn repository_context_wanted(signals:&RoutingSignals)->bool{signals.needs_repository_context.is_none_or(|probability|jev::RoutingDecision::holds(probability,REPOSITORY_CONTEXT_THRESHOLD))}
+fn tools_wanted(signals:&RoutingSignals)->bool{signals.needs_tools.is_none_or(|probability|jev::RoutingDecision::holds(probability,TOOLS_THRESHOLD))}
+fn destructive(signals:&RoutingSignals)->bool{signals.is_destructive.is_some_and(|probability|jev::RoutingDecision::holds(probability,DESTRUCTIVE_THRESHOLD))}
+pub fn routing_capabilities(intent:&str,signals:&RoutingSignals)->Vec<String>{let mut capabilities=required_capabilities(intent);if !tools_wanted(signals){capabilities.retain(|capability|capability!="tools");}capabilities}
+pub fn routing_notes(signals:&RoutingSignals)->String {
+    let mut notes=vec![];
+    if jev_routed(signals)&&!signals.confident { notes.push(CLARIFY_NOTE); }
+    if !repository_context_wanted(signals) { notes.push(NO_REPOSITORY_NOTE); }
+    if signals.needs_tools.is_some()&&tools_wanted(signals) { notes.push(TOOLS_NOTE); }
+    if destructive(signals) { notes.push(DESTRUCTIVE_NOTE); }
+    if notes.is_empty(){String::new()}else{format!("\n{}",notes.join("\n"))}
+}
+fn note_routing(context:&mut Context,signals:&RoutingSignals){ let notes=routing_notes(signals); if !notes.is_empty()&&!context.system_instructions.contains(notes.trim_start()) { context.system_instructions.push_str(&notes); } }
+fn estimate_tokens(value:&str)->usize{(value.chars().count()/4).max(1)}
+fn snippet_tokens(snippet:&ContextSnippet)->usize{estimate_tokens(&snippet.content)+estimate_tokens(&snippet.path)+SNIPPET_WRAPPER}
+fn note_removal(context:&mut Context){ if !context.system_instructions.contains(REMOVAL_NOTE) { context.system_instructions=format!("{}\n{REMOVAL_NOTE}",context.system_instructions); } }
+fn fragment(index:usize,snippet:&ContextSnippet,top:f64)->ContextFragment{ContextFragment{id:index.to_string(),content:String::new(),relevance:(snippet.score/top).clamp(0.0,1.0),confidence:NEUTRAL_SIGNAL,freshness:NEUTRAL_SIGNAL,tokens:snippet_tokens(snippet),dependency_importance:NEUTRAL_SIGNAL}}
+
+fn prune_to_budget(context:&mut Context,budget:usize)->bool {
+    let retrieved=context.snippets.len();
+    if retrieved==0 { return false; }
+    if budget==0 { context.snippets.clear(); context.relevant_files.clear(); return true; }
+    let top=context.snippets.iter().map(|s|s.score).fold(0.0,f64::max).max(1.0);
+    let fragments=context.snippets.iter().enumerate().map(|(index,snippet)|fragment(index,snippet,top)).collect::<Vec<_>>();
+    let mut kept=optimize_for_budget(fragments.clone(),budget).iter().filter_map(|f|f.id.parse::<usize>().ok()).collect::<HashSet<_>>();
+    if kept.is_empty() {
+        let best=rank_fragments(fragments).first().and_then(|f|f.id.parse::<usize>().ok()).unwrap_or(0);
+        let room=budget.saturating_sub(estimate_tokens(&context.snippets[best].path)+estimate_tokens(TRUNCATION_MARKER)+SNIPPET_WRAPPER);
+        if room==0 { context.snippets.clear(); context.relevant_files.clear(); return true; }
+        let head=context.snippets[best].content.chars().take(room*4).collect::<String>();
+        context.snippets[best].content=format!("{head}{TRUNCATION_MARKER}");
+        kept.insert(best);
+    }
+    let mut index=0; context.snippets.retain(|_|{let keep=kept.contains(&index);index+=1;keep});
+    context.relevant_files=context.snippets.iter().map(|s|s.path.clone()).collect();
+    context.snippets.len()<retrieved||context.snippets.iter().any(|s|s.content.ends_with(TRUNCATION_MARKER))
+}
+
+const FAILURE_PREFIXES:[&str;6]=["error:","erro:","error ","http 4","http 5","traceback (most recent call last)"];
+const FAILURE_MARKERS:[&str;10]=["rate limit","quota","unauthorized","forbidden","timed out","request timeout","service unavailable","context length","internal server error","overloaded"];
+pub fn usable_response(response:&ProviderResponse)->bool {
+    let body=response.response.trim();
+    if body.chars().count()<2 { return false; }
+    if body.matches("```").count()%2==1 { return false; }
+    let lower=body.to_lowercase();
+    if FAILURE_PREFIXES.iter().any(|prefix|lower.starts_with(prefix)) { return false; }
+    if body.chars().count()<=200 && FAILURE_MARKERS.iter().any(|marker|lower.contains(marker)) { return false; }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repository(files:&[(&str,String)])->tempfile::TempDir { let dir=tempfile::tempdir().expect("temporary repository"); for (name,body) in files { std::fs::write(dir.path().join(name),body).expect("fixture"); } dir }
+    fn orchestrator(dir:&tempfile::TempDir)->Orchestrator { Orchestrator::new(dir.path().join("missing-config.yaml"),dir.path().to_path_buf()).expect("orchestrator") }
+    fn filler(word:&str,chars:usize)->String { let mut body=format!("fn {word}() {{}}\n"); while body.len()<chars { body.push_str("let padding_value = 1;\n"); } body }
+    fn answer(text:&str)->ProviderResponse { ProviderResponse{response:text.into(),..Default::default()} }
+    fn sent_tokens(context:&Context)->usize { context.snippets.iter().map(snippet_tokens).sum() }
+    fn routed(intent:&str,intent_confidence:f64,complexity:&str,complexity_confidence:f64)->jev::RoutingDecision {
+        jev::RoutingDecision{intent:intent.into(),intent_confidence,intent_probabilities:HashMap::from([(intent.to_string(),intent_confidence)]),complexity:complexity.into(),complexity_score:0.0,complexity_confidence,complexity_probabilities:HashMap::new(),needs_repository_context:1.0,needs_tools:1.0,is_destructive:0.0,model:"jev-1.13.0".into(),usage:jev::Usage{input_tokens:1_200,output_tokens:64}}
+    }
+    fn signals_of(orchestrator:&Orchestrator,decision:&jev::RoutingDecision)->RoutingSignals { orchestrator.jev_routing(decision).2 }
+    fn repository_root()->PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().expect("repository root").to_path_buf() }
+
+    #[test]
+    fn the_title_survives_the_decoration_the_model_puts_around_it() {
+        assert_eq!(clean_title("Cálculo do frete no checkout").as_deref(),Some("Cálculo do frete no checkout"));
+        assert_eq!(clean_title("\n  \"Revisão do cálculo do frete.\"  \n").as_deref(),Some("Revisão do cálculo do frete"));
+        assert_eq!(clean_title("- **Frete** do checkout\n\nEscolhi esse título porque o pedido trata do cálculo.").as_deref(),Some("**Frete** do checkout"));
+        assert_eq!(clean_title("Title: ").as_deref(),Some("Title"));
+        assert_eq!(clean_title("   \n  "),None,"resposta vazia deixa o resumo local de pé");
+        assert_eq!(clean_title(&"palavra ".repeat(20)),None,"um parágrafo não cabe na lateral");
+    }
+
+    #[test]
+    fn jev_replaces_the_keyword_counter_with_its_own_calibrated_confidence() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let orchestrator=orchestrator(&dir);
+        let request="fix the auth bypass in the payment handler";
+        assert_eq!(analyze_intent(request).intent,"code");
+        assert_eq!(analyze_complexity(request,&analyze_intent(request)),"simple");
+
+        let mut decision=routed("security",0.91,"complex",0.88); decision.needs_tools=0.06;
+        let (intent,complexity,signals)=orchestrator.jev_routing(&decision);
+
+        assert_eq!(intent.intent,"security");
+        assert_eq!(intent.confidence,0.91);
+        assert_eq!(intent.scores.get("security"),Some(&91));
+        assert_eq!(complexity,"complex");
+        assert!(signals.confident);
+        assert_eq!(signals.source,SOURCE_JEV);
+        assert_eq!(signals.jev_input_tokens,1_200);
+        assert!(signals.notice.is_none());
+        assert!(routing_notes(&signals).is_empty());
+    }
+
+    #[test]
+    fn a_low_complexity_confidence_widens_the_budget_by_at_most_one_bucket() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let orchestrator=orchestrator(&dir);
+        let mut decision=routed("code",0.95,"simple",0.41);
+        decision.complexity_probabilities=HashMap::from([("1".into(),0.5),("2".into(),0.3),("3".into(),0.2)]);
+
+        let (_,complexity,signals)=orchestrator.jev_routing(&decision);
+
+        assert_eq!(complexity,"medium");
+        assert_eq!(signals.complexity_before_widening.as_deref(),Some("simple"));
+        assert_eq!(orchestrator.jev_routing(&routed("code",0.95,"trivial",0.1)).1,"simple");
+        assert_eq!(orchestrator.jev_routing(&routed("code",0.95,"complex",0.1)).1,"complex");
+        let mut noisy=routed("code",0.95,"medium",0.2); noisy.complexity_probabilities=HashMap::from([("0".into(),0.4),("2".into(),0.6)]);
+        assert_eq!(orchestrator.jev_routing(&noisy).1,"medium");
+    }
+
+    #[test]
+    fn a_low_intent_confidence_keeps_the_jev_intent_and_asks_the_model_to_clarify() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let orchestrator=orchestrator(&dir);
+
+        let (intent,complexity,signals)=orchestrator.jev_routing(&routed("refactor",0.38,"medium",0.95));
+
+        assert_eq!(intent.intent,"refactor");
+        assert_eq!(complexity,"medium");
+        assert!(!signals.confident);
+        assert!(routing_notes(&signals).contains(CLARIFY_NOTE));
+        let notice=signals.notice.expect("aviso em pt-BR");
+        assert!(notice.contains("confiança baixa") && notice.contains("refactor"),"{notice}");
+    }
+
+    #[test]
+    fn a_request_that_needs_no_repository_context_ships_no_snippets() {
+        let mut orchestrator=Orchestrator::new(repository_root().join("config.yaml"),repository_root()).expect("orchestrator");
+        let request="what does this error mean";
+        let mut decision=routed("general",0.94,"trivial",0.91);
+        decision.needs_repository_context=0.04; decision.needs_tools=0.05;
+        let heuristic=RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()};
+        let signals=signals_of(&orchestrator,&decision);
+        let plan=plan_context("general","trivial");
+        let retrieved=orchestrator.retrieve_context(request,&plan);
+
+        let before=orchestrator.assemble_context(request,&plan,2_000,120,&heuristic);
+        let after=orchestrator.assemble_context(request,&plan,2_000,120,&signals);
+
+        assert!(!before.snippets.is_empty(),"the fixture must retrieve something to save");
+        assert!(sent_tokens(&before)>0);
+        assert!(after.snippets.is_empty() && after.relevant_files.is_empty());
+        assert!(after.repository_context_skipped && !before.repository_context_skipped);
+        assert_eq!(sent_tokens(&after),0);
+        assert!(after.system_instructions.contains(NO_REPOSITORY_NOTE));
+        assert!(estimate_tokens(&routing_notes(&signals))<sent_tokens(&before),"the instruction must cost less than the context it replaces");
+        println!("`{request}` on this repository | retrieved: {} files / {} tokens | before (pruned to the trivial budget): {} files / {} tokens | after: {} files / {} tokens + {} instruction tokens",retrieved.snippets.len(),sent_tokens(&retrieved),before.snippets.len(),sent_tokens(&before),after.snippets.len(),sent_tokens(&after),estimate_tokens(&routing_notes(&signals)));
+    }
+
+    #[test]
+    fn tools_that_are_not_needed_leave_the_tools_capability_out() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let orchestrator=orchestrator(&dir);
+        let mut quiet=routed("code",0.9,"simple",0.9); quiet.needs_tools=0.08;
+        let quiet=signals_of(&orchestrator,&quiet);
+        let noisy=signals_of(&orchestrator,&routed("code",0.9,"simple",0.9));
+        let heuristic=RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()};
+
+        assert_eq!(routing_capabilities("code",&quiet),vec!["code".to_string()]);
+        assert!(routing_capabilities("code",&noisy).contains(&"tools".to_string()));
+        assert_eq!(routing_capabilities("code",&heuristic),required_capabilities("code"));
+        assert!(!routing_notes(&quiet).contains(TOOLS_NOTE));
+        assert!(routing_notes(&noisy).contains(TOOLS_NOTE));
+    }
+
+    #[tokio::test]
+    async fn a_destructive_request_is_surfaced_and_stated_to_the_model() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let mut decision=routed("refactor",0.93,"medium",0.9); decision.is_destructive=0.94;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(decision));
+
+        let result=orchestrator.process("apague o roteador antigo e reescreva",Some("test")).await;
+
+        assert_eq!(result.routing.is_destructive,Some(0.94));
+        assert_eq!(result.routing.source,SOURCE_JEV);
+        assert!(result.context.system_instructions.contains(DESTRUCTIVE_NOTE));
+        assert!(result.error.is_none(),"a safety signal must never block the request");
+        assert!(result.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_routing_failure_falls_back_to_the_heuristics_without_failing_the_request() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        orchestrator.routing_mode=RoutingMode::Failed("a TypeSafe aplicou limite de requisições (429)".into());
+
+        let result=orchestrator.process("Implemente um cliente HTTP",Some("test")).await;
+
+        assert_eq!(result.routing.source,SOURCE_FALLBACK);
+        assert_eq!(result.intent_analysis.intent,analyze_intent("Implemente um cliente HTTP").intent);
+        assert!(result.routing.needs_repository_context.is_none());
+        assert!(result.error.is_none());
+        let notice=result.routing.notice.expect("aviso de fallback");
+        assert!(notice.contains("heurísticas locais") && notice.contains("429"),"{notice}");
+        assert!(!result.context.system_instructions.contains(CLARIFY_NOTE));
+    }
+
+    #[tokio::test]
+    async fn without_jev_the_routing_and_the_prompt_are_exactly_what_they_are_today() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+
+        let result=orchestrator.process("Explique o roteador",Some("test")).await;
+
+        assert_eq!(result.routing.source,SOURCE_LOCAL);
+        assert!(result.routing.notice.is_none() && result.routing.jev_model.is_none());
+        assert!(result.routing.needs_repository_context.is_none() && result.routing.needs_tools.is_none() && result.routing.is_destructive.is_none());
+        assert_eq!(result.intent_analysis.intent,analyze_intent("Explique o roteador").intent);
+        assert_eq!(result.complexity,analyze_complexity("Explique o roteador",&analyze_intent("Explique o roteador")));
+        assert_eq!(result.context.system_instructions,SYSTEM_INSTRUCTIONS);
+        assert!(!result.context.repository_context_skipped);
+        assert!(routing_notes(&result.routing).is_empty());
+    }
+
+    #[test]
+    fn routing_notes_are_idempotent_and_stay_within_a_measured_budget() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let orchestrator=orchestrator(&dir);
+        let mut decision=routed("code",0.3,"medium",0.3);
+        decision.needs_repository_context=0.02; decision.needs_tools=0.99; decision.is_destructive=0.99;
+        let signals=signals_of(&orchestrator,&decision);
+        let notes=routing_notes(&signals);
+
+        assert!(notes.contains(CLARIFY_NOTE) && notes.contains(NO_REPOSITORY_NOTE) && notes.contains(TOOLS_NOTE) && notes.contains(DESTRUCTIVE_NOTE));
+        assert!(estimate_tokens(&notes)<=140,"worst-case routing instructions cost {} tokens",estimate_tokens(&notes));
+        let mut context=Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),..Default::default()};
+        note_routing(&mut context,&signals); let once=context.system_instructions.clone();
+        note_routing(&mut context,&signals);
+        assert_eq!(context.system_instructions,once);
+        assert_eq!(estimate_tokens(&routing_notes(&RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()})),1);
+    }
+
+    #[test]
+    fn the_state_sent_to_jev_carries_the_project_the_candidates_and_the_recent_turns() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        orchestrator.memory.add_message("test","user","primeira pergunta");
+        orchestrator.memory.add_message("test","assistant","primeira resposta");
+        orchestrator.memory.add_message("test","user","router");
+
+        let input=orchestrator.routing_input("router","test");
+
+        assert_eq!(input.request,"router");
+        assert_eq!(input.project_name,orchestrator.rag.project_info().name);
+        assert_eq!(input.languages,vec!["Rust".to_string()]);
+        assert_eq!(input.candidate_files,vec!["router.rs".to_string()]);
+        assert_eq!(input.recent_turns,vec!["user: primeira pergunta".to_string(),"assistant: primeira resposta".to_string()]);
+        assert!(input.candidate_files.iter().map(|path|estimate_tokens(path)).sum::<usize>()<=ROUTING_CANDIDATES*8);
+    }
+
+    #[test]
+    fn keyword_ties_resolve_deterministically() {
+        let analysis=analyze_intent("review the coverage");
+        assert_eq!(analysis.scores["test"],1);
+        assert_eq!(analysis.scores["review"],1);
+        for _ in 0..64 { assert_eq!(analyze_intent("review the coverage").intent,analysis.intent); }
+        assert_eq!(analysis.intent,"test");
+    }
+
+    #[test]
+    fn identifies_code_intent() {
+        assert_eq!(analyze_intent("Implement a Rust function").intent,"code");
+    }
+
+    #[test]
+    fn plans_code_context() {
+        let p=plan_context("code","simple");
+        assert!(p.contains(&"dependencies".into()));
+    }
+
+    #[test]
+    fn a_trivial_request_never_ships_more_than_its_budget() {
+        let dir=repository(&[("router.rs",filler("router",40_000)),("cache.rs",filler("router_cache",40_000)),("graph.rs",filler("router_graph",40_000)),("memory.rs",filler("router_memory",40_000))]);
+        let mut orchestrator=orchestrator(&dir);
+        let reserved=orchestrator.request_overhead("router","test");
+        let unpruned=sent_tokens(&orchestrator.retrieve_context("router",&plan_context("code","trivial")));
+        let context=orchestrator.build_context("router",&plan_context("code","trivial"),2_000,reserved);
+        assert!(unpruned>2_000,"fixture must exceed the trivial budget, got {unpruned}");
+        assert!(context.estimated_tokens<=2_000,"estimated {} above budget",context.estimated_tokens);
+        assert!(reserved+sent_tokens(&context)<=2_000,"actually sent {} above budget",reserved+sent_tokens(&context));
+        assert!(!context.snippets.is_empty(),"budget pruning must not drop all context silently");
+        assert!(context.system_instructions.contains("Never guess removed content"));
+    }
+
+    #[test]
+    fn pruning_keeps_the_highest_value_fragments() {
+        let dir=repository(&[("small.rs",filler("router",200)),("huge.rs",filler("router",40_000))]);
+        let mut orchestrator=orchestrator(&dir);
+        let context=orchestrator.build_context("router",&plan_context("code","trivial"),2_000,120);
+        assert_eq!(context.relevant_files,vec!["small.rs".to_string()]);
+        assert_eq!(context.snippets.len(),1);
+    }
+
+    #[test]
+    fn a_single_oversized_snippet_is_truncated_instead_of_dropped() {
+        let dir=repository(&[("router.rs",filler("router",40_000))]);
+        let mut orchestrator=orchestrator(&dir);
+        let context=orchestrator.build_context("router",&plan_context("code","trivial"),2_000,120);
+        assert_eq!(context.snippets.len(),1);
+        assert!(context.snippets[0].content.ends_with(TRUNCATION_MARKER));
+        assert!(120+sent_tokens(&context)<=2_000);
+        assert!(context.system_instructions.contains("[CONTEXT_TRUNCATED]"));
+    }
+
+    #[test]
+    fn untouched_context_carries_no_removal_note() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let context=orchestrator.build_context("router",&plan_context("code","simple"),5_000,120);
+        assert!(!context.system_instructions.contains(REMOVAL_NOTE));
+        assert_eq!(context.system_instructions,SYSTEM_INSTRUCTIONS);
+    }
+
+    #[test]
+    fn the_cached_context_is_reused_after_an_unrelated_edit() {
+        let dir=repository(&[("router.rs",filler("router",200)),("notes.md","unrelated".into())]);
+        let mut orchestrator=orchestrator(&dir);
+        let plan=plan_context("code","simple");
+        orchestrator.build_context("router",&plan,5_000,120);
+        std::fs::write(dir.path().join("notes.md"),"changed").expect("fixture");
+        orchestrator.rag.index(&orchestrator.firewall).expect("reindex");
+        orchestrator.build_context("router",&plan,5_000,120);
+        assert!(orchestrator.cache.hit_rate()>0.0,"an unrelated edit must not invalidate the cached context");
+    }
+
+    #[test]
+    fn rejects_provider_failures_masquerading_as_answers() {
+        assert!(!usable_response(&answer("   ")));
+        assert!(!usable_response(&answer("Error: 429 rate limit reached")));
+        assert!(!usable_response(&answer("HTTP 503 service unavailable")));
+        assert!(!usable_response(&answer("```rust\nfn truncated() {")));
+        assert!(usable_response(&answer("The router selects a model and then\n```rust\nfn ok() {}\n```\ndone.")));
+        assert!(usable_response(&answer(&format!("{} the quota handling code lives in router.rs and is exercised by tests.",filler("explain",260)))));
+    }
+
+    #[tokio::test]
+    async fn explains_how_to_configure_an_llm_when_none_is_available() {
+        let root=tempfile::tempdir().expect("temporary repository");
+        let config_path=root.path().join("missing-config.yaml");
+        let mut orchestrator=Orchestrator::new(config_path.clone(),root.path().to_path_buf()).expect("orchestrator");
+
+        let result=orchestrator.process("Explique este projeto",Some("test")).await;
+
+        assert!(result.error.is_none());
+        assert!(result.validation);
+        assert_eq!(result.decision.model_provider,"jev");
+        assert_eq!(result.decision.model_name,"configuration");
+        let response=result.result.expect("Jev configuration guidance").response;
+        assert!(response.contains("o arquivo de configuração não foi encontrado"));
+        assert!(response.contains("tela Configuração"));
+        assert!(response.contains("consultar os modelos disponíveis"));
+        assert!(!response.contains("provider named 'none'"));
+    }
+}
+

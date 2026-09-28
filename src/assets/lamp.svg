@@ -1,0 +1,6 @@
+<!-- Uma lente só, para o placar. Acende com a mesma classe do semáforo. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+  <circle class="lens" cx="9" cy="9.8" r="6.4" />
+  <path class="hood" d="M1.5 7a7.5 7.5 0 0 1 15 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+  <path class="glint" d="M5.6 6.6a4.6 4.6 0 0 1 2.8-1.8" />
+</svg>
