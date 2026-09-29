@@ -14,12 +14,14 @@ import iconChevron from "./assets/icon-chevron.svg?raw";
 import iconChatRef from "./assets/icon-chat-ref.svg?raw";
 import iconFolder from "./assets/icon-folder.svg?raw";
 
-const ENTRY_VERDICTS = {
+/** Os dois portões falam por cores: é o mesmo semáforo que pinta o balão do
+ * chat, e por isso estes mapas moram aqui e são lidos de lá. */
+export const ENTRY_VERDICTS = {
   pass: { aspect: "go", label: "passou" },
   ask: { aspect: "ask", label: "vai perguntar" },
   block: { aspect: "stop", label: "barrado" },
 };
-const EXIT_VERDICTS = {
+export const EXIT_VERDICTS = {
   cleared: { aspect: "go", label: "liberado" },
   held: { aspect: "stop", label: "segurado" },
 };
@@ -63,15 +65,16 @@ function kindMark(icon, word) {
   return mark;
 }
 
-/** O caminho de volta: cada pedido analisado aponta o chat de onde veio. */
-function chatRef(chatId) {
+/** O caminho de volta: cada cartão cita o pedido que o originou, pelo mesmo
+ * código que está no balão do chat — `#XY4T9B·04`. */
+function chatRef(chatId, turn) {
   const chat = scope.chats.get(chatId);
   const button = node("button", "gate-ref");
   button.type = "button";
-  const code = chat?.code ? `#${chat.code}` : "chat encerrado";
+  const code = turn ? `#${turn}` : chat?.code ? `#${chat.code}` : "chat encerrado";
   button.append(drawing(iconChatRef, "gate-kind-icon"), node("code", null, code), node("span", null, chat?.title ?? "não está mais no projeto"));
   if (!chat) { button.disabled = true; return button; }
-  button.title = `Abrir o chat ${code} — ${chat.title}`;
+  button.title = `Abrir o pedido ${code} — ${chat.title}`;
   button.addEventListener("click", () => scope.openChat(chatId));
   return button;
 }
@@ -159,7 +162,7 @@ function entryItem(check) {
   });
 
   const foot = node("div", "gate-foot");
-  foot.append(chatRef(check.chatId));
+  foot.append(chatRef(check.chatId, check.turn));
 
   item.append(head, foot, panel);
   return item;
@@ -186,7 +189,7 @@ function exitItem(check) {
 
   face.append(body);
   const foot = node("div", "gate-foot");
-  foot.append(chatRef(check.chatId));
+  foot.append(chatRef(check.chatId, check.turn));
   item.append(face, foot);
   return item;
 }
@@ -246,7 +249,8 @@ export function setGateScope({ project, chats, openChat }) {
 
 /** O último registro da portaria naquele chat: a saída, quando houve alguma, ou
  * o pedido que entrou. É o que os cartões de chat mostram sem abrir a portaria.
- * A portaria vive na memória da sessão, então um chat antigo pode não ter nada. */
+ * O feed vem do banco, então um chat parado há semanas continua contando o que
+ * passou por ele. */
 export function lastGatePass(chatId) {
   const exit = feed.exits.find((check) => check.chatId === chatId);
   const entry = feed.entries.find((check) => check.chatId === chatId);
@@ -277,6 +281,9 @@ const VERDICT_TALLY = { pass: "passed", ask: "asked", block: "blocked" };
 export function watchGate() {
   listen("gate-entry", ({ payload }) => {
     if (!mine(payload.check.chatId)) return;
+    // Reenvio: o pedido já tem cartão aqui. Ele é atualizado, não duplicado, e
+    // o placar vem do banco para não contar duas vezes a mesma tentativa.
+    if (feed.entries.some((check) => check.id === payload.check.id)) { loadGate(); return; }
     feed.entries.unshift(payload.check);
     feed.tally[VERDICT_TALLY[payload.check.verdict]] += 1;
     renderTally();
@@ -286,6 +293,7 @@ export function watchGate() {
   listen("gate-exit", ({ payload }) => {
     const checks = payload.checks.filter((check) => mine(check.chatId));
     if (checks.length === 0) return;
+    if (checks.some((check) => feed.exits.some((known) => known.turnId === check.turnId))) { loadGate(); return; }
     feed.exits.unshift(...checks);
     feed.tally.held += checks.filter((check) => check.verdict === "held").length;
     renderTally();

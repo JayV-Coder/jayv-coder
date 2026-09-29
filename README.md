@@ -32,7 +32,11 @@ The Tauri interface is the control plane for provider configuration. The shipped
 
 For OpenAI, Anthropic, and compatible APIs, **Carregar modelos disponíveis** queries the provider through Rust. Changing the API key or compatible base URL also starts discovery automatically. A discovered model can then be added to the router without manually copying its ID.
 
-Opening a project lands on its chat grid: one card per chat with the title, the creation date, the last gate pass recorded for it, and the most recent request sent in it. The gate log lives in session memory, so a card only shows a gate line once that chat has been used since the app started.
+Opening a project lands on its chat grid: one card per chat with the title, the creation date, the last gate pass recorded for it, and the most recent request sent in it. The gate log is stored in SQLite, so a card still shows the gate line for a chat that has not been touched in weeks, and the tally counts everything that ever crossed a gate rather than only what fits in the feed.
+
+Every request sent opens a **turn**, identified by a short code the developer reads on both sides: the chat code, a middle dot, and the position of the request in that chat — `XY4T9B·04`. The prompt bubble carries that code, the entry-gate verdict, and a border in the verdict's colour; the answer bubble is bordered by what the exit gate found in it. Gate cards cite the same code, so a card in **Portaria** points back to one exact bubble.
+
+A request is written to the database before any model is called, so leaving the chat, a failed send, or closing the app never removes it from the conversation. A turn still in flight when the app closes is marked failed on reopen. A failed prompt gets a **Reenviar** button under its bubble: the retry reuses the same turn, so the code does not change and the gate card is updated instead of duplicated. A prompt the entry gate blocked gets no such button — the refusal was deliberate.
 
 Sending a message points the index at the folder of the project that owns the chat, so the context files, the project name in the prompt, and the exit scan all describe that repository and not the directory the app was launched from. The folder is re-indexed only when it actually changes, and a project without a folder falls back to the startup root. If the folder no longer exists, the send fails with that message instead of silently reading another repository.
 

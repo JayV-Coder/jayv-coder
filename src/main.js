@@ -1,13 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { loadGate, watchGate, paintGateChrome, setGateBusy, setGateScope, lastGatePass } from "./gate.js";
+import { loadGate, watchGate, paintGateChrome, setGateBusy, setGateScope, lastGatePass, ENTRY_VERDICTS, EXIT_VERDICTS } from "./gate.js";
 import iconFolder from "./assets/icon-folder.svg?raw";
 import iconGrid from "./assets/icon-grid.svg?raw";
 import iconList from "./assets/icon-list.svg?raw";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { workspace: { projects: [], chats: [] }, activeProjectId: null, activeChatId: null, view: "projects", layout: localStorage.getItem("jev.layout") === "list" ? "list" : "grid", settings: null, discovered: new Map() };
+/** `live` é o que está acontecendo agora, por pedido em aberto: o texto que vai
+ * chegando e as etapas já anunciadas. Não é a verdade — a verdade está no banco,
+ * e é de lá que a conversa é redesenhada. É a ponte entre dois retratos do
+ * banco, para que a espera não seja um silêncio. */
+const state = { workspace: { projects: [], chats: [] }, activeProjectId: null, activeChatId: null, view: "projects", layout: localStorage.getItem("jev.layout") === "list" ? "list" : "grid", settings: null, discovered: new Map(), live: new Map() };
 const since = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 const timeline = $("#timeline");
 const form = $("#prompt-form");
@@ -17,20 +21,56 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 }
 
-function addMessage(role, content, meta = "") {
+function addMessage(role, content, meta = "", turn = null) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
   const head=document.createElement("div");
   head.className="message-head";
   const author=document.createElement("strong"); author.textContent=role === "user" ? "Você" : "Jev";
+  head.append(author);
+  const light = turn ? messageLight(role,turn) : null;
+  if (turn) {
+    const tag=document.createElement("code"); tag.className="message-turn"; tag.textContent=`#${turn.code}`;
+    tag.title=`Pedido ${turn.code} — é por este código que a Portaria aponta de volta para cá`;
+    head.append(tag);
+  }
+  if (light) {const verdict=document.createElement("small"); verdict.className="message-verdict"; verdict.dataset.aspect=light.aspect; verdict.textContent=light.label; head.append(verdict);}
   const metadata=document.createElement("small"); metadata.textContent=meta;
-  head.append(author,metadata);
+  head.append(metadata);
   const body=document.createElement("div"); body.className="message-body";
+  if (light) body.dataset.aspect=light.aspect;
   if (role === "assistant") renderAssistantContent(body,content); else body.textContent=content;
   article.append(head,body);
+  if (role === "user" && turn?.status === "failed") article.append(retryFoot(turn));
   timeline.append(article);
   timeline.scrollTop = timeline.scrollHeight;
   return article;
+}
+
+/** O semáforo do balão. O pedido mostra o que o portão de entrada decidiu sobre
+ * ele; a resposta, o que o portão de saída viu nela — vermelho quando alguma
+ * coisa foi segurada, verde quando nada foi. Um pedido barrado tinge os dois
+ * balões: quem respondeu foi a própria portaria. */
+function messageLight(role, turn) {
+  if (role === "user") return ENTRY_VERDICTS[turn.entry] ?? null;
+  if (turn.status === "blocked") return {aspect:"stop",label:"barrado na portaria"};
+  if (turn.status === "failed") return {aspect:"ask",label:"o envio falhou"};
+  if (turn.status === "flying" || turn.status === "queued") return null;
+  return EXIT_VERDICTS[turn.exit] ?? {aspect:"go",label:"nada a fiscalizar"};
+}
+
+/** O pedido que não chegou ao fim continua escrito, e ganha a chance de ir de
+ * novo — com o mesmo código, para não virar dois pedidos no histórico. Quem foi
+ * barrado não recebe este botão: a portaria recusou de propósito. */
+function retryFoot(turn) {
+  const foot=document.createElement("div"); foot.className="message-foot";
+  const button=document.createElement("button"); button.type="button"; button.className="retry-turn";
+  button.dataset.retryTurn=turn.id;
+  button.textContent="Reenviar";
+  button.title=`Reenviar o pedido ${turn.code} sem abrir um novo`;
+  foot.append(button,document.createElement("small"));
+  foot.lastChild.textContent="este pedido não chegou a ser respondido";
+  return foot;
 }
 
 function renderAssistantContent(container, content) {
@@ -93,6 +133,131 @@ function renderTable(container, lines, start) {
 
 function activeChat() { return state.workspace.chats.find((chat) => chat.id === state.activeChatId); }
 
+/** Os pedidos deste chat que ainda não foram atendidos, do mais antigo para o
+ * mais novo. Sai do retrato do banco, e não de um registro da tela: é por isso
+ * que a espera continua desenhada depois de sair do chat, de recarregar a
+ * janela ou de fechar e reabrir o aplicativo. */
+function openTurns(chat) { return (chat?.turns ?? []).filter((turn) => turn.status === "queued" || turn.status === "flying"); }
+
+/** O que o desenvolvedor lê enquanto espera. O primeiro da fila está sendo
+ * atendido; os outros dizem quantos estão na frente, para que ficar em fila
+ * seja uma informação e não um silêncio. Quando já há texto chegando, é o texto
+ * que aparece — em texto puro, porque marcação pela metade pisca na tela; a
+ * resposta formatada vem no redesenho, quando o pedido fecha. */
+function pendingBubble(turn, place) {
+  const live = liveOf(turn);
+  const article = addMessage("assistant", "", place > 1 ? `${place - 1} na frente` : "", turn);
+  article.classList.add("message-pending");
+  article.dataset.pendingTurn = turn.id;
+  const body = $(".message-body", article);
+  body.classList.add("message-live");
+  paintLiveText(body, live);
+  article.append(activityList(turn));
+  showPending(article, live);
+  return article;
+}
+
+/** O balão em aberto só aparece quando já tem o que mostrar. Enquanto o pedido
+ * não deu notícia nenhuma, quem conta a espera é a faixa da caixa de escrita —
+ * um balão vazio no fim da conversa é ruído, e a espera fica longe dos olhos de
+ * quem acabou de digitar. */
+function showPending(article, live) {
+  if (article) article.hidden = !live.text && live.beats.size === 0;
+}
+
+/** O que se sabe deste pedido, juntando o que o banco gravou com o que chegou
+ * pelo barramento. O banco escreve o rascunho com folga, então o que está na
+ * tela pode estar à frente dele: fica o mais longo dos dois, nunca a soma —
+ * somar escreveria a resposta duas vezes. */
+function liveOf(turn) {
+  const live = state.live.get(turn.id) ?? { text: "", beats: new Map() };
+  const partial = turn.partial ?? "";
+  if (partial.length > live.text.length) live.text = partial;
+  (turn.activity ?? []).forEach((row) => { if (!live.beats.has(row.seq)) live.beats.set(row.seq, row); });
+  state.live.set(turn.id, live);
+  return live;
+}
+
+function paintLiveText(body, live) {
+  body.hidden = !live.text;
+  body.textContent = live.text;
+}
+
+function activityList(turn) {
+  const list = document.createElement("ol");
+  list.className = "turn-activity";
+  list.dataset.activityTurn = turn.id;
+  paintActivity(list, liveOf(turn));
+  return list;
+}
+
+function paintActivity(list, live) {
+  list.innerHTML = "";
+  [...live.beats.keys()].sort((a, b) => a - b).forEach((seq) => {
+    const row = live.beats.get(seq);
+    const line = beatLine(row.kind, row.detail ?? {});
+    if (!line) return;
+    const item = document.createElement("li");
+    item.dataset.kind = row.kind;
+    item.textContent = line;
+    list.append(item);
+  });
+  list.hidden = list.childElementCount === 0;
+}
+
+const GATE_WORDS = { pass: "liberou", ask: "pediu mais detalhe", block: "barrou" };
+
+/** Uma etapa em uma linha. O evento cru é JSON; quem espera quer ler o que está
+ * acontecendo, não o formato em que foi gravado. */
+function beatLine(kind, detail) {
+  switch (kind) {
+    case "gate": return `Portaria ${GATE_WORDS[detail.verdict] ?? detail.verdict} — nota ${detail.score} de ${detail.demand}`;
+    case "read": return `Leitura: ${detail.intent} · complexidade ${detail.complexity} · ${detail.source}`;
+    case "context": return `Contexto: ${detail.files} arquivo(s), ~${detail.tokens} tokens`;
+    case "route": return `Rota: ${detail.provider} · ${detail.model}${detail.reason ? ` — ${detail.reason}` : ""}`;
+    case "running": return "Conversando com o modelo…";
+    case "agent": return detail.line;
+    case "done": return `Pronto em ${detail.latencyMs} ms — ${detail.inputTokens} tokens de entrada, ${detail.outputTokens} de saída`;
+    case "failed": return `Falhou: ${detail.error}`;
+    case "dismissed": return `Pergunta ignorada: ${detail.prompt}`;
+    default: return null;
+  }
+}
+
+const pending = $("#pending");
+const pendingCode = $("#pending-code");
+const pendingState = $("#pending-state");
+const pendingLine = $("#pending-line");
+const FIRST_WORD = "Analisando intenção, contexto e rota…";
+
+/** A espera onde os olhos já estão: colada na caixa de escrita, e não no fim de
+ * uma conversa que pode estar rolada para cima. Ela conta de quem é a vez —
+ * `Jev`, o código do pedido, o estado —, e embaixo o que está sendo feito agora.
+ * Quem está na fila não ganha faixa própria: vira a contagem do cabeçalho, para
+ * que a caixa não cresça a cada pedido empilhado. */
+function dressPending() {
+  const chat = activeChat();
+  const open = chat ? openTurns(chat) : [];
+  const turn = open[0] ?? null;
+  pending.hidden = !turn;
+  if (!turn) return;
+  const live = liveOf(turn);
+  const queued = open.length - 1;
+  pendingCode.textContent = `#${turn.code}`;
+  pendingState.textContent = queued > 0 ? `em andamento · ${queued} na fila` : "em andamento";
+  pendingLine.textContent = pendingWord(live);
+}
+
+/** O que dizer enquanto se espera. Antes da primeira etapa não há o que contar,
+ * e é aí que vale a frase de sempre; depois dela, a etapa mais recente diz mais
+ * do que qualquer frase fixa. Quando a resposta começa a chegar, a faixa sai da
+ * frente do texto e só avisa que ele está vindo. */
+function pendingWord(live) {
+  if (live.text) return "Escrevendo a resposta…";
+  const steps = [...live.beats.keys()].sort((a, b) => a - b).map((seq) => beatLine(live.beats.get(seq).kind, live.beats.get(seq).detail ?? {})).filter(Boolean);
+  return steps.at(-1) ?? FIRST_WORD;
+}
+
 function renderTimeline() {
   timeline.innerHTML = "";
   const chat = activeChat();
@@ -102,15 +267,21 @@ function renderTimeline() {
       ? `<article class="welcome"><p class="eyebrow">${escapeHtml(project.name.toUpperCase())}</p><h2>O que vamos construir?</h2><p>Cada conversa guarda o próprio contexto dentro do projeto e ganha um identificador — é por ele que a Portaria aponta de volta para aqui.</p>${chat ? "" : '<button class="primary welcome-chat" type="button">Novo chat</button>'}</article>`
       : '<article class="welcome"><p class="eyebrow">JEV DESKTOP</p><h2>Abra um projeto</h2><p>Os projetos organizam seus chats, sua portaria e a pasta de trabalho no disco.</p><button class="primary welcome-projects" type="button">Ver projetos</button></article>';
   } else {
-    chat.messages.forEach((message) => addMessage(message.role, message.content));
+    const turns = new Map((chat.turns ?? []).map((turn) => [turn.id, turn]));
+    chat.messages.forEach((message) => addMessage(message.role, message.content, "", turns.get(message.turnId) ?? null));
+    openTurns(chat).forEach((turn, index) => pendingBubble(turn, index + 1));
   }
+  forgetSettledTurns();
   $("#view-title").textContent = chat?.title ?? "Selecione um chat";
   const badge = $("#chat-code");
   badge.textContent = chat ? `#${chat.code}` : "";
   badge.hidden = !chat || !$("#chat-view").classList.contains("active");
   $("#clear").hidden = !chat;
-  prompt.disabled = !chat;
-  $("#send").disabled = !chat;
+  dressComposer();
+  dressPending();
+  // A ampulheta da portaria também lê o banco: ela acende enquanto houver
+  // pedido em aberto em qualquer chat, não enquanto uma chamada estiver presa.
+  setGateBusy(state.workspace.chats.some((item) => openTurns(item).length > 0));
 }
 
 function activeProject() { return state.workspace.projects.find((project) => project.id === state.activeProjectId); }
@@ -168,7 +339,7 @@ function chatCard(chat) {
   const said = [...chat.messages].reverse().find((message) => message.role === "user")?.content;
   const gate = pass
     ? `<span class="chat-gate" data-aspect="${escapeHtml(pass.aspect)}"><b>${escapeHtml(pass.label)}</b><code>${escapeHtml(shorten(pass.detail, 64))}</code></span>`
-    : '<span class="chat-gate" data-empty="true">a portaria não registrou nada nesta sessão</span>';
+    : '<span class="chat-gate" data-empty="true">a portaria ainda não registrou nada aqui</span>';
   const last = said
     ? `<span class="chat-said">${escapeHtml(shorten(said, 150))}</span>`
     : '<span class="chat-said" data-empty="true">nenhum pedido enviado ainda</span>';
@@ -282,6 +453,57 @@ async function loadWorkspace(preferredChatId) {
 /** O núcleo troca o título do chat depois da primeira resposta: a lateral, o
  * cabeçalho e as referências da portaria passam a mostrar o nome novo sem
  * recarregar a conversa. */
+/** O núcleo grava o pedido no banco antes de chamar qualquer modelo e avisa
+ * aqui. A partir deste aviso a mensagem existe em disco, e o estado da tela tem
+ * de saber disso na hora: sem isto, sair do chat redesenharia a conversa a
+ * partir do retrato anterior ao envio — e o pedido sumiria da tela mesmo
+ * estando gravado. */
+function watchPrompts() {
+  const refresh = () => { loadWorkspace(state.activeChatId).catch((error) => console.error(error)); };
+  listen("chat-prompt", refresh);
+  listen("turn-settled", refresh);
+}
+
+/** O pedido que fechou não tem mais o que acompanhar: a resposta dele está em
+ * `messages`, gravada. Guardar o rascunho depois disso é guardar duas versões do
+ * mesmo texto, e uma delas envelhece. */
+function forgetSettledTurns() {
+  const open = new Set(state.workspace.chats.flatMap((chat) => openTurns(chat).map((turn) => turn.id)));
+  [...state.live.keys()].forEach((turnId) => { if (!open.has(turnId)) state.live.delete(turnId); });
+}
+
+/** O pedido contado enquanto acontece. Estes dois avisos não redesenham a
+ * conversa: eles mexem só no balão em aberto. Redesenhar a cada pedaço de texto
+ * jogaria o histórico inteiro fora e de volta dezenas de vezes por resposta — o
+ * redesenho continua sendo do `turn-settled`, quando há o que redesenhar. */
+function watchBeats() {
+  listen("turn-chunk", ({ payload }) => {
+    const live = state.live.get(payload.turnId) ?? { text: "", beats: new Map() };
+    live.text += payload.text;
+    state.live.set(payload.turnId, live);
+    if (payload.chatId !== state.activeChatId) return;
+    dressPending();
+    const article = $(`[data-pending-turn="${payload.turnId}"]`);
+    const body = article && $(".message-body", article);
+    if (!body) return;
+    paintLiveText(body, live);
+    showPending(article, live);
+    timeline.scrollTop = timeline.scrollHeight;
+  });
+  listen("turn-beat", ({ payload }) => {
+    const live = state.live.get(payload.turnId) ?? { text: "", beats: new Map() };
+    live.beats.set(payload.seq, { seq: payload.seq, kind: payload.kind, detail: payload.detail });
+    state.live.set(payload.turnId, live);
+    if (payload.chatId !== state.activeChatId) return;
+    dressPending();
+    const list = $(`[data-activity-turn="${payload.turnId}"]`);
+    if (!list) return;
+    paintActivity(list, live);
+    showPending(list.closest("[data-pending-turn]"), live);
+    timeline.scrollTop = timeline.scrollHeight;
+  });
+}
+
 function watchRenames() {
   listen("chat-renamed", ({ payload }) => {
     const chat = state.workspace.chats.find((item) => item.id === payload.chatId);
@@ -314,33 +536,164 @@ async function loadStatus() {
   }
 }
 
+const asking = $("#asking");
+const askingPrompt = $("#asking-prompt");
+const askingOptions = $("#asking-options");
+const askingSource = $("#asking-source");
+const askingActions = $("#asking-actions");
+const WRITING_HINT = "Enter envia a resposta · Shift + Enter quebra a linha";
+const LOCKED_HINT = "Escolha uma opção acima ou use RESPONDER para escrever";
+const OPEN_HINT = "Enter envia · Shift + Enter quebra a linha";
+
+/** Qual pergunta está aberta na caixa, se o desenvolvedor pediu para escrever
+ * em vez de clicar, e o que ele marcou e ainda não enviou. Nada disto é verdade
+ * guardada: a pergunta e o desfecho dela estão no banco, e é de lá que a caixa
+ * se veste a cada retrato. Isto é rascunho, como o texto ainda não enviado. */
+const answering = { turnId: null, writing: false, picked: new Set() };
+
+/** A caixa de enviar mensagem tem três trajes, e é o banco que escolhe qual:
+ * sem pergunta em aberto, ela é a caixa de sempre; com pergunta de sim ou não,
+ * as três opções aparecem nela e o campo de texto fica travado; com pergunta de
+ * escolha, as alternativas aparecem nela. `IGNORAR` está em todos os trajes —
+ * pergunta que não trava a caixa para sempre é pergunta que se pode recusar. */
+function dressComposer() {
+  const chat = activeChat();
+  const question = chat?.question ?? null;
+  if ((question?.turnId ?? null) !== answering.turnId) {
+    answering.turnId = question?.turnId ?? null;
+    answering.writing = false;
+    answering.picked = new Set();
+  }
+  asking.hidden = !question;
+  askingActions.hidden = !question;
+  form.classList.toggle("composer-asking", Boolean(question));
+  if (!question) {
+    askingOptions.innerHTML = "";
+    askingActions.innerHTML = "";
+    prompt.placeholder = "Peça uma análise, implementação ou revisão…";
+    prompt.disabled = !chat;
+    $("#hint").textContent = OPEN_HINT;
+    // O botão só cai quando não há chat. Desligá-lo enquanto um pedido roda era
+    // o que empurrava o desenvolvedor a mandar por cima e ver o texto sumir; com
+    // fila, mandar em cima da espera é o comportamento normal.
+    $("#send").hidden = false;
+    $("#send").disabled = !chat;
+    return;
+  }
+  askingPrompt.textContent = question.prompt;
+  askingSource.textContent = `Pergunta de #${question.code} · ${question.source}`;
+  askingOptions.innerHTML = question.kind === "noul" ? "" : optionsMarkup(question);
+  askingActions.innerHTML = actionsMarkup(question);
+  prompt.disabled = !answering.writing;
+  prompt.placeholder = answering.writing ? "Escreva a resposta…" : "Responda à pergunta acima";
+  $("#send").hidden = !answering.writing;
+  $("#send").disabled = !answering.writing;
+  $("#hint").textContent = answering.writing ? WRITING_HINT : LOCKED_HINT;
+  if (answering.writing) prompt.focus();
+}
+
+function optionsMarkup(question) {
+  const multiple = question.kind === "multiple";
+  return question.options.map((option, index) => {
+    const marked = answering.picked.has(option) ? " checked" : "";
+    return `<label class="asking-option"><input type="${multiple ? "checkbox" : "radio"}" name="asking-pick" value="${escapeHtml(option)}"${marked}><span>${escapeHtml(option)}</span></label>`;
+  }).join("") + (multiple ? '<small class="asking-note">Pode marcar mais de uma.</small>' : "");
+}
+
+function actionsMarkup(question) {
+  const buttons = [];
+  if (answering.writing) buttons.push('<button type="button" class="asking-act" data-answer="close">VOLTAR</button>');
+  else if (question.kind === "noul") buttons.push('<button type="button" class="asking-act primary" data-answer="yes">SIM</button><button type="button" class="asking-act" data-answer="no">NÃO</button><button type="button" class="asking-act" data-answer="write">RESPONDER</button>');
+  else buttons.push(`<button type="button" class="asking-act primary" data-answer="pick"${answering.picked.size ? "" : " disabled"}>ENVIAR ESCOLHA</button><button type="button" class="asking-act" data-answer="write">RESPONDER</button>`);
+  buttons.push('<button type="button" class="asking-act asking-skip" data-answer="dismiss">IGNORAR</button>');
+  return buttons.join("");
+}
+
+/** A resposta volta pelo mesmo caminho de qualquer pedido: o núcleo compõe o
+ * texto — a tela não escolhe outras palavras para o que foi clicado —, a
+ * Portaria pontua o par pergunta/resposta e só então o modelo é chamado. */
+async function answerQuestion(picked, text = null) {
+  const turnId = answering.turnId;
+  if (!turnId) return;
+  const chatId = state.activeChatId;
+  try {
+    await invoke("answer_question", { answer: { questionTurnId: turnId, picked, text } });
+    answering.writing = false;
+    answering.picked = new Set();
+    await loadWorkspace(chatId);
+  } catch (error) {
+    showFeedback(String(error), true);
+  }
+  loadStatus();
+}
+
+async function dismissQuestion() {
+  const turnId = answering.turnId;
+  if (!turnId) return;
+  const chatId = state.activeChatId;
+  try {
+    await invoke("dismiss_question", { questionTurnId: turnId });
+    await loadWorkspace(chatId);
+  } catch (error) {
+    showFeedback(String(error), true);
+  }
+}
+
+askingOptions.addEventListener("change", (event) => {
+  const input = event.target.closest("input[name='asking-pick']");
+  if (!input) return;
+  const question = activeChat()?.question;
+  if (!question) return;
+  if (question.kind === "multiple") {
+    if (input.checked) answering.picked.add(input.value); else answering.picked.delete(input.value);
+  } else {
+    answering.picked = new Set(input.checked ? [input.value] : []);
+  }
+  askingActions.innerHTML = actionsMarkup(question);
+});
+
+askingActions.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-answer]");
+  if (!button) return;
+  switch (button.dataset.answer) {
+    case "yes": answerQuestion(["yes"]); break;
+    case "no": answerQuestion(["no"]); break;
+    case "pick": answerQuestion([...answering.picked]); break;
+    case "dismiss": dismissQuestion(); break;
+    case "write": answering.writing = true; dressComposer(); break;
+    case "close": answering.writing = false; prompt.value = ""; dressComposer(); break;
+  }
+});
+
+/** Entrega o pedido ao banco e volta. Não espera resposta de modelo nenhum:
+ * quando esta função retorna, o que o desenvolvedor escreveu já é uma linha no
+ * disco com número próprio, e a tela o desenha lendo de lá. Mandar outra coisa
+ * em seguida não atropela nada — o pedido novo entra na fila atrás do anterior.
+ * Se a gravação falhar, o texto volta para a caixa: perder o que foi digitado é
+ * pior do que qualquer erro na tela. */
+async function sendPrompt(value, chatId, turnId = null) {
+  try {
+    await invoke("enqueue_prompt", { request: { input: value, sessionId: chatId, turnId } });
+    await loadWorkspace(state.activeChatId === chatId ? chatId : undefined);
+  } catch (error) {
+    showFeedback(String(error), true);
+    if (state.activeChatId === chatId && !turnId && !prompt.value.trim()) prompt.value = value;
+  }
+  if (state.activeChatId === chatId) prompt.focus();
+  loadStatus();
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const value = prompt.value.trim();
   const chatId = state.activeChatId;
   if (!value || !chatId) return;
-  addMessage("user", value);
   prompt.value = "";
   prompt.style.height = "auto";
-  $("#send").disabled = true;
-  setGateBusy(true);
-  const pending = addMessage("assistant", "Analisando intenção, contexto e rota…", "em andamento");
-  try {
-    const result = await invoke("process_request", { request: { input: value, sessionId: chatId } });
-    pending.remove();
-    const response = result.result?.response ?? result.error ?? "A execução terminou sem resposta.";
-    const meta = result.error ? "erro" : `${result.decision.model_provider} · ${result.decision.model_name} · ${result.complexity}`;
-    addMessage("assistant", response, meta);
-    await loadWorkspace(chatId);
-  } catch (error) {
-    pending.remove();
-    addMessage("assistant", String(error), "erro");
-  } finally {
-    setGateBusy(false);
-    $("#send").disabled = false;
-    prompt.focus();
-    loadStatus();
-  }
+  // Com pergunta em aberto, o que foi escrito é a resposta dela: é o caminho do
+  // `RESPONDER`, e o texto livre vale para qualquer tipo de pergunta.
+  if (answering.turnId && answering.writing) await answerQuestion([], value);
+  else await sendPrompt(value, chatId);
 });
 
 prompt.addEventListener("keydown", (event) => {
@@ -420,6 +773,15 @@ $("#new-chat").addEventListener("click", () => { if (state.activeProjectId) crea
 $("#nav-gate").addEventListener("click", () => navigate("gate"));
 
 timeline.addEventListener("click",async(event)=>{
+  const retry=event.target.closest("[data-retry-turn]");
+  if(retry){
+    const chat=activeChat();
+    const said=chat?.messages.find((message)=>message.turnId===retry.dataset.retryTurn && message.role==="user");
+    if(!said) return;
+    retry.disabled=true;
+    await sendPrompt(said.content,chat.id,retry.dataset.retryTurn);
+    return;
+  }
   const copy=event.target.closest(".copy-code");
   if(copy){await navigator.clipboard.writeText(copy.dataset.code);copy.textContent="Copiado";window.setTimeout(()=>{copy.textContent="Copiar";},1500);return;}
   if(event.target.closest(".welcome-chat") && state.activeProjectId) {createChat(state.activeProjectId);return;}
@@ -622,6 +984,8 @@ $("#icon-grid").innerHTML=iconGrid;
 $("#icon-list").innerHTML=iconList;
 setLayout(state.layout);
 watchGate();
+watchPrompts();
+watchBeats();
 watchRenames();
 navigate("projects");
 Promise.all([loadWorkspace(),loadStatus()]).catch((error) => { showFeedback(String(error),true); console.error(error); });

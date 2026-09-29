@@ -76,6 +76,33 @@ h1,h2,h3,p { margin-top:0; } h1 { font-size:21px; margin-bottom:0; } h2 { font-s
 .message-head { display:flex; justify-content:space-between; padding:0 4px 8px; font-size:12px; } .message-head small { color:#6e7870; }
 .message-body { overflow-wrap:anywhere; line-height:1.58; padding:17px 19px; border-radius:13px; border:1px solid #29302b; background:#151916; }
 .user .message-body { white-space:pre-wrap; background:#1d2920; border-color:#324a37; }
+/* O balão herda a cor do semáforo do próprio pedido: a borda é o registro da
+   portaria onde o desenvolvedor está lendo, sem precisar abrir outra tela. */
+.message-body[data-aspect] { border-color:var(--aspect); box-shadow:0 0 0 1px color-mix(in srgb,var(--aspect) 22%,transparent),0 6px 20px -14px var(--glow); }
+.message-head { gap:10px; align-items:baseline; }
+.message-head strong { margin-right:auto; }
+.message-turn { color:#8d978f; font:11px var(--mono,ui-monospace,SFMono-Regular,Consolas,monospace); letter-spacing:.04em; }
+.message-verdict[data-aspect] { color:var(--aspect); }
+.message-foot { display:flex; gap:10px; align-items:center; padding:9px 4px 0; }
+.message-foot small { color:#6e7870; font-size:12px; }
+.retry-turn { padding:6px 13px; border:1px solid #4a3a22; border-radius:9px; background:#241c12; color:#f5b53d; font-size:12px; cursor:pointer; }
+.retry-turn:hover:not(:disabled) { border-color:#f5b53d; background:#2e2415; }
+.retry-turn:disabled { opacity:.5; cursor:progress; }
+/* O pedido em andamento. O texto cresce em texto puro — a marcação só é
+   aplicada no redesenho, quando a resposta está inteira. */
+.message-live { white-space:pre-wrap; }
+.message-live[hidden] { display:none; }
+.message-pending[hidden] { display:none; }
+.message-pending .message-body { border-style:dashed; }
+/* As etapas, na ordem em que aconteceram. Uma lista curta e apagada: ela conta
+   o caminho, não disputa a atenção com a resposta. */
+.turn-activity { list-style:none; margin:8px 0 0; padding:0 4px; display:flex; flex-direction:column; gap:3px; }
+.turn-activity[hidden] { display:none; }
+.turn-activity li { color:#6e7870; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.turn-activity li::before { content:"·"; margin-right:7px; color:#3f4943; }
+.turn-activity li[data-kind="agent"] { font:11px var(--mono,ui-monospace,SFMono-Regular,Consolas,monospace); color:#5f6a63; }
+.turn-activity li[data-kind="failed"] { color:#e2725b; }
+.turn-activity li[data-kind="done"] { color:#7fa389; }
 .assistant .message-body > :first-child { margin-top:0; }
 .assistant .message-body > :last-child { margin-bottom:0; }
 .assistant .message-body p { white-space:pre-wrap; margin:0 0 13px; }
@@ -98,9 +125,50 @@ h1,h2,h3,p { margin-top:0; } h1 { font-size:21px; margin-bottom:0; } h2 { font-s
 .response-table th { color:#d9e4db; background:#121713; }
 .composer { margin:0 max(40px,calc((100% - 880px)/2)) 28px; border:1px solid #39443c; border-radius:15px; background:#151a17; box-shadow:0 14px 45px #0008; }
 .composer textarea { width:100%; min-height:66px; max-height:180px; resize:none; border:0; box-shadow:none; background:transparent; color:#f2f5f1; padding:17px; }
-.composer > div { display:flex; align-items:center; justify-content:space-between; padding:9px 11px 11px 18px; border-top:1px solid #252d27; }
+.composer > div:not(.asking):not(.pending) { display:flex; align-items:center; justify-content:space-between; padding:9px 11px 11px 18px; border-top:1px solid #252d27; }
 #hint { color:#626d64; font-size:11px; } #send,.primary { color:#08110a; font-weight:700; background:#9defa4; border-color:#9defa4; }
 #send:disabled,.primary:disabled { opacity:.5; cursor:wait; }
+/* ── A espera, colada na caixa de escrita ────────────────────────────────────
+   Quem acabou de digitar está olhando para cá, não para o fim de uma conversa
+   que pode estar rolada para cima. A faixa entra de baixo, pulsa enquanto o
+   pedido corre e sai quando ele fecha — o movimento é o que diz que ainda há
+   alguém trabalhando; um texto parado é indistinguível de uma tela travada. */
+.pending { padding:11px 18px 10px; border-bottom:1px solid #252d27; animation:pending-in .28s ease-out both; }
+.pending[hidden] { display:none; }
+.pending-head { display:flex; align-items:baseline; gap:9px; }
+.pending-head strong { color:#d9e4db; font-size:12px; font-weight:700; }
+.pending-code { color:#8d978f; font:11px var(--mono,ui-monospace,SFMono-Regular,Consolas,monospace); letter-spacing:.04em; }
+.pending-state { margin-left:auto; color:#6e7870; font-size:11px; }
+.pending-pulse { width:7px; height:7px; border-radius:50%; background:#9defa4; align-self:center; animation:pending-pulse 1.5s ease-in-out infinite; }
+/* O texto é varrido por uma luz que anda da esquerda para a direita: é a mesma
+   frase, e mesmo assim não fica parada enquanto a etapa não muda. */
+.pending-line { margin:5px 0 0; font-size:12.5px; line-height:1.45; color:#8d978f;
+  background:linear-gradient(100deg,#8d978f 34%,#e4f2e6 50%,#8d978f 66%) 0 0/300% 100%;
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  animation:pending-sweep 2.6s linear infinite; }
+@keyframes pending-in { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+@keyframes pending-pulse { 0%,100% { opacity:.3; transform:scale(.72); box-shadow:0 0 0 0 #9defa400; } 50% { opacity:1; transform:scale(1); box-shadow:0 0 0 4px #9defa41f; } }
+@keyframes pending-sweep { from { background-position:150% 0; } to { background-position:-150% 0; } }
+/* Movimento é informação aqui, não enfeite — por isso o que sobra sem ele é a
+   cor cheia do texto, e não um texto transparente que ninguém leria. */
+@media(prefers-reduced-motion:reduce){
+  .pending,.pending-pulse,.pending-line { animation:none; }
+  .pending-line { background:none; -webkit-text-fill-color:currentColor; color:#c6cfc5; }
+}
+/* ── A pergunta dentro da caixa de enviar ────────────────────────────────── */
+.composer-asking { border-color:#5c6f5f; }
+.asking { padding:15px 18px 12px; border-bottom:1px solid #252d27; }
+.asking-prompt { margin:0 0 10px; color:#e6ece5; font-size:13px; line-height:1.5; }
+.asking-options { display:flex; flex-direction:column; gap:7px; }
+.asking-option { display:flex; align-items:flex-start; gap:9px; color:#c6cfc5; font-size:12.5px; line-height:1.45; cursor:pointer; }
+.asking-option input { margin:2px 0 0; accent-color:#9defa4; }
+.asking-note,.asking-source { display:block; margin-top:8px; color:#626d64; font-size:11px; }
+.asking-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.asking-act { padding:7px 13px; border:1px solid #39443c; border-radius:8px; color:#d3dbd2; background:#1b211d; font-size:11.5px; font-weight:700; letter-spacing:.04em; }
+.asking-act:hover:not(:disabled) { border-color:#6f8472; }
+.asking-act:disabled { opacity:.45; cursor:default; }
+.asking-skip { color:#8a9289; background:#15191600; border-style:dashed; }
+.composer-asking textarea:disabled { color:#6b756c; cursor:default; }
 /* ── Pátio: a lista de projetos, a página inicial ────────────────────────── */
 #projects-view { overflow:auto; }
 .yard { width:min(1180px,100%); margin:0 auto; padding:46px 42px 52px; }

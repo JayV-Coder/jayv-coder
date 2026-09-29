@@ -20,10 +20,17 @@ providers:
   # para a nuvem; declara-los locais liberaria os arquivos de privacy.local_only.
   # Num provedor proprio, `local: true` so vale se o binario nunca sair da
   # maquina; em openai-compatible o valor e inferido do host de base_url.
+  # `timeout` nao e o prazo da resposta: e o prazo entre um sinal de vida e o
+  # seguinte. Um pedido detalhado leva minutos de trabalho honesto, e enquanto o
+  # agente estiver falando ele nao estoura; calado por este tanto, estoura.
+  # Os tres argumentos de formato existem para ele falar: com `--print` sozinho
+  # o Claude nao escreve nada ate terminar, e `--include-partial-messages` cobre
+  # tambem a escrita da resposta, que em `stream-json` seria silenciosa.
+  # Um agente mudo nao se distingue de um agente travado.
   claude:
     type: cli
     command: claude
-    args: ["--model", "{model}", "--print"]
+    args: ["--model", "{model}", "--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
     timeout: 120
   codex:
     type: cli

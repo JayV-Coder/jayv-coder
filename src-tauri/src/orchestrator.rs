@@ -3,7 +3,8 @@ use crate::{
     context_engine::{optimize_for_budget, rank_fragments, ContextFragment},
     firewall::ContextFirewall, graph::ExecutionGraph, jev, memory::MemoryManager,
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
-    providers::{build_providers, Provider}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
+    progress::{Beat, Pulse},
+    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -55,6 +56,9 @@ pub struct Orchestrator {
     pub pending_gate_note: Option<String>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
+    /// A pasta que os agentes de linha de comando enxergam. Anda junto com o
+    /// índice: os dois descrevem o projeto do chat que está sendo atendido.
+    workdir: Workdir,
     last_decision: Option<Decision>,
 }
 
@@ -63,11 +67,13 @@ impl Orchestrator {
         let config=Config::load(&config_path)?;
         let firewall=ContextFirewall::new(config.privacy.clone());
         let performance_path=root.join(PERFORMANCE_FILE);
+        let workdir=Workdir::default();
+        workdir.focus(root.clone());
         let mut rag=RepositoryRag::new(root); rag.index(&firewall)?;
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers), config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, performance_path, last_decision:None })
     }
 
-    pub fn reload(&mut self)->Result<()> { let config=Config::load(&self.config_path)?; self.providers=build_providers(&config.providers); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
+    pub fn reload(&mut self)->Result<()> { let config=Config::load(&self.config_path)?; self.providers=build_providers(&config.providers,&self.workdir); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
 
     /// Cada chat pertence a um projeto, e é a pasta desse projeto que precisa
     /// entrar no contexto: sem isto o Jev descreveria o diretório de onde o
@@ -76,27 +82,40 @@ impl Orchestrator {
     /// resposta de outro repositório.
     pub fn focus_on(&mut self,root:&Path)->Result<()> {
         anyhow::ensure!(root.is_dir(),"a pasta do projeto não existe mais: {}",root.display());
+        self.workdir.focus(root.to_path_buf());
         self.rag.focus_on(root.to_path_buf(),&self.firewall)
     }
 
     pub fn executable_provider_count(&self)->usize { self.providers.len() }
     pub fn executable_model_count(&self)->usize { self.config.models.values().filter(|model|model.enabled && self.providers.contains_key(&model.provider)).count() }
 
-    pub async fn process(&mut self,user_input:&str,session_id:Option<&str>)->ProcessResult {
+    /// O `pulse` é por onde o pedido conta o que está fazendo enquanto faz.
+    /// `Pulse::silent()` deixa tudo como era: o núcleo não sabe nem precisa
+    /// saber se alguém está escutando.
+    pub async fn process(&mut self,user_input:&str,session_id:Option<&str>,pulse:&Pulse)->ProcessResult {
         let session_id=session_id.unwrap_or("default");
         let normalized=user_input.trim().to_string();
-        if normalized.starts_with("/why") { return self.explanation_result(user_input,&normalized); }
+        if normalized.starts_with("/why") {
+            let result=self.explanation_result(user_input,&normalized);
+            if let Some(response)=&result.result { pulse.beat(Beat::Chunk{text:response.response.clone()}); }
+            pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
+            return result;
+        }
         self.memory.add_message(session_id,"user",normalized.clone());
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
+        pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
         let notes=routing_notes(&signals);
         let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens);
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals);
+        pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
         let capabilities=routing_capabilities(&intent.intent,&signals);
         let selection=select_model(&self.config,&intent.intent,&complexity,&context,&self.performance);
         if let Some(guidance)=self.configuration_guidance(&selection) {
             let response=ProviderResponse { response:guidance, input_tokens:0, output_tokens:0, model:"configuration".into(), provider:"jev".into(), latency_ms:0 };
+            pulse.beat(Beat::Chunk{text:response.response.clone()});
+            pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
             self.memory.add_message(session_id,"assistant",response.response.clone());
             let model_selection=ModelSelection { model_name:"configuration".into(), provider:"jev".into(), estimated_tokens:selection.estimated_tokens, score:0.0, reason:"LLM configuration is required before execution".into() };
             let decision=Decision { model_provider:"jev".into(), model_name:"configuration".into(), estimated_tokens:model_selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
@@ -104,8 +123,14 @@ impl Orchestrator {
             return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
         }
         let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
+        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone()});
+        pulse.beat(Beat::Running);
         let started=Instant::now();
-        let execution=self.execute(&normalized,&capabilities,&context,&selection,session_id).await;
+        let execution=self.execute(&normalized,&capabilities,&context,&selection,session_id,pulse).await;
+        match &execution {
+            Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
+            Err(error)=>pulse.beat(Beat::Failed{error:error.to_string()}),
+        }
         let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(error.to_string()),false) };
         self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now() });
         let _=self.performance.save(&self.performance_path);
@@ -155,6 +180,7 @@ impl Orchestrator {
 
     fn assemble_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize,signals:&RoutingSignals)->Context {
         let mut context=if repository_context_wanted(signals){self.build_context(input,plan,budget,reserved)}else{Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),project:self.rag.project_info(),relevant_files:vec![],snippets:vec![],estimated_tokens:reserved,repository_context_skipped:true}};
+        note_project(&mut context);
         note_routing(&mut context,signals);
         if let Some(note)=self.pending_gate_note.take() { context.system_instructions.push_str(&format!("\n{note}")); }
         context
@@ -198,7 +224,7 @@ impl Orchestrator {
         clean_title(&provider.chat(&messages,&model.model).await.ok()?.response)
     }
 
-    async fn execute(&self,input:&str,capabilities:&[String],context:&Context,selection:&ModelSelection,session_id:&str)->Result<ProviderResponse> {
+    async fn execute(&self,input:&str,capabilities:&[String],context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
         let provider=self.providers.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
         let agent=self.agents.select(capabilities);
@@ -208,7 +234,7 @@ impl Orchestrator {
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).rev().cloned());
         messages.push(ChatMessage{role:"user".into(),content:user});
-        provider.chat(&messages,&selection.model_name).await
+        provider.chat_stream(&messages,&selection.model_name,pulse).await
     }
 
     fn without_local_only(&self,context:&Context)->Context {
@@ -302,6 +328,14 @@ pub fn routing_notes(signals:&RoutingSignals)->String {
     if destructive(signals) { notes.push(DESTRUCTIVE_NOTE); }
     if notes.is_empty(){String::new()}else{format!("\n{}",notes.join("\n"))}
 }
+/// Em que repositório o pedido está sendo atendido. Vai no prompt porque sem
+/// ele um caminho de arquivo na resposta não quer dizer nada: nem o modelo sabe
+/// de onde partir, nem o portão de saída tem contra o que medir o que voltou.
+fn note_project(context:&mut Context){
+    let line=format!("\nPROJECT: {} at {}",context.project.name,context.project.root);
+    if !context.system_instructions.contains(&line) { context.system_instructions.push_str(&line); }
+}
+
 fn note_routing(context:&mut Context,signals:&RoutingSignals){ let notes=routing_notes(signals); if !notes.is_empty()&&!context.system_instructions.contains(notes.trim_start()) { context.system_instructions.push_str(&notes); } }
 fn estimate_tokens(value:&str)->usize{(value.chars().count()/4).max(1)}
 fn snippet_tokens(snippet:&ContextSnippet)->usize{estimate_tokens(&snippet.content)+estimate_tokens(&snippet.path)+SNIPPET_WRAPPER}
@@ -443,6 +477,21 @@ mod tests {
         println!("`{request}` on this repository | retrieved: {} files / {} tokens | before (pruned to the trivial budget): {} files / {} tokens | after: {} files / {} tokens + {} instruction tokens",retrieved.snippets.len(),sent_tokens(&retrieved),before.snippets.len(),sent_tokens(&before),after.snippets.len(),sent_tokens(&after),estimate_tokens(&routing_notes(&signals)));
     }
 
+    /// O modelo precisa saber em que repositório ele está mexendo. Sem a pasta
+    /// no prompt, um caminho de arquivo devolvido pela resposta não quer dizer
+    /// nada, e o portão de saída não tem contra o que medi-lo.
+    #[test]
+    fn o_prompt_diz_em_que_pasta_o_projeto_esta() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let plan=plan_context("general","trivial");
+
+        let context=orchestrator.assemble_context("onde estou",&plan,2_000,120,&RoutingSignals::default());
+
+        assert!(context.system_instructions.contains(&context.project.root),"o caminho do projeto vai no prompt: {}",context.system_instructions);
+        assert!(context.system_instructions.contains(&context.project.name),"o nome do projeto vai junto");
+    }
+
     #[test]
     fn tools_that_are_not_needed_leave_the_tools_capability_out() {
         let dir=repository(&[("router.rs",filler("router",200))]);
@@ -466,7 +515,7 @@ mod tests {
         let mut decision=routed("refactor",0.93,"medium",0.9); decision.is_destructive=0.94;
         orchestrator.routing_mode=RoutingMode::Fixed(Box::new(decision));
 
-        let result=orchestrator.process("apague o roteador antigo e reescreva",Some("test")).await;
+        let result=orchestrator.process("apague o roteador antigo e reescreva",Some("test"),&Pulse::silent()).await;
 
         assert_eq!(result.routing.is_destructive,Some(0.94));
         assert_eq!(result.routing.source,SOURCE_JEV);
@@ -481,7 +530,7 @@ mod tests {
         let mut orchestrator=orchestrator(&dir);
         orchestrator.routing_mode=RoutingMode::Failed("a TypeSafe aplicou limite de requisições (429)".into());
 
-        let result=orchestrator.process("Implemente um cliente HTTP",Some("test")).await;
+        let result=orchestrator.process("Implemente um cliente HTTP",Some("test"),&Pulse::silent()).await;
 
         assert_eq!(result.routing.source,SOURCE_FALLBACK);
         assert_eq!(result.intent_analysis.intent,analyze_intent("Implemente um cliente HTTP").intent);
@@ -497,14 +546,16 @@ mod tests {
         let dir=repository(&[("router.rs",filler("router",200))]);
         let mut orchestrator=orchestrator(&dir);
 
-        let result=orchestrator.process("Explique o roteador",Some("test")).await;
+        let result=orchestrator.process("Explique o roteador",Some("test"),&Pulse::silent()).await;
 
         assert_eq!(result.routing.source,SOURCE_LOCAL);
         assert!(result.routing.notice.is_none() && result.routing.jev_model.is_none());
         assert!(result.routing.needs_repository_context.is_none() && result.routing.needs_tools.is_none() && result.routing.is_destructive.is_none());
         assert_eq!(result.intent_analysis.intent,analyze_intent("Explique o roteador").intent);
         assert_eq!(result.complexity,analyze_complexity("Explique o roteador",&analyze_intent("Explique o roteador")));
-        assert_eq!(result.context.system_instructions,SYSTEM_INSTRUCTIONS);
+        // Sem o Jev, o prompt é o de sempre mais a linha do projeto — ela não vem
+        // do roteador, vem de onde o pedido está sendo atendido, e vai sempre.
+        assert_eq!(result.context.system_instructions,format!("{SYSTEM_INSTRUCTIONS}\nPROJECT: {} at {}",result.context.project.name,result.context.project.root));
         assert!(!result.context.repository_context_skipped);
         assert!(routing_notes(&result.routing).is_empty());
     }
@@ -636,7 +687,7 @@ mod tests {
         let config_path=root.path().join("missing-config.yaml");
         let mut orchestrator=Orchestrator::new(config_path.clone(),root.path().to_path_buf()).expect("orchestrator");
 
-        let result=orchestrator.process("Explique este projeto",Some("test")).await;
+        let result=orchestrator.process("Explique este projeto",Some("test"),&Pulse::silent()).await;
 
         assert!(result.error.is_none());
         assert!(result.validation);

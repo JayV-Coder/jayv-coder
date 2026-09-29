@@ -3,13 +3,13 @@
 //! confere cada comando ou arquivo que o modelo pediu para mexer contra as
 //! regras da casa declaradas em `config.yaml`.
 
-use crate::{config::Config, firewall::ContextFirewall, jev::{self, Evaluation, Question}};
+use crate::{config::Config, firewall::ContextFirewall, jev::{self, Evaluation, Question}, turns::Turn};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::{BTreeMap, BTreeSet, VecDeque}, path::Path, sync::OnceLock};
+use std::{collections::BTreeMap, path::Path, sync::OnceLock};
 use uuid::Uuid;
 
 pub const ENTRY_QUESTION_IDS:[&str;5]=["bundles_requests","goal_is_clear","says_when_done","says_where","scope"];
@@ -19,7 +19,6 @@ pub const SCOPE_DEMAND:[f64;3]=[0.35,0.55,0.70];
 /// Abaixo da exigência o portão pergunta; abaixo dela com esta folga, barra.
 pub const BLOCK_MARGIN:f64=0.20;
 const WEIGHTS:[(&str,f64);4]=[("goal_is_clear",0.40),("says_where",0.25),("says_when_done",0.20),("bundles_requests",0.15)];
-const LOG_CAPACITY:usize=200;
 const PROMPT_PREVIEW:usize=600;
 const SHELL_LANGUAGES:[&str;7]=["bash","sh","shell","zsh","console","terminal","shell-session"];
 
@@ -30,6 +29,7 @@ const SHELL_LANGUAGES:[&str;7]=["bash","sh","shell","zsh","console","terminal","
 pub enum EntryVerdict{Pass,Ask,Block}
 impl EntryVerdict {
     pub fn as_str(&self)->&'static str{match self{Self::Pass=>"pass",Self::Ask=>"ask",Self::Block=>"block"}}
+    pub fn parse(value:&str)->Result<Self>{Ok(match value{"pass"=>Self::Pass,"ask"=>Self::Ask,"block"=>Self::Block,other=>return Err(anyhow!("veredito de entrada desconhecido: `{other}`"))})}
     pub fn lets_through(&self)->bool{!matches!(self,Self::Block)}
 }
 
@@ -45,9 +45,13 @@ impl Criterion {
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct EntryCheck {
+    /// O turno é a identidade do check: um pedido é pontuado uma vez, e
+    /// retentá-lo reescreve esta linha em vez de criar outra.
     pub id:String,
     pub at:DateTime<Utc>,
     pub chat_id:String,
+    /// O código que o desenvolvedor lê nos dois lados, `XY4T9B·04`.
+    pub turn:String,
     pub prompt:String,
     pub score:u8,
     pub demand:u8,
@@ -117,7 +121,7 @@ fn criterion(id:&str,label:&str,value:f64,demand:f64,inverted:bool,reading:(&str
 }
 
 /// Monta o veredito a partir das leituras, aplicando a exigência do tamanho.
-pub fn judge(chat_id:&str,prompt:&str,reading:&EntryReading,source:&str)->EntryCheck {
+pub fn judge(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str)->EntryCheck {
     let level=reading.scope_level();
     let demand=SCOPE_DEMAND[level];
     let clarity=reading.clarity();
@@ -135,7 +139,7 @@ pub fn judge(chat_id:&str,prompt:&str,reading:&EntryReading,source:&str)->EntryC
         EntryVerdict::Ask=>"Liberado com ressalva: o modelo vai perguntar antes de começar.".into(),
         EntryVerdict::Block=>format!("Barrado: {scope} sem o mínimo de clareza exigido."),
     };
-    EntryCheck{id:Uuid::new_v4().to_string(),at:Utc::now(),chat_id:chat_id.into(),prompt:preview(prompt),score:percent(clarity),demand:percent(demand),verdict,scope:scope.into(),criteria,source:source.into(),note}
+    EntryCheck{id:turn.id.clone(),at:Utc::now(),chat_id:turn.chat_id.clone(),turn:turn.code.clone(),prompt:preview(prompt),score:percent(clarity),demand:percent(demand),verdict,scope:scope.into(),criteria,source:source.into(),note}
 }
 
 fn preview(prompt:&str)->String {
@@ -223,6 +227,7 @@ pub fn heuristic_entry(prompt:&str)->EntryReading {
 pub enum ExitVerdict{Cleared,Held}
 impl ExitVerdict {
     pub fn as_str(&self)->&'static str{match self{Self::Cleared=>"cleared",Self::Held=>"held"}}
+    pub fn parse(value:&str)->Result<Self>{Ok(match value{"cleared"=>Self::Cleared,"held"=>Self::Held,other=>return Err(anyhow!("veredito de saída desconhecido: `{other}`"))})}
 }
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
@@ -231,6 +236,9 @@ pub struct ExitCheck {
     pub id:String,
     pub at:DateTime<Utc>,
     pub chat_id:String,
+    pub turn_id:String,
+    /// O pedido que originou esta saída, como o desenvolvedor o lê.
+    pub turn:String,
     /// `comando` ou `arquivo`, como a coluna mostra.
     pub kind:String,
     pub target:String,
@@ -239,8 +247,8 @@ pub struct ExitCheck {
 }
 
 impl ExitCheck {
-    fn new(chat_id:&str,kind:&str,target:&str,rule:Option<String>)->Self {
-        Self{id:Uuid::new_v4().to_string(),at:Utc::now(),chat_id:chat_id.into(),kind:kind.into(),target:target.into(),rule:rule.clone(),verdict:if rule.is_some(){ExitVerdict::Held}else{ExitVerdict::Cleared}}
+    pub(crate) fn new(turn:&Turn,kind:&str,target:&str,rule:Option<String>)->Self {
+        Self{id:Uuid::new_v4().to_string(),at:Utc::now(),chat_id:turn.chat_id.clone(),turn_id:turn.id.clone(),turn:turn.code.clone(),kind:kind.into(),target:target.into(),rule:rule.clone(),verdict:if rule.is_some(){ExitVerdict::Held}else{ExitVerdict::Cleared}}
     }
 }
 
@@ -273,18 +281,18 @@ fn escapes_root(root:&Path,path:&str)->bool {
 
 /// Lê a resposta do modelo e devolve tudo que ele pediu para rodar ou mexer,
 /// já confrontado com as regras da casa.
-pub fn scan_answer(chat_id:&str,answer:&str,config:&Config,firewall:&ContextFirewall,root:&Path)->Vec<ExitCheck> {
+pub fn scan_answer(turn:&Turn,answer:&str,config:&Config,firewall:&ContextFirewall,root:&Path)->Vec<ExitCheck> {
     let mut checks=Vec::new();
     let mut seen=Vec::new();
     for line in shell_lines(answer) {
         if seen.contains(&line){continue;}
         seen.push(line.clone());
-        checks.push(ExitCheck::new(chat_id,"comando",&line,command_rule(config,&line)));
+        checks.push(ExitCheck::new(turn,"comando",&line,command_rule(config,&line)));
     }
     for path in mentioned_paths(answer) {
         if seen.contains(&path){continue;}
         seen.push(path.clone());
-        checks.push(ExitCheck::new(chat_id,"arquivo",&path,file_rule(config,firewall,root,&path)));
+        checks.push(ExitCheck::new(turn,"arquivo",&path,file_rule(config,firewall,root,&path)));
     }
     checks
 }
@@ -342,54 +350,13 @@ pub struct Tally{pub passed:u32,pub asked:u32,pub blocked:u32,pub held:u32}
 #[serde(rename_all="camelCase")]
 pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tally:Tally}
 
-/// O que as duas colunas mostram: os últimos itens de cada portão, mais novos
-/// primeiro, e um placar que conta tudo que passou pela portaria na sessão.
-#[derive(Debug,Default)]
-/// `by_chat` guarda o placar de cada chat separado do placar da sessão: é o
-/// que deixa a Portaria de um projeto contar certo mesmo depois que os itens
-/// mais antigos saíram da fila.
-pub struct GateLog{entries:VecDeque<EntryCheck>,exits:VecDeque<ExitCheck>,tally:Tally,by_chat:BTreeMap<String,Tally>}
-
-impl GateLog {
-    pub fn record_entry(&mut self,check:EntryCheck)->EntryCheck {
-        let chat=self.by_chat.entry(check.chat_id.clone()).or_default();
-        for tally in [&mut self.tally,chat] {
-            match check.verdict {EntryVerdict::Pass=>tally.passed+=1,EntryVerdict::Ask=>tally.asked+=1,EntryVerdict::Block=>tally.blocked+=1}
-        }
-        push_capped(&mut self.entries,check.clone()); check
-    }
-    pub fn record_exits(&mut self,checks:Vec<ExitCheck>)->Vec<ExitCheck> {
-        for check in &checks {
-            if check.verdict==ExitVerdict::Held {
-                self.tally.held+=1;
-                self.by_chat.entry(check.chat_id.clone()).or_default().held+=1;
-            }
-            push_capped(&mut self.exits,check.clone());
-        }
-        checks
-    }
-    pub fn tally(&self)->Tally{self.tally}
-    pub fn feed(&self)->GateFeed{GateFeed{entries:self.entries.iter().rev().cloned().collect(),exits:self.exits.iter().rev().cloned().collect(),tally:self.tally}}
-
-    /// O feed de um projeto: só o que passou pelos chats dele, com o placar
-    /// somado apenas desses chats.
-    pub fn feed_for(&self,chats:&BTreeSet<String>)->GateFeed {
-        let tally=chats.iter().filter_map(|chat|self.by_chat.get(chat)).fold(Tally::default(),|total,chat|Tally{
-            passed:total.passed+chat.passed,asked:total.asked+chat.asked,blocked:total.blocked+chat.blocked,held:total.held+chat.held,
-        });
-        GateFeed{
-            entries:self.entries.iter().rev().filter(|check|chats.contains(&check.chat_id)).cloned().collect(),
-            exits:self.exits.iter().rev().filter(|check|chats.contains(&check.chat_id)).cloned().collect(),
-            tally,
-        }
-    }
-}
-
-fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{queue.pop_front();}queue.push_back(item);}
-
 #[cfg(test)] mod tests {
     use super::*;
-    use crate::config::{Config,PermissionsConfig,PrivacyConfig};
+    use crate::{config::{Config,PermissionsConfig,PrivacyConfig},turns::TurnStatus};
+
+    /// Um turno de mentira, do tamanho que o portão precisa: ele só lê o id, o
+    /// chat e o código.
+    fn turn_at(chat:&str)->Turn{Turn{id:format!("turno-de-{chat}"),chat_id:chat.into(),code:format!("{}·01",chat.to_uppercase()),ordinal:1,status:TurnStatus::Flying,created_at:Utc::now()}}
 
     fn reading(scope:f64,goal:f64,where_:f64,done:f64,bundles:f64)->EntryReading{EntryReading{scope_score:scope,goal_is_clear:goal,says_where:where_,says_when_done:done,bundles_requests:bundles}}
     fn firewall()->ContextFirewall{ContextFirewall::new(PrivacyConfig::default())}
@@ -413,10 +380,10 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
     #[test]
     fn a_bigger_pedido_has_to_say_more_to_get_through() {
         let precise=reading(0.2,0.9,0.9,0.9,0.05);
-        assert_eq!(judge("c","x",&precise,"jev").verdict,EntryVerdict::Pass);
+        assert_eq!(judge(&turn_at("c"),"x",&precise,"jev").verdict,EntryVerdict::Pass);
         // A mesma clareza fraca atravessa como ajuste pequeno e barra como sistema inteiro.
-        let small=judge("c","x",&reading(0.2,0.5,0.2,0.1,0.1),"jev");
-        let whole=judge("c","x",&reading(1.9,0.5,0.2,0.1,0.1),"jev");
+        let small=judge(&turn_at("c"),"x",&reading(0.2,0.5,0.2,0.1,0.1),"jev");
+        let whole=judge(&turn_at("c"),"x",&reading(1.9,0.5,0.2,0.1,0.1),"jev");
         assert_eq!(small.score,whole.score);
         assert_eq!((small.verdict,whole.verdict),(EntryVerdict::Pass,EntryVerdict::Block));
         assert_eq!((small.demand,whole.demand),(35,70));
@@ -428,15 +395,15 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
         assert_eq!((level(0.0),level(0.66),level(0.67),level(1.33),level(1.34),level(2.0)),(0,0,1,1,2,2));
         // Uma funcionalidade exige 55: 70 passa, 50 pergunta, 30 barra.
         let at=|clarity:f64|{let mut r=reading(1.0,clarity,clarity,clarity,1.0-clarity);r.bundles_requests=1.0-clarity;r};
-        assert_eq!(judge("c","x",&at(0.70),"jev").verdict,EntryVerdict::Pass);
-        assert_eq!(judge("c","x",&at(0.50),"jev").verdict,EntryVerdict::Ask);
-        assert_eq!(judge("c","x",&at(0.30),"jev").verdict,EntryVerdict::Block);
-        assert_eq!(judge("c","x",&at(0.70),"jev").demand,55);
+        assert_eq!(judge(&turn_at("c"),"x",&at(0.70),"jev").verdict,EntryVerdict::Pass);
+        assert_eq!(judge(&turn_at("c"),"x",&at(0.50),"jev").verdict,EntryVerdict::Ask);
+        assert_eq!(judge(&turn_at("c"),"x",&at(0.30),"jev").verdict,EntryVerdict::Block);
+        assert_eq!(judge(&turn_at("c"),"x",&at(0.70),"jev").demand,55);
     }
 
     #[test]
     fn every_criterion_reaches_the_screen_as_a_percentage_with_its_band() {
-        let check=judge("chat","Refatore o roteador",&reading(1.0,0.9,0.2,0.8,0.4),"jev");
+        let check=judge(&turn_at("chat"),"Refatore o roteador",&reading(1.0,0.9,0.2,0.8,0.4),"jev");
         let ids=check.criteria.iter().map(|criterion|criterion.id.as_str()).collect::<Vec<_>>();
         assert_eq!(ids,vec!["scope","goal_is_clear","says_where","says_when_done","bundles_requests"]);
         assert!(check.criteria.iter().all(|criterion|criterion.percent<=100 && !criterion.label.is_empty() && !criterion.reading.is_empty()));
@@ -452,16 +419,16 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
 
     #[test]
     fn a_blocked_pedido_explains_itself_and_an_asked_one_carries_an_instruction() {
-        let blocked=judge("chat","arruma tudo ai",&reading(1.9,0.2,0.1,0.05,0.6),"heuristica");
+        let blocked=judge(&turn_at("chat"),"arruma tudo ai",&reading(1.9,0.2,0.1,0.05,0.6),"heuristica");
         assert_eq!(blocked.verdict,EntryVerdict::Block);
         let reply=blocked.reply();
         assert!(reply.contains("sistema inteiro") && reply.contains("70") && reply.contains("onde mexer"),"{reply}");
         assert!(blocked.clarifying_note().is_none());
-        let asked=judge("chat","Adicione paginação na listagem",&reading(1.0,0.7,0.4,0.05,0.05),"jev");
+        let asked=judge(&turn_at("chat"),"Adicione paginação na listagem",&reading(1.0,0.7,0.4,0.05,0.05),"jev");
         assert_eq!(asked.verdict,EntryVerdict::Ask);
         let note=asked.clarifying_note().expect("ressalva");
         assert!(note.contains("uma única pergunta") && note.contains("pronto"),"{note}");
-        assert!(judge("chat","x",&reading(0.2,0.95,0.95,0.95,0.0),"jev").clarifying_note().is_none());
+        assert!(judge(&turn_at("chat"),"x",&reading(0.2,0.95,0.95,0.95,0.0),"jev").clarifying_note().is_none());
     }
 
     #[test]
@@ -483,7 +450,7 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
     fn the_exit_gate_names_the_rule_each_command_and_file_hit() {
         let answer="Rode isto:\n\n```bash\n$ cargo test --lib\nrm -rf target\n```\n\nDepois edite `src/router.rs` e nunca toque em `.env`.";
         let ask=config("ask","ask");
-        let checks=scan_answer("chat",answer,&ask,&firewall(),Path::new("/projeto"));
+        let checks=scan_answer(&turn_at("chat"),answer,&ask,&firewall(),Path::new("/projeto"));
         let commands=checks.iter().filter(|check|check.kind=="comando").collect::<Vec<_>>();
         assert_eq!(commands.len(),2);
         assert_eq!(commands[0].target,"cargo test --lib");
@@ -493,7 +460,7 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
         assert_eq!(files[1].rule.as_deref(),Some("privacy.deny · .env"));
         assert_eq!(files[0].rule.as_deref(),Some("permissions.write · ask"));
         let open=config("allow","allow");
-        let relaxed=scan_answer("chat",answer,&open,&firewall(),Path::new("/projeto"));
+        let relaxed=scan_answer(&turn_at("chat"),answer,&open,&firewall(),Path::new("/projeto"));
         assert!(relaxed.iter().filter(|check|check.target=="cargo test --lib").all(|check|check.verdict==ExitVerdict::Cleared));
         assert_eq!(relaxed.iter().find(|check|check.target==".env").expect("env").verdict,ExitVerdict::Held);
     }
@@ -518,50 +485,6 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
     }
 
     #[test]
-    fn the_scoreboard_counts_every_verdict_and_the_feed_keeps_the_newest_first() {
-        let mut log=GateLog::default();
-        log.record_entry(judge("chat","primeiro",&reading(0.2,0.95,0.95,0.95,0.0),"jev"));
-        log.record_entry(judge("chat","segundo",&reading(1.0,0.7,0.4,0.05,0.05),"jev"));
-        log.record_entry(judge("chat","terceiro",&reading(1.9,0.2,0.1,0.05,0.6),"jev"));
-        log.record_exits(vec![ExitCheck::new("chat","comando","cargo test",Some("permissions.shell · ask".into())),ExitCheck::new("chat","arquivo","src/lib.rs",None)]);
-        assert_eq!(log.tally(),Tally{passed:1,asked:1,blocked:1,held:1});
-        let feed=log.feed();
-        assert_eq!(feed.entries.iter().map(|entry|entry.prompt.as_str()).collect::<Vec<_>>(),vec!["terceiro","segundo","primeiro"]);
-        assert_eq!(feed.exits[0].target,"src/lib.rs");
-        for index in 0..LOG_CAPACITY+20 {log.record_entry(judge("chat",&index.to_string(),&reading(0.2,0.9,0.9,0.9,0.0),"jev"));}
-        assert_eq!(log.feed().entries.len(),LOG_CAPACITY);
-        assert_eq!(log.tally().passed,1+LOG_CAPACITY as u32+20);
-    }
-
-    #[test]
-    fn a_project_sees_only_the_gates_of_its_own_chats() {
-        let mut log=GateLog::default();
-        log.record_entry(judge("chat-a","do projeto",&reading(0.2,0.95,0.95,0.95,0.0),"jev"));
-        log.record_entry(judge("chat-b","de outro projeto",&reading(0.2,0.95,0.95,0.95,0.0),"jev"));
-        log.record_entry(judge("chat-a","barrado aqui",&reading(1.9,0.2,0.1,0.05,0.6),"jev"));
-        log.record_exits(vec![ExitCheck::new("chat-a","comando","cargo test",Some("permissions.shell · ask".into()))]);
-        log.record_exits(vec![ExitCheck::new("chat-b","arquivo",".env",Some("privacy.deny · .env".into()))]);
-
-        let mine=log.feed_for(&["chat-a".to_string()].into_iter().collect());
-        assert_eq!(mine.entries.iter().map(|entry|entry.prompt.as_str()).collect::<Vec<_>>(),vec!["barrado aqui","do projeto"]);
-        assert_eq!(mine.exits.iter().map(|exit|exit.target.as_str()).collect::<Vec<_>>(),vec!["cargo test"]);
-        assert_eq!(mine.tally,Tally{passed:1,asked:0,blocked:1,held:1},"o placar conta só os chats do projeto");
-        assert_eq!(log.tally(),Tally{passed:2,asked:0,blocked:1,held:2},"o placar da sessão continua somando tudo");
-        assert_eq!(log.feed_for(&BTreeSet::new()),GateFeed::default(),"projeto sem chat, portaria vazia");
-    }
-
-    /// O placar de um projeto não pode encolher quando os itens antigos saem
-    /// da fila: ele conta o que passou, não o que ainda está na tela.
-    #[test]
-    fn the_project_scoreboard_survives_the_feed_rolling_over() {
-        let mut log=GateLog::default();
-        for index in 0..LOG_CAPACITY+20 {log.record_entry(judge("chat-a",&index.to_string(),&reading(0.2,0.9,0.9,0.9,0.0),"jev"));}
-        let mine=log.feed_for(&["chat-a".to_string()].into_iter().collect());
-        assert_eq!(mine.entries.len(),LOG_CAPACITY);
-        assert_eq!(mine.tally.passed,LOG_CAPACITY as u32+20);
-    }
-
-    #[test]
     fn reads_a_batched_entry_evaluation_and_reports_what_is_missing() {
         let evaluation:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{
             "scope":{"type":"score","score":1.8,"confidence":0.8,"probabilities":{"0":0.0,"1":0.2,"2":0.8}},
@@ -574,7 +497,7 @@ fn push_capped<T>(queue:&mut VecDeque<T>,item:T){if queue.len()>=LOG_CAPACITY{qu
         assert_eq!(entry.scope_level(),2);
         // Objetivo claríssimo, mas num sistema inteiro sem dizer onde nem como
         // conferir: a portaria libera e manda perguntar antes de começar.
-        let check=judge("chat","Migre a persistência",&entry,"jev");
+        let check=judge(&turn_at("chat"),"Migre a persistência",&entry,"jev");
         assert_eq!((check.verdict,check.scope.as_str(),check.demand),(EntryVerdict::Ask,"sistema inteiro",70));
         assert_eq!(check.failing().iter().map(|criterion|criterion.id.as_str()).collect::<Vec<_>>(),vec!["says_where","says_when_done","bundles_requests"]);
         let partial:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{"goal_is_clear":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1,"output_tokens":1}}"#).unwrap();

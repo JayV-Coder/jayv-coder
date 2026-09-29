@@ -481,9 +481,9 @@ impl VerificationVerdict {
 
     #[test]
     fn routing_state_names_every_field_the_instructions_reference() {
-        let state=routing_state(&RoutingInput::new("Refatore o roteador").with_project("jev-orchestrator",vec!["Rust".into()]).with_candidate_files(vec!["src/router.rs".into()]));
+        let state=routing_state(&RoutingInput::new("Refatore o roteador").with_project("",vec!["Rust".into()]).with_candidate_files(vec!["src/router.rs".into()]));
         assert_eq!(state.pointer("/user_request").and_then(Value::as_str),Some("Refatore o roteador"));
-        assert_eq!(state.pointer("/project/name").and_then(Value::as_str),Some("jev-orchestrator"));
+        assert_eq!(state.pointer("/project/name").and_then(Value::as_str),Some(""));
         assert_eq!(state.pointer("/candidate_files/0").and_then(Value::as_str),Some("src/router.rs"));
         assert!(state.pointer("/recent_turns").is_none());
     }

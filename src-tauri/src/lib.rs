@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod asking;
 pub mod cache;
 pub mod checkpoint;
 pub mod config;
@@ -10,34 +11,41 @@ pub mod jev;
 pub mod memory;
 pub mod model;
 pub mod orchestrator;
+pub mod progress;
 pub mod providers;
 pub mod rag;
 pub mod router;
 pub mod sandbox;
 pub mod tools;
+pub mod turns;
 pub mod workspace;
 
 use config::{ModelConfig, ProviderConfig};
-use gatekeeper::{EntryCheck, EntryVerdict, ExitCheck, GateFeed, GateLog, Tally};
-use model::{Context, Decision, IntentAnalysis, ModelSelection, ProcessResult, ProviderResponse, RoutingSignals};
+use gatekeeper::{EntryCheck, EntryVerdict, ExitCheck, GateFeed};
+
 use orchestrator::Orchestrator;
+use progress::{Beat, Debounce, Pulse};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
-use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Mutex;
+use serde_json::Value;
+use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc, time::Instant};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::{mpsc, Mutex, Notify};
+use turns::{Turn, TurnStatus};
 use workspace::{ChatRecord, ProjectRecord, WorkspaceData, WorkspaceStore};
 
-/// O nome do portão quando ele mesmo responde, em vez de um modelo.
-const GATE_AUTHOR:&str="portaria";
 const ENTRY_EVENT:&str="gate-entry";
 const EXIT_EVENT:&str="gate-exit";
 const RENAME_EVENT:&str="chat-renamed";
 const PROMPT_EVENT:&str="chat-prompt";
+const TURN_EVENT:&str="turn-settled";
+/// Uma etapa do pedido, gravada e desenhada.
+const BEAT_EVENT:&str="turn-beat";
+/// Um pedaço da resposta. Vai para a tela a cada chegada e para o disco com
+/// folga: são dois ritmos diferentes de propósito.
+const CHUNK_EVENT:&str="turn-chunk";
 
 pub struct DesktopState {
     orchestrator: Orchestrator,
-    workspace: WorkspaceStore,
-    gate: GateLog,
     /// A raiz com que o aplicativo subiu: vale só para chat de projeto sem
     /// pasta escolhida.
     home_root: PathBuf,
@@ -45,17 +53,46 @@ pub struct DesktopState {
 
 pub type SharedDesktopState=Arc<Mutex<DesktopState>>;
 
+/// O banco vive atrás do seu próprio cadeado, separado do orquestrador. É esta
+/// separação que faz a promessa da fila valer: aceitar um pedido é escrever uma
+/// linha, e escrever essa linha não pode esperar o modelo que está respondendo
+/// o pedido anterior. Enquanto os dois dividiam um cadeado só, o segundo envio
+/// ficava parado na porta — sem chegar ao disco — e o primeiro, ao terminar,
+/// redesenhava a conversa a partir do banco e apagava da tela o que o
+/// desenvolvedor tinha acabado de escrever.
+pub type SharedWorkspace=Arc<Mutex<WorkspaceStore>>;
+
+/// Toca quando entra pedido novo. O atendente dorme nele em vez de ficar
+/// perguntando ao banco se chegou alguma coisa.
+pub type QueueBell=Arc<Notify>;
+
+/// Quem precisa dos dois cadeados pega sempre nesta ordem — orquestrador,
+/// depois banco. O atendente segura o orquestrador do começo ao fim do pedido e
+/// encosta no banco em trechos curtos; inverter a ordem em qualquer comando
+/// travaria os dois.
+async fn both<'a>(desk:&'a SharedDesktopState,workspace:&'a SharedWorkspace)->(tokio::sync::MutexGuard<'a,DesktopState>,tokio::sync::MutexGuard<'a,WorkspaceStore>) {
+    let desk=desk.lock().await;
+    let workspace=workspace.lock().await;
+    (desk,workspace)
+}
+
 #[derive(Debug,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct ProcessRequest { pub input:String,pub session_id:Option<String> }
+pub struct ProcessRequest {
+    pub input:String,
+    pub session_id:Option<String>,
+    /// Preenchido só no reenvio: é o turno que falhou voltando ao ar com o
+    /// mesmo código, em vez de um pedido novo com um código novo.
+    pub turn_id:Option<String>,
+}
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
-struct EntryEvent{check:EntryCheck,tally:Tally}
+struct EntryEvent{check:EntryCheck}
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
-struct ExitEvent{checks:Vec<ExitCheck>,tally:Tally}
+struct ExitEvent{checks:Vec<ExitCheck>}
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -64,6 +101,19 @@ struct RenameEvent{chat_id:String,title:String}
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
 struct PromptEvent{chat_id:String}
+
+/// A fila andou: um pedido entrou no ar ou acabou de se fechar.
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+struct TurnEvent{chat_id:String,turn_id:String}
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+struct BeatEvent{chat_id:String,turn_id:String,seq:u32,kind:String,detail:Value}
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+struct ChunkEvent{chat_id:String,turn_id:String,text:String}
 
 #[derive(Debug,Serialize)]
 pub struct SystemStatus { pub version:&'static str,pub config_path:String,pub database_path:String,pub database_name:String,pub tables:Vec<workspace::TableCount>,pub providers:usize,pub models:usize,pub indexed_files:usize,pub cache_entries:usize,pub session_messages:usize,pub performance_records:usize }
@@ -121,60 +171,283 @@ pub struct SettingsSnapshot {
 #[serde(rename_all="camelCase")]
 pub struct SaveSettingsInput { pub providers:Vec<ProviderInput>,pub models:Vec<ModelSettings> }
 
+/// Aceita o pedido e devolve o turno. Só isso — e é de propósito: esta chamada
+/// escreve o que o desenvolvedor mandou, numera o pedido e volta na hora,
+/// sem tocar em modelo nenhum. A partir do instante em que ela retorna, a
+/// mensagem existe em disco e a tela a lê de lá, como lê qualquer mensagem
+/// antiga; nada do que acontecer depois pode fazê-la sumir. Mandar outra coisa
+/// por cima não atropela nada: o segundo pedido entra na fila atrás do
+/// primeiro, com o seu próprio número, e espera a vez.
 #[tauri::command]
-async fn process_request(app:AppHandle,state:State<'_,SharedDesktopState>,request:ProcessRequest)->Result<model::ProcessResult,String>{
-    let shared=state.inner().clone();
-    let mut state=state.lock().await;
+async fn enqueue_prompt(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,request:ProcessRequest)->Result<Turn,String>{
     let chat_id=request.session_id.as_deref().ok_or_else(||"selecione um chat antes de enviar".to_string())?;
-    if !state.workspace.contains_chat(chat_id).map_err(|error|error.to_string())?{return Err("chat não encontrado".into());}
+    let input=request.input.trim();
+    if input.is_empty(){return Err("não há o que enviar".into());}
+    let turn={
+        let mut workspace=workspace.lock().await;
+        if !workspace.contains_chat(chat_id).map_err(|error|error.to_string())?{return Err("chat não encontrado".into());}
+        workspace.enqueue_prompt(chat_id,input,request.turn_id.as_deref()).map_err(|error|error.to_string())?
+    };
+    let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:chat_id.to_string()});
+    bell.notify_one();
+    Ok(turn)
+}
 
-    let unnamed=state.workspace.chat_is_unnamed(chat_id).map_err(|error|error.to_string())?;
-    focus_on_chat_project(&mut state,chat_id)?;
+/// O que a tela manda quando o desenvolvedor responde. O tipo da pergunta não
+/// vem daqui: ele está no banco, e é de lá que sai — a tela não redefine o que
+/// foi perguntado.
+#[derive(Debug,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct AnswerInput {
+    pub question_turn_id:String,
+    #[serde(default)] pub picked:Vec<String>,
+    /// O caminho do `RESPONDER`: texto livre, que vale para qualquer tipo.
+    #[serde(default)] pub text:Option<String>,
+}
 
+/// Responde à pergunta em aberto. O texto do pedido é composto aqui, e não na
+/// tela: é ele que fica no chat, é ele que a Portaria pontua e é ele que chega
+/// ao modelo — a tela não escolhe outras palavras para o que foi clicado.
+///
+/// O pedido entra na fila como qualquer outro. Nenhum caminho dispensa o portão.
+#[tauri::command]
+async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Turn,String>{
+    let mut store=workspace.lock().await;
+    let question=store.question_of(&answer.question_turn_id).map_err(|error|error.to_string())?.ok_or_else(||"essa pergunta não existe mais".to_string())?;
+    if question.status!=turns::QUESTION_PENDING {return Err("essa pergunta já foi encerrada".into());}
+    let kind=asking::Shape::parse(&question.kind).map_err(|error|error.to_string())?;
+    let composed=asking::compose(&question.prompt,kind,&question.options,&answer.picked,answer.text.as_deref()).map_err(|error|error.to_string())?;
+    let chat_id=store.chat_of_turn(&question.turn_id).map_err(|error|error.to_string())?.ok_or_else(||"o pedido dessa pergunta não existe mais".to_string())?;
+    let turn=store.enqueue_prompt(&chat_id,&composed,None).map_err(|error|error.to_string())?;
+    // O vínculo é o que faz a Portaria julgar a resposta em par com a pergunta.
+    if !store.settle_question(&question.turn_id,turns::QUESTION_ANSWERED,Some(&turn.id)).map_err(|error|error.to_string())? {
+        eprintln!("pergunta: `{}` foi encerrada por outro caminho enquanto era respondida",question.turn_id);
+    }
+    drop(store);
+    let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id});
+    bell.notify_one();
+    Ok(turn)
+}
+
+/// Descarta a pergunta e devolve o box ao desenvolvedor. A decisão fica
+/// registrada: a linha em `questions` guarda que foi ignorada e quando, e a
+/// narração do turno ganha o evento. Ignorar é uma escolha, e escolha não some.
+#[tauri::command]
+async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,question_turn_id:String)->Result<(),String>{
+    let mut store=workspace.lock().await;
+    let question=store.question_of(&question_turn_id).map_err(|error|error.to_string())?.ok_or_else(||"essa pergunta não existe mais".to_string())?;
+    if !store.settle_question(&question_turn_id,turns::QUESTION_DISMISSED,None).map_err(|error|error.to_string())? {
+        return Err("essa pergunta já foi encerrada".into());
+    }
+    let _=store.record_beat(&question_turn_id,"dismissed",&serde_json::json!({"prompt":question.prompt}));
+    let chat_id=store.chat_of_turn(&question_turn_id).map_err(|error|error.to_string())?.unwrap_or_default();
+    drop(store);
+    let _=app.emit(TURN_EVENT,TurnEvent{chat_id,turn_id:question_turn_id});
+    Ok(())
+}
+
+/// O atendente da fila: um pedido de cada vez, na ordem em que chegaram, até
+/// não sobrar nenhum — e então volta a dormir no sino. Ele existe uma vez só no
+/// aplicativo, e é por isso que dois envios seguidos nunca disputam o
+/// orquestrador: o segundo não é uma chamada esperando na porta, é uma linha no
+/// banco esperando a vez.
+async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell) {
+    loop {
+        loop {
+            let claimed=workspace.lock().await.claim_next_turn();
+            let next=match claimed {
+                Ok(Some(next))=>next,
+                Ok(None)=>break,
+                Err(error)=>{eprintln!("fila: não consegui chamar o próximo pedido ({error})");break;}
+            };
+            let (turn,prompt)=next;
+            let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+            serve(&app,&desk,&workspace,&turn,&prompt).await;
+            let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+        }
+        bell.notified().await;
+    }
+}
+
+/// Abre o barramento do pedido, atende, e só então fecha o barramento. A ordem
+/// importa: a narradora ainda pode ter um rascunho da resposta para gravar, e
+/// apagar o rascunho antes de ela terminar deixaria a tela com duas versões do
+/// mesmo texto. Por isso o rascunho é apagado no fim, depois de a resposta
+/// definitiva estar em `messages` e de a narradora ter se despedido.
+async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,turn:&Turn,prompt:&str) {
+    let (pulse,beats)=Pulse::channel();
+    let narrator=tauri::async_runtime::spawn(narrate(app.clone(),workspace.clone(),turn.clone(),beats));
+    attend(app,desk,workspace,turn,prompt,&pulse).await;
+    drop(pulse);
+    let _=narrator.await;
+    let _=workspace.lock().await.clear_turn_partial(&turn.id);
+}
+
+/// A consumidora do barramento. Ela é a única que sabe que existe tela e banco:
+/// o núcleo só empurra eventos. E trata os dois com ritmos diferentes de
+/// propósito — a webview recebe cada pedaço na hora, porque é isso que faz o
+/// texto crescer, e o disco recebe o texto acumulado com folga, porque gravar
+/// token a token faria do SQLite um log de tokens.
+///
+/// Ela toca só o cadeado do banco, em trechos curtos, e nunca o do
+/// orquestrador: a ordem de cadeados continua a mesma.
+async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mpsc::UnboundedReceiver<Beat>) {
+    let mut answer=String::new();
+    let mut slack=Debounce::start(Instant::now());
+    while let Some(beat)=beats.recv().await {
+        if let Beat::Chunk{text}=&beat {
+            answer.push_str(text);
+            let _=app.emit(CHUNK_EVENT,ChunkEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone(),text:text.clone()});
+            let now=Instant::now();
+            if slack.accept(text.len(),now) {
+                let _=workspace.lock().await.set_turn_partial(&turn.id,&answer);
+                slack.wrote(now);
+            }
+            continue;
+        }
+        let (kind,detail,settles)=(beat.kind().to_string(),beat.detail(),beat.settles());
+        let seq={
+            let mut workspace=workspace.lock().await;
+            let seq=workspace.record_beat(&turn.id,&kind,&detail).unwrap_or_default();
+            // O fim do turno paga a escrita extra: o que ficou na folga tem de
+            // estar no disco antes de o pedido sair do ar.
+            if settles && slack.waiting()>0 {
+                let _=workspace.set_turn_partial(&turn.id,&answer);
+                slack.wrote(Instant::now());
+            }
+            seq
+        };
+        let _=app.emit(BEAT_EVENT,BeatEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone(),seq,kind,detail});
+    }
+    // O canal fechou. Nem todo caminho passa por um desfecho anunciado — uma
+    // pasta que sumiu, um portão que barrou —, então a descarga final é aqui.
+    if slack.waiting()>0 {
+        let _=workspace.lock().await.set_turn_partial(&turn.id,&answer);
+    }
+}
+
+/// Atende um pedido do começo ao fim. O texto vem do banco, não da tela, e o
+/// turno sai daqui sempre fechado — respondido, barrado ou falho. Um turno que
+/// saísse em aberto travaria a fila inteira atrás dele.
+async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,turn:&Turn,prompt:&str,pulse:&Pulse) {
+    let chat_id=turn.chat_id.as_str();
+    let mut state=desk.lock().await;
+    let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
+
+    // O pedido é lido dentro da pasta do projeto. Se ela sumiu do disco, o
+    // atendimento morre aqui — mas com a mensagem já escrita, o turno dado por
+    // falho e o motivo no chat, em vez de sumir da conversa.
+    if let Err(error)=focus_on_chat_project(&mut state,workspace,chat_id).await {
+        pulse.beat(Beat::Failed{error:error.clone()});
+        fail_turn(workspace,chat_id,turn,error).await;
+        return;
+    }
     let project=state.orchestrator.rag.project_info();
-    let entry=entry_check(&project,chat_id,&request.input).await;
-    let entry=state.gate.record_entry(entry);
-    let _=app.emit(ENTRY_EVENT,EntryEvent{check:entry.clone(),tally:state.gate.tally()});
+
+    // Um turno-resposta é julgado — e enviado — em par com a pergunta que o
+    // originou. Um `SIM` sozinho seria barrado por faltas que o pedido de origem
+    // já tinha suprido, e o modelo receberia uma palavra sem assunto. O que a
+    // portaria pontua é exatamente o que chega ao modelo.
+    let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or(None);
+    let paired=origin.map(|origin|asking::pair(&origin,prompt));
+    let request=paired.as_deref().unwrap_or(prompt);
+    let entry=entry_check(&project,turn,request).await;
+    {
+        let mut workspace=workspace.lock().await;
+        let _=workspace.record_entry_check(&entry);
+    }
+    let _=app.emit(ENTRY_EVENT,EntryEvent{check:entry.clone()});
+    pulse.beat(Beat::Gate{verdict:entry.verdict.as_str().into(),score:entry.score,demand:entry.demand});
     if entry.verdict==EntryVerdict::Block {
         let reply=entry.reply();
-        state.orchestrator.memory.add_message(chat_id,"user",request.input.trim().to_string());
+        // O barrado também é resposta, e a tela mostra o motivo crescendo como
+        // mostraria qualquer outra.
+        pulse.beat(Beat::Chunk{text:reply.clone()});
+        pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
+        state.orchestrator.memory.add_message(chat_id,"user",prompt.trim().to_string());
         state.orchestrator.memory.add_message(chat_id,"assistant",reply.clone());
-        state.workspace.append_exchange(chat_id,&request.input,&reply).map_err(|error|error.to_string())?;
-        return Ok(blocked_result(&request.input,reply));
+        let mut workspace=workspace.lock().await;
+        let _=workspace.append_answer(chat_id,&turn.id,&reply);
+        let _=workspace.set_turn_status(&turn.id,TurnStatus::Blocked);
+        return;
     }
     state.orchestrator.pending_gate_note=entry.clarifying_note();
 
-    let stored=state.workspace.append_prompt(chat_id,&request.input).map_err(|error|error.to_string())?;
-    let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:chat_id.to_string()});
-    if !stored {forget_pending_prompt(&mut state,chat_id).map_err(|error|error.to_string())?;}
+    // O `process` torna a anotar o pedido na memória da sessão, e ele já está
+    // no banco desde o envio: sem esta poda o modelo receberia a mesma linha
+    // duas vezes no histórico.
+    if let Err(error)=forget_pending_prompt(&mut state,workspace,chat_id).await {eprintln!("fila: histórico da sessão desalinhado ({error})");}
 
-    let result=state.orchestrator.process(&request.input,Some(chat_id)).await;
+    let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
     let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||"A execução terminou sem resposta.".into());
     if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",assistant.clone());}
-    state.workspace.append_answer(chat_id,&assistant).map_err(|error|error.to_string())?;
-
-    let exits=exit_checks(&state,chat_id,&assistant);
-    if !exits.is_empty() {
-        let exits=state.gate.record_exits(exits);
-        let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits,tally:state.gate.tally()});
+    let exits=exit_checks(&state,turn,&assistant);
+    {
+        let mut workspace=workspace.lock().await;
+        let _=workspace.append_answer(chat_id,&turn.id,&assistant);
+        let _=workspace.record_exit_checks(turn,&exits);
+        let _=workspace.set_turn_status(&turn.id,if result.result.is_some(){TurnStatus::Answered}else{TurnStatus::Failed});
     }
-    if unnamed {rename_in_background(app,shared,chat_id.to_string(),request.input.clone(),jev_reading(&result));}
-    Ok(result)
+    if !exits.is_empty(){let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits});}
+    drop(state);
+    if result.result.is_some() {enable_question(app,workspace,turn,&assistant).await;}
+    if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
+}
+
+/// A resposta do modelo volta ao Jev, e é o retorno dele que **habilita** a
+/// interação no box. Nada aqui inventa pergunta: o enunciado e as alternativas
+/// são extraídos do texto que o modelo escreveu, e o Jev diz se aquilo é
+/// pergunta e de que tipo.
+///
+/// Roda fora do cadeado do orquestrador de propósito — é uma ida à rede, e a
+/// fila não pode ficar parada atrás dela.
+async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,answer:&str) {
+    let Some(question)=asking::classify(answer).await else {return};
+    let recorded={
+        let mut workspace=workspace.lock().await;
+        workspace.ask_question(&turn.id,question.kind.as_str(),&question.prompt,&question.options,&question.source)
+    };
+    match recorded {
+        Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});}
+        Err(error)=>eprintln!("pergunta: não consegui habilitar a interação do turno `{}` ({error})",turn.id),
+    }
+}
+
+/// O título definitivo depende de outra ida ao modelo, e a fila não pode
+/// esperar por ela: o chat já entrou na lista com o resumo local do pedido, e o
+/// próximo da fila tem direito ao orquestrador antes de qualquer enfeite. O
+/// batismo pega o cadeado quando ele estiver livre e avisa a interface.
+fn name_in_background(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,chat_id:String,prompt:String,reading:String) {
+    tauri::async_runtime::spawn(async move {
+        let state=desk.lock().await;
+        let Some(title)=state.orchestrator.name_chat(&prompt,&reading).await else {return};
+        drop(state);
+        if workspace.lock().await.rename_chat(&chat_id,&title).is_ok() {let _=app.emit(RENAME_EVENT,RenameEvent{chat_id,title});}
+    });
+}
+
+/// O pedido que não sai do lugar: o turno é dado por falho e o motivo entra no
+/// chat como resposta. Sem isto ele ficaria voando até o aplicativo reabrir, e
+/// o balão não ofereceria o reenvio a quem acabou de ver o erro.
+async fn fail_turn(workspace:&SharedWorkspace,chat_id:&str,turn:&Turn,error:String) {
+    let mut workspace=workspace.lock().await;
+    let _=workspace.append_answer(chat_id,&turn.id,&error);
+    let _=workspace.set_turn_status(&turn.id,TurnStatus::Failed);
 }
 
 /// O chat mora num projeto, e o pedido tem de ser lido dentro da pasta desse
 /// projeto: é dela que saem os arquivos do contexto, o nome no prompt da
 /// portaria e a varredura da saída. Projeto sem pasta cai na raiz de partida.
-fn focus_on_chat_project(state:&mut DesktopState,chat_id:&str)->Result<(),String> {
-    let root=state.workspace.chat_root(chat_id).map_err(|error|error.to_string())?.unwrap_or_else(||state.home_root.clone());
+async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->Result<(),String> {
+    let root=workspace.lock().await.chat_root(chat_id).map_err(|error|error.to_string())?.unwrap_or_else(||state.home_root.clone());
     state.orchestrator.focus_on(&root).map_err(|error|error.to_string())
 }
 
-/// Na retentativa o pedido já está gravado desde a tentativa anterior, e o
-/// `process` torna a anotá-lo na memória da sessão: sem isto o modelo receberia
-/// a mesma linha duas vezes no histórico.
-fn forget_pending_prompt(state:&mut DesktopState,chat_id:&str)->anyhow::Result<()> {
-    let mut history=state.workspace.conversation(chat_id)?;
+/// O pedido está gravado desde o envio, e o `process` torna a anotá-lo na
+/// memória da sessão: sem isto o modelo receberia a mesma linha duas vezes no
+/// histórico.
+async fn forget_pending_prompt(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->anyhow::Result<()> {
+    let mut history=workspace.lock().await.conversation(chat_id)?;
     if history.last().is_some_and(|message|message.role=="user") {history.pop();}
     state.orchestrator.memory.set_conversation(chat_id.to_string(),history);
     Ok(())
@@ -184,94 +457,69 @@ fn forget_pending_prompt(state:&mut DesktopState,chat_id:&str)->anyhow::Result<(
 /// quando o modelo escolhe o título.
 fn jev_reading(result:&model::ProcessResult)->String{format!("{} task, {} complexity, routed to {}",result.intent_analysis.intent,result.complexity,result.model_selection.model_name)}
 
-/// O título definitivo depende de outra ida ao modelo, e ninguém deve esperar
-/// por ela para ler a resposta: o chat já entrou na lista com o resumo local do
-/// pedido e é rebatizado depois, avisando a interface pelo evento.
-fn rename_in_background(app:AppHandle,shared:SharedDesktopState,chat_id:String,prompt:String,reading:String) {
-    tauri::async_runtime::spawn(async move {
-        let mut state=shared.lock().await;
-        let Some(title)=state.orchestrator.name_chat(&prompt,&reading).await else {return};
-        if state.workspace.rename_chat(&chat_id,&title).is_ok() {let _=app.emit(RENAME_EVENT,RenameEvent{chat_id,title});}
-    });
-}
-
 /// Sem projeto, a portaria mostra a sessão inteira; com projeto, só os chats
 /// dele.
 #[tauri::command]
-async fn gate_feed(state:State<'_,SharedDesktopState>,project_id:Option<String>)->Result<GateFeed,String>{
-    let state=state.lock().await;
-    let Some(project_id)=project_id else {return Ok(state.gate.feed());};
-    let chats=state.workspace.chat_ids_for_project(&project_id).map_err(|error|error.to_string())?.into_iter().collect();
-    Ok(state.gate.feed_for(&chats))
+async fn gate_feed(workspace:State<'_,SharedWorkspace>,project_id:Option<String>)->Result<GateFeed,String>{
+    let workspace=workspace.lock().await;
+    let Some(project_id)=project_id else {return workspace.gate_feed(None).map_err(|error|error.to_string());};
+    let chats=workspace.chat_ids_for_project(&project_id).map_err(|error|error.to_string())?.into_iter().collect();
+    workspace.gate_feed(Some(&chats)).map_err(|error|error.to_string())
 }
 
 /// Pontua o pedido no Jev quando há credencial e nas heurísticas locais quando
 /// não há — ou quando a chamada falha, para que o portão nunca trave o envio.
-async fn entry_check(project:&model::ProjectInfo,chat_id:&str,input:&str)->EntryCheck {
+async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str)->EntryCheck {
     if jev::is_configured() {
         match gatekeeper::evaluate_entry(input,&project.name,&project.languages).await {
-            Ok(reading)=>return gatekeeper::judge(chat_id,input,&reading,"jev"),
+            Ok(reading)=>return gatekeeper::judge(turn,input,&reading,"jev"),
             Err(error)=>eprintln!("portaria: o Jev não respondeu, usando heurísticas locais ({error})"),
         }
     }
-    gatekeeper::judge(chat_id,input,&gatekeeper::heuristic_entry(input),"heurística local")
+    gatekeeper::judge(turn,input,&gatekeeper::heuristic_entry(input),"heurística local")
 }
 
-fn exit_checks(state:&DesktopState,chat_id:&str,answer:&str)->Vec<ExitCheck> {
+fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {
     let root=state.orchestrator.rag.project_info().root;
-    gatekeeper::scan_answer(chat_id,answer,&state.orchestrator.config,&state.orchestrator.firewall,Path::new(&root))
-}
-
-fn blocked_result(input:&str,reply:String)->ProcessResult {
-    let response=ProviderResponse{response:reply,input_tokens:0,output_tokens:0,model:GATE_AUTHOR.into(),provider:"jev".into(),latency_ms:0};
-    ProcessResult {
-        user_input:input.into(), normalized_input:input.trim().into(),
-        intent_analysis:IntentAnalysis{intent:"general".into(),scores:HashMap::new(),confidence:0.0},
-        complexity:"trivial".into(), context_plan:vec![], context:Context::default(),
-        strategy:"gate_blocked".into(),
-        model_selection:ModelSelection{model_name:GATE_AUTHOR.into(),provider:"jev".into(),estimated_tokens:0,score:0.0,reason:"o portão de entrada barrou o pedido".into()},
-        result:Some(response), validation:true,
-        decision:Decision{model_provider:"jev".into(),model_name:GATE_AUTHOR.into(),estimated_tokens:0,context_files_count:0,rag_files_count:0},
-        routing:RoutingSignals::default(), error:None,
-    }
+    gatekeeper::scan_answer(turn,answer,&state.orchestrator.config,&state.orchestrator.firewall,Path::new(&root))
 }
 
 #[tauri::command]
-async fn system_status(state:State<'_,SharedDesktopState>)->Result<SystemStatus,String>{
-    let state=state.lock().await;
+async fn system_status(state:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>)->Result<SystemStatus,String>{
+    let (state,workspace)=both(&state,&workspace).await;
     let orchestrator=&state.orchestrator;
-    Ok(SystemStatus{version:env!("CARGO_PKG_VERSION"),config_path:orchestrator.config_path.display().to_string(),database_path:state.workspace.database_path().display().to_string(),database_name:state.workspace.database_name(),tables:state.workspace.table_counts().unwrap_or_default(),providers:orchestrator.executable_provider_count(),models:orchestrator.executable_model_count(),indexed_files:orchestrator.rag.len(),cache_entries:orchestrator.cache.len(),session_messages:orchestrator.memory.session_messages(),performance_records:orchestrator.performance.len()})
+    Ok(SystemStatus{version:env!("CARGO_PKG_VERSION"),config_path:orchestrator.config_path.display().to_string(),database_path:workspace.database_path().display().to_string(),database_name:workspace.database_name(),tables:workspace.table_counts().unwrap_or_default(),providers:orchestrator.executable_provider_count(),models:orchestrator.executable_model_count(),indexed_files:orchestrator.rag.len(),cache_entries:orchestrator.cache.len(),session_messages:orchestrator.memory.session_messages(),performance_records:orchestrator.performance.len()})
 }
 
 #[tauri::command]
-async fn get_workspace(state:State<'_,SharedDesktopState>)->Result<WorkspaceData,String>{state.lock().await.workspace.snapshot().map_err(|error|error.to_string())}
+async fn get_workspace(workspace:State<'_,SharedWorkspace>)->Result<WorkspaceData,String>{workspace.lock().await.snapshot().map_err(|error|error.to_string())}
 
 #[tauri::command]
-async fn create_project(state:State<'_,SharedDesktopState>,name:String,root_path:Option<String>)->Result<ProjectRecord,String>{state.lock().await.workspace.create_project(&name,root_path).map_err(|error|error.to_string())}
+async fn create_project(workspace:State<'_,SharedWorkspace>,name:String,root_path:Option<String>)->Result<ProjectRecord,String>{workspace.lock().await.create_project(&name,root_path).map_err(|error|error.to_string())}
 
 #[tauri::command]
-async fn create_chat(state:State<'_,SharedDesktopState>,project_id:String,title:Option<String>)->Result<ChatRecord,String>{state.lock().await.workspace.create_chat(&project_id,title).map_err(|error|error.to_string())}
+async fn create_chat(workspace:State<'_,SharedWorkspace>,project_id:String,title:Option<String>)->Result<ChatRecord,String>{workspace.lock().await.create_chat(&project_id,title).map_err(|error|error.to_string())}
 
 #[tauri::command]
-async fn clear_chat(state:State<'_,SharedDesktopState>,chat_id:String)->Result<(),String>{
-    let mut state=state.lock().await;
-    state.workspace.clear_chat(&chat_id).map_err(|error|error.to_string())?;
+async fn clear_chat(state:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<(),String>{
+    let (mut state,mut workspace)=both(&state,&workspace).await;
+    workspace.clear_chat(&chat_id).map_err(|error|error.to_string())?;
     state.orchestrator.memory.clear_session(&chat_id);
     Ok(())
 }
 
 #[tauri::command]
-async fn delete_chat(state:State<'_,SharedDesktopState>,chat_id:String)->Result<(),String>{
-    let mut state=state.lock().await;
-    state.workspace.delete_chat(&chat_id).map_err(|error|error.to_string())?;
+async fn delete_chat(state:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<(),String>{
+    let (mut state,mut workspace)=both(&state,&workspace).await;
+    workspace.delete_chat(&chat_id).map_err(|error|error.to_string())?;
     state.orchestrator.memory.clear_session(&chat_id);
     Ok(())
 }
 
 #[tauri::command]
-async fn delete_project(state:State<'_,SharedDesktopState>,project_id:String)->Result<(),String>{
-    let mut state=state.lock().await;
-    let chat_ids=state.workspace.delete_project(&project_id).map_err(|error|error.to_string())?;
+async fn delete_project(state:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,project_id:String)->Result<(),String>{
+    let (mut state,mut workspace)=both(&state,&workspace).await;
+    let chat_ids=workspace.delete_project(&project_id).map_err(|error|error.to_string())?;
     for chat_id in chat_ids {state.orchestrator.memory.clear_session(&chat_id);}
     Ok(())
 }
@@ -340,8 +588,24 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     for chat in &workspace_data.chats {
         orchestrator.memory.set_conversation(chat.id.clone(),workspace.conversation(&chat.id)?);
     }
-    let state=Arc::new(Mutex::new(DesktopState{orchestrator,workspace,gate:GateLog::default(),home_root:root}));
-    tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(state).invoke_handler(tauri::generate_handler![process_request,system_status,get_workspace,create_project,create_chat,clear_chat,delete_chat,delete_project,get_settings,save_settings,discover_provider_models,gate_feed]).run(tauri::generate_context!()).map_err(Into::into)
+
+    let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root}));
+    let workspace:SharedWorkspace=Arc::new(Mutex::new(workspace));
+    let bell:QueueBell=Arc::new(Notify::new());
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(desk).manage(workspace).manage(bell)
+        .setup(|app|{
+            // O sino toca uma vez na partida: a abertura do banco devolveu à
+            // fila o que o fechamento anterior pegou pela metade, e esses
+            // pedidos têm de ser retomados sem esperar por um envio novo.
+            let (handle,desk,workspace,bell)=(app.handle().clone(),app.state::<SharedDesktopState>().inner().clone(),app.state::<SharedWorkspace>().inner().clone(),app.state::<QueueBell>().inner().clone());
+            bell.notify_one();
+            tauri::async_runtime::spawn(serve_the_queue(handle,desk,workspace,bell));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![enqueue_prompt,answer_question,dismiss_question,system_status,get_workspace,create_project,create_chat,clear_chat,delete_chat,delete_project,get_settings,save_settings,discover_provider_models,gate_feed])
+        .run(tauri::generate_context!()).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -350,6 +614,18 @@ mod tests {
     /// abre a janela pela thread GTK dele, que disputa o loop de eventos do
     /// Tauri, e a chamada volta vazia sem nada aparecer. Quem voltar a declarar
     /// o plugin numa linha só reativa o padrão gtk3 e traz o bug de volta.
+    /// Aceitar um pedido não pode depender do orquestrador. Enquanto os dois
+    /// dividiam um cadeado, o segundo envio ficava parado na porta até o modelo
+    /// devolver o primeiro — e sumia da tela no redesenho. Quem voltar a pedir
+    /// o estado do orquestrador aqui traz o bug de volta inteiro.
+    #[test] fn aceitar_um_pedido_nao_espera_pelo_orquestrador() {
+        let source=include_str!("lib.rs");
+        let command=source.split("async fn enqueue_prompt").nth(1).expect("falta o comando de envio");
+        let signature=command.split(')').next().expect("assinatura");
+        assert!(!signature.contains("SharedDesktopState"),"o envio voltou a depender do cadeado do modelo: {signature}");
+        assert!(signature.contains("SharedWorkspace"),"o envio precisa do banco, e só dele: {signature}");
+    }
+
     #[test] fn the_folder_picker_talks_to_the_xdg_portal_on_linux() {
         let manifest=include_str!("../Cargo.toml");
         let linux=manifest.split("[target.'cfg(any(target_os = \"linux\"").nth(1).expect("falta o bloco de dependências do Linux");

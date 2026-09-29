@@ -16,6 +16,6 @@ fn main()->Result<()> {
         Some(Commands::Status)=>{let orchestrator=Orchestrator::new(config_path.clone(),root)?;println!("Jev AI Orchestrator {}",env!("CARGO_PKG_VERSION"));println!("Status: operational");println!("Configuration: {}",config_path.display());println!("Providers: {}",orchestrator.executable_provider_count());println!("Models: {}",orchestrator.executable_model_count());println!("Indexed files: {}",orchestrator.rag.len());Ok(())},
         Some(Commands::Index)=>{let orchestrator=Orchestrator::new(config_path,root)?;println!("Indexed {} files",orchestrator.rag.len());Ok(())},
         Some(Commands::Version)=>{println!("Jev AI Orchestrator v{}",env!("CARGO_PKG_VERSION"));Ok(())},
-        Some(Commands::Run{task})=>{let runtime=tokio::runtime::Runtime::new()?;runtime.block_on(async move {let mut orchestrator=Orchestrator::new(config_path,root)?;let result=orchestrator.process(&task.join(" "),Some("cli")).await;if let Some(response)=result.result{println!("{}",response.response);Ok(())}else{Err(anyhow::anyhow!(result.error.unwrap_or_else(||"task failed".into())))}})},
+        Some(Commands::Run{task})=>{let runtime=tokio::runtime::Runtime::new()?;runtime.block_on(async move {let mut orchestrator=Orchestrator::new(config_path,root)?;let result=orchestrator.process(&task.join(" "),Some("cli"),&jev_orchestrator::progress::Pulse::silent()).await;if let Some(response)=result.result{println!("{}",response.response);Ok(())}else{Err(anyhow::anyhow!(result.error.unwrap_or_else(||"task failed".into())))}})},
     }
 }

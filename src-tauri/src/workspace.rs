@@ -1,9 +1,9 @@
-use crate::model::ChatMessage;
+use crate::{gatekeeper::{EntryCheck, ExitCheck, GateFeed}, model::ChatMessage, turns::{self, QuestionView, Turn, TurnStatus, TurnView}};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::{Path, PathBuf}, time::Duration};
+use std::{collections::BTreeSet, fs, path::{Path, PathBuf}, time::Duration};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +21,10 @@ pub struct WorkspaceMessage {
     pub role: String,
     pub content: String,
     pub created_at: DateTime<Utc>,
+    /// O turno a que esta linha pertence. Histórico importado de antes dos
+    /// turnos não tem nenhum, e continua legível sem semáforo.
+    #[serde(default)]
+    pub turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +37,15 @@ pub struct ChatRecord {
     pub project_id: String,
     pub title: String,
     pub messages: Vec<WorkspaceMessage>,
+    /// O que cada pedido do chat levou dos dois portões: é daqui que o balão
+    /// tira o código, o semáforo e o botão de retentar.
+    #[serde(default)]
+    pub turns: Vec<TurnView>,
+    /// A pergunta que espera resposta, quando há uma. O box a desenha a partir
+    /// do banco como desenha todo o resto: fechar e reabrir o aplicativo
+    /// encontra a mesma pergunta esperando.
+    #[serde(default)]
+    pub question: Option<QuestionView>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -70,12 +83,14 @@ impl WorkspaceStore {
                code TEXT NOT NULL DEFAULT '',
                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                title TEXT NOT NULL,
+               named INTEGER NOT NULL DEFAULT 0,
                created_at TEXT NOT NULL,
                updated_at TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS messages (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
                chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+               turn_id TEXT,
                role TEXT NOT NULL,
                content TEXT NOT NULL,
                created_at TEXT NOT NULL
@@ -84,6 +99,11 @@ impl WorkspaceStore {
              CREATE INDEX IF NOT EXISTS messages_chat_order ON messages(chat_id, id);
              CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         )?;
+        connection.execute_batch(turns::SCHEMA)?;
+        ensure_message_turns(&connection)?;
+        ensure_chat_named(&connection)?;
+        ensure_turn_partial(&connection)?;
+        turns::requeue_interrupted_turns(&connection)?;
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path,fs::Permissions::from_mode(0o600))?;
@@ -107,7 +127,7 @@ impl WorkspaceStore {
         };
         let mut chats=Vec::with_capacity(chat_rows.len());
         for (id,code,project_id,title,created_at,updated_at) in chat_rows {
-            chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:self.messages(&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?});
+            chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?});
         }
         Ok(WorkspaceData{projects,chats})
     }
@@ -124,59 +144,114 @@ impl WorkspaceStore {
         anyhow::ensure!(self.project_exists(project_id)?,"projeto não encontrado");
         let now=Utc::now();
         let title=title.unwrap_or_default().trim().to_string();
-        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title:if title.is_empty(){"Novo chat".into()}else{title},messages:vec![],created_at:now,updated_at:now};
+        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title:if title.is_empty(){"Novo chat".into()}else{title},messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now};
         self.connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",params![chat.id,chat.code,chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
         Ok(chat)
     }
 
-    /// Grava o pedido antes de qualquer ida ao modelo: se a rota falhar, o
-    /// desenvolvedor sair do chat ou o aplicativo fechar no meio, o que ele
-    /// escreveu continua no banco, sem resposta, e a interface oferece o
-    /// reenvio. Devolve `false` quando o pedido pendente já era exatamente
-    /// este — é a retentativa do mesmo texto, que não pode virar duas linhas
-    /// iguais no histórico.
-    pub fn append_prompt(&mut self, chat_id: &str, user: &str) -> Result<bool> {
+    /// Aceita o pedido: abre o turno e grava o texto no mesmo ato, antes de
+    /// existir qualquer processo para atendê-lo. É o único caminho de entrada
+    /// de um pedido no aplicativo, e o ponto do sistema em que "enviado" passa
+    /// a significar "está no disco". Depois daqui, fechar o aplicativo, perder
+    /// a rede, trocar de chat ou mandar outra coisa por cima não faz diferença:
+    /// o pedido existe, numerado, e a tela o lê do banco como lê qualquer
+    /// mensagem antiga. Devolve o turno já na fila.
+    ///
+    /// `requested` só vem no reenvio, e aí é o turno que falhou voltando ao ar
+    /// com o mesmo número: a resposta anterior sai, o pedido fica onde estava.
+    pub fn enqueue_prompt(&mut self, chat_id: &str, user: &str, requested: Option<&str>) -> Result<Turn> {
         let transaction=self.connection.transaction()?;
-        let (title,count):(String,i64)=transaction.query_row("SELECT title,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context("chat não encontrado")?;
-        let last:Option<(String,String)>=transaction.query_row("SELECT role,content FROM messages WHERE chat_id=?1 ORDER BY id DESC LIMIT 1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
-        if last.is_some_and(|(role,content)|role=="user" && content==user) {return Ok(false);}
+        let (named,count):(bool,i64)=transaction.query_row("SELECT named,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context("chat não encontrado")?;
+        let turn=turns::open_or_reopen(&transaction,chat_id,requested)?;
+        // A tentativa anterior deixou uma resposta — quase sempre a linha de
+        // erro. Ela sai para não empilhar duas respostas sob o mesmo balão; o
+        // pedido não é tocado.
+        transaction.execute("DELETE FROM messages WHERE turn_id=?1 AND role='assistant'",[&turn.id])?;
         let now=Utc::now();
-        if count==0 && title=="Novo chat" {transaction.execute("UPDATE chats SET title=?1 WHERE id=?2",params![compact_title(user),chat_id])?;}
-        insert_message(&transaction,chat_id,"user",user,now)?;
+        if count==0 && !named {transaction.execute("UPDATE chats SET title=?1 WHERE id=?2",params![compact_title(user),chat_id])?;}
+        // Repetir a mesma frase é um pedido novo e tem de aparecer duas vezes
+        // no chat. Só o reenvio do mesmo turno é que não pode escrever de novo
+        // o que já está escrito — e isso se decide pelo turno, nunca pelo
+        // texto: foi comparar conteúdo que já fez pedido sumir da conversa.
+        if !written(&transaction,&turn.id)? {insert_message(&transaction,chat_id,Some(&turn.id),"user",user,now)?;}
+        transaction.execute("UPDATE chats SET updated_at=?1 WHERE id=?2",params![now.to_rfc3339(),chat_id])?;
+        transaction.commit()?;
+        Ok(turn)
+    }
+
+    /// Grava o pedido de um turno já aberto. Devolve `false` quando ele já
+    /// estava escrito — o reenvio do mesmo turno.
+    pub fn append_prompt(&mut self, chat_id: &str, turn_id: &str, user: &str) -> Result<bool> {
+        let transaction=self.connection.transaction()?;
+        let (named,count):(bool,i64)=transaction.query_row("SELECT named,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context("chat não encontrado")?;
+        if written(&transaction,turn_id)? {return Ok(false);}
+        let now=Utc::now();
+        if count==0 && !named {transaction.execute("UPDATE chats SET title=?1 WHERE id=?2",params![compact_title(user),chat_id])?;}
+        insert_message(&transaction,chat_id,Some(turn_id),"user",user,now)?;
         transaction.execute("UPDATE chats SET updated_at=?1 WHERE id=?2",params![now.to_rfc3339(),chat_id])?;
         transaction.commit()?;
         Ok(true)
     }
 
+    /// Chama o próximo da fila e o põe no ar, devolvendo junto o texto do
+    /// pedido lido do banco. Quem atende nunca recebe o texto de fora: ele sai
+    /// da mesma linha que a tela desenha, então o que é processado e o que o
+    /// desenvolvedor lê são forçosamente a mesma coisa. Enquanto houver um
+    /// pedido no ar ninguém é chamado — é isto, e não a ordem das chamadas na
+    /// interface, que garante um pedido de cada vez.
+    pub fn claim_next_turn(&mut self) -> Result<Option<(Turn,String)>> {
+        if turns::is_flying(&self.connection)? {return Ok(None);}
+        let Some(turn)=turns::next_queued(&self.connection)? else {return Ok(None)};
+        let prompt:String=self.connection.query_row(
+            "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY id LIMIT 1",[&turn.id],|row|row.get(0),
+        ).with_context(||format!("o turno `{}` está na fila sem pedido escrito",turn.id))?;
+        turns::set_status(&self.connection,&turn.id,TurnStatus::Flying)?;
+        Ok(Some((Turn{status:TurnStatus::Flying,..turn},prompt)))
+    }
+
+    /// Quantos pedidos deste chat ainda estão em aberto, contando o que está
+    /// sendo atendido agora.
+    pub fn queue_depth(&self, chat_id:&str) -> Result<u32> {turns::queue_depth(&self.connection,chat_id)}
+
     /// Fecha a troca com o que voltou do modelo — ou com o erro que veio no
     /// lugar dele. Enquanto isto não acontece, o pedido fica pendente.
-    pub fn append_answer(&mut self, chat_id: &str, assistant: &str) -> Result<()> {
+    pub fn append_answer(&mut self, chat_id: &str, turn_id: &str, assistant: &str) -> Result<()> {
         anyhow::ensure!(self.contains_chat(chat_id)?,"chat não encontrado");
         let now=Utc::now();
         let transaction=self.connection.transaction()?;
-        insert_message(&transaction,chat_id,"assistant",assistant,now)?;
+        insert_message(&transaction,chat_id,Some(turn_id),"assistant",assistant,now)?;
         transaction.execute("UPDATE chats SET updated_at=?1 WHERE id=?2",params![now.to_rfc3339(),chat_id])?;
         transaction.commit()?;
         Ok(())
     }
 
-    pub fn append_exchange(&mut self, chat_id: &str, user: &str, assistant: &str) -> Result<()> {
-        self.append_prompt(chat_id,user)?;
-        self.append_answer(chat_id,assistant)
+    /// Apaga o que voltou do modelo neste turno — só isso. O pedido continua
+    /// escrito: retentar não pode fazer sumir do chat o que o desenvolvedor
+    /// mandou, e sem esta limpeza a segunda tentativa deixaria duas respostas
+    /// empilhadas sob o mesmo balão.
+    pub fn clear_turn_answer(&mut self, turn_id: &str) -> Result<()> {
+        self.connection.execute("DELETE FROM messages WHERE turn_id=?1 AND role='assistant'",[turn_id])?;
+        Ok(())
     }
 
-    /// Um chat que ainda não recebeu nada: é o único momento em que vale gastar
-    /// uma chamada de modelo para batizá-lo.
+    pub fn append_exchange(&mut self, chat_id: &str, turn_id: &str, user: &str, assistant: &str) -> Result<()> {
+        self.append_prompt(chat_id,turn_id,user)?;
+        self.append_answer(chat_id,turn_id,assistant)
+    }
+
+    /// Um chat que nenhum modelo batizou ainda: é o único momento em que vale
+    /// gastar uma chamada para lhe dar um nome. Lê a marca no banco em vez de
+    /// deduzir do histórico, porque o pedido entra no histórico antes de sair.
     pub fn chat_is_unnamed(&self, chat_id: &str) -> Result<bool> {
-        let (title,count):(String,i64)=self.connection.query_row("SELECT title,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context("chat não encontrado")?;
-        Ok(count==0 && title=="Novo chat")
+        let named:bool=self.connection.query_row("SELECT named FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).context("chat não encontrado")?;
+        Ok(!named)
     }
 
     /// Troca o título sem mexer no `updated_at`: rebatizar não é movimento de
     /// conversa e não pode reordenar a lista lateral.
     pub fn rename_chat(&mut self, chat_id: &str, title: &str) -> Result<()> {
         let title=compact_title(title);
-        anyhow::ensure!(self.connection.execute("UPDATE chats SET title=?1 WHERE id=?2",params![title,chat_id])?>0,"chat não encontrado");
+        anyhow::ensure!(self.connection.execute("UPDATE chats SET title=?1,named=1 WHERE id=?2",params![title,chat_id])?>0,"chat não encontrado");
         Ok(())
     }
 
@@ -184,7 +259,7 @@ impl WorkspaceStore {
         anyhow::ensure!(self.contains_chat(chat_id)?,"chat não encontrado");
         let transaction=self.connection.transaction()?;
         transaction.execute("DELETE FROM messages WHERE chat_id=?1",[chat_id])?;
-        transaction.execute("UPDATE chats SET title='Novo chat',updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
+        transaction.execute("UPDATE chats SET title='Novo chat',named=0,updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
         transaction.commit()?;
         Ok(())
     }
@@ -217,6 +292,47 @@ impl WorkspaceStore {
         let root=root.trim();
         Ok((!root.is_empty()).then(||PathBuf::from(root)))
     }
+
+    /// Abre o turno do pedido que está sendo enviado agora.
+    pub fn open_turn(&mut self, chat_id:&str) -> Result<Turn> {turns::open_turn(&self.connection,chat_id)}
+
+    /// O turno do pedido que sai agora: novo, ou o mesmo que falhou e voltou.
+    pub fn open_or_reopen_turn(&mut self, chat_id:&str, requested:Option<&str>) -> Result<Turn> {
+        turns::open_or_reopen(&self.connection,chat_id,requested)
+    }
+
+    /// Põe um turno falho de volta no ar, com o mesmo número.
+    pub fn reopen_turn(&mut self, turn_id:&str) -> Result<Turn> {turns::reopen_turn(&self.connection,turn_id)}
+
+    pub fn turn(&self, turn_id:&str) -> Result<Option<Turn>> {turns::turn(&self.connection,turn_id)}
+
+    pub fn set_turn_status(&mut self, turn_id:&str, status:TurnStatus) -> Result<()> {turns::set_status(&self.connection,turn_id,status)}
+
+    pub fn record_entry_check(&mut self, check:&EntryCheck) -> Result<()> {turns::record_entry(&self.connection,check)}
+
+    pub fn record_exit_checks(&mut self, turn:&Turn, checks:&[ExitCheck]) -> Result<()> {turns::record_exits(&self.connection,turn,checks)}
+
+    pub fn gate_feed(&self, chats:Option<&BTreeSet<String>>) -> Result<GateFeed> {turns::feed(&self.connection,chats)}
+
+    pub fn record_beat(&mut self, turn_id:&str, kind:&str, detail:&serde_json::Value) -> Result<u32> {turns::record_beat(&self.connection,turn_id,kind,detail)}
+
+    pub fn turn_activity(&self, turn_id:&str) -> Result<Vec<turns::Activity>> {turns::activity(&self.connection,turn_id)}
+
+    pub fn set_turn_partial(&mut self, turn_id:&str, text:&str) -> Result<()> {turns::set_partial(&self.connection,turn_id,text)}
+
+    pub fn clear_turn_partial(&mut self, turn_id:&str) -> Result<()> {turns::clear_partial(&self.connection,turn_id)}
+
+    pub fn ask_question(&mut self, turn_id:&str, kind:&str, prompt:&str, options:&[String], source:&str) -> Result<()> {turns::ask(&self.connection,turn_id,kind,prompt,options,source)}
+
+    pub fn pending_question(&self, chat_id:&str) -> Result<Option<QuestionView>> {turns::pending_question(&self.connection,chat_id)}
+
+    pub fn question_of(&self, turn_id:&str) -> Result<Option<QuestionView>> {turns::question_of(&self.connection,turn_id)}
+
+    pub fn settle_question(&mut self, turn_id:&str, status:&str, answered_by:Option<&str>) -> Result<bool> {turns::settle_question(&self.connection,turn_id,status,answered_by)}
+
+    pub fn chat_of_turn(&self, turn_id:&str) -> Result<Option<String>> {turns::chat_of(&self.connection,turn_id)}
+
+    pub fn question_origin(&self, turn_id:&str) -> Result<Option<String>> {turns::question_origin(&self.connection,turn_id)}
 
     pub fn database_path(&self) -> &Path {&self.path}
 
@@ -274,10 +390,10 @@ impl WorkspaceStore {
 
     fn messages(&self,chat_id:&str)->Result<Vec<WorkspaceMessage>>{
         let rows={
-            let mut statement=self.connection.prepare("SELECT role,content,created_at FROM messages WHERE chat_id=?1 ORDER BY id")?;
-            statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+            let mut statement=self.connection.prepare("SELECT role,content,created_at,turn_id FROM messages WHERE chat_id=?1 ORDER BY id")?;
+            statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,Option<String>>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        rows.into_iter().map(|(role,content,created_at)|Ok(WorkspaceMessage{role,content,created_at:parse_time(&created_at)?})).collect()
+        rows.into_iter().map(|(role,content,created_at,turn_id)|Ok(WorkspaceMessage{role,content,created_at:parse_time(&created_at)?,turn_id})).collect()
     }
 
     fn migrate_legacy_json(&mut self,path:&Path)->Result<()> {
@@ -294,18 +410,56 @@ impl WorkspaceStore {
     }
 }
 
-fn import_legacy(transaction:&Transaction<'_>,legacy:&WorkspaceData)->Result<()> {
-    for project in &legacy.projects {transaction.execute("INSERT OR IGNORE INTO projects(id,name,root_path,created_at) VALUES(?1,?2,?3,?4)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339()])?;}
-    for chat in &legacy.chats {
-        transaction.execute("INSERT OR IGNORE INTO chats(id,code,project_id,title,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",params![chat.id,"",chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
-        let existing:i64=transaction.query_row("SELECT COUNT(*) FROM messages WHERE chat_id=?1",[&chat.id],|row|row.get(0))?;
-        if existing==0 {for message in &chat.messages {insert_message(transaction,&chat.id,&message.role,&message.content,message.created_at)?;}}
+/// Abre espaço para o turno nas mensagens dos bancos antigos. Quem já estava
+/// escrito fica com o turno vazio: é conversa de antes da portaria, e um balão
+/// sem semáforo continua legível.
+fn ensure_message_turns(connection:&Connection)->Result<()> {
+    if !connection.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name='turn_id'")?.exists([])? {
+        connection.execute_batch("ALTER TABLE messages ADD COLUMN turn_id TEXT")?;
     }
     Ok(())
 }
 
-fn insert_message(transaction:&Transaction<'_>,chat_id:&str,role:&str,content:&str,created_at:DateTime<Utc>)->Result<()> {
-    transaction.execute("INSERT INTO messages(chat_id,role,content,created_at) VALUES(?1,?2,?3,?4)",params![chat_id,role,content,created_at.to_rfc3339()])?;
+/// Abre espaço para a resposta parcial nos bancos antigos. Quem já estava
+/// escrito fica sem rascunho: aquelas respostas chegaram inteiras, de uma vez, e
+/// não têm meio caminho para mostrar.
+fn ensure_turn_partial(connection:&Connection)->Result<()> {
+    if !connection.prepare("SELECT 1 FROM pragma_table_info('turns') WHERE name='partial'")?.exists([])? {
+        connection.execute_batch("ALTER TABLE turns ADD COLUMN partial TEXT")?;
+    }
+    Ok(())
+}
+
+/// Quem batizou o chat: o resumo local do primeiro pedido, ou o modelo. Sem
+/// esta marca a única pista era "o chat não tem mensagem nenhuma" — e desde que
+/// o pedido passa a ser gravado antes de sair, essa pista deixa de existir.
+/// Um chat que já existia e tem histórico é dado por batizado.
+fn ensure_chat_named(connection:&Connection)->Result<()> {
+    if connection.prepare("SELECT 1 FROM pragma_table_info('chats') WHERE name='named'")?.exists([])? {return Ok(());}
+    connection.execute_batch("ALTER TABLE chats ADD COLUMN named INTEGER NOT NULL DEFAULT 0")?;
+    connection.execute_batch("UPDATE chats SET named=1 WHERE EXISTS(SELECT 1 FROM messages WHERE messages.chat_id=chats.id)")?;
+    Ok(())
+}
+
+fn import_legacy(transaction:&Transaction<'_>,legacy:&WorkspaceData)->Result<()> {
+    for project in &legacy.projects {transaction.execute("INSERT OR IGNORE INTO projects(id,name,root_path,created_at) VALUES(?1,?2,?3,?4)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339()])?;}
+    for chat in &legacy.chats {
+        transaction.execute("INSERT OR IGNORE INTO chats(id,code,project_id,title,named,created_at,updated_at) VALUES(?1,?2,?3,?4,1,?5,?6)",params![chat.id,"",chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
+        let existing:i64=transaction.query_row("SELECT COUNT(*) FROM messages WHERE chat_id=?1",[&chat.id],|row|row.get(0))?;
+        if existing==0 {for message in &chat.messages {insert_message(transaction,&chat.id,None,&message.role,&message.content,message.created_at)?;}}
+    }
+    Ok(())
+}
+
+/// Se o pedido deste turno já está escrito. É o que separa o reenvio de um
+/// turno que falhou — o texto já está lá — de um pedido novo que por acaso
+/// repete a frase anterior.
+fn written(connection:&Connection,turn_id:&str)->Result<bool> {
+    Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE turn_id=?1 AND role='user')",[turn_id],|row|row.get(0))?)
+}
+
+fn insert_message(transaction:&Transaction<'_>,chat_id:&str,turn_id:Option<&str>,role:&str,content:&str,created_at:DateTime<Utc>)->Result<()> {
+    transaction.execute("INSERT INTO messages(chat_id,turn_id,role,content,created_at) VALUES(?1,?2,?3,?4,?5)",params![chat_id,turn_id,role,content,created_at.to_rfc3339()])?;
     Ok(())
 }
 
@@ -316,7 +470,7 @@ fn new_chat_code()->String {
     Uuid::new_v4().as_bytes().iter().take(6).map(|byte|ALPHABET[(byte%32) as usize] as char).collect()
 }
 
-fn parse_time(value:&str)->Result<DateTime<Utc>>{Ok(DateTime::parse_from_rfc3339(value).with_context(||format!("invalid timestamp `{value}`"))?.with_timezone(&Utc))}
+pub(crate) fn parse_time(value:&str)->Result<DateTime<Utc>>{Ok(DateTime::parse_from_rfc3339(value).with_context(||format!("invalid timestamp `{value}`"))?.with_timezone(&Utc))}
 
 fn compact_title(input: &str) -> String {
     let mut title=input.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
@@ -329,6 +483,196 @@ mod tests {
     use super::*;
 
     fn store(root:&tempfile::TempDir)->WorkspaceStore{WorkspaceStore::open(root.path().join("workspace.sqlite3"),None).expect("workspace")}
+
+    #[test]
+    fn o_pedido_e_o_turno_entram_no_banco_no_mesmo_ato() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+
+        let turn=store.enqueue_prompt(&chat.id,"desenha o cabeçalho",None).expect("fila");
+
+        let saved=store.snapshot().expect("snapshot");
+        let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
+        assert_eq!(saved.messages.len(),1,"o pedido está no disco antes de qualquer ida ao modelo");
+        assert_eq!(saved.messages[0].content,"desenha o cabeçalho");
+        assert_eq!(saved.messages[0].turn_id.as_deref(),Some(turn.id.as_str()),"o pedido nasce preso ao seu turno");
+        assert_eq!(turn.status,TurnStatus::Queued);
+    }
+
+    #[test]
+    fn mandar_a_mesma_frase_duas_vezes_deixa_as_duas_no_chat() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+
+        let primeiro=store.enqueue_prompt(&chat.id,"de novo",None).expect("primeiro");
+        let segundo=store.enqueue_prompt(&chat.id,"de novo",None).expect("segundo");
+
+        assert_ne!(primeiro.id,segundo.id,"repetir a frase é um pedido novo, com número novo");
+        let saved=store.snapshot().expect("snapshot");
+        let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
+        assert_eq!(saved.messages.len(),2,"nenhum pedido some do chat por parecer com o anterior");
+    }
+
+    #[test]
+    fn retentar_nao_escreve_o_pedido_duas_vezes() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"tenta",None).expect("primeira");
+        store.append_answer(&chat.id,&turn.id,"deu erro").expect("resposta");
+        store.set_turn_status(&turn.id,TurnStatus::Failed).expect("falhou");
+
+        let de_novo=store.enqueue_prompt(&chat.id,"tenta",Some(&turn.id)).expect("retentativa");
+
+        assert_eq!(de_novo.id,turn.id,"a retentativa é o mesmo pedido");
+        assert_eq!(de_novo.status,TurnStatus::Queued,"e ele volta para o fim do seu próprio trabalho, não para o ar");
+        let saved=store.snapshot().expect("snapshot");
+        let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
+        assert_eq!(saved.messages.len(),1,"o pedido continua único e a resposta que falhou saiu");
+        assert_eq!(saved.messages[0].role,"user");
+    }
+
+    #[test]
+    fn o_texto_da_fila_e_lido_de_volta_do_banco_e_nao_da_tela() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        store.enqueue_prompt(&chat.id,"primeiro",None).expect("um");
+        store.enqueue_prompt(&chat.id,"segundo",None).expect("dois");
+
+        let (turn,prompt)=store.claim_next_turn().expect("consulta").expect("há fila");
+        assert_eq!(prompt,"primeiro","quem processa lê o pedido do disco, não de uma variável da tela");
+        assert_eq!(turn.status,TurnStatus::Flying,"assumir a vez tira o pedido da fila e o põe no ar");
+        assert!(store.claim_next_turn().expect("consulta").is_none(),"o segundo espera o primeiro voltar");
+
+        store.set_turn_status(&turn.id,TurnStatus::Answered).expect("respondido");
+        let (_,seguinte)=store.claim_next_turn().expect("consulta").expect("agora é a vez dele");
+        assert_eq!(seguinte,"segundo");
+    }
+
+    #[test]
+    fn a_fila_sobrevive_ao_fechamento_do_aplicativo() {
+        let root=tempfile::tempdir().expect("root");
+        let path=root.path().join("workspace.sqlite3");
+        let chat_id={
+            let mut store=WorkspaceStore::open(path.clone(),None).expect("workspace");
+            let project=store.create_project("Produto",None).expect("project");
+            let chat=store.create_chat(&project.id,None).expect("chat");
+            store.enqueue_prompt(&chat.id,"não me perca",None).expect("fila");
+            store.claim_next_turn().expect("consulta").expect("assume");
+            chat.id
+        };
+
+        let mut store=WorkspaceStore::open(path,None).expect("reabre");
+        let (turn,prompt)=store.claim_next_turn().expect("consulta").expect("o pedido interrompido voltou para a fila");
+
+        assert_eq!(prompt,"não me perca");
+        assert_eq!(turn.chat_id,chat_id);
+    }
+
+    /// O defeito relatado: mandar uma segunda coisa enquanto a primeira estava
+    /// sendo respondida fazia a segunda sumir da tela. Ela sumia porque nunca
+    /// chegava ao banco — ficava presa esperando o cadeado do modelo — e a
+    /// primeira, ao terminar, redesenhava a conversa a partir do disco.
+    #[test]
+    fn mandar_por_cima_de_um_pedido_em_andamento_nao_apaga_o_que_foi_escrito() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+
+        store.enqueue_prompt(&chat.id,"o primeiro pedido",None).expect("primeiro");
+        let (primeiro,_)=store.claim_next_turn().expect("consulta").expect("assume");
+        // O modelo está respondendo o primeiro. O desenvolvedor manda mais dois.
+        let segundo=store.enqueue_prompt(&chat.id,"o segundo pedido",None).expect("segundo");
+        let terceiro=store.enqueue_prompt(&chat.id,"o terceiro pedido",None).expect("terceiro");
+
+        let escrito=|store:&WorkspaceStore|store.snapshot().expect("snapshot").chats.iter().find(|entry|entry.id==chat.id).expect("chat").messages.iter().filter(|message|message.role=="user").map(|message|message.content.clone()).collect::<Vec<_>>();
+        assert_eq!(escrito(&store),["o primeiro pedido","o segundo pedido","o terceiro pedido"],"os três estão no disco antes de qualquer resposta");
+
+        // A primeira resposta chega e a tela é redesenhada a partir do banco.
+        store.append_answer(&chat.id,&primeiro.id,"pronto").expect("resposta");
+        store.set_turn_status(&primeiro.id,TurnStatus::Answered).expect("fechado");
+        assert_eq!(escrito(&store),["o primeiro pedido","o segundo pedido","o terceiro pedido"],"nada some do chat quando a conversa é redesenhada");
+
+        assert_eq!(store.queue_depth(&chat.id).expect("fila"),2,"os dois que esperam continuam na fila");
+        assert_eq!(store.claim_next_turn().expect("consulta").expect("vez").0.id,segundo.id,"a vez é de quem chegou primeiro");
+        store.set_turn_status(&segundo.id,TurnStatus::Answered).expect("fechado");
+        assert_eq!(store.claim_next_turn().expect("consulta").expect("vez").0.id,terceiro.id);
+    }
+
+    #[test]
+    fn sair_do_chat_no_meio_da_fila_nao_desfaz_a_fila() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let aqui=store.create_chat(&project.id,None).expect("chat");
+        let ali=store.create_chat(&project.id,None).expect("outro");
+        store.enqueue_prompt(&aqui.id,"fica esperando",None).expect("pedido");
+        store.claim_next_turn().expect("consulta").expect("assume");
+        store.enqueue_prompt(&aqui.id,"este também",None).expect("pedido");
+
+        // O desenvolvedor vai para outro chat e manda outra coisa de lá.
+        store.enqueue_prompt(&ali.id,"de outro chat",None).expect("pedido");
+
+        assert_eq!(store.queue_depth(&aqui.id).expect("fila"),2,"a fila do chat de origem não se desfaz porque ninguém está olhando");
+        assert_eq!(store.queue_depth(&ali.id).expect("fila"),1);
+    }
+
+    #[test]
+    fn um_banco_anterior_a_marca_de_batismo_continua_abrindo() {
+        let root=tempfile::tempdir().expect("root");
+        let path=root.path().join("workspace.sqlite3");
+        {
+            let connection=rusqlite::Connection::open(&path).expect("sqlite");
+            connection.execute_batch(
+                "CREATE TABLE projects (id TEXT PRIMARY KEY,name TEXT NOT NULL,root_path TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
+                 CREATE TABLE chats (id TEXT PRIMARY KEY,code TEXT NOT NULL DEFAULT '',project_id TEXT NOT NULL,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+                 CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,chat_id TEXT NOT NULL,turn_id TEXT,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);
+                 INSERT INTO projects VALUES('p','Antigo','','2024-01-01T00:00:00Z');
+                 INSERT INTO chats VALUES('usado','AAAAAA','p','Cálculo do frete','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z');
+                 INSERT INTO chats VALUES('vazio','BBBBBB','p','Novo chat','2024-01-02T00:00:00Z','2024-01-02T00:00:00Z');
+                 INSERT INTO messages(chat_id,role,content,created_at) VALUES('usado','user','e o frete?','2024-01-01T00:00:00Z');"
+            ).expect("esquema anterior à marca");
+        }
+
+        let store=WorkspaceStore::open(path,None).expect("workspace");
+
+        assert!(!store.chat_is_unnamed("usado").expect("chat com histórico"),"quem já tem conversa fica com o título que tem");
+        assert!(store.chat_is_unnamed("vazio").expect("chat vazio"),"o chat que nunca foi usado ainda tem direito a um nome");
+    }
+
+    /// O par que a Portaria julga: o turno-resposta aponta para a pergunta, e a
+    /// pergunta aponta para o pedido que a originou. É esse caminho de volta que
+    /// dá assunto a um `SIM` — sem ele, a resposta chegaria ao portão como uma
+    /// palavra solta e seria barrada por faltas que o pedido de origem já supriu.
+    #[test]
+    fn o_turno_resposta_encontra_o_pedido_que_originou_a_pergunta() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let pergunta=store.enqueue_prompt(&chat.id,"Troque o provedor padrão em config.yaml",None).expect("pedido");
+        store.append_answer(&chat.id,&pergunta.id,"Qual provedor?").expect("resposta");
+        store.ask_question(&pergunta.id,"single","Qual provedor?",&["Anthropic".into(),"OpenAI".into()],"jev").expect("pergunta");
+
+        let aberta=store.snapshot().expect("snapshot").chats.into_iter().find(|item|item.id==chat.id).expect("chat").question.expect("pergunta na caixa");
+        assert_eq!(aberta.turn_id,pergunta.id,"é o retrato do banco que veste a caixa de enviar mensagem");
+
+        let resposta=store.enqueue_prompt(&chat.id,"Resposta à pergunta «Qual provedor?»: Anthropic",None).expect("turno-resposta");
+        assert!(store.settle_question(&pergunta.id,turns::QUESTION_ANSWERED,Some(&resposta.id)).expect("encerrar"));
+
+        assert_eq!(store.question_origin(&resposta.id).expect("origem").as_deref(),Some("Troque o provedor padrão em config.yaml"));
+        assert_eq!(store.chat_of_turn(&resposta.id).expect("chat").as_deref(),Some(chat.id.as_str()));
+        assert!(store.question_origin(&pergunta.id).expect("origem").is_none(),"o pedido original não responde a pergunta nenhuma");
+        assert!(store.snapshot().expect("snapshot").chats.into_iter().find(|item|item.id==chat.id).expect("chat").question.is_none(),"respondida não trava mais a caixa");
+    }
 
     #[test]
     fn starts_without_an_automatic_project() {
@@ -375,6 +719,63 @@ mod tests {
     }
 
     #[test]
+    fn o_pedido_e_a_resposta_ficam_presos_ao_mesmo_turno() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.open_turn(&chat.id).expect("turno");
+
+        store.append_exchange(&chat.id,&turn.id,"e aí","opa").expect("troca");
+
+        let saved=store.snapshot().expect("snapshot");
+        let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
+        assert_eq!(saved.messages.iter().map(|message|message.turn_id.clone()).collect::<Vec<_>>(),vec![Some(turn.id.clone()),Some(turn.id.clone())],"os dois balões apontam para o mesmo pedido");
+        assert_eq!(saved.turns.len(),1,"o chat devolve o turno junto com as mensagens");
+        assert_eq!(saved.turns[0].code,format!("{}·01",chat.code));
+    }
+
+    #[test]
+    fn retentar_apaga_a_resposta_que_falhou_mas_nunca_o_pedido() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let antigo=store.open_turn(&chat.id).expect("turno");
+        store.append_exchange(&chat.id,&antigo.id,"o de ontem","respondido").expect("troca");
+        let turn=store.open_turn(&chat.id).expect("turno");
+        store.append_exchange(&chat.id,&turn.id,"revise o frete","falhou: sem rede").expect("troca");
+
+        store.clear_turn_answer(&turn.id).expect("limpeza");
+
+        let saved=store.snapshot().expect("snapshot");
+        let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
+        assert_eq!(saved.messages.iter().map(|message|message.content.as_str()).collect::<Vec<_>>(),["o de ontem","respondido","revise o frete"],"some só o erro; o pedido e o que já estava respondido ficam");
+    }
+
+    #[test]
+    fn um_banco_antigo_sem_turno_nas_mensagens_continua_abrindo() {
+        let root=tempfile::tempdir().expect("root");
+        let path=root.path().join("workspace.sqlite3");
+        {
+            let connection=rusqlite::Connection::open(&path).expect("sqlite");
+            connection.execute_batch(
+                "CREATE TABLE projects (id TEXT PRIMARY KEY,name TEXT NOT NULL,root_path TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
+                 CREATE TABLE chats (id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+                 CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,chat_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);
+                 INSERT INTO projects VALUES('p','Antigo','','2024-01-01T00:00:00Z');
+                 INSERT INTO chats VALUES('c1','p','Um','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z');
+                 INSERT INTO messages(chat_id,role,content,created_at) VALUES('c1','user','oi','2024-01-01T00:00:00Z');"
+            ).expect("esquema antigo");
+        }
+        let store=WorkspaceStore::open(path,None).expect("workspace");
+        let chats=store.snapshot().expect("snapshot").chats;
+        assert_eq!(chats[0].messages.len(),1,"o que já estava escrito não some");
+        assert_eq!(chats[0].messages[0].turn_id,None,"conversa de antes dos turnos não ganha semáforo");
+        assert!(chats[0].turns.is_empty());
+    }
+
+    #[test]
     fn a_project_knows_which_chats_are_its_own() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
@@ -396,7 +797,8 @@ mod tests {
         let mut store=WorkspaceStore::open(path,None).expect("workspace");
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
-        store.append_exchange(&chat.id,"pergunta","resposta").expect("exchange");
+        let turn=store.open_turn(&chat.id).expect("turno");
+        store.append_exchange(&chat.id,&turn.id,"pergunta","resposta").expect("exchange");
 
         assert_eq!(store.database_name(),"workspace.sqlite3");
         let counts=store.table_counts().expect("counts");
@@ -416,7 +818,8 @@ mod tests {
             let mut store=WorkspaceStore::open(path.clone(),None).expect("workspace");
             let project=store.create_project("Produto",None).expect("project");
             let chat=store.create_chat(&project.id,None).expect("chat");
-            store.append_exchange(&chat.id,"Implemente o painel agora","Pronto").expect("exchange");
+            let turn=store.open_turn(&chat.id).expect("turno");
+            store.append_exchange(&chat.id,&turn.id,"Implemente o painel agora","Pronto").expect("exchange");
             chat.id
         };
         let reloaded=WorkspaceStore::open(path,None).expect("reloaded");
@@ -432,7 +835,8 @@ mod tests {
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
-        store.append_exchange(&chat.id,"Pergunta","Resposta").expect("exchange");
+        let turn=store.open_turn(&chat.id).expect("turno");
+        store.append_exchange(&chat.id,&turn.id,"Pergunta","Resposta").expect("exchange");
         assert_eq!(store.delete_project(&project.id).expect("delete"),vec![chat.id]);
         let data=store.snapshot().expect("snapshot");
         assert!(data.projects.is_empty());
@@ -458,7 +862,7 @@ mod tests {
         let root=tempfile::tempdir().expect("root");
         let legacy_path=root.path().join("workspace.json");
         let now=Utc::now();
-        let legacy=WorkspaceData{projects:vec![ProjectRecord{id:"project".into(),name:"src-tauri".into(),root_path:"/tmp/src-tauri".into(),created_at:now}],chats:vec![ChatRecord{id:"chat".into(),code:String::new(),project_id:"project".into(),title:"Novo chat".into(),messages:vec![],created_at:now,updated_at:now}]};
+        let legacy=WorkspaceData{projects:vec![ProjectRecord{id:"project".into(),name:"src-tauri".into(),root_path:"/tmp/src-tauri".into(),created_at:now}],chats:vec![ChatRecord{id:"chat".into(),code:String::new(),project_id:"project".into(),title:"Novo chat".into(),messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now}]};
         fs::write(&legacy_path,serde_json::to_vec(&legacy).expect("json")).expect("legacy fixture");
         let store=WorkspaceStore::open(root.path().join("workspace.sqlite3"),Some(&legacy_path)).expect("workspace");
         assert!(store.snapshot().expect("snapshot").projects.is_empty());
@@ -488,10 +892,15 @@ mod tests {
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
 
+        let turn=store.open_turn(&chat.id).expect("turno");
+
         assert!(store.chat_is_unnamed(&chat.id).expect("chat novo"),"um chat recém-criado ainda não tem nome");
-        store.append_exchange(&chat.id,"Preciso revisar o cálculo do frete no checkout","Vamos olhar o cálculo.").expect("exchange");
-        assert!(!store.chat_is_unnamed(&chat.id).expect("chat usado"),"depois da primeira troca o título já foi escolhido uma vez");
+        store.append_exchange(&chat.id,&turn.id,"Preciso revisar o cálculo do frete no checkout","Vamos olhar o cálculo.").expect("exchange");
         assert_eq!(store.snapshot().expect("snapshot").chats[0].title,"Preciso revisar o cálculo do frete no…","o resumo local entra na hora");
+        assert!(store.chat_is_unnamed(&chat.id).expect("chat em uso"),"o resumo local é provisório: o modelo ainda tem direito a um nome");
+
+        store.rename_chat(&chat.id,"Cálculo do frete").expect("batismo");
+        assert!(!store.chat_is_unnamed(&chat.id).expect("chat batizado"),"batizado uma vez, nunca mais se gasta modelo com isso");
     }
 
     #[test]
@@ -517,7 +926,7 @@ mod tests {
         let root=tempfile::tempdir().expect("root");
         let legacy_path=root.path().join("workspace.json");
         let now=Utc::now();
-        let legacy=WorkspaceData{projects:vec![ProjectRecord{id:"project".into(),name:"Produto".into(),root_path:"".into(),created_at:now}],chats:vec![ChatRecord{id:"chat".into(),code:String::new(),project_id:"project".into(),title:"Discussão".into(),messages:vec![WorkspaceMessage{role:"user".into(),content:"Olá".into(),created_at:now}],created_at:now,updated_at:now}]};
+        let legacy=WorkspaceData{projects:vec![ProjectRecord{id:"project".into(),name:"Produto".into(),root_path:"".into(),created_at:now}],chats:vec![ChatRecord{id:"chat".into(),code:String::new(),project_id:"project".into(),title:"Discussão".into(),messages:vec![WorkspaceMessage{role:"user".into(),content:"Olá".into(),created_at:now,turn_id:None}],turns:vec![],question:None,created_at:now,updated_at:now}]};
         fs::write(&legacy_path,serde_json::to_vec(&legacy).expect("json")).expect("legacy fixture");
         let database_path=root.path().join("workspace.sqlite3");
         let first=WorkspaceStore::open(database_path.clone(),Some(&legacy_path)).expect("first migration");

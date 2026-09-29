@@ -1,25 +1,50 @@
-use crate::{config::ProviderConfig, model::{ChatMessage, ProviderResponse}};
+use crate::{config::ProviderConfig, model::{ChatMessage, ProviderResponse}, progress::{Beat, Pulse}};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::{collections::HashMap, future::Future, net::IpAddr, process::Stdio, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, future::Future, net::IpAddr, path::PathBuf, process::Stdio, sync::{Arc, RwLock}, time::{Instant, SystemTime, UNIX_EPOCH}};
 use reqwest::{header::{HeaderMap, RETRY_AFTER}, StatusCode};
-use tokio::{io::AsyncWriteExt, process::Command, time::{sleep, timeout, Duration}};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::Command, time::{sleep, timeout, Duration}};
 
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
     fn is_local(&self) -> bool { false }
     async fn chat(&self, messages: &[ChatMessage], model: &str) -> Result<ProviderResponse>;
+
+    /// A mesma conversa, contada enquanto acontece. O padrão é a resposta
+    /// inteira num pedaço só: um provedor que não saiba transmitir continua
+    /// funcionando, e a tela mostra o texto de uma vez em vez de não mostrar
+    /// nada. Quem sabe transmitir sobrescreve.
+    async fn chat_stream(&self, messages:&[ChatMessage], model:&str, pulse:&Pulse) -> Result<ProviderResponse> {
+        let response=self.chat(messages,model).await?;
+        pulse.beat(Beat::Chunk{text:response.response.clone()});
+        Ok(response)
+    }
 }
 
-pub fn build_providers(configs: &HashMap<String, ProviderConfig>) -> HashMap<String, Box<dyn Provider>> {
+/// A pasta que os agentes de linha de comando enxergam. Eles leem o
+/// repositório em que são abertos, então esta é a única forma de o chat de um
+/// projeto receber respostas sobre o repositório desse projeto. Um só valor
+/// compartilhado: trocar de projeto o move para todos os agentes de uma vez.
+#[derive(Clone,Default)]
+pub struct Workdir(Arc<RwLock<Option<PathBuf>>>);
+
+impl Workdir {
+    pub fn focus(&self,root:PathBuf) { if let Ok(mut current)=self.0.write() {*current=Some(root);} }
+    /// A pasta corrente, se houver uma. Um cadeado envenenado não derruba o
+    /// pedido: o agente roda onde estiver, como rodava antes.
+    fn current(&self)->Option<PathBuf> { self.0.read().ok().and_then(|current|current.clone()) }
+}
+
+pub fn build_providers(configs: &HashMap<String, ProviderConfig>, workdir: &Workdir) -> HashMap<String, Box<dyn Provider>> {
     configs.iter().filter(|(_,config)|config.is_executable()).filter_map(|(name, config)| {
         let provider: Box<dyn Provider> = match config.kind.as_str() {
             "openai" => Box::new(HttpProvider::openai(name.clone(), config.clone())),
             "anthropic" => Box::new(HttpProvider::anthropic(name.clone(), config.clone())),
             "openai-compatible" => Box::new(HttpProvider::compatible(name.clone(), config.clone())),
-            "cli" => Box::new(CliProvider { name:name.clone(), config:config.clone() }),
+            "cli" => Box::new(CliProvider { name:name.clone(), config:config.clone(), workdir:workdir.clone() }),
             _ => return None,
         }; Some((name.clone(),provider))
     }).collect()
@@ -106,6 +131,46 @@ fn is_loopback_host(host:&str)->bool {
 }
 fn jitter(span:u64)->u64 { if span==0 {return 0;} SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed|elapsed.subsec_nanos() as u64).unwrap_or(0)%span }
 
+/// O que uma resposta rendeu: o texto e a conta dos tokens.
+#[derive(Debug,Default,PartialEq)]
+struct Harvest { text:String, input_tokens:usize, output_tokens:usize }
+
+/// Um erro que já não pode ser repetido. A tentativa seguinte só é honesta
+/// enquanto nada foi dito.
+fn settle(spoken:&AtomicBool,error:RetryError)->RetryError {
+    if spoken.load(Ordering::Relaxed) { RetryError::Fatal(error.into_error()) } else { error }
+}
+
+/// As linhas inteiras que já chegaram, sem a quebra. O que sobrar continua no
+/// balde: um pedaço da rede corta onde quiser, e meio evento não se lê.
+fn ready_lines(pending:&mut Vec<u8>)->Vec<String> {
+    let mut lines=Vec::new();
+    while let Some(cut)=pending.iter().position(|byte|*byte==b'\n') {
+        let line=pending.drain(..=cut).collect::<Vec<_>>();
+        lines.push(String::from_utf8_lossy(&line).trim_end_matches(['\n','\r']).to_string());
+    }
+    lines
+}
+
+/// Uma linha do fluxo de eventos. Devolve o texto que ela acrescenta à resposta,
+/// e vai somando os tokens que passam. Comentários, batidas de coração, o
+/// `[DONE]` e os eventos que não interessam não acrescentam nada.
+fn read_event(kind:&HttpKind,line:&str,harvest:&mut Harvest)->Option<String> {
+    let data=line.strip_prefix("data:")?.trim();
+    if data.is_empty()||data=="[DONE]" { return None; }
+    let event=serde_json::from_str::<Value>(data).ok()?;
+    let tokens=|pointer:&str|event.pointer(pointer).and_then(Value::as_u64).map(|value|value as usize);
+    if let Some(input)=tokens("/usage/input_tokens").or_else(||tokens("/message/usage/input_tokens")).or_else(||tokens("/usage/prompt_tokens")) { harvest.input_tokens=input; }
+    if let Some(output)=tokens("/usage/output_tokens").or_else(||tokens("/message/usage/output_tokens")).or_else(||tokens("/usage/completion_tokens")) { harvest.output_tokens=output; }
+    match kind {
+        HttpKind::OpenAi=>event.pointer("/choices/0/delta/content").and_then(Value::as_str).map(str::to_string),
+        HttpKind::Anthropic=>{
+            if event.get("type").and_then(Value::as_str)!=Some("content_block_delta") { return None; }
+            event.pointer("/delta/text").and_then(Value::as_str).map(str::to_string)
+        }
+    }
+}
+
 enum HttpKind { OpenAi, Anthropic }
 struct HttpProvider { name:String, config:ProviderConfig, kind:HttpKind, client:reqwest::Client }
 impl HttpProvider {
@@ -113,13 +178,117 @@ impl HttpProvider {
     fn anthropic(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::Anthropic) }
     fn compatible(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::OpenAi) }
     fn new(name:String,config:ProviderConfig,kind:HttpKind)->Self { let client=reqwest::Client::builder().timeout(Duration::from_secs(config.timeout)).build().expect("HTTP client"); Self{name,config,kind,client} }
+    /// O que um corpo de resposta inteiro carrega. O mesmo leitor serve à
+    /// conversa comum e ao provedor que ignorou o pedido de transmissão e
+    /// devolveu tudo de uma vez — sem ele, um endpoint desses devolveria texto
+    /// vazio, que é exatamente o silêncio que a transmissão veio resolver.
+    fn reap(&self,body:&Value)->Harvest {
+        match self.kind {
+            HttpKind::OpenAi=>Harvest{
+                text:body.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or_default().to_string(),
+                input_tokens:body.pointer("/usage/prompt_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                output_tokens:body.pointer("/usage/completion_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+            },
+            HttpKind::Anthropic=>Harvest{
+                text:body.pointer("/content/0/text").and_then(Value::as_str).unwrap_or_default().to_string(),
+                input_tokens:body.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                output_tokens:body.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+            },
+        }
+    }
+
+    /// O endereço e o corpo do pedido. O mesmo para a conversa comum e para a
+    /// transmitida: o que muda é o `stream`, e é isso que garante que as duas
+    /// falem com o mesmo modelo, na mesma temperatura, pelo mesmo caminho.
+    fn compose(&self,messages:&[ChatMessage],model:&str,flowing:bool)->(String,Value) {
+        match self.kind {
+            HttpKind::OpenAi=>{
+                let base=self.config.base_url.as_deref().unwrap_or("https://api.openai.com/v1").trim_end_matches('/');
+                let mut payload=json!({"model":model,"messages":messages,"temperature":0.2});
+                if flowing {
+                    payload["stream"]=json!(true);
+                    // A conta dos tokens no fluxo é extra da OpenAI. Pedi-la a um
+                    // servidor apenas compatível é risco de o corpo ser recusado
+                    // inteiro por um campo que ele não conhece.
+                    if self.config.kind=="openai" { payload["stream_options"]=json!({"include_usage":true}); }
+                }
+                (format!("{base}/chat/completions"),payload)
+            }
+            HttpKind::Anthropic=>{
+                let base=self.config.base_url.as_deref().unwrap_or("https://api.anthropic.com/v1").trim_end_matches('/');
+                let system=messages.iter().find(|m|m.role=="system").map(|m|m.content.clone()).unwrap_or_default();
+                let chat=messages.iter().filter(|m|m.role!="system").collect::<Vec<_>>();
+                let mut payload=json!({"model":model,"max_tokens":4096,"system":system,"messages":chat});
+                if flowing { payload["stream"]=json!(true); }
+                (format!("{base}/messages"),payload)
+            }
+        }
+    }
+
+    fn wrap(&self,harvest:Harvest,model:&str,started:Instant)->ProviderResponse {
+        ProviderResponse{response:harvest.text,input_tokens:harvest.input_tokens,output_tokens:harvest.output_tokens,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()}
+    }
+
+    fn ask(&self,url:&str,payload:&Value)->reqwest::RequestBuilder {
+        let mut request=self.client.post(url).json(payload);
+        if matches!(self.kind,HttpKind::Anthropic) { request=request.header("anthropic-version","2023-06-01"); }
+        if let Some(key)=self.config.api_key.as_deref().filter(|k|!k.is_empty()) {
+            request=if matches!(self.kind,HttpKind::Anthropic){request.header("x-api-key",key)}else{request.bearer_auth(key)};
+        }
+        request
+    }
+
+    /// A conversa transmitida. Duas regras a governam. A primeira: repetir a
+    /// chamada só vale enquanto nada saiu — depois do primeiro pedaço a tela já
+    /// mostrou texto, e uma segunda tentativa escreveria a resposta duas vezes,
+    /// então a partir dali todo erro é fatal. A segunda: o que o servidor manda
+    /// não respeita a linha do evento, um pedaço da rede pode cortar um JSON no
+    /// meio, e meio JSON não se lê.
+    async fn flow(&self,url:&str,payload:&Value,pulse:&Pulse)->Result<Harvest> {
+        let spoken=AtomicBool::new(false);
+        with_retry(RetryPolicy::default(),|_attempt| async {
+            let response=self.ask(url,payload).send().await.map_err(|error|settle(&spoken,RetryError::from_transport(&self.name,error)))?;
+            let status=response.status();
+            let after=retry_after(response.headers());
+            if !status.is_success() {
+                let body=response.text().await.ok().and_then(|text|serde_json::from_str::<Value>(&text).ok()).unwrap_or(Value::Null);
+                return Err(settle(&spoken,RetryError::from_status(status,after,anyhow!("provider returned {status}: {}",provider_error(&body)))));
+            }
+            let mut response=response;
+            let (mut harvest,mut pending,mut raw,mut heard,mut ended)=(Harvest::default(),Vec::new(),String::new(),false,false);
+            while !ended {
+                match response.chunk().await.map_err(|error|settle(&spoken,RetryError::from_transport(&self.name,error)))? {
+                    Some(piece)=>pending.extend_from_slice(&piece),
+                    // O corpo acabou. A última linha pode ter vindo sem quebra
+                    // no fim, e ela também é um evento.
+                    None=>{ pending.push(b'\n'); ended=true; }
+                }
+                for line in ready_lines(&mut pending) {
+                    if line.starts_with("data:") { heard=true; }
+                    else if !heard && !line.trim().is_empty() { raw.push_str(&line); }
+                    let Some(text)=read_event(&self.kind,&line,&mut harvest) else {continue};
+                    if text.is_empty() { continue; }
+                    harvest.text.push_str(&text);
+                    spoken.store(true,Ordering::Relaxed);
+                    pulse.beat(Beat::Chunk{text});
+                }
+            }
+            // Nenhum evento: o provedor ignorou o pedido de transmissão e
+            // respondeu à moda antiga. Ler o corpo inteiro é melhor que
+            // devolver o silêncio que a transmissão veio resolver.
+            if !heard {
+                let body=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+                if body.is_null() { return Err(settle(&spoken,RetryError::Fatal(anyhow!("invalid provider response")))); }
+                harvest=self.reap(&body);
+                if !harvest.text.is_empty() { spoken.store(true,Ordering::Relaxed); pulse.beat(Beat::Chunk{text:harvest.text.clone()}); }
+            }
+            Ok(harvest)
+        }).await
+    }
+
     async fn send(&self,url:&str,payload:&Value)->Result<Value> {
-        let anthropic=matches!(self.kind,HttpKind::Anthropic);
         with_retry(RetryPolicy::default(),move |_attempt| async move {
-            let mut request=self.client.post(url).json(payload);
-            if anthropic { request=request.header("anthropic-version","2023-06-01"); }
-            if let Some(key)=self.config.api_key.as_deref().filter(|k|!k.is_empty()) { request=if anthropic{request.header("x-api-key",key)}else{request.bearer_auth(key)}; }
-            let response=request.send().await.map_err(|error|RetryError::from_transport(&self.name,error))?;
+            let response=self.ask(url,payload).send().await.map_err(|error|RetryError::from_transport(&self.name,error))?;
             let status=response.status();
             let after=retry_after(response.headers());
             let text=response.text().await.map_err(|error|RetryError::from_transport(&self.name,error))?;
@@ -137,40 +306,154 @@ impl Provider for HttpProvider {
     fn is_local(&self)->bool { self.config.local.unwrap_or_else(||self.config.base_url.as_deref().is_some_and(is_loopback_url)) }
     async fn chat(&self,messages:&[ChatMessage],model:&str)->Result<ProviderResponse> {
         let started=Instant::now();
-        match self.kind {
-            HttpKind::OpenAi => {
-                let base=self.config.base_url.as_deref().unwrap_or("https://api.openai.com/v1").trim_end_matches('/');
-                let body=self.send(&format!("{base}/chat/completions"),&json!({"model":model,"messages":messages,"temperature":0.2})).await?;
-                let text=body.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or_default().to_string();
-                Ok(ProviderResponse{response:text,input_tokens:body.pointer("/usage/prompt_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,output_tokens:body.pointer("/usage/completion_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
-            }
-            HttpKind::Anthropic => {
-                let base=self.config.base_url.as_deref().unwrap_or("https://api.anthropic.com/v1").trim_end_matches('/');
-                let system=messages.iter().find(|m|m.role=="system").map(|m|m.content.clone()).unwrap_or_default();
-                let chat=messages.iter().filter(|m|m.role!="system").collect::<Vec<_>>();
-                let body=self.send(&format!("{base}/messages"),&json!({"model":model,"max_tokens":4096,"system":system,"messages":chat})).await?;
-                let text=body.pointer("/content/0/text").and_then(Value::as_str).unwrap_or_default().to_string();
-                Ok(ProviderResponse{response:text,input_tokens:body.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,output_tokens:body.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
-            }
-        }
+        let (url,payload)=self.compose(messages,model,false);
+        let harvest=self.reap(&self.send(&url,&payload).await?);
+        Ok(self.wrap(harvest,model,started))
+    }
+
+    async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        let started=Instant::now();
+        let (url,payload)=self.compose(messages,model,true);
+        let harvest=self.flow(&url,&payload,pulse).await?;
+        Ok(self.wrap(harvest,model,started))
     }
 }
 
-struct CliProvider { name:String, config:ProviderConfig }
+struct CliProvider { name:String, config:ProviderConfig, workdir:Workdir }
+
+/// O que uma linha do agente é: resposta ou relato do trabalho. A decisão é
+/// pelo conteúdo, não pela configuração — `claude --print` escreve o texto
+/// direto, `codex exec` narra o que faz, e nenhum dos dois avisa qual dos dois
+/// está na linha. Texto que não é JSON de evento é resposta; evento com fala do
+/// assistente é resposta; escrituração do agente não é nada; todo o resto é
+/// relato.
+fn classify(line:&str)->Option<Beat> {
+    let event=serde_json::from_str::<Value>(line.trim()).ok().filter(Value::is_object);
+    let Some((event,kind))=event.and_then(|event|event.get("type").and_then(Value::as_str).map(str::to_string).map(|kind|(event,kind)))
+        else { return Some(Beat::Chunk{text:format!("{line}\n")}) };
+    if let Some(text)=said(&event) { return Some(Beat::Chunk{text}); }
+    if bookkeeping(&kind,&event) { return None; }
+    Some(Beat::Agent{line:reported(&kind,&event)})
+}
+
+/// O que o agente escreve para si mesmo. Em `stream-json` a contagem de tokens
+/// de raciocínio, o resultado de cada hook e a resposta pedaço a pedaço saem
+/// centenas de vezes por pedido: é sinal de vida — e por isso a linha chega até
+/// aqui —, mas não é etapa nenhuma para quem espera, e enfileirá-las afogaria as
+/// que importam. O texto da resposta não se perde nisso: ele volta inteiro no
+/// evento do assistente, e é de lá que `said` o tira.
+const BOOKKEEPING:[&str;6]=["rate_limit_event","stream_event","thinking_tokens","hook_started","hook_progress","hook_response"];
+fn bookkeeping(kind:&str,event:&Value)->bool {
+    BOOKKEEPING.contains(&kind)||event.get("subtype").and_then(Value::as_str).is_some_and(|subtype|BOOKKEEPING.contains(&subtype))
+}
+
+/// A fala do assistente dentro de um evento, se houver. Uma mensagem inteira
+/// termina em quebra de linha porque a próxima virá em outro evento; um pedaço
+/// de mensagem não, porque ele continua no pedaço seguinte.
+fn said(event:&Value)->Option<String> {
+    if let Some(parts)=event.pointer("/message/content").and_then(Value::as_array) {
+        let text=parts.iter().filter(|part|part.get("type").and_then(Value::as_str)==Some("text"))
+            .filter_map(|part|part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("");
+        if !text.is_empty() { return Some(format!("{text}\n")); }
+    }
+    event.pointer("/delta/text").and_then(Value::as_str).map(str::to_string)
+}
+
+/// O relato em uma linha. O evento cru na tela seria JSON aos olhos de quem
+/// lê; o tipo mais a pista mais útil que ele traz é o que interessa.
+fn reported(kind:&str,event:&Value)->String {
+    let tool=event.pointer("/message/content").and_then(Value::as_array)
+        .and_then(|parts|parts.iter().find_map(|part|part.get("name").and_then(Value::as_str)));
+    let detail=tool.or_else(||["name","command","tool","subtype","status"].iter().find_map(|field|event.get(field).and_then(Value::as_str)));
+    match detail { Some(detail)=>format!("{kind}: {detail}"), None=>kind.to_string() }
+}
+
+impl CliProvider {
+    fn prompt(messages:&[ChatMessage])->String { messages.iter().map(|m|format!("{}: {}",m.role,m.content)).collect::<Vec<_>>().join("\n\n") }
+
+    /// O agente aberto, com as três pontas na mão. Um só arranque para as duas
+    /// conversas: a que espera o fim e a que acompanha.
+    fn open(&self,model:&str)->Result<tokio::process::Child> {
+        let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
+        let args=self.config.args.iter().map(|arg|arg.replace("{model}",model)).collect::<Vec<_>>();
+        let mut process=Command::new(command);
+        process.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        // A pasta do projeto do chat. Sem ela o agente leria o diretório de
+        // onde o aplicativo subiu e responderia sobre o repositório errado.
+        if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
+        process.spawn().with_context(||format!("could not start CLI provider {command}"))
+    }
+
+    /// Quanto tempo o agente pode ficar calado. O `timeout` do provedor não é o
+    /// prazo da resposta inteira: um pedido detalhado leva minutos de trabalho
+    /// honesto, e derrubá-lo no meio era o que devolvia `CLI provider timed out`
+    /// para quem escrevia demais. É o prazo entre um sinal de vida e o seguinte
+    /// — uma linha na saída, uma linha no erro, o processo que termina. Agente
+    /// que trabalha nunca estoura; agente travado estoura na mesma hora.
+    fn silence(&self)->Duration { Duration::from_secs(self.config.timeout.max(1)) }
+
+    fn muteness(&self)->anyhow::Error {
+        anyhow!("o provedor `{}` passou {}s sem dar sinal de vida e foi encerrado; se o trabalho costuma demorar mais em silêncio, aumente `timeout` na configuração dele",self.name,self.silence().as_secs())
+    }
+}
+
 #[async_trait]
 impl Provider for CliProvider {
     fn name(&self)->&str { &self.name }
     fn is_local(&self)->bool { self.config.local.unwrap_or(false) }
+    /// A conversa sem ninguém acompanhando é a mesma conversa. Ler a saída de
+    /// duas maneiras diferentes era o que fazia o título do chat vir em JSON
+    /// cru: o agente que narra em eventos narra igual nas duas chamadas, e só
+    /// quem lê linha a linha sabe separar a fala dele do relato do trabalho.
     async fn chat(&self,messages:&[ChatMessage],model:&str)->Result<ProviderResponse> {
-        let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
-        let prompt=messages.iter().map(|m|format!("{}: {}",m.role,m.content)).collect::<Vec<_>>().join("\n\n");
-        let args=self.config.args.iter().map(|arg|arg.replace("{model}",model)).collect::<Vec<_>>();
+        self.chat_stream(messages,model,&Pulse::silent()).await
+    }
+
+    /// A mesma conversa, acompanhada linha a linha. As duas pontas são lidas ao
+    /// mesmo tempo de propósito: um agente que escreve muito no canal de erro
+    /// enche o cano e para de trabalhar se ninguém estiver lendo dos dois lados.
+    /// O prazo é de cada linha, não do conjunto — ver `silence`.
+    async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        let prompt=Self::prompt(messages);
         let started=Instant::now();
-        let mut child=Command::new(command).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().with_context(||format!("could not start CLI provider {command}"))?;
+        let mut child=self.open(model)?;
         if let Some(mut stdin)=child.stdin.take() { stdin.write_all(prompt.as_bytes()).await?; }
-        let output=timeout(Duration::from_secs(self.config.timeout),child.wait_with_output()).await.map_err(|_|anyhow!("CLI provider timed out"))??;
-        if !output.status.success() { return Err(anyhow!("CLI provider failed: {}",String::from_utf8_lossy(&output.stderr).trim())); }
-        let response=String::from_utf8(output.stdout).context("CLI provider returned non-UTF-8 output")?;
+        let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).lines();
+        let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).lines();
+        let (mut response,mut complaint)=(String::new(),String::new());
+        let (mut talking,mut grumbling)=(true,true);
+        let silence=self.silence();
+        while talking||grumbling {
+            // As duas leituras podem ser largadas pelo relógio no meio do
+            // caminho: `next_line` guarda a linha pela metade e a devolve
+            // inteira na volta, então um sinal de vida nunca se perde aqui.
+            let heard=timeout(silence,async {
+                tokio::select! {
+                    line=talk.next_line(),if talking=>match line.context("CLI provider returned non-UTF-8 output")? {
+                        None=>talking=false,
+                        Some(line)=>if let Some(beat)=classify(&line) {
+                            if let Beat::Chunk{text}=&beat { response.push_str(text); }
+                            pulse.beat(beat);
+                        },
+                    },
+                    line=grumble.next_line(),if grumbling=>match line.context("CLI provider returned non-UTF-8 output")? {
+                        None=>grumbling=false,
+                        Some(line)=>if !line.trim().is_empty() {
+                            complaint.push_str(&line);
+                            complaint.push('\n');
+                            pulse.beat(Beat::Agent{line});
+                        },
+                    },
+                }
+                Ok::<(),anyhow::Error>(())
+            }).await;
+            match heard { Ok(read)=>read?, Err(_)=>{ let _=child.start_kill(); return Err(self.muteness()); } }
+        }
+        // As duas pontas fecharam: o que falta é o agente sair. Sem prazo aqui,
+        // um processo que fechou a saída e não morreu seguraria o pedido para
+        // sempre — e é por isso que este prazo não é o de trabalhar, é o de sair.
+        let status=timeout(silence,child.wait()).await.map_err(|_|self.muteness())??;
+        if !status.success() { return Err(anyhow!("CLI provider failed: {}",complaint.trim())); }
         Ok(ProviderResponse{response,input_tokens:prompt.chars().count()/4,output_tokens:0,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
     }
 }
@@ -190,7 +473,7 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     fn config(kind:&str)->ProviderConfig { ProviderConfig{enabled:true,kind:kind.into(),timeout:30,..Default::default()} }
-    fn cli(local:Option<bool>)->CliProvider { CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("ollama".into()),local,..config("cli")}} }
+    fn cli(local:Option<bool>)->CliProvider { CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("ollama".into()),local,..config("cli")},workdir:Workdir::default()} }
     fn http(base:&str,local:Option<bool>)->HttpProvider { HttpProvider::compatible("http".into(),ProviderConfig{base_url:Some(base.into()),local,..config("openai-compatible")}) }
 
     #[test] fn cli_provider_is_remote_unless_declared_local() { assert!(!cli(None).is_local()); assert!(!cli(Some(false)).is_local()); }
@@ -202,12 +485,156 @@ mod tests {
     #[test] fn does_not_retry_client_errors() { for status in [400u16,401,403,404,422] { assert!(!is_retryable_status(status),"{status}"); } }
     #[test] fn reads_retry_after_header() { let mut headers=HeaderMap::new(); headers.insert(RETRY_AFTER,"2".parse().expect("header")); assert_eq!(retry_after(&headers),Some(Duration::from_secs(2))); assert_eq!(retry_after(&HeaderMap::new()),None); }
     #[test] fn backoff_grows_with_jitter_and_stays_bounded() { let policy=RetryPolicy::default(); assert!(policy.delay(1,None)<=policy.base_delay); assert!(policy.delay(2,None)>=policy.base_delay/2); assert!(policy.delay(20,None)<=policy.max_delay); assert_eq!(policy.delay(1,Some(Duration::from_secs(600))),policy.max_delay); }
+    /// Um agente de linha de comando lê o repositório em que ele foi aberto.
+    /// Rodá-lo na pasta de onde o aplicativo subiu faria o chat de um projeto
+    /// receber respostas sobre outro repositório.
+    #[tokio::test] async fn o_agente_de_linha_de_comando_roda_na_pasta_do_projeto() {
+        let projeto=tempfile::tempdir().expect("pasta do projeto");
+        let esperado=projeto.path().canonicalize().expect("caminho real");
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("pwd".into()),..config("cli")},workdir:Workdir::default()};
+        provider.workdir.focus(esperado.clone());
+
+        let answer=provider.chat(&[ChatMessage{role:"user".into(),content:"onde estou?".into()}],"modelo").await.expect("pwd");
+
+        assert_eq!(answer.response.trim(),esperado.to_string_lossy(),"o agente foi aberto na pasta do projeto do chat");
+    }
+
     #[tokio::test] async fn gives_up_after_the_attempt_budget() {
         let calls=Cell::new(0);
         let policy=RetryPolicy{attempts:3,base_delay:Duration::from_millis(1),max_delay:Duration::from_millis(2)};
         let result:Result<()>=with_retry(policy,|_|{calls.set(calls.get()+1); async {Err(RetryError::retryable(anyhow!("529 overloaded"),None))}}).await;
         assert!(result.is_err()); assert_eq!(calls.get(),3);
     }
+    /// Um pedaço da rede corta onde quiser, inclusive no meio de um evento.
+    /// Ler meio JSON é ler nada — a metade tem de esperar pela outra.
+    #[test] fn a_metade_de_um_evento_espera_pela_outra() {
+        let mut balde=b"data: {\"a\":1}\ndata: {\"b\"".to_vec();
+        assert_eq!(ready_lines(&mut balde),vec!["data: {\"a\":1}".to_string()]);
+        assert_eq!(ready_lines(&mut balde),Vec::<String>::new(),"o que sobrou nao virou linha");
+        balde.extend_from_slice(b":2}\n");
+        assert_eq!(ready_lines(&mut balde),vec!["data: {\"b\":2}".to_string()]);
+        assert!(balde.is_empty(),"o balde esvazia quando a linha fecha");
+    }
+
+    #[test] fn o_fluxo_da_openai_rende_texto_e_a_conta_dos_tokens() {
+        let mut colheita=Harvest::default();
+        assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[{\"delta\":{\"content\":\"oi\"}}]}",&mut colheita),Some("oi".into()));
+        assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}",&mut colheita),None);
+        assert_eq!((colheita.input_tokens,colheita.output_tokens),(12,7));
+    }
+
+    #[test] fn o_fluxo_da_anthropic_rende_texto_e_a_conta_dos_tokens() {
+        let mut colheita=Harvest::default();
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}",&mut colheita),None);
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ola\"}}",&mut colheita),Some("ola".into()));
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}",&mut colheita),None);
+        assert_eq!((colheita.input_tokens,colheita.output_tokens),(9,4));
+    }
+
+    /// Comentário, batida de coração e despedida não são resposta. Tratá-los
+    /// como texto encheria a resposta de ruído do protocolo.
+    #[test] fn o_que_nao_e_evento_nao_acrescenta_nada() {
+        let mut colheita=Harvest::default();
+        for line in ["",": keep-alive","event: message_stop","data: [DONE]","data: nao e json","id: 7"] {
+            assert_eq!(read_event(&HttpKind::OpenAi,line,&mut colheita),None,"{line}");
+            assert_eq!(read_event(&HttpKind::Anthropic,line,&mut colheita),None,"{line}");
+        }
+        assert_eq!(colheita,Harvest::default());
+    }
+
+    /// O agente não avisa se a linha é resposta ou relato do trabalho dele, e a
+    /// configuração também não: `claude --print` escreve o texto direto e
+    /// `codex exec` narra. Quem voltar a decidir pelo provedor erra num dos dois.
+    #[test] fn a_linha_do_agente_e_classificada_pelo_conteudo() {
+        assert_eq!(classify("a resposta em texto puro"),Some(Beat::Chunk{text:"a resposta em texto puro\n".into()}));
+        assert_eq!(classify("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"oi\"}]}}"),Some(Beat::Chunk{text:"oi\n".into()}));
+        assert_eq!(classify("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}"),Some(Beat::Agent{line:"assistant: Read".into()}));
+        assert_eq!(classify("{\"type\":\"item_completed\",\"command\":\"cargo test\"}"),Some(Beat::Agent{line:"item_completed: cargo test".into()}));
+        // Um número solto é JSON válido e não é evento nenhum.
+        assert_eq!(classify("42"),Some(Beat::Chunk{text:"42\n".into()}));
+    }
+
+    /// A escrituração do agente chega dezenas de vezes por resposta. Ela conta
+    /// como sinal de vida — quem lê a linha rearma o relógio do silêncio —, mas
+    /// virar linha na tela empurraria a portaria e a rota para fora da vista.
+    #[test] fn a_escrituracao_do_agente_nao_vira_etapa() {
+        for line in [
+            "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":42}",
+            "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_name\":\"SessionStart\"}",
+            "{\"type\":\"system\",\"subtype\":\"hook_response\",\"outcome\":\"success\"}",
+            "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}",
+            "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ola \"}}}",
+        ] { assert_eq!(classify(line),None,"{line}"); }
+        assert_eq!(classify("{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/tmp\"}"),Some(Beat::Agent{line:"system: init".into()}),"o começo da sessão continua sendo etapa");
+    }
+
+    /// Em `stream-json` o agente conta o trabalho em eventos e a fala dele vem
+    /// dentro de um deles. O que fica gravado tem de ser a fala: lida como texto
+    /// cru, a resposta do chat seria o protocolo inteiro.
+    #[tokio::test] async fn o_protocolo_do_agente_nao_entra_na_resposta() {
+        let stream=[
+            "{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/tmp\"}",
+            "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":7}",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ola mundo\"}]}}",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ola mundo\"}",
+        ].join("\n");
+        // `cat` primeiro: um agente lê o pedido inteiro antes de responder, e
+        // sem isso o teste corre com o fim do processo.
+        let roteiro=format!("cat >/dev/null; printf '%s' '{stream}'");
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),roteiro],..config("cli")},workdir:Workdir::default()};
+        let (pulse,mut beats)=Pulse::channel();
+
+        let answer=provider.chat_stream(&[ChatMessage{role:"user".into(),content:"oi".into()}],"modelo",&pulse).await.expect("o agente em eventos");
+
+        assert_eq!(answer.response,"ola mundo\n","a resposta e a fala, nao o protocolo");
+        drop(pulse);
+        let mut etapas=Vec::new();
+        while let Some(beat)=beats.recv().await { if let Beat::Agent{line}=beat { etapas.push(line); } }
+        assert_eq!(etapas,vec!["system: init".to_string(),"assistant: Read".into(),"result: success".into()],"as etapas sao o trabalho, sem a escrituracao");
+    }
+
+    /// O relógio do provedor de linha de comando conta silêncio, não trabalho.
+    /// Um agente que fala a cada poucos segundos há dez minutos está vivo; era
+    /// o prazo do conjunto que matava o pedido detalhado no meio.
+    #[tokio::test] async fn o_agente_que_fala_de_vez_em_quando_nao_estoura_o_prazo() {
+        let fala="for i in 1 2 3 4; do echo linha $i; sleep 0.4; done";
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),fala.into()],timeout:1,..config("cli")},workdir:Workdir::default()};
+
+        let answer=provider.chat(&[ChatMessage{role:"user".into(),content:"fale devagar".into()}],"modelo").await.expect("o agente falante");
+
+        assert_eq!(answer.response,"linha 1\nlinha 2\nlinha 3\nlinha 4\n","cada linha rearmou o relogio");
+        assert!(answer.latency_ms>=1_000,"a conversa passou do prazo de silencio sem estourar: {}ms",answer.latency_ms);
+    }
+
+    /// E o agente que emudece tem de cair — e cair dizendo o que houve, porque
+    /// `CLI provider timed out` mandava o desenvolvedor procurar no lugar errado.
+    #[tokio::test] async fn o_agente_que_emudece_cai_e_diz_por_que() {
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sleep".into()),args:vec!["60".into()],timeout:1,..config("cli")},workdir:Workdir::default()};
+
+        let erro=provider.chat(&[ChatMessage{role:"user".into(),content:"fique calado".into()}],"modelo").await.expect_err("o agente mudo");
+
+        let erro=erro.to_string();
+        assert!(erro.contains("sem dar sinal de vida"),"{erro}");
+        assert!(erro.contains("`timeout`"),"o erro aponta o que mexer: {erro}");
+    }
+
+    /// A conversa acompanhada tem de render a mesma resposta que a esperada, e
+    /// os pedaços anunciados têm de somar exatamente ela: um pedaço a mais na
+    /// tela é texto duplicado, um a menos é texto que ninguém viu chegar.
+    #[tokio::test] async fn o_agente_acompanhado_anuncia_a_mesma_resposta_que_devolve() {
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("cat".into()),args:vec![],..config("cli")},workdir:Workdir::default()};
+        let (pulse,mut beats)=Pulse::channel();
+
+        let answer=provider.chat_stream(&[ChatMessage{role:"user".into(),content:"uma linha\noutra linha".into()}],"modelo",&pulse).await.expect("cat");
+
+        drop(pulse);
+        let mut anunciado=String::new();
+        while let Some(beat)=beats.recv().await { if let Beat::Chunk{text}=beat { anunciado.push_str(&text); } }
+        assert_eq!(anunciado,answer.response,"o que a tela viu e o que ficou gravado sao o mesmo texto");
+        assert!(answer.response.contains("uma linha"),"a resposta chegou: {:?}",answer.response);
+    }
+
     #[tokio::test] async fn stops_immediately_on_fatal_errors() {
         let calls=Cell::new(0);
         let result:Result<()>=with_retry(RetryPolicy::default(),|_|{calls.set(calls.get()+1); async {Err(RetryError::from_status(StatusCode::UNAUTHORIZED,None,anyhow!("401")))}}).await;

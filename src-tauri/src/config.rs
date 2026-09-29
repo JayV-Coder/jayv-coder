@@ -159,8 +159,12 @@ fn default_budgets() -> HashMap<String, usize> { [("trivial", 2_000), ("simple",
 /// Sem `config.yaml`, o Jev já sobe com os dois CLIs que o desenvolvedor
 /// provavelmente tem instalados. Nenhum dos dois é local: os dois mandam o
 /// código para a nuvem, então não recebem `local: true`.
+///
+/// O Claude vai em `stream-json` porque `--print` sozinho não escreve nada até
+/// terminar, e um agente calado não se distingue de um agente travado: era isso
+/// que derrubava o pedido detalhado no meio do trabalho.
 fn default_providers() -> HashMap<String, ProviderConfig> {
-    [("claude","claude",vec!["--model","{model}","--print"]),("codex","codex",vec!["exec","--model","{model}","-"])].into_iter()
+    [("claude","claude",vec!["--model","{model}","--print","--output-format","stream-json","--verbose","--include-partial-messages"]),("codex","codex",vec!["exec","--model","{model}","-"])].into_iter()
         .map(|(name,command,args)|(name.to_string(),ProviderConfig{kind:"cli".into(),command:Some(command.into()),args:args.into_iter().map(String::from).collect(),timeout:120,..ProviderConfig::default()}))
         .collect()
 }
