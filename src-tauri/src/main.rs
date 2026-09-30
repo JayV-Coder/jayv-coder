@@ -6,7 +6,7 @@ use std::{fs,io::Write,path::PathBuf};
 /// O orquestrador com os agentes e modelos do banco, o mesmo que o aplicativo
 /// de mesa usa.
 fn orchestrator(config_path:PathBuf,root:PathBuf)->Result<Orchestrator> {
-    let store=WorkspaceStore::open(database_location(&config_path,&root),None)?;
+    let store=WorkspaceStore::open(database_location(&config_path,&root))?;
     let mut orchestrator=Orchestrator::new(config_path,root)?;
     orchestrator.use_llm(&store.llm_settings()?);
     Ok(orchestrator)

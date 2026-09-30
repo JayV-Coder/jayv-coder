@@ -64,8 +64,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     keep_webkit_off_dmabuf();
     let mut orchestrator=Orchestrator::unindexed(config_path.clone(),root.clone())?;
     let database=crate::workspace::database_location(&config_path,&root);
-    let legacy_workspace_path=database.with_file_name("workspace.json");
-    let workspace=WorkspaceStore::open(database,Some(&legacy_workspace_path))?;
+    let workspace=WorkspaceStore::open(database)?;
     orchestrator.use_llm(&workspace.llm_settings()?);
     let workspace_data=workspace.snapshot()?;
     for chat in &workspace_data.chats {

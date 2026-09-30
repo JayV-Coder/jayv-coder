@@ -10,6 +10,7 @@ pub mod gatekeeper;
 pub mod graph;
 pub mod jev;
 pub mod llm;
+pub mod local;
 pub mod memory;
 pub mod model;
 pub mod orchestrator;
