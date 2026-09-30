@@ -406,6 +406,42 @@ impl VerificationVerdict {
 
     fn question<'a>(map:&'a BTreeMap<String,Question>,id:&str)->&'a Question{map.get(id).expect("pergunta de roteamento")}
 
+    /// As linhas `('a', 'b', $json$…$json$::jsonb…)` do seed: os campos entre
+    /// aspas antes do JSON, e o JSON.
+    fn seed_rows(seed:&str)->Vec<(Vec<String>,Value)> {
+        seed.lines().filter(|line|line.trim_start().starts_with("('")).map(|line|{
+            let mut parts=line.split("$json$");
+            let head=parts.next().expect("cabeça");
+            let fields=head.trim().trim_start_matches('(').split(',').map(|field|field.trim().trim_matches('\'').to_string()).filter(|field|!field.is_empty()).collect();
+            (fields,serde_json::from_str(parts.next().expect("json")).expect("json do seed"))
+        }).collect()
+    }
+
+    /// O seed sai destas mesmas funções. Uma pergunta que mude aqui sem o seed
+    /// ser gerado de novo deixaria o Supabase perguntando a versão antiga.
+    #[test]
+    fn o_seed_do_jev_e_o_que_o_rust_pergunta_hoje() {
+        let rows=seed_rows(include_str!("../../supabase/migrations/20260930120200_seed_jev.sql"));
+        let mut sets:BTreeMap<String,BTreeMap<String,Question>>=BTreeMap::new();
+        let mut parameters:BTreeMap<String,Value>=BTreeMap::new();
+        for (fields,value) in rows {
+            match fields.as_slice() {
+                [set,id]=>{sets.entry(set.clone()).or_default().insert(id.clone(),serde_json::from_value(value).expect("pergunta do seed"));}
+                [key]=>{parameters.insert(key.clone(),value);}
+                other=>panic!("linha fora do formato: {other:?}"),
+            }
+        }
+        assert_eq!(sets["entry"],crate::gatekeeper::entry_questions());
+        assert_eq!(sets["routing"],routing_questions());
+        assert_eq!(sets["verification"],verification_questions());
+        assert_eq!(sets["asking"],crate::asking::questions());
+        for id in crate::gatekeeper::ENTRY_QUESTION_IDS {assert!(sets["entry"].contains_key(id),"{id}");}
+        for id in ROUTING_QUESTION_IDS {assert!(sets["routing"].contains_key(id),"{id}");}
+        for id in VERIFICATION_QUESTION_IDS {assert!(sets["verification"].contains_key(id),"{id}");}
+        for id in [crate::asking::KIND_QUESTION,crate::asking::OPTIONS_QUESTION] {assert!(sets["asking"].contains_key(id),"{id}");}
+        assert_eq!(parameters,crate::gatekeeper::parameters());
+    }
+
     #[test]
     fn serializes_the_documented_noul_wire_shape() {
         assert_eq!(serde_json::to_value(Question::noul("Does this convey urgency?")).unwrap(),json!({"type":"noul","instructions":"Does this convey urgency?"}));

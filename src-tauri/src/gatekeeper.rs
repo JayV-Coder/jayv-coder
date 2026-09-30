@@ -18,7 +18,19 @@ pub const SCOPE_LEVELS:[&str;3]=["ajuste pequeno","funcionalidade","sistema inte
 pub const SCOPE_DEMAND:[f64;3]=[0.35,0.55,0.70];
 /// Abaixo da exigência o portão pergunta; abaixo dela com esta folga, barra.
 pub const BLOCK_MARGIN:f64=0.20;
-const WEIGHTS:[(&str,f64);4]=[("goal_is_clear",0.40),("says_where",0.25),("says_when_done",0.20),("bundles_requests",0.15)];
+pub const WEIGHTS:[(&str,f64);4]=[("goal_is_clear",0.40),("says_where",0.25),("says_when_done",0.20),("bundles_requests",0.15)];
+
+/// Os números do Jev como vão para o seed de `jev_parameters`. São também o
+/// padrão quando o cache não tem um valor válido.
+pub fn parameters()->BTreeMap<String,serde_json::Value> {
+    BTreeMap::from([
+        ("scope_demand".to_string(),json!(SCOPE_DEMAND)),
+        ("block_margin".to_string(),json!(BLOCK_MARGIN)),
+        ("weights".to_string(),json!(WEIGHTS.iter().map(|(id,weight)|(id.to_string(),json!(weight))).collect::<serde_json::Map<_,_>>())),
+        ("scope_levels".to_string(),json!(SCOPE_LEVELS)),
+        ("noul_line".to_string(),json!(crate::asking::NOUL_LINE)),
+    ])
+}
 const PROMPT_PREVIEW:usize=600;
 const SHELL_LANGUAGES:[&str;7]=["bash","sh","shell","zsh","console","terminal","shell-session"];
 
