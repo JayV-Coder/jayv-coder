@@ -98,7 +98,7 @@ pub struct ClaudeOptions {
     pub persist_sessions:bool,
     pub safe_mode:bool,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:"default".into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:false,safe_mode:false} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:"default".into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -479,7 +479,10 @@ mod tests {
 
     #[test] fn o_claude_sempre_fala_em_stream_json() {
         let args=agent(AgentId::Claude,json!({"permissionMode":"plan","maxBudgetUsd":2.5})).args();
-        for fixed in ["--print","stream-json","--include-partial-messages","{model}","--no-session-persistence"] { assert!(args.iter().any(|arg|arg==fixed),"falta {fixed}"); }
+        for fixed in ["--print","stream-json","--include-partial-messages","{model}"] { assert!(args.iter().any(|arg|arg==fixed),"falta {fixed}"); }
+        assert!(!args.iter().any(|arg|arg=="--no-session-persistence"),"guardar sessões é o padrão");
+        let forgetful=agent(AgentId::Claude,json!({"persistSessions":false})).args();
+        assert!(forgetful.iter().any(|arg|arg=="--no-session-persistence"));
         assert!(args.windows(2).any(|pair|pair==["--permission-mode","plan"]));
         assert!(args.windows(2).any(|pair|pair==["--max-budget-usd","2.50"]));
     }

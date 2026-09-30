@@ -9,6 +9,8 @@ export const ptBR = {
   "common.newChat": "Novo chat",
   "common.noFolder": "sem pasta no disco",
   "language.label": "Idioma",
+  "language.search": "Buscar idioma…",
+  "language.none": "Nenhum idioma encontrado.",
 
   "nav.projects": "Projetos",
   "nav.system": "Sistema",
@@ -285,6 +287,8 @@ export const ptBR = {
   "model.empty": "Nenhum modelo neste agente.",
   "model.enabled": "Modelo ativo",
   "model.custom": "Outro modelo…",
+  "model.custom.hint": "Digitar um identificador que não está no catálogo",
+  "model.taken": "já está na lista",
   "model.custom.label": "Identificador do modelo",
   "model.custom.placeholder": "ex.: meu-modelo-1",
   "model.invalid": "Use letras, números e . _ : / @ -, sem espaços.",

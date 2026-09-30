@@ -7,6 +7,8 @@ export const ar: Messages = {
   "common.newChat": "محادثة جديدة",
   "common.noFolder": "لا يوجد مجلد على القرص",
   "language.label": "اللغة",
+  "language.search": "ابحث عن لغة…",
+  "language.none": "لم يُعثر على أي لغة.",
 
   "nav.projects": "المشاريع",
   "nav.system": "النظام",
@@ -287,6 +289,8 @@ export const ar: Messages = {
   "model.empty": "لا توجد نماذج لهذا الوكيل.",
   "model.enabled": "النموذج نشط",
   "model.custom": "نموذج آخر…",
+  "model.custom.hint": "اكتب معرّفًا غير موجود في الكتالوج",
+  "model.taken": "موجود في القائمة بالفعل",
   "model.custom.label": "معرّف النموذج",
   "model.custom.placeholder": "مثال: my-model-1",
   "model.invalid": "استخدم الحروف والأرقام و . _ : / @ - دون مسافات.",

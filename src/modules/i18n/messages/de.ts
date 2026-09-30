@@ -7,6 +7,8 @@ export const de: Messages = {
   "common.newChat": "Neuer Chat",
   "common.noFolder": "kein Ordner auf der Festplatte",
   "language.label": "Sprache",
+  "language.search": "Sprache suchen…",
+  "language.none": "Keine Sprache gefunden.",
 
   "nav.projects": "Projekte",
   "nav.system": "System",
@@ -283,6 +285,8 @@ export const de: Messages = {
   "model.empty": "Keine Modelle für diesen Agenten.",
   "model.enabled": "Modell aktiv",
   "model.custom": "Anderes Modell…",
+  "model.custom.hint": "Eine Kennung eingeben, die nicht im Katalog steht",
+  "model.taken": "bereits in der Liste",
   "model.custom.label": "Modellkennung",
   "model.custom.placeholder": "z. B. mein-modell-1",
   "model.invalid": "Verwende Buchstaben, Ziffern und . _ : / @ -, ohne Leerzeichen.",

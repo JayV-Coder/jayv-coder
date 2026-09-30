@@ -7,6 +7,8 @@ export const ru: Messages = {
   "common.newChat": "Новый чат",
   "common.noFolder": "нет папки на диске",
   "language.label": "Язык",
+  "language.search": "Найти язык…",
+  "language.none": "Язык не найден.",
 
   "nav.projects": "Проекты",
   "nav.system": "Система",
@@ -290,6 +292,8 @@ export const ru: Messages = {
   "model.empty": "У этого агента нет моделей.",
   "model.enabled": "Модель активна",
   "model.custom": "Другая модель…",
+  "model.custom.hint": "Ввести идентификатор, которого нет в каталоге",
+  "model.taken": "уже в списке",
   "model.custom.label": "Идентификатор модели",
   "model.custom.placeholder": "напр.: my-model-1",
   "model.invalid": "Используйте буквы, цифры и . _ : / @ -, без пробелов.",

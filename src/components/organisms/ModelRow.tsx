@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Capability, CostClass, KnownModel, Speed } from "@/modules/core";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import { MODEL_PATTERN, pickModel, removeModel, updateModel, type ModelDraft } from "@/modules/settings";
@@ -19,41 +20,55 @@ export function ModelRow({ model, catalog, taken, problem }: { model: ModelDraft
   const locale = useLocale();
   const id = (field: string) => `${model.uid}-${field}`;
   const known = catalog.some((item) => item.id === model.model);
+  // O modo "digitar" é escolha de quem edita, não consequência do texto: um ID
+  // digitado que coincide com o catálogo não pode sumir com o campo no meio.
+  const [custom, setCustom] = useState(!known);
   const compact = new Intl.NumberFormat(locale, { notation: "compact" });
   const windows = [...new Set([...WINDOWS, model.contextWindow])].sort((a, b) => a - b);
   const typed = model.model.trim();
-  const typing = !known && typed !== "" && !MODEL_PATTERN.test(typed);
+  const typing = custom && typed !== "" && !MODEL_PATTERN.test(typed);
+  const choose = (value: string) => {
+    if (value === CUSTOM) {
+      setCustom(true);
+      updateModel(model.uid, { model: "" });
+    } else {
+      setCustom(false);
+      pickModel(model.uid, value);
+    }
+  };
 
   return (
     <div className={cn("grid gap-4 rounded-lg border px-4 py-4", problem ? "border-destructive/50" : "border-border/60", !model.enabled && "opacity-70")}>
-      <div className="flex flex-wrap items-end gap-3">
-        <Switch checked={model.enabled} onCheckedChange={(enabled) => updateModel(model.uid, { enabled })} aria-label={t("model.enabled")} title={t("model.enabled")} className="mb-2.5" />
-        <FormField label={t("model.id")} htmlFor={id("model")} className="min-w-56 flex-1">
+      <div className="flex items-start gap-3">
+        <Switch checked={model.enabled} onCheckedChange={(enabled) => updateModel(model.uid, { enabled })} aria-label={t("model.enabled")} title={t("model.enabled")} className="mt-7" />
+        <FormField label={t("model.id")} htmlFor={id("model")} className="min-w-0 flex-1">
           <OptionSelect
             id={id("model")}
-            value={known ? model.model : CUSTOM}
-            onChange={(value) => (value === CUSTOM ? updateModel(model.uid, { model: "" }) : pickModel(model.uid, value))}
+            value={custom ? CUSTOM : model.model}
+            onChange={choose}
             options={[
-              ...catalog.map((item) => ({ value: item.id, label: item.label, hint: item.id, disabled: item.id !== model.model && taken.has(item.id) })),
-              { value: CUSTOM, label: t("model.custom") },
+              ...catalog.map((item) => {
+                const used = item.id !== model.model && taken.has(item.id);
+                return { value: item.id, label: item.label, hint: used ? `${item.id} · ${t("model.taken")}` : item.id, disabled: used };
+              }),
+              { value: CUSTOM, label: t("model.custom"), hint: t("model.custom.hint") },
             ]}
           />
-        </FormField>
-        {!known && (
-          <FormField label={t("model.custom.label")} htmlFor={id("custom")} className="min-w-56 flex-1">
+          {custom && (
             <Input
               id={id("custom")}
               value={model.model}
               autoFocus={model.model === ""}
               spellCheck={false}
+              aria-label={t("model.custom.label")}
               placeholder={t("model.custom.placeholder")}
               aria-invalid={typing || problem === "model.invalid" || undefined}
               onChange={(event) => updateModel(model.uid, { model: event.target.value.trim() })}
               className="font-mono"
             />
-          </FormField>
-        )}
-        <button type="button" title={t("model.remove")} aria-label={t("model.remove")} onClick={() => removeModel(model.uid)} className="mb-1.5 px-2 text-xl leading-none text-muted-foreground hover:text-destructive">×</button>
+          )}
+        </FormField>
+        <button type="button" title={t("model.remove")} aria-label={t("model.remove")} onClick={() => removeModel(model.uid)} className="mt-6 px-2 text-xl leading-none text-muted-foreground hover:text-destructive">×</button>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">

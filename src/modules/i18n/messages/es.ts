@@ -7,6 +7,8 @@ export const es: Messages = {
   "common.newChat": "Nuevo chat",
   "common.noFolder": "sin carpeta en el disco",
   "language.label": "Idioma",
+  "language.search": "Buscar idioma…",
+  "language.none": "No se encontró ningún idioma.",
 
   "nav.projects": "Proyectos",
   "nav.system": "Sistema",
@@ -283,6 +285,8 @@ export const es: Messages = {
   "model.empty": "Ningún modelo en este agente.",
   "model.enabled": "Modelo activo",
   "model.custom": "Otro modelo…",
+  "model.custom.hint": "Escribir un identificador que no está en el catálogo",
+  "model.taken": "ya está en la lista",
   "model.custom.label": "Identificador del modelo",
   "model.custom.placeholder": "ej.: mi-modelo-1",
   "model.invalid": "Usa letras, números y . _ : / @ -, sin espacios.",

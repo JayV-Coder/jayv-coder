@@ -7,6 +7,8 @@ export const hi: Messages = {
   "common.newChat": "नई चैट",
   "common.noFolder": "डिस्क पर कोई फ़ोल्डर नहीं",
   "language.label": "भाषा",
+  "language.search": "भाषा खोजें…",
+  "language.none": "कोई भाषा नहीं मिली।",
 
   "nav.projects": "प्रोजेक्ट",
   "nav.system": "सिस्टम",
@@ -280,6 +282,8 @@ export const hi: Messages = {
   "model.empty": "इस एजेंट में कोई मॉडल नहीं है।",
   "model.enabled": "मॉडल सक्रिय",
   "model.custom": "दूसरा मॉडल…",
+  "model.custom.hint": "ऐसा पहचानकर्ता लिखें जो कैटलॉग में नहीं है",
+  "model.taken": "पहले से सूची में",
   "model.custom.label": "मॉडल पहचानकर्ता",
   "model.custom.placeholder": "जैसे: my-model-1",
   "model.invalid": "अक्षर, अंक और . _ : / @ - इस्तेमाल करें, स्पेस नहीं।",

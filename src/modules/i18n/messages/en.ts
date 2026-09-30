@@ -7,6 +7,8 @@ export const en: Messages = {
   "common.newChat": "New chat",
   "common.noFolder": "no folder on disk",
   "language.label": "Language",
+  "language.search": "Search language…",
+  "language.none": "No language found.",
 
   "nav.projects": "Projects",
   "nav.system": "System",
@@ -283,6 +285,8 @@ export const en: Messages = {
   "model.empty": "No models for this agent.",
   "model.enabled": "Model active",
   "model.custom": "Other model…",
+  "model.custom.hint": "Type an identifier that is not in the catalog",
+  "model.taken": "already on the list",
   "model.custom.label": "Model identifier",
   "model.custom.placeholder": "e.g. my-model-1",
   "model.invalid": "Use letters, numbers and . _ : / @ -, no spaces.",

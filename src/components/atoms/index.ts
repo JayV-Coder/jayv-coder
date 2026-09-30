@@ -8,3 +8,4 @@ export { EmptyText } from "./EmptyText";
 export * from "./icons";
 export { AgentIcon } from "./AgentIcon";
 export { LoadingNote } from "./LoadingNote";
+export { Flag } from "./Flag";

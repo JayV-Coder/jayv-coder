@@ -7,6 +7,8 @@ export const zhCN: Messages = {
   "common.newChat": "新建对话",
   "common.noFolder": "磁盘上没有文件夹",
   "language.label": "语言",
+  "language.search": "搜索语言…",
+  "language.none": "未找到语言。",
 
   "nav.projects": "项目",
   "nav.system": "系统",
@@ -280,6 +282,8 @@ export const zhCN: Messages = {
   "model.empty": "此代理还没有模型。",
   "model.enabled": "模型已启用",
   "model.custom": "其他模型…",
+  "model.custom.hint": "输入目录中没有的标识",
+  "model.taken": "已在列表中",
   "model.custom.label": "模型标识",
   "model.custom.placeholder": "例如：my-model-1",
   "model.invalid": "只能使用字母、数字和 . _ : / @ -，不能有空格。",

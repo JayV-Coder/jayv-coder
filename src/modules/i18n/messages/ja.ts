@@ -7,6 +7,8 @@ export const ja: Messages = {
   "common.newChat": "新しいチャット",
   "common.noFolder": "ディスク上のフォルダなし",
   "language.label": "言語",
+  "language.search": "言語を検索…",
+  "language.none": "言語が見つかりません。",
 
   "nav.projects": "プロジェクト",
   "nav.system": "システム",
@@ -280,6 +282,8 @@ export const ja: Messages = {
   "model.empty": "このエージェントにはモデルがありません。",
   "model.enabled": "モデル有効",
   "model.custom": "他のモデル…",
+  "model.custom.hint": "カタログにない ID を入力",
+  "model.taken": "すでに一覧にあります",
   "model.custom.label": "モデル ID",
   "model.custom.placeholder": "例：my-model-1",
   "model.invalid": "英数字と . _ : / @ - を使い、空白は入れないでください。",

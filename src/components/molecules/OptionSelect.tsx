@@ -3,21 +3,27 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 export interface Option<V extends string> { value: V; label: string; hint?: string; disabled?: boolean }
 
 /** Uma escolha dentro de uma lista fechada: nada que o núcleo não aceite chega
- * a ser digitado. A explicação da opção aparece embaixo do nome dela. */
+ * a ser digitado. Na lista, a explicação fica embaixo do nome; no campo fechado,
+ * ao lado dele, numa linha só. */
 export function OptionSelect<V extends string>({ id, value, options, onChange, disabled, invalid }: {
   id?: string; value: V; options: Option<V>[]; onChange: (value: V) => void; disabled?: boolean; invalid?: boolean;
 }) {
+  const current = options.find((option) => option.value === value);
   return (
     <Select value={value} onValueChange={(next) => onChange(next as V)} disabled={disabled}>
-      <SelectTrigger id={id} className="w-full" aria-invalid={invalid || undefined}><SelectValue /></SelectTrigger>
+      <SelectTrigger id={id} className="w-full min-w-0" aria-invalid={invalid || undefined}>
+        <SelectValue>
+          {current && (
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="truncate">{current.label}</span>
+              {current.hint && <span className="truncate font-mono text-[11px] text-muted-foreground">{current.hint}</span>}
+            </span>
+          )}
+        </SelectValue>
+      </SelectTrigger>
       <SelectContent>
         {options.map((option) => (
-          <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
-            <span className="flex flex-col items-start">
-              <span>{option.label}</span>
-              {option.hint && <span className="text-[11px] text-muted-foreground">{option.hint}</span>}
-            </span>
-          </SelectItem>
+          <SelectItem key={option.value} value={option.value} disabled={option.disabled} description={option.hint}>{option.label}</SelectItem>
         ))}
       </SelectContent>
     </Select>
