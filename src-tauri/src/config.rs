@@ -193,7 +193,7 @@ mod tests {
         let elsewhere=tempfile::tempdir().expect("different working directory");
         let config=root.path().join("config.yaml");
         fs::write(&config,"models: {}").expect("config fixture");
-        let executable=root.path().join("src-tauri/target/debug/jev");
+        let executable=root.path().join("src-tauri/target/debug/jayv");
 
         assert_eq!(discover_from(None,elsewhere.path(),Some(&executable)),config);
     }

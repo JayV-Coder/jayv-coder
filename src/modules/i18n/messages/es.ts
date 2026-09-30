@@ -319,4 +319,8 @@ export const es: Messages = {
   "db.table": "Tabla",
   "db.rows": "Registros",
   "db.empty": "Aún no hay tablas.",
+  "update.available": "JayV {version} está disponible",
+  "update.install": "Actualizar",
+  "update.downloading": "Descargando JayV {version}…",
+  "update.failed": "No se pudo actualizar: {error}",
 };

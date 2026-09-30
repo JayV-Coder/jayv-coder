@@ -316,4 +316,8 @@ export const ja: Messages = {
   "db.table": "テーブル",
   "db.rows": "レコード数",
   "db.empty": "テーブルはまだありません。",
+  "update.available": "JayV {version} が利用可能です",
+  "update.install": "更新",
+  "update.downloading": "JayV {version} をダウンロード中…",
+  "update.failed": "更新できませんでした: {error}",
 };

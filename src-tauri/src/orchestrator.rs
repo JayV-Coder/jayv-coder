@@ -68,12 +68,22 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     pub fn new(config_path: PathBuf, root: PathBuf) -> Result<Self> {
+        let mut orchestrator=Self::unindexed(config_path,root)?;
+        orchestrator.rag.index(&orchestrator.firewall)?;
+        Ok(orchestrator)
+    }
+
+    /// O orquestrador sem ter lido a raiz ainda. O aplicativo de mesa sobe
+    /// assim: todo pedido aponta para a pasta do projeto do chat antes de ser
+    /// atendido, e ler de saída a pasta de onde o aplicativo foi aberto — o
+    /// `$HOME`, pelo menu do sistema — custava tempo e memória à toa.
+    pub fn unindexed(config_path: PathBuf, root: PathBuf) -> Result<Self> {
         let config=Config::load(&config_path)?;
         let firewall=ContextFirewall::new(config.privacy.clone());
         let performance_path=root.join(PERFORMANCE_FILE);
         let workdir=Workdir::default();
         workdir.focus(root.clone());
-        let mut rag=RepositoryRag::new(root); rag.index(&firewall)?;
+        let rag=RepositoryRag::new(root);
         Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, performance_path, last_decision:None })
     }
 

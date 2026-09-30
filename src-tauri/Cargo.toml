@@ -6,12 +6,14 @@ authors = ["JayV Team"]
 edition = "2024"
 license = "MIT"
 
+# O `_lib` evita que biblioteca e executável disputem o mesmo `jayv.pdb` no
+# Windows.
 [lib]
-name = "jayv"
+name = "jayv_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "jev"
+name = "jayv"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -22,6 +24,7 @@ anyhow = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+dirs = "7"
 dotenvy = "0.15"
 globset = "0.4"
 hex = "0.4"
@@ -33,6 +36,8 @@ serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
 tauri = { version = "2", features = [] }
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }

@@ -321,4 +321,8 @@ export const ptBR = {
   "db.table": "Tabela",
   "db.rows": "Registros",
   "db.empty": "Nenhuma tabela ainda.",
+  "update.available": "JayV {version} está disponível",
+  "update.install": "Atualizar",
+  "update.downloading": "Baixando o JayV {version}…",
+  "update.failed": "Não foi possível atualizar: {error}",
 } satisfies Record<string, Message>;

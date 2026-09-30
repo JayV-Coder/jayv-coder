@@ -323,4 +323,8 @@ export const ar: Messages = {
   "db.table": "الجدول",
   "db.rows": "السجلات",
   "db.empty": "لا توجد جداول بعد.",
+  "update.available": "يتوفر JayV {version}",
+  "update.install": "تحديث",
+  "update.downloading": "جارٍ تنزيل JayV {version}…",
+  "update.failed": "تعذّر التحديث: {error}",
 };

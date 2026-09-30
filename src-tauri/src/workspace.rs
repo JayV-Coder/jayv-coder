@@ -60,8 +60,21 @@ pub struct WorkspaceData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TableCount { pub name: String, pub rows: i64 }
 
-/// Onde o banco mora: ao lado do arquivo de configuração, na pasta `.jev`.
-pub fn database_location(config_path:&Path,root:&Path)->PathBuf { config_path.parent().unwrap_or(root).join(".jev").join("workspace.sqlite3") }
+/// Onde o banco mora. Com um arquivo de configuração achado — o repositório,
+/// em desenvolvimento —, ao lado dele, na pasta `.jev`. O aplicativo instalado
+/// não traz configuração e sobe de pastas onde não se escreve (o AppImage
+/// montado, o `Program Files`, a `/` do macOS), então o banco vai para a pasta
+/// de dados do sistema, a mesma em que o WebView já guarda as dele.
+pub fn database_location(config_path:&Path,root:&Path)->PathBuf { database_location_in(config_path,root,dirs::data_dir()) }
+
+const APP_IDENTIFIER:&str="ai.jayv.desktop";
+
+fn database_location_in(config_path:&Path,root:&Path,data_dir:Option<PathBuf>)->PathBuf {
+    match data_dir {
+        Some(data_dir) if !config_path.is_file()=>data_dir.join(APP_IDENTIFIER).join("workspace.sqlite3"),
+        _=>config_path.parent().unwrap_or(root).join(".jev").join("workspace.sqlite3"),
+    }
+}
 
 pub struct WorkspaceStore {
     connection: Connection,
@@ -492,6 +505,23 @@ mod tests {
     use super::*;
 
     fn store(root:&tempfile::TempDir)->WorkspaceStore{WorkspaceStore::open(root.path().join("workspace.sqlite3"),None).expect("workspace")}
+
+    #[test]
+    fn o_banco_fica_ao_lado_da_configuracao_que_existe() {
+        let root=tempfile::tempdir().expect("root");
+        let config=root.path().join("config.yaml");
+        fs::write(&config,"models: {}").expect("config");
+        assert_eq!(database_location_in(&config,root.path(),Some("/dados".into())),root.path().join(".jev/workspace.sqlite3"));
+    }
+
+    #[test]
+    fn sem_configuracao_o_banco_vai_para_a_pasta_de_dados_do_sistema() {
+        let root=tempfile::tempdir().expect("root");
+        let config=root.path().join("config.yaml");
+        assert_eq!(database_location_in(&config,root.path(),Some("/dados".into())),PathBuf::from("/dados/ai.jayv.desktop/workspace.sqlite3"));
+        assert_eq!(database_location_in(&config,root.path(),None),root.path().join(".jev/workspace.sqlite3"));
+        assert!(include_str!("../tauri.conf.json").contains(&format!("\"identifier\": \"{APP_IDENTIFIER}\"")),"a pasta de dados é a do identificador do aplicativo");
+    }
 
     #[test]
     fn o_pedido_e_o_turno_entram_no_banco_no_mesmo_ato() {

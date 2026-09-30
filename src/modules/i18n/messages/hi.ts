@@ -316,4 +316,8 @@ export const hi: Messages = {
   "db.table": "तालिका",
   "db.rows": "रिकॉर्ड",
   "db.empty": "अभी कोई तालिका नहीं है।",
+  "update.available": "JayV {version} उपलब्ध है",
+  "update.install": "अपडेट करें",
+  "update.downloading": "JayV {version} डाउनलोड हो रहा है…",
+  "update.failed": "अपडेट नहीं हो सका: {error}",
 };

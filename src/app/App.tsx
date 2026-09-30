@@ -6,6 +6,7 @@ import { connectGate } from "@/modules/gate";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { connectSettings } from "@/modules/settings";
 import { connectSystem, loadStatus } from "@/modules/system";
+import { checkForUpdate } from "@/modules/updates";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { ChatPage, ChatsPage, GatePage, ProjectsPage, SettingsPage, StatusPage } from "@/components/pages";
 import { AppShell } from "@/components/templates";
@@ -30,6 +31,7 @@ export function App() {
     const disconnect = [connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings()];
     navigate("projects");
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
+    void checkForUpdate();
     return () => disconnect.forEach((off) => off());
   }, []);
 

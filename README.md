@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-The desktop application opens when `jev` is started without a subcommand. CLI commands remain available:
+The desktop application opens when `jayv` is started without a subcommand. CLI commands remain available:
 
 ```bash
 cargo run --manifest-path src-tauri/Cargo.toml -- status

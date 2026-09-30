@@ -326,4 +326,8 @@ export const ru: Messages = {
   "db.table": "Таблица",
   "db.rows": "Записи",
   "db.empty": "Таблиц пока нет.",
+  "update.available": "Доступна версия JayV {version}",
+  "update.install": "Обновить",
+  "update.downloading": "Загрузка JayV {version}…",
+  "update.failed": "Не удалось обновить: {error}",
 };

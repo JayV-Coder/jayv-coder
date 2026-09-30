@@ -47,7 +47,7 @@ pub(crate) async fn both<'a>(desk:&'a SharedDesktopState,workspace:&'a SharedWor
 }
 
 pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
-    let mut orchestrator=Orchestrator::new(config_path.clone(),root.clone())?;
+    let mut orchestrator=Orchestrator::unindexed(config_path.clone(),root.clone())?;
     let database=crate::workspace::database_location(&config_path,&root);
     let legacy_workspace_path=database.with_file_name("workspace.json");
     let workspace=WorkspaceStore::open(database,Some(&legacy_workspace_path))?;
@@ -62,6 +62,8 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     let bell:QueueBell=Arc::new(Notify::new());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(desk).manage(workspace).manage(bell)
         .setup(|app|{
             // O sino toca uma vez na partida: a abertura do banco devolveu à

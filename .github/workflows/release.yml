@@ -1,9 +1,17 @@
 # Gera os instaladores do JayV para Linux, Windows e macOS e os publica no
 # release da versão em `src-tauri/tauri.conf.json` (tag `v<versão>`).
 #
+# O código é privado, então os releases moram no repositório público
+# `JayV-Coder/jayv-coder-releases`: é de lá que o aplicativo instalado lê o
+# `latest.json` para saber se há versão nova. Escrever em outro repositório pede
+# dois segredos neste:
+#   RELEASES_TOKEN             token com `Contents: write` no jayv-coder-releases
+#   TAURI_SIGNING_PRIVATE_KEY  a chave que assina os pacotes de atualização
+#
 # Dispara a cada push no main, ao enviar uma tag `v*` ou manualmente pela aba
 # Actions. Enquanto a versão não muda, cada build substitui os instaladores do
-# mesmo release; para abrir um release novo, suba a versão.
+# mesmo release; para abrir um release novo — e oferecer a atualização a quem
+# já instalou —, suba a versão.
 name: Release
 
 on:
@@ -14,11 +22,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: true
+
+env:
+  RELEASES_OWNER: JayV-Coder
+  RELEASES_REPO: jayv-coder-releases
 
 jobs:
   prepare:
@@ -32,22 +44,71 @@ jobs:
       - name: Criar ou reaproveitar o release da versão
         id: release
         uses: actions/github-script@v7
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         with:
           script: |
             const { version } = require("./src-tauri/tauri.conf.json");
             const tag = `v${version}`;
-            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            // `github` lê os commits daqui; `publisher` escreve no repositório
+            // de releases.
+            const publisher = getOctokit(process.env.RELEASES_TOKEN);
+            const target = { owner: process.env.RELEASES_OWNER, repo: process.env.RELEASES_REPO };
+
+            // Release precisa de uma tag, e tag precisa de um commit: o
+            // repositório de releases vazio ganha um README antes do primeiro.
+            try {
+              await publisher.rest.repos.listCommits({ ...target, per_page: 1 });
+            } catch (error) {
+              if (error.status !== 409) throw error;
+              await publisher.rest.repos.createOrUpdateFileContents({
+                ...target,
+                path: "README.md",
+                message: "Instaladores do JayV",
+                content: Buffer.from("# JayV\n\nInstaladores do JayV para Linux, Windows e macOS. Baixe a versão mais nova em [Releases](../../releases/latest).\n").toString("base64"),
+              });
+            }
+
+            const releases = await publisher.paginate(publisher.rest.repos.listReleases, { ...target, per_page: 100 });
             const found = releases.find((release) => release.tag_name === tag);
+
+            // As notas são os commits desde o release publicado anterior. O
+            // código não mora no repositório de releases, então cada release
+            // guarda num comentário o commit de onde saiu, e é dele que a
+            // comparação parte. Como o mesmo release recebe cada push até a
+            // versão subir, o texto é refeito a cada build.
+            const previous = releases
+              .filter((release) => !release.draft && release.tag_name !== tag)
+              .sort((a, b) => new Date(b.published_at) - new Date(a.published_at))[0];
+            const base = previous?.body?.match(/<!-- source: ([0-9a-f]{40}) -->/)?.[1];
+            const commits = base
+              ? (await github.rest.repos.compareCommits({ ...context.repo, base, head: context.sha, per_page: 250 })).data.commits
+              : (await github.paginate(github.rest.repos.listCommits, { ...context.repo, sha: context.sha, per_page: 100 })).reverse();
+            const changes = commits
+              .filter((commit) => commit.parents.length < 2)
+              .map((commit) => `- ${commit.commit.message.split("\n")[0]}`)
+              .reverse();
+            const since = base ? `desde o ${previous.tag_name}` : "desde o início";
+            const body = [
+              `Instaladores do JayV ${tag} para Linux, Windows e macOS.`,
+              "",
+              `## O que mudou ${since}`,
+              "",
+              ...(changes.length ? changes : ["- Nenhuma mudança registrada."]),
+              "",
+              `<!-- source: ${context.sha} -->`,
+            ].join("\n");
+
             if (found) {
-              core.notice(`Atualizando os instaladores do release ${tag}.`);
+              core.notice(`Atualizando os instaladores e as notas do release ${tag}.`);
+              await publisher.rest.repos.updateRelease({ ...target, release_id: found.id, body });
               return found.id;
             }
-            const { data } = await github.rest.repos.createRelease({
-              ...context.repo,
+            const { data } = await publisher.rest.repos.createRelease({
+              ...target,
               tag_name: tag,
-              target_commitish: context.sha,
               name: `JayV ${tag}`,
-              body: `Instaladores do JayV ${tag} para Linux, Windows e macOS.`,
+              body,
               draft: true,
             });
             return data.id;
@@ -103,8 +164,12 @@ jobs:
       - name: Build e envio dos instaladores
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
+          owner: ${{ env.RELEASES_OWNER }}
+          repo: ${{ env.RELEASES_REPO }}
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tauriScript: npm run tauri
           args: ${{ matrix.args }}
@@ -119,5 +184,6 @@ jobs:
         env:
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         with:
+          github-token: ${{ secrets.RELEASES_TOKEN }}
           script: |
-            await github.rest.repos.updateRelease({ ...context.repo, release_id: Number(process.env.RELEASE_ID), draft: false });
+            await github.rest.repos.updateRelease({ owner: process.env.RELEASES_OWNER, repo: process.env.RELEASES_REPO, release_id: Number(process.env.RELEASE_ID), draft: false });

@@ -316,4 +316,8 @@ export const zhCN: Messages = {
   "db.table": "表",
   "db.rows": "记录数",
   "db.empty": "还没有表。",
+  "update.available": "JayV {version} 已发布",
+  "update.install": "更新",
+  "update.downloading": "正在下载 JayV {version}…",
+  "update.failed": "无法更新：{error}",
 };
