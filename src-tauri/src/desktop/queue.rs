@@ -137,6 +137,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         return;
     }
     state.orchestrator.pending_gate_note=entry.clarifying_note();
+    state.orchestrator.pending_brief=entry.refined_prompt(request);
 
     // O `process` torna a anotar o pedido na memória da sessão, e ele já está
     // no banco desde o envio: sem esta poda o modelo receberia a mesma linha

@@ -1,23 +1,60 @@
-# Gera os instaladores do JayV para Linux, Windows e macOS e os anexa a um
-# rascunho de release no GitHub. Dispara ao enviar uma tag `v*` (ex.: v0.6.0)
-# ou manualmente pela aba Actions.
+# Gera os instaladores do JayV para Linux, Windows e macOS e os publica no
+# release da versão em `src-tauri/tauri.conf.json` (tag `v<versão>`).
+#
+# Dispara a cada push no main, ao enviar uma tag `v*` ou manualmente pela aba
+# Actions. Enquanto a versão não muda, cada build substitui os instaladores do
+# mesmo release; para abrir um release novo, suba a versão.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md", ".serena/**"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  group: release
+  cancel-in-progress: true
 
 jobs:
+  prepare:
+    name: Preparar release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Criar ou reaproveitar o release da versão
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { version } = require("./src-tauri/tauri.conf.json");
+            const tag = `v${version}`;
+            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            const found = releases.find((release) => release.tag_name === tag);
+            if (found) {
+              core.notice(`Atualizando os instaladores do release ${tag}.`);
+              return found.id;
+            }
+            const { data } = await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: tag,
+              target_commitish: context.sha,
+              name: `JayV ${tag}`,
+              body: `Instaladores do JayV ${tag} para Linux, Windows e macOS.`,
+              draft: true,
+            });
+            return data.id;
+
   build:
     name: ${{ matrix.name }}
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -63,14 +100,24 @@ jobs:
       - name: Dependências do front-end
         run: npm ci
 
-      - name: Build e release
+      - name: Build e envio dos instaladores
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: JayV v__VERSION__
-          releaseBody: Instaladores do JayV v__VERSION__ para Linux, Windows e macOS.
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tauriScript: npm run tauri
           args: ${{ matrix.args }}
+
+  publish:
+    name: Publicar release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tirar o release do rascunho
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({ ...context.repo, release_id: Number(process.env.RELEASE_ID), draft: false });

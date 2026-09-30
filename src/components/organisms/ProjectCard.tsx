@@ -1,3 +1,4 @@
+import { Trash2Icon } from "lucide-react";
 import type { Chat, Project } from "@/modules/core";
 import { formatSince, useT } from "@/modules/i18n";
 import { FolderIcon, PathText } from "@/components/atoms";
@@ -26,7 +27,10 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
             description={t("project.delete.description", { name: project.name, count })}
             onConfirm={onDelete}
           >
-            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive">{t("common.delete")}</Button>
+            <Button variant="ghost" size="sm" className="ms-auto text-muted-foreground hover:text-destructive">
+            <Trash2Icon aria-hidden="true" />
+            {t("common.delete")}
+          </Button>
           </ConfirmAction>
         </>
       )}

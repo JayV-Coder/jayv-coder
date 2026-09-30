@@ -54,6 +54,10 @@ pub struct Orchestrator {
     /// A ressalva que o portão de entrada deixou para o próximo pedido, quando
     /// ele foi liberado com semáforo amarelo. `process` a consome uma vez.
     pub pending_gate_note: Option<String>,
+    /// O pedido liberado pela portaria, reescrito para o modelo. Toma o lugar
+    /// do texto cru só na mensagem enviada: roteamento, contexto e histórico
+    /// continuam lendo o que o desenvolvedor escreveu. `process` o consome uma vez.
+    pub pending_brief: Option<String>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// A pasta que os agentes de linha de comando enxergam. Anda junto com o
@@ -70,7 +74,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let mut rag=RepositoryRag::new(root); rag.index(&firewall)?;
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -111,12 +115,13 @@ impl Orchestrator {
             return result;
         }
         self.memory.add_message(session_id,"user",normalized.clone());
+        let brief=self.pending_brief.take();
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
         let notes=routing_notes(&signals);
-        let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens);
+        let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)));
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
         let capabilities=routing_capabilities(&intent.intent,&signals);
@@ -135,7 +140,7 @@ impl Orchestrator {
         pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone()});
         pulse.beat(Beat::Running);
         let started=Instant::now();
-        let execution=self.execute(&normalized,&capabilities,&context,&selection,session_id,pulse).await;
+        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&capabilities,&context,&selection,session_id,pulse).await;
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
             Err(error)=>pulse.beat(Beat::Failed{error:error.to_string()}),

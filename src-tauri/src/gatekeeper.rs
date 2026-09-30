@@ -81,6 +81,27 @@ impl EntryCheck {
         let gaps=self.failing().iter().map(|criterion|criterion.label.to_lowercase()).collect::<Vec<_>>().join(", ");
         Some(format!("A portaria liberou este pedido com ressalva: {gaps}. Faça uma única pergunta objetiva sobre o ponto mais crítico antes de começar o trabalho, e não presuma uma abordagem enquanto ela não for respondida."))
     }
+    /// O pedido liberado, reescrito para o modelo com o que a portaria leu nele.
+    /// O texto do desenvolvedor vai intacto no topo; embaixo, a leitura de cada
+    /// critério vira uma instrução de conduta — o que o pedido já disse é
+    /// cobrado como compromisso, o que faltou vira tarefa do modelo. Barrado não
+    /// chega a modelo nenhum, então não tem versão melhorada.
+    pub fn refined_prompt(&self,request:&str)->Option<String> {
+        if !self.verdict.lets_through() {return None;}
+        let met=|id:&str|self.criteria.iter().find(|criterion|criterion.id==id).is_some_and(Criterion::within_band);
+        let mut steps=vec![match self.scope.as_str(){
+            "ajuste pequeno"=>"This is a small adjustment: make the smallest change that satisfies it and leave everything else untouched.",
+            "funcionalidade"=>"This is one capability delivered end to end: plan the few files it needs, implement them, and keep unrelated code as it is.",
+            _=>"This is system-wide work: outline the plan and the parts it touches before changing anything, then deliver it in reviewable steps.",
+        }.to_string()];
+        steps.push(if met("goal_is_clear"){"Treat the outcome the request states as the goal; do not widen it."}else{"The goal is not explicit: state in one sentence the outcome you are going to deliver before you start."}.into());
+        steps.push(if met("says_where"){"Work in the places the request names; if something outside them must change, say which file and why."}else{"No location was given: find where this belongs in the project first and list the files you will touch."}.into());
+        steps.push(if met("says_when_done"){"Use the request's own done criterion as your final check and report how it was verified."}else{"No done criterion was given: end by saying how the developer can confirm the work is finished (a test, a command or an observable behaviour)."}.into());
+        if !met("bundles_requests") {steps.push("The request bundles independent items: handle them one at a time, in the order given, and report the outcome of each separately.".into());}
+        steps.push("Preserve behaviour the request does not mention, and answer in the language the request was written in.".into());
+        let steps=steps.iter().map(|step|format!("- {step}")).collect::<Vec<_>>().join("\n");
+        Some(format!("REQUEST (verbatim from the developer):\n{}\n\nHOW TO CARRY IT OUT (JayV entry gate: {}/100, scope \"{}\"):\n{steps}",request.trim(),self.score,self.scope))
+    }
 }
 
 /// As cinco leituras que o portão de entrada precisa, vindas do Jev ou das
@@ -429,6 +450,23 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         let note=asked.clarifying_note().expect("ressalva");
         assert!(note.contains("uma única pergunta") && note.contains("pronto"),"{note}");
         assert!(judge(&turn_at("chat"),"x",&reading(0.2,0.95,0.95,0.95,0.0),"jev").clarifying_note().is_none());
+    }
+
+    #[test]
+    fn a_released_pedido_reaches_the_model_rewritten_with_what_the_gate_read() {
+        let request="Adicione paginação em src/components/Table.tsx; pronto quando `npm test` passar";
+        let passed=judge(&turn_at("chat"),request,&reading(1.0,0.9,0.9,0.9,0.05),"jev");
+        assert_eq!(passed.verdict,EntryVerdict::Pass);
+        let refined=passed.refined_prompt(&format!("  {request}\n")).expect("liberado tem prompt melhorado");
+        assert!(refined.starts_with(&format!("REQUEST (verbatim from the developer):\n{request}\n")),"{refined}");
+        assert!(refined.contains("one capability") && refined.contains("places the request names") && refined.contains("own done criterion"),"{refined}");
+        assert!(!refined.contains("bundles independent items"),"{refined}");
+        let asked=judge(&turn_at("chat"),"Adicione paginação na listagem e também troque o tema",&reading(1.0,0.7,0.4,0.05,0.8),"jev");
+        assert_eq!(asked.verdict,EntryVerdict::Ask);
+        let refined=asked.refined_prompt("Adicione paginação na listagem e também troque o tema").expect("ressalva também é melhorada");
+        assert!(refined.contains("No location was given") && refined.contains("No done criterion") && refined.contains("bundles independent items"),"{refined}");
+        let blocked=judge(&turn_at("chat"),"arruma tudo ai",&reading(1.9,0.2,0.1,0.05,0.6),"heuristica");
+        assert!(blocked.refined_prompt("arruma tudo ai").is_none());
     }
 
     #[test]

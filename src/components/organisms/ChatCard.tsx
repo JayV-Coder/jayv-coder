@@ -1,3 +1,4 @@
+import { Trash2Icon } from "lucide-react";
 import { shorten, type Chat } from "@/modules/core";
 import { lastGatePass, useGate } from "@/modules/gate";
 import { formatSince, useT } from "@/modules/i18n";
@@ -17,7 +18,10 @@ export function ChatCard({ chat, onOpen, onDelete }: { chat: Chat; onOpen: () =>
       onOpen={onOpen}
       actions={(
         <ConfirmAction title={t("chat.delete.title")} description={t("chat.delete.description", { title: chat.title })} onConfirm={onDelete}>
-          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive">{t("common.delete")}</Button>
+          <Button variant="ghost" size="sm" className="ms-auto text-muted-foreground hover:text-destructive">
+            <Trash2Icon aria-hidden="true" />
+            {t("common.delete")}
+          </Button>
         </ConfirmAction>
       )}
     >
