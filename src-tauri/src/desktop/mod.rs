@@ -46,7 +46,22 @@ pub(crate) async fn both<'a>(desk:&'a SharedDesktopState,workspace:&'a SharedWor
     (desk,workspace)
 }
 
+/// No Wayland com driver NVIDIA, o renderizador DMA-BUF do WebKitGTK derruba o
+/// processo antes da janela aparecer ("Error 71 (Protocol error) dispatching to
+/// Wayland display"): aberto pelo menu, o app abria e fechava. Quem já escolheu
+/// um valor na sessão manda; sem ele, o WebKit desenha sem DMA-BUF.
+#[cfg(target_os = "linux")]
+fn keep_webkit_off_dmabuf() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // SAFETY: roda no começo da partida, antes do Tauri e do tokio subirem
+        // qualquer thread que leia o ambiente.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER","1"); }
+    }
+}
+
 pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    keep_webkit_off_dmabuf();
     let mut orchestrator=Orchestrator::unindexed(config_path.clone(),root.clone())?;
     let database=crate::workspace::database_location(&config_path,&root);
     let legacy_workspace_path=database.with_file_name("workspace.json");
@@ -100,6 +115,17 @@ mod tests {
         let signature=command.split(')').next().expect("assinatura");
         assert!(!signature.contains("SharedDesktopState"),"o envio voltou a depender do cadeado do modelo: {signature}");
         assert!(signature.contains("SharedWorkspace"),"o envio precisa do banco, e só dele: {signature}");
+    }
+
+    /// O ambiente só pode mudar enquanto o processo tem uma thread só. Quem
+    /// mover o contorno para depois do orquestrador ou do Builder corre o risco
+    /// de o WebKit já ter lido o ambiente — e o app volta a abrir e fechar.
+    #[test] fn o_webkit_sai_do_dmabuf_antes_de_tudo_subir() {
+        let source=include_str!("mod.rs");
+        let body=source.split("pub fn run_desktop").nth(1).expect("falta run_desktop");
+        let workaround=body.find("keep_webkit_off_dmabuf();").expect("run_desktop precisa desligar o DMA-BUF do WebKit");
+        assert!(workaround<body.find("Orchestrator::unindexed").expect("orquestrador"),"o contorno tem de vir antes do orquestrador");
+        assert!(workaround<body.find("tauri::Builder").expect("builder"),"o contorno tem de vir antes do Tauri");
     }
 
     #[test] fn the_folder_picker_talks_to_the_xdg_portal_on_linux() {

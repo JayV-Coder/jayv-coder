@@ -1,7 +1,7 @@
 use anyhow::{Context,Result};
 use clap::{Parser,Subcommand};
-use jayv_lib::{config::Config,orchestrator::Orchestrator,run_desktop,workspace::{database_location,WorkspaceStore}};
-use std::path::PathBuf;
+use jayv_lib::{config::Config,orchestrator::Orchestrator,run_desktop,workspace::{database_location,startup_log_location,WorkspaceStore}};
+use std::{fs,io::Write,path::PathBuf};
 
 /// O orquestrador com os agentes e modelos do banco, o mesmo que o aplicativo
 /// de mesa usa.
@@ -18,8 +18,26 @@ struct Cli { #[arg(short,long,global=true)] config:Option<PathBuf>, #[arg(long,g
 #[derive(Debug,Subcommand)]
 enum Commands { Status, Run { #[arg(required=true,num_args=1..)] task:Vec<String> }, Index, Version }
 
+/// Guarda o erro que impediu o aplicativo de mesa de abrir. Falhar aqui não
+/// pode esconder o erro original, então qualquer problema de escrita é ignorado.
+fn record_startup_error(error:&anyhow::Error) {
+    let Some(path)=startup_log_location() else {return};
+    if let Some(parent)=path.parent(){let _=fs::create_dir_all(parent);}
+    if let Ok(mut file)=fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _=writeln!(file,"[{}] JayV {}: {error:#}",chrono::Local::now().to_rfc3339(),env!("CARGO_PKG_VERSION"));
+    }
+}
+
 fn main()->Result<()> {
-    let cli=Cli::parse(); let config_path=Config::discover(cli.config); let root=cli.root.canonicalize().context("workspace root does not exist")?;
+    let cli=Cli::parse();
+    let desktop=cli.command.is_none();
+    let result=run(cli);
+    if desktop { if let Err(error)=&result { record_startup_error(error); } }
+    result
+}
+
+fn run(cli:Cli)->Result<()> {
+    let config_path=Config::discover(cli.config); let root=cli.root.canonicalize().context("workspace root does not exist")?;
     match cli.command {
         None=>run_desktop(config_path,root),
         Some(Commands::Status)=>{let orchestrator=orchestrator(config_path.clone(),root)?;println!("JayV {}",env!("CARGO_PKG_VERSION"));println!("Status: operational");println!("Configuration: {}",config_path.display());println!("Providers: {}",orchestrator.executable_provider_count());println!("Models: {}",orchestrator.executable_model_count());println!("Indexed files: {}",orchestrator.rag.len());Ok(())},

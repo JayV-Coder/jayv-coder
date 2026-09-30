@@ -69,6 +69,10 @@ pub fn database_location(config_path:&Path,root:&Path)->PathBuf { database_locat
 
 const APP_IDENTIFIER:&str="ai.jayv.desktop";
 
+/// Onde fica o motivo de o aplicativo não ter aberto. Aberto pelo menu não há
+/// terminal, e sem este arquivo o erro some junto com a janela.
+pub fn startup_log_location()->Option<PathBuf> { dirs::data_dir().map(|data_dir|data_dir.join(APP_IDENTIFIER).join("startup-error.log")) }
+
 fn database_location_in(config_path:&Path,root:&Path,data_dir:Option<PathBuf>)->PathBuf {
     match data_dir {
         Some(data_dir) if !config_path.is_file()=>data_dir.join(APP_IDENTIFIER).join("workspace.sqlite3"),
