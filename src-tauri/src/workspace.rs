@@ -60,6 +60,9 @@ pub struct WorkspaceData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TableCount { pub name: String, pub rows: i64 }
 
+/// Onde o banco mora: ao lado do arquivo de configuração, na pasta `.jev`.
+pub fn database_location(config_path:&Path,root:&Path)->PathBuf { config_path.parent().unwrap_or(root).join(".jev").join("workspace.sqlite3") }
+
 pub struct WorkspaceStore {
     connection: Connection,
     path: PathBuf,
@@ -100,6 +103,7 @@ impl WorkspaceStore {
              CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         )?;
         connection.execute_batch(turns::SCHEMA)?;
+        crate::llm::ensure(&connection)?;
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
         ensure_turn_partial(&connection)?;
@@ -333,6 +337,11 @@ impl WorkspaceStore {
     pub fn chat_of_turn(&self, turn_id:&str) -> Result<Option<String>> {turns::chat_of(&self.connection,turn_id)}
 
     pub fn question_origin(&self, turn_id:&str) -> Result<Option<String>> {turns::question_origin(&self.connection,turn_id)}
+
+    /// Os agentes e modelos que a tela Configuração do LLM grava.
+    pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
+
+    pub fn save_llm_settings(&mut self, settings:&crate::llm::LlmSettings) -> Result<crate::llm::LlmSettings> {crate::llm::save(&mut self.connection,settings)}
 
     pub fn database_path(&self) -> &Path {&self.path}
 

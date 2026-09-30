@@ -1,6 +1,6 @@
-# Jev AI Orchestrator CLI — What I Would Add
+# JayV CLI — What I Would Add
 
-Based on the current **Jev AI Orchestrator CLI** architecture, the foundation is already strong:
+Based on the current **JayV CLI** architecture, the foundation is already strong:
 
 `User → Jev → Intent/Complexity → RAG → Context Builder → Router → Provider/CLI → Validation`
 

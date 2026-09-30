@@ -321,6 +321,9 @@ impl Provider for HttpProvider {
 
 struct CliProvider { name:String, config:ProviderConfig, workdir:Workdir }
 
+/// O argumento que vira o texto do pedido.
+const PROMPT:&str="{prompt}";
+
 /// O que uma linha do agente é: resposta ou relato do trabalho. A decisão é
 /// pelo conteúdo, não pela configuração — `claude --print` escreve o texto
 /// direto, `codex exec` narra o que faz, e nenhum dos dois avisa qual dos dois
@@ -359,6 +362,31 @@ fn said(event:&Value)->Option<String> {
     event.pointer("/delta/text").and_then(Value::as_str).map(str::to_string)
 }
 
+/// A recusa que o agente anuncia na própria saída. Em `stream-json` o Claude
+/// não explica a falha no canal de erro: ele fecha com um evento `result`
+/// marcado `is_error`, e o motivo — modelo inexistente, cota estourada, login
+/// vencido — está no texto desse evento. Sem lê-lo, a falha chegava à tela
+/// como `CLI provider failed: ` e nada mais.
+fn refusal(line:&str)->Option<String> {
+    let event=serde_json::from_str::<Value>(line.trim()).ok()?;
+    if event.get("type").and_then(Value::as_str)!=Some("result")||event.get("is_error").and_then(Value::as_bool)!=Some(true) { return None; }
+    let reason=event.get("result").and_then(Value::as_str).map(str::trim).filter(|reason|!reason.is_empty())
+        .map(str::to_string)
+        .or_else(||event.get("subtype").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(||"erro sem descrição".into());
+    Some(reason)
+}
+
+/// O fim de um texto, até `limit` caracteres, sem cortar no meio de um
+/// caractere. É o pedaço da saída que costuma dizer por que o agente parou.
+fn tail(text:&str,limit:usize)->&str {
+    let text=text.trim();
+    let count=text.chars().count();
+    if count<=limit { return text; }
+    let start=text.char_indices().nth(count-limit).map(|(at,_)|at).unwrap_or(0);
+    &text[start..]
+}
+
 /// O relato em uma linha. O evento cru na tela seria JSON aos olhos de quem
 /// lê; o tipo mais a pista mais útil que ele traz é o que interessa.
 fn reported(kind:&str,event:&Value)->String {
@@ -371,13 +399,32 @@ fn reported(kind:&str,event:&Value)->String {
 impl CliProvider {
     fn prompt(messages:&[ChatMessage])->String { messages.iter().map(|m|format!("{}: {}",m.role,m.content)).collect::<Vec<_>>().join("\n\n") }
 
+    /// O pedido vai num argumento, e não na entrada padrão, quando o agente
+    /// não lê a entrada — é o caso do Copilot, que só aceita `-p`.
+    fn inline(&self)->bool { self.config.args.iter().any(|arg|arg==PROMPT) }
+
+    /// A linha de comando deste pedido. O modelo reserva igual ao modelo do
+    /// pedido sai inteiro: o Claude recusa os dois iguais, e a reserva é por
+    /// agente enquanto o modelo é por pedido.
+    fn args(&self,model:&str,prompt:&str)->Vec<String> {
+        let mut args=Vec::new();
+        let mut given=self.config.args.iter();
+        while let Some(arg)=given.next() {
+            if arg=="--fallback-model" {
+                if let Some(reserve)=given.next().filter(|reserve|reserve.as_str()!=model) { args.extend([arg.clone(),reserve.clone()]); }
+                continue;
+            }
+            args.push(if arg==PROMPT { prompt.to_string() } else { arg.replace("{model}",model) });
+        }
+        args
+    }
+
     /// O agente aberto, com as três pontas na mão. Um só arranque para as duas
     /// conversas: a que espera o fim e a que acompanha.
-    fn open(&self,model:&str)->Result<tokio::process::Child> {
+    fn open(&self,model:&str,prompt:&str)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
-        let args=self.config.args.iter().map(|arg|arg.replace("{model}",model)).collect::<Vec<_>>();
         let mut process=Command::new(command);
-        process.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        process.args(self.args(model,prompt)).stdin(if self.inline(){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
@@ -391,6 +438,21 @@ impl CliProvider {
     /// — uma linha na saída, uma linha no erro, o processo que termina. Agente
     /// que trabalha nunca estoura; agente travado estoura na mesma hora.
     fn silence(&self)->Duration { Duration::from_secs(self.config.timeout.max(1)) }
+
+    /// Por que o agente falhou, com a melhor pista disponível: o que ele
+    /// anunciou como erro, o que escreveu no canal de erro, o fim do que
+    /// escreveu na saída — nessa ordem. Nenhuma das três é garantida, então o
+    /// código de saída vai sempre junto.
+    fn failure(&self,status:Option<std::process::ExitStatus>,refused:Option<String>,complaint:&str,response:&str)->anyhow::Error {
+        let exit=match status.and_then(|status|status.code()) { Some(code)=>format!("saiu com o código {code}"), None if status.is_some()=>"foi interrompido por um sinal".into(), None=>"anunciou um erro".into() };
+        let reason=refused.filter(|reason|!reason.trim().is_empty())
+            .or_else(||Some(tail(complaint,800).to_string()).filter(|text|!text.is_empty()))
+            .or_else(||Some(tail(response,800).to_string()).filter(|text|!text.is_empty()));
+        match reason {
+            Some(reason)=>anyhow!("o provedor `{}` falhou ({exit}): {reason}",self.name),
+            None=>anyhow!("o provedor `{}` falhou ({exit}) sem escrever o motivo; rode `{}` no terminal para ver o erro",self.name,self.config.command.as_deref().unwrap_or("o comando")),
+        }
+    }
 
     fn muteness(&self)->anyhow::Error {
         anyhow!("o provedor `{}` passou {}s sem dar sinal de vida e foi encerrado; se o trabalho costuma demorar mais em silêncio, aumente `timeout` na configuração dele",self.name,self.silence().as_secs())
@@ -416,11 +478,11 @@ impl Provider for CliProvider {
     async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
         let prompt=Self::prompt(messages);
         let started=Instant::now();
-        let mut child=self.open(model)?;
+        let mut child=self.open(model,&prompt)?;
         if let Some(mut stdin)=child.stdin.take() { stdin.write_all(prompt.as_bytes()).await?; }
         let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).lines();
         let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).lines();
-        let (mut response,mut complaint)=(String::new(),String::new());
+        let (mut response,mut complaint,mut refused)=(String::new(),String::new(),None::<String>);
         let (mut talking,mut grumbling)=(true,true);
         let silence=self.silence();
         while talking||grumbling {
@@ -431,7 +493,7 @@ impl Provider for CliProvider {
                 tokio::select! {
                     line=talk.next_line(),if talking=>match line.context("CLI provider returned non-UTF-8 output")? {
                         None=>talking=false,
-                        Some(line)=>if let Some(beat)=classify(&line) {
+                        Some(line)=>if let Some(reason)=refusal(&line) { refused=Some(reason); } else if let Some(beat)=classify(&line) {
                             if let Beat::Chunk{text}=&beat { response.push_str(text); }
                             pulse.beat(beat);
                         },
@@ -453,7 +515,10 @@ impl Provider for CliProvider {
         // um processo que fechou a saída e não morreu seguraria o pedido para
         // sempre — e é por isso que este prazo não é o de trabalhar, é o de sair.
         let status=timeout(silence,child.wait()).await.map_err(|_|self.muteness())??;
-        if !status.success() { return Err(anyhow!("CLI provider failed: {}",complaint.trim())); }
+        // Um `result` com `is_error` é falha mesmo quando o processo sai com
+        // zero: a resposta que veio antes dele é o texto do erro, não a do
+        // pedido.
+        if !status.success()||refused.is_some() { return Err(self.failure(Some(status),refused,&complaint,&response)); }
         Ok(ProviderResponse{response,input_tokens:prompt.chars().count()/4,output_tokens:0,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
     }
 }
@@ -497,6 +562,36 @@ mod tests {
         let answer=provider.chat(&[ChatMessage{role:"user".into(),content:"onde estou?".into()}],"modelo").await.expect("pwd");
 
         assert_eq!(answer.response.trim(),esperado.to_string_lossy(),"o agente foi aberto na pasta do projeto do chat");
+    }
+
+    fn script(body:&str)->CliProvider {
+        CliProvider{name:"agente".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),body.into()],..config("cli")},workdir:Workdir::default()}
+    }
+    fn ask()->Vec<ChatMessage> { vec![ChatMessage{role:"user".into(),content:"oi".into()}] }
+
+    /// O Claude em `stream-json` explica a falha na saída, não no canal de
+    /// erro. É esse texto que tem de chegar à tela.
+    #[tokio::test] async fn a_falha_anunciada_na_saida_chega_com_o_motivo() {
+        let provider=script(r#"echo '{"type":"result","subtype":"success","is_error":true,"result":"There is an issue with the selected model"}'; exit 1"#);
+        let error=provider.chat(&ask(),"modelo").await.expect_err("falhou").to_string();
+        assert!(error.contains("There is an issue with the selected model"),"{error}");
+        assert!(error.contains("código 1"),"{error}");
+    }
+
+    #[tokio::test] async fn a_falha_anunciada_vale_mesmo_com_saida_zero() {
+        let provider=script(r#"echo '{"type":"result","is_error":true,"result":"cota esgotada"}'"#);
+        let error=provider.chat(&ask(),"modelo").await.expect_err("falhou").to_string();
+        assert!(error.contains("cota esgotada"),"{error}");
+    }
+
+    #[tokio::test] async fn sem_canal_de_erro_a_saida_explica_a_falha() {
+        let error=script("echo 'login expirado'; exit 2").chat(&ask(),"modelo").await.expect_err("falhou").to_string();
+        assert!(error.contains("login expirado")&&error.contains("código 2"),"{error}");
+    }
+
+    #[tokio::test] async fn a_falha_muda_diz_o_codigo_e_o_que_fazer() {
+        let error=script("exit 3").chat(&ask(),"modelo").await.expect_err("falhou").to_string();
+        assert!(error.contains("código 3")&&error.contains("no terminal"),"{error}");
     }
 
     #[tokio::test] async fn gives_up_after_the_attempt_budget() {
@@ -639,5 +734,18 @@ mod tests {
         let calls=Cell::new(0);
         let result:Result<()>=with_retry(RetryPolicy::default(),|_|{calls.set(calls.get()+1); async {Err(RetryError::from_status(StatusCode::UNAUTHORIZED,None,anyhow!("401")))}}).await;
         assert!(result.is_err()); assert_eq!(calls.get(),1);
+    }
+
+    #[test] fn o_pedido_vai_no_argumento_quando_o_agente_pede() {
+        let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
+        assert!(provider.inline());
+        assert_eq!(provider.args("gpt-5","oi {model}"),["-p","oi {model}","--model","gpt-5"]);
+    }
+
+    #[test] fn a_reserva_igual_ao_modelo_sai_da_linha() {
+        let provider=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--model".into(),"{model}".into(),"--fallback-model".into(),"haiku".into()],..config("cli")},workdir:Workdir::default()};
+        assert!(!provider.inline());
+        assert_eq!(provider.args("haiku",""),["--model","haiku"]);
+        assert_eq!(provider.args("opus",""),["--model","opus","--fallback-model","haiku"]);
     }
 }

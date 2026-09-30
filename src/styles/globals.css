@@ -1,0 +1,171 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* A paleta é a mesma de antes, agora como tokens do shadcn: verde sobre grafite
+   no aplicativo, e a cabine de sinalização da Portaria com os seus próprios. */
+:root {
+  --radius: 0.6rem;
+  --background: #090b0a;
+  --foreground: #edf0e8;
+  --card: #131713;
+  --card-foreground: #edf0e8;
+  --popover: #121613;
+  --popover-foreground: #edf0e8;
+  --primary: #9defa4;
+  --primary-foreground: #08110a;
+  --secondary: #171b18;
+  --secondary-foreground: #bdc6bf;
+  --muted: #151916;
+  --muted-foreground: #79837b;
+  --accent: #1b211d;
+  --accent-foreground: #ecf5ed;
+  --destructive: #ff8f84;
+  --border: #29302b;
+  --input: #303832;
+  --ring: #78bd7f;
+
+  /* o semáforo: entrada e saída falam pelas mesmas três cores */
+  --go: #3fd07a;
+  --ask: #f5b53d;
+  --stop: #f2402c;
+
+  /* a cabine da portaria */
+  --void: #07080a;
+  --panel: #0b0e11;
+  --rail: #151a1e;
+  --rail-2: #22282f;
+  --dim: #7d868f;
+  --faint: #555d66;
+}
+
+@theme inline {
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --font-plate: "Liberation Sans Narrow", "Inter", ui-sans-serif, sans-serif;
+  --font-gate-mono: "Adwaita Mono", "Source Code Pro", ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-go: var(--go);
+  --color-ask: var(--ask);
+  --color-stop: var(--stop);
+  --color-void: var(--void);
+  --color-panel: var(--panel);
+  --color-rail: var(--rail);
+  --color-rail-2: var(--rail-2);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+
+  --animate-pending-in: pending-in 0.28s ease-out both;
+  --animate-pending-pulse: pending-pulse 1.5s ease-in-out infinite;
+  --animate-pending-sweep: pending-sweep 2.6s linear infinite;
+  --animate-gate-wait: gate-wait 1.7s ease-in-out infinite;
+  --animate-gate-strike: gate-strike 0.85s ease-out;
+
+  @keyframes pending-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes pending-pulse {
+    0%, 100% { opacity: 0.3; transform: scale(0.72); box-shadow: 0 0 0 0 #9defa400; }
+    50% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 4px #9defa41f; }
+  }
+  @keyframes pending-sweep { from { background-position: 150% 0; } to { background-position: -150% 0; } }
+  @keyframes gate-wait { 50% { opacity: 0.35; } }
+  @keyframes gate-strike { from { background: #181e25; } to { background: transparent; } }
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply text-foreground antialiased;
+    min-width: 760px;
+    font-synthesis: none;
+    background: radial-gradient(circle at 70% 0, #1c281f 0, #0b0e0c 34%, #080a09 70%);
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+}
+
+/* ── O semáforo ──────────────────────────────────────────────────────────────
+   Quem carrega `data-aspect` define a cor da vez; os desenhos e os textos lá
+   dentro só leem `--aspect`. */
+@layer components {
+  [data-aspect="stop"] { --aspect: var(--stop); --glow: #f2402c8c; }
+  [data-aspect="ask"] { --aspect: var(--ask); --glow: #f5b53d8c; }
+  [data-aspect="go"] { --aspect: var(--go); --glow: #3fd07a8c; }
+
+  /* lentes: uma acende por vez, o resto do vidro fica apagado */
+  .lens { fill: #14181c; stroke: #242a31; stroke-width: 1; }
+  .housing { fill: #0e1114; stroke: #2b323a; stroke-width: 1.4; }
+  .hood, .hoods path, .mast { stroke: #39424b; }
+  .glint, .glints path { stroke: #4d5761; stroke-width: 1.1; fill: none; }
+  [data-aspect="stop"] .lens--stop,
+  [data-aspect="ask"] .lens--ask,
+  [data-aspect="go"] .lens--go,
+  .lamp[data-aspect] .lens { fill: var(--aspect); stroke: none; filter: drop-shadow(0 0 4px var(--glow)); }
+
+  @keyframes lens-strike {
+    from { filter: brightness(2.1) drop-shadow(0 0 9px var(--glow)); }
+    to { filter: drop-shadow(0 0 4px var(--glow)); }
+  }
+  [data-arriving][data-aspect="stop"] .lens--stop,
+  [data-arriving][data-aspect="ask"] .lens--ask,
+  [data-arriving][data-aspect="go"] .lens--go { animation: lens-strike 0.85s ease-out; }
+
+  /* O caminho no disco corta pela esquerda: o fim da pasta é o que importa. */
+  .path-rtl { direction: rtl; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .path-rtl::before { content: "\200e"; }
+
+  /* A frase da espera é varrida por uma luz: é a mesma frase, e mesmo assim não
+     fica parada enquanto a etapa não muda. */
+  .shimmer-text {
+    background: linear-gradient(100deg, #8d978f 34%, #e4f2e6 50%, #8d978f 66%) 0 0 / 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: var(--animate-pending-sweep);
+  }
+
+  /* A resposta do modelo, em Markdown já montado. */
+  .prose-answer > :first-child { margin-top: 0; }
+  .prose-answer > :last-child { margin-bottom: 0; }
+  .prose-answer p { white-space: pre-wrap; margin: 0 0 13px; }
+  .prose-answer :is(h3, h4, h5, h6) { margin: 20px 0 8px; color: #f0f5f1; font-weight: 700; }
+  .prose-answer :is(ul, ol) { margin: 8px 0 16px; padding-left: 24px; }
+  .prose-answer ul { list-style: disc; }
+  .prose-answer ol { list-style: decimal; }
+  .prose-answer li { margin: 5px 0; }
+  .prose-answer a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+  .prose-answer :not(pre) > code { padding: 2px 6px; border: 1px solid #333c35; border-radius: 5px; background: #0d110e; color: #bff4c4; font: 12px var(--font-mono); }
+  .prose-answer blockquote { margin: 14px 0; padding: 8px 14px; border-left: 3px solid #72b67a; color: #aab4ac; background: #101411; white-space: pre-wrap; }
+  .prose-answer hr { border: 0; border-top: 1px solid #303730; margin: 18px 0; }
+}
+
+/* Movimento é informação aqui, não enfeite — por isso o que sobra sem ele é a
+   cor cheia do texto, e não um texto transparente que ninguém leria. */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text { background: none; -webkit-text-fill-color: currentColor; color: #c6cfc5; animation: none; }
+  [data-arriving] .lens { animation: none !important; }
+}

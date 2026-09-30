@@ -1,4 +1,4 @@
-# Jev AI Orchestrator CLI
+# JayV CLI
 
 Act as a **Senior Software Engineer, Software Architect, and AI Infrastructure Engineer**.
 
@@ -42,7 +42,7 @@ The fundamental architecture should be:
                                       │
                                       ▼
                     ┌─────────────────────────────────┐
-                    │       JEV ORCHESTRATOR          │
+                    │             JAYV                │
                     │                                 │
                     │  Intent Classification          │
                     │  Complexity Analysis            │

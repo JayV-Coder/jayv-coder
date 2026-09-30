@@ -1,4 +1,4 @@
-# Jev AI Orchestrator
+# JayV
 
 Jev is now a native Rust application with a Tauri 2 desktop interface and a CLI served by the same orchestration core. The former Python implementation is retained in `bkp/` only as migration evidence; it is not used at runtime.
 

@@ -1,13 +1,13 @@
 [package]
-name = "jev-orchestrator"
+name = "jayv"
 version = "0.6.0"
 description = "Local-first AI orchestration desktop and CLI"
-authors = ["Jev AI Team"]
+authors = ["JayV Team"]
 edition = "2024"
 license = "MIT"
 
 [lib]
-name = "jev_orchestrator"
+name = "jayv"
 path = "src/lib.rs"
 
 [[bin]]

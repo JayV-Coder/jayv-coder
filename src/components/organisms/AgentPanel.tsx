@@ -1,0 +1,87 @@
+import type { AgentId, AgentSettings } from "@/modules/core";
+import { useT, type Key } from "@/modules/i18n";
+import { addModel, checkAgent, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
+import { AgentIcon, EmptyText } from "@/components/atoms";
+import { AgentProbeLine, FormField, OptionSelect, SettingsSection } from "@/components/molecules";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { ClaudeOptionsForm } from "./ClaudeOptionsForm";
+import { CodexOptionsForm } from "./CodexOptionsForm";
+import { CopilotOptionsForm } from "./CopilotOptionsForm";
+import { ModelRow } from "./ModelRow";
+
+export const AGENT_NAMES: Record<AgentId, string> = { claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot" };
+const TIMEOUTS = [60, 120, 300, 600, 900, 1800, 3600];
+
+/** Tudo de um agente numa aba: se ele está ligado, como é chamado, o que pode
+ * fazer e com quais modelos. */
+export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; models: ModelDraft[]; problems: Record<string, Key> }) {
+  const t = useT();
+  const probe = useSettings((state) => state.probes[agent.id]);
+  const catalog = useSettings((state) => state.catalog[agent.id]);
+  const [min, max] = useSettings((state) => state.timeoutRange);
+  const taken = new Set(models.map((model) => model.model));
+  const timeouts = [...new Set([...TIMEOUTS, agent.timeout])].filter((value) => value >= min && value <= max).sort((a, b) => a - b);
+  const duration = (seconds: number) => (seconds % 60 === 0 ? t("agent.timeout.minutes", { count: seconds / 60 }) : t("agent.timeout.seconds", { count: seconds }));
+
+  return (
+    <div className="grid gap-5">
+      <div className="flex flex-wrap items-center gap-4 rounded-xl border border-border/60 bg-card/40 px-6 py-5">
+        <AgentIcon agent={agent.id} className="size-11 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-xl font-bold tracking-tight">{AGENT_NAMES[agent.id]}</h3>
+          <p className="text-sm text-muted-foreground">{t(`agent.${agent.id}.tagline`)}</p>
+        </div>
+        <label htmlFor={`${agent.id}-enabled`} className="flex items-center gap-3">
+          <span className="grid text-end">
+            <span className="text-sm font-medium">{t("agent.enabled")}</span>
+            <span className="text-[11.5px] text-muted-foreground">{t("agent.enabled.hint")}</span>
+          </span>
+          <Switch id={`${agent.id}-enabled`} checked={agent.enabled} onCheckedChange={(enabled) => updateAgent(agent.id, { enabled })} />
+        </label>
+      </div>
+
+      <SettingsSection title={t("agent.section.connection")} description={t("agent.section.connection.description")}>
+        <div className="grid gap-5 sm:grid-cols-[1fr_220px]">
+          <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t("agent.command.hint")} error={problems.command && t(problems.command)}>
+            <div className="flex gap-2">
+              <Input
+                id={`${agent.id}-command`}
+                value={agent.command}
+                spellCheck={false}
+                className="font-mono"
+                aria-invalid={problems.command ? true : undefined}
+                onChange={(event) => updateAgent(agent.id, { command: event.target.value })}
+                onBlur={() => void checkAgent(agent.id)}
+              />
+              <Button variant="outline" disabled={probe === "checking" || !!problems.command} onClick={() => void checkAgent(agent.id)}>{t("agent.check")}</Button>
+            </div>
+            <AgentProbeLine probe={probe} />
+          </FormField>
+          <FormField label={t("agent.timeout")} htmlFor={`${agent.id}-timeout`} hint={t("agent.timeout.hint")}>
+            <OptionSelect id={`${agent.id}-timeout`} value={String(agent.timeout)} onChange={(value) => updateAgent(agent.id, { timeout: Number(value) })}
+              options={timeouts.map((value) => ({ value: String(value), label: duration(value) }))} />
+          </FormField>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title={t("agent.section.behavior")} description={t("agent.section.behavior.description")}>
+        {agent.id === "claude" && <ClaudeOptionsForm agent={agent as AgentSettings<"claude">} models={models} problems={problems} />}
+        {agent.id === "codex" && <CodexOptionsForm agent={agent as AgentSettings<"codex">} />}
+        {agent.id === "copilot" && <CopilotOptionsForm agent={agent as AgentSettings<"copilot">} />}
+      </SettingsSection>
+
+      <SettingsSection
+        title={t("agent.section.models")}
+        description={t("agent.section.models.description")}
+        action={<Button variant="outline" size="sm" onClick={() => addModel(agent.id)}>{t("model.add")}</Button>}
+      >
+        {problems.models && <p role="alert" className="text-[11.5px] text-destructive">{t(problems.models)}</p>}
+        {models.length === 0
+          ? <EmptyText>{t("model.empty")}</EmptyText>
+          : <div className="grid gap-3">{models.map((model) => <ModelRow key={model.uid} model={model} catalog={catalog} taken={taken} problem={problems[model.uid]} />)}</div>}
+      </SettingsSection>
+    </div>
+  );
+}

@@ -12,49 +12,8 @@ jev:
     cache_ttl: 3600
     privacy_filtering: true
 
-providers:
-  # Preset da casa, e so ele: os dois CLIs que o desenvolvedor ja tem na maquina.
-  # Qualquer outro provedor (OpenAI, Anthropic, LM Studio, Ollama...) entra a mao,
-  # pela tela Configuracao ou aqui embaixo.
-  # NAO marque local: true em nenhum dos dois. Os dois binarios mandam o codigo
-  # para a nuvem; declara-los locais liberaria os arquivos de privacy.local_only.
-  # Num provedor proprio, `local: true` so vale se o binario nunca sair da
-  # maquina; em openai-compatible o valor e inferido do host de base_url.
-  # `timeout` nao e o prazo da resposta: e o prazo entre um sinal de vida e o
-  # seguinte. Um pedido detalhado leva minutos de trabalho honesto, e enquanto o
-  # agente estiver falando ele nao estoura; calado por este tanto, estoura.
-  # Os tres argumentos de formato existem para ele falar: com `--print` sozinho
-  # o Claude nao escreve nada ate terminar, e `--include-partial-messages` cobre
-  # tambem a escrita da resposta, que em `stream-json` seria silenciosa.
-  # Um agente mudo nao se distingue de um agente travado.
-  claude:
-    type: cli
-    command: claude
-    args: ["--model", "{model}", "--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
-    timeout: 120
-  codex:
-    type: cli
-    command: codex
-    args: ["exec", "--model", "{model}", "-"]
-    timeout: 120
-
-models:
-  # Um modelo por CLI do preset. Os demais o desenvolvedor adiciona, pela tela
-  # Configuracao ou aqui.
-  claude:
-    provider: claude
-    model: claude-sonnet-4-5
-    capabilities: [chat, code, reasoning, tools]
-    cost_class: high
-    speed: medium
-    context_window: 200000
-  codex:
-    provider: codex
-    model: gpt-5-codex
-    capabilities: [chat, code, reasoning, tools]
-    cost_class: high
-    speed: medium
-    context_window: 128000
+# Provedores e modelos nao moram aqui: ficam no banco local e sao editados
+# pela tela Configuracao do LLM (Claude Code, Codex e Copilot).
 
 budgets:
   trivial: 2000

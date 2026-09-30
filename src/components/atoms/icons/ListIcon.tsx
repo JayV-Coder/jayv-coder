@@ -1,0 +1,14 @@
+import type { SVGProps } from "react";
+
+/** Três linhas de fichário, cada uma com sua marca à esquerda: a lista. */
+export function ListIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <g stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+        <path d="M2.4 3.4h1.4M6.3 3.4h7.3" />
+        <path d="M2.4 8h1.4M6.3 8h7.3" />
+        <path d="M2.4 12.6h1.4M6.3 12.6h7.3" />
+      </g>
+    </svg>
+  );
+}

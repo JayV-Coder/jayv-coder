@@ -1,131 +1,13 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <title>Jev Orchestrator</title>
-    <link rel="stylesheet" href="/src/styles.css" />
+    <title>JayV</title>
   </head>
   <body>
-    <div class="shell">
-      <aside>
-        <div class="brand"><span class="mark">J</span><div><strong>Jev</strong><small>AI Orchestrator</small></div></div>
-        <nav class="main-nav" id="main-nav">
-          <button class="nav active" data-view="projects"><span>▦</span> Projetos</button>
-          <button class="nav" data-view="status"><span>◫</span> Sistema</button>
-        </nav>
-        <div id="project-context" class="project-context" hidden>
-          <button id="leave-project" class="plate-leave" type="button">Todos os projetos</button>
-          <div class="project-plate">
-            <strong id="plate-name"></strong>
-            <code id="plate-path" class="plate-path"></code>
-          </div>
-          <button class="nav nav-project" id="nav-chats" data-view="chats"><span>▤</span> Chats</button>
-          <button class="nav nav-gate" id="nav-gate" data-view="gate"><span class="nav-mark" id="nav-gate-mark"></span> Portaria</button>
-          <div class="project-heading"><span>CHATS RECENTES</span><button id="new-chat" title="Novo chat" aria-label="Novo chat">+</button></div>
-          <div id="chat-list" class="project-list"></div>
-        </div>
-        <div class="side-foot">
-          <button class="nav" data-view="settings"><span>⚙</span> Configuração</button>
-        </div>
-      </aside>
-      <main>
-        <header>
-          <div><p class="eyebrow" id="view-eyebrow">CHAT ATIVO</p><h1 id="view-title">Novo chat</h1></div>
-          <div class="header-side"><code id="chat-code" class="chat-code" hidden></code><button id="clear" class="ghost">Limpar chat</button></div>
-        </header>
-        <section id="projects-view" class="view active">
-          <div class="yard">
-            <div class="yard-head">
-              <div><p class="eyebrow">ESPAÇO DE TRABALHO</p><h2>Projetos</h2><p class="yard-sub">Cada projeto tem sua própria portaria, seus chats e sua pasta no disco.</p></div>
-              <div class="yard-tools">
-                <div class="view-switch" role="group" aria-label="Forma de exibir os projetos">
-                  <button type="button" class="switch-option" data-layout="grid" aria-pressed="true"><span class="switch-icon" id="icon-grid"></span> Grade</button>
-                  <button type="button" class="switch-option" data-layout="list" aria-pressed="false"><span class="switch-icon" id="icon-list"></span> Lista</button>
-                </div>
-                <button id="new-project" class="primary" type="button">Novo projeto</button>
-              </div>
-            </div>
-            <div id="project-grid" class="project-yard" data-layout="grid"></div>
-          </div>
-        </section>
-        <section id="chats-view" class="view">
-          <div class="yard">
-            <div class="yard-head">
-              <div><p class="eyebrow" id="chats-eyebrow">PROJETO</p><h2>Chats</h2><p class="yard-sub">Cada conversa guarda o próprio contexto e o que a portaria registrou nela.</p></div>
-              <div class="yard-tools"><button id="new-chat-card" class="primary" type="button">Novo chat</button></div>
-            </div>
-            <div id="chat-grid" class="chat-yard"></div>
-          </div>
-        </section>
-        <section id="chat-view" class="view">
-          <div id="timeline" class="timeline"></div>
-          <form id="prompt-form" class="composer">
-            <div id="pending" class="pending" hidden>
-              <div class="pending-head"><span class="pending-pulse" aria-hidden="true"></span><strong>Jev</strong><code class="pending-code" id="pending-code"></code><small class="pending-state" id="pending-state"></small></div>
-              <p class="pending-line" id="pending-line"></p>
-            </div>
-            <div id="asking" class="asking" hidden>
-              <p class="asking-prompt" id="asking-prompt"></p>
-              <div class="asking-options" id="asking-options"></div>
-              <small class="asking-source" id="asking-source"></small>
-            </div>
-            <textarea id="prompt" rows="3" placeholder="Peça uma análise, implementação ou revisão…" required></textarea>
-            <div><span id="hint">Enter envia · Shift + Enter quebra a linha</span><span class="asking-actions" id="asking-actions" hidden></span><button id="send" type="submit">Enviar</button></div>
-          </form>
-        </section>
-        <section id="status-view" class="view"><div id="status-grid" class="grid"></div></section>
-        <section id="gate-view" class="view">
-          <div class="gate">
-            <div class="gate-board">
-              <div class="gate-brand"><span class="gate-logo" id="gate-logo"></span><div><strong>Portaria</strong><span id="gate-project"></span></div></div>
-              <div class="gate-tally" id="gate-tally"></div>
-            </div>
-            <div class="gate-lanes">
-              <section class="gate-lane">
-                <div class="gate-lane-head" id="entry-head">
-                  <span class="gate-lane-icon"></span>
-                  <h2>Entrada</h2>
-                  <p>o pedido é pontuado antes de qualquer modelo ser chamado</p>
-                  <span class="gate-lane-count" id="entry-count"></span>
-                </div>
-                <div class="gate-feed" id="entry-lane"></div>
-              </section>
-              <section class="gate-lane">
-                <div class="gate-lane-head" id="exit-head">
-                  <span class="gate-lane-icon"></span>
-                  <h2>Saída</h2>
-                  <p>o que o modelo pediu para rodar ou mexer, contra as regras da casa</p>
-                  <span class="gate-lane-count" id="exit-count"></span>
-                </div>
-                <div class="gate-feed" id="exit-lane"></div>
-              </section>
-            </div>
-          </div>
-        </section>
-        <section id="settings-view" class="view">
-          <div class="settings-shell">
-            <div class="settings-intro"><div><p class="eyebrow">PROVEDORES E MODELOS</p><h2>Configuração do LLM</h2><p>As credenciais ficam no arquivo local do Jev e nunca são devolvidas à interface. Ao informar uma chave, o catálogo de modelos é consultado pelo núcleo Rust.</p></div><button id="save-settings" class="primary">Salvar configuração</button></div>
-            <div id="settings-feedback" class="feedback" hidden></div>
-            <section class="settings-section"><div class="section-heading"><div><h3>Provedores</h3><p id="config-path">Configuração local</p></div><button id="add-provider" class="ghost">+ Provedor</button></div><div id="provider-list" class="card-list"></div></section>
-            <section class="settings-section"><div class="section-heading"><div><h3>Modelos ativos</h3><p>Defina quais modelos podem participar do roteamento automático.</p></div><button id="add-model" class="ghost">+ Modelo manual</button></div><div id="model-list" class="card-list"></div></section>
-          </div>
-        </section>
-      </main>
-    </div>
-
-    <dialog id="project-dialog">
-      <form id="project-form" method="dialog" class="dialog-form">
-        <div><p class="eyebrow">NOVO PROJETO</p><h2>Organize seus chats</h2></div>
-        <label>Nome do projeto<input id="project-name" autocomplete="off" required placeholder="Ex.: Portal do cliente" /></label>
-        <label><span class="label-line">Pasta do projeto <span>opcional</span></span>
-          <div class="path-field"><input id="project-path" autocomplete="off" placeholder="Ex.: /home/voce/codigo/portal" /><button type="button" id="pick-path" class="ghost">Escolher…</button></div>
-          <small id="path-note" class="path-note"></small>
-        </label>
-        <div class="dialog-actions"><button type="button" class="ghost" id="cancel-project">Cancelar</button><button class="primary" value="default">Criar projeto</button></div>
-      </form>
-    </dialog>
-    <script type="module" src="/src/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

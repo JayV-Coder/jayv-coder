@@ -73,7 +73,16 @@ impl Orchestrator {
         Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, performance_path, last_decision:None })
     }
 
-    pub fn reload(&mut self)->Result<()> { let config=Config::load(&self.config_path)?; self.providers=build_providers(&config.providers,&self.workdir); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
+    /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
+    /// fala deles; sem esta chamada o orquestrador não tem com quem conversar.
+    pub fn use_llm(&mut self,settings:&crate::llm::LlmSettings) {
+        let (providers,models)=crate::llm::to_config(settings);
+        self.providers=build_providers(&providers,&self.workdir);
+        self.config.providers=providers;
+        self.config.models=models;
+    }
+
+    pub fn reload(&mut self)->Result<()> { let mut config=Config::load(&self.config_path)?; config.providers=std::mem::take(&mut self.config.providers); config.models=std::mem::take(&mut self.config.models); self.providers=build_providers(&config.providers,&self.workdir); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
 
     /// Cada chat pertence a um projeto, e é a pasta desse projeto que precisa
     /// entrar no contexto: sem isto o Jev descreveria o diretório de onde o
@@ -246,14 +255,12 @@ impl Orchestrator {
     }
 
     fn configuration_guidance(&self, selection:&ModelSelection)->Option<String> {
-        let problem=if !self.config_path.is_file() {
-            "o arquivo de configuração não foi encontrado".to_string()
-        } else if self.config.models.is_empty() && self.providers.is_empty() {
+        let problem=if self.config.models.is_empty() && self.providers.is_empty() {
             "nenhum provedor de LLM nem modelo está configurado".to_string()
         } else if self.config.models.is_empty() {
             "há provedores declarados, mas nenhum modelo está configurado".to_string()
         } else if self.providers.is_empty() {
-            "nenhum provedor habilitado está pronto; confira `type` e a credencial, `base_url` ou `command` exigido pelo adapter".to_string()
+            "nenhum agente está ligado; ligue o Claude Code, o Codex ou o Copilot".to_string()
         } else if selection.provider=="jev" {
             "nenhum modelo configurado atende a esta solicitação; confira capacidades e `context_window`".to_string()
         } else if !self.providers.contains_key(&selection.provider) {
@@ -262,7 +269,7 @@ impl Orchestrator {
             return None;
         };
         Some(format!(
-            "Não consegui executar sua solicitação porque {problem}.\n\nAbra a tela Configuração do Jev e cadastre um provedor e ao menos um modelo. Para OpenAI, Anthropic e APIs compatíveis, a própria tela pode consultar os modelos disponíveis depois que a API key e a URL forem informadas."
+            "Não consegui executar sua solicitação porque {problem}.\n\nAbra a tela Configuração do LLM, ligue um agente e deixe ao menos um modelo ativo nele."
         ))
     }
 
@@ -694,9 +701,9 @@ mod tests {
         assert_eq!(result.decision.model_provider,"jev");
         assert_eq!(result.decision.model_name,"configuration");
         let response=result.result.expect("Jev configuration guidance").response;
-        assert!(response.contains("o arquivo de configuração não foi encontrado"));
-        assert!(response.contains("tela Configuração"));
-        assert!(response.contains("consultar os modelos disponíveis"));
+        assert!(response.contains("nenhum provedor de LLM nem modelo está configurado"));
+        assert!(response.contains("tela Configuração do LLM"));
+        assert!(response.contains("ligue um agente"));
         assert!(!response.contains("provider named 'none'"));
     }
 }

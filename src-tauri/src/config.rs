@@ -5,13 +5,15 @@ use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)] pub jev: JevConfig,
-    #[serde(default = "default_providers")] pub providers: HashMap<String, ProviderConfig>,
-    #[serde(default = "default_models")] pub models: HashMap<String, ModelConfig>,
+    /// Provedores e modelos moram no banco (ver `llm`): o arquivo não os lê
+    /// nem os escreve. Quem sobe o orquestrador os entrega com `use_llm`.
+    #[serde(skip)] pub providers: HashMap<String, ProviderConfig>,
+    #[serde(skip)] pub models: HashMap<String, ModelConfig>,
     #[serde(default = "default_budgets")] pub budgets: HashMap<String, usize>,
     #[serde(default)] pub permissions: PermissionsConfig,
     #[serde(default)] pub privacy: PrivacyConfig,
 }
-impl Default for Config { fn default() -> Self { Self { jev:JevConfig::default(), providers:default_providers(), models:default_models(), budgets:default_budgets(), permissions:PermissionsConfig::default(), privacy:PrivacyConfig::default() } } }
+impl Default for Config { fn default() -> Self { Self { jev:JevConfig::default(), providers:HashMap::new(), models:HashMap::new(), budgets:default_budgets(), permissions:PermissionsConfig::default(), privacy:PrivacyConfig::default() } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JevConfig {
@@ -114,21 +116,9 @@ impl Config {
         let executable=env::current_exe().ok();
         discover_from(requested,&cwd,executable.as_deref())
     }
-
-    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
-        let path=path.as_ref();
-        if let Some(parent)=path.parent(){fs::create_dir_all(parent).with_context(||format!("could not create {}",parent.display()))?;}
-        let temporary=path.with_extension("yaml.tmp");
-        fs::write(&temporary,serde_yaml::to_string(self)?).with_context(||format!("could not write {}",temporary.display()))?;
-        #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&temporary,fs::Permissions::from_mode(0o600))?;
-        }
-        fs::rename(&temporary,path).with_context(||format!("could not replace {}",path.display()))
-    }
 }
 
-const CONFIG_CANDIDATES:[&str;4]=["config.yaml","config_complete.yaml","bkp/config_complete.yaml","bkp/config.yaml"];
+const CONFIG_CANDIDATES:[&str;2]=["config.yaml","config_complete.yaml"];
 
 fn discover_from(requested:Option<PathBuf>,cwd:&Path,executable:Option<&Path>)->PathBuf {
     if let Some(path)=requested {
@@ -156,25 +146,6 @@ fn expand_env(input: &str) -> String {
     regex.replace_all(input, |caps: &regex::Captures| env::var(&caps[1]).unwrap_or_default()).into_owned()
 }
 fn default_budgets() -> HashMap<String, usize> { [("trivial", 2_000), ("simple", 5_000), ("medium", 12_000), ("complex", 30_000)].into_iter().map(|(k,v)|(k.into(),v)).collect() }
-/// Sem `config.yaml`, o Jev já sobe com os dois CLIs que o desenvolvedor
-/// provavelmente tem instalados. Nenhum dos dois é local: os dois mandam o
-/// código para a nuvem, então não recebem `local: true`.
-///
-/// O Claude vai em `stream-json` porque `--print` sozinho não escreve nada até
-/// terminar, e um agente calado não se distingue de um agente travado: era isso
-/// que derrubava o pedido detalhado no meio do trabalho.
-fn default_providers() -> HashMap<String, ProviderConfig> {
-    [("claude","claude",vec!["--model","{model}","--print","--output-format","stream-json","--verbose","--include-partial-messages"]),("codex","codex",vec!["exec","--model","{model}","-"])].into_iter()
-        .map(|(name,command,args)|(name.to_string(),ProviderConfig{kind:"cli".into(),command:Some(command.into()),args:args.into_iter().map(String::from).collect(),timeout:120,..ProviderConfig::default()}))
-        .collect()
-}
-
-fn default_models() -> HashMap<String, ModelConfig> {
-    [("claude","claude","claude-sonnet-4-5",200_000),("codex","codex","gpt-5-codex",128_000)].into_iter()
-        .map(|(name,provider,model,window)|(name.to_string(),ModelConfig{provider:provider.into(),model:model.into(),capabilities:["chat","code","reasoning","tools"].into_iter().map(String::from).collect(),cost_class:"high".into(),speed:"medium".into(),context_window:window,..ModelConfig::default()}))
-        .collect()
-}
-
 fn default_deny() -> Vec<String> { vec![".env".into(), "*.pem".into(), ".ssh/**".into(), "secrets/**".into(), "*.key".into(), "*.secret".into()] }
 fn yes() -> bool { true }
 fn default_strategy() -> String { "auto".into() }
@@ -205,40 +176,14 @@ mod tests {
     use super::*;
     #[test] fn defaults_are_safe() { let c = Config::default(); assert_eq!(c.permissions.write, "ask"); assert!(c.privacy.deny.contains(&".env".to_string())); }
 
-    #[test] fn ships_claude_and_codex_ready_to_run() {
-        let config=Config::default();
-        let mut providers:Vec<_>=config.providers.keys().cloned().collect(); providers.sort();
-        let mut models:Vec<_>=config.models.keys().cloned().collect(); models.sort();
-        assert_eq!(providers,["claude","codex"]);
-        assert_eq!(models,["claude","codex"]);
-        for (name,provider) in &config.providers {
-            assert_eq!(provider.kind,"cli","{name} precisa ser CLI");
-            assert!(provider.is_executable(),"{name} precisa subir sem chave nenhuma");
-            assert_eq!(provider.local,None,"{name} manda o código para a nuvem, não pode ser local");
-        }
-        for (name,model) in &config.models { assert!(model.enabled && config.providers.contains_key(&model.provider),"{name} aponta para um provedor que não existe"); }
-    }
-
-    /// A tela Configuracao mostra exatamente o que o arquivo tem. O preset que
-    /// acompanha o projeto traz só os dois CLIs; qualquer outro provedor ou
-    /// modelo é o desenvolvedor que adiciona, e voltar a listar exemplos
-    /// desligados aqui enche a tela de cartões que ninguém pediu.
-    #[test] fn the_shipped_config_lists_only_the_two_cli_presets() {
+    /// Provedores e modelos saíram do arquivo: uma seção `providers` que
+    /// sobrar num `config.yaml` antigo é ignorada, não carregada pela metade.
+    #[test] fn the_file_never_carries_providers_or_models() {
+        let parsed:Config=serde_yaml::from_str("providers:\n  claude:\n    type: cli\n    command: claude\nmodels:\n  x:\n    provider: claude\n").expect("config antigo");
+        assert!(parsed.providers.is_empty() && parsed.models.is_empty());
         let shipped:Config=serde_yaml::from_str(&expand_env(include_str!("../../config.yaml"))).expect("config.yaml do projeto");
-        let mut providers:Vec<_>=shipped.providers.keys().cloned().collect(); providers.sort();
-        let mut models:Vec<_>=shipped.models.keys().cloned().collect(); models.sort();
-        assert_eq!(providers,["claude","codex"]);
-        assert_eq!(models,["claude","codex"]);
-        for (name,provider) in &shipped.providers {
-            assert!(provider.enabled,"{name} vem ligado");
-            assert_eq!(provider.local,None,"{name} manda o código para a nuvem, não pode ser local");
-        }
-    }
-
-    #[test] fn an_empty_file_lands_on_the_same_preset() {
-        let parsed:Config=serde_yaml::from_str("{}").expect("empty config");
-        assert_eq!(parsed.providers.len(),2);
-        assert_eq!(parsed.models.len(),2);
+        assert!(shipped.providers.is_empty() && shipped.models.is_empty());
+        assert!(!include_str!("../../config.yaml").contains("providers:"),"o config.yaml do projeto não declara provedores");
     }
     #[test] fn provider_local_flag_is_optional_and_opt_in() { let implicit:ProviderConfig=serde_yaml::from_str("type: cli\ncommand: ollama").expect("cli provider"); assert_eq!(implicit.local,None); let explicit:ProviderConfig=serde_yaml::from_str("type: cli\ncommand: ollama\nlocal: true").expect("local cli provider"); assert_eq!(explicit.local,Some(true)); assert!(!serde_yaml::to_string(&implicit).expect("yaml").contains("local")); }
     #[test] fn expands_missing_env_to_empty() { assert_eq!(expand_env("api_key: ${JEV_TEST_MISSING}"), "api_key: "); }
@@ -261,11 +206,11 @@ mod tests {
     fn loads_dotenv_next_to_config_before_expanding_yaml() {
         let root=tempfile::tempdir().expect("temporary config directory");
         let config=root.path().join("config.yaml");
-        fs::write(root.path().join(".env"),"JEV_CONFIG_DOTENV_TEST_KEY=loaded-from-adjacent-dotenv\n").expect("dotenv fixture");
-        fs::write(&config,"providers:\n  test:\n    type: openai\n    api_key: ${JEV_CONFIG_DOTENV_TEST_KEY}\n").expect("config fixture");
+        fs::write(root.path().join(".env"),"JEV_CONFIG_DOTENV_TEST_STRATEGY=loaded-from-adjacent-dotenv\n").expect("dotenv fixture");
+        fs::write(&config,"jev:\n  default_strategy: ${JEV_CONFIG_DOTENV_TEST_STRATEGY}\n").expect("config fixture");
 
         let loaded=Config::load(&config).expect("config with adjacent dotenv");
 
-        assert_eq!(loaded.providers["test"].api_key.as_deref(),Some("loaded-from-adjacent-dotenv"));
+        assert_eq!(loaded.jev.default_strategy,"loaded-from-adjacent-dotenv");
     }
 }

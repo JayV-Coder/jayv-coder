@@ -374,7 +374,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         for id in ["goal_is_clear","says_where","says_when_done","bundles_requests"] {assert_eq!(questions[id].kind(),"noul","{id}");}
         let wire=serde_json::to_string(&questions).expect("json");
         assert!(wire.contains("`user_request`") && wire.contains("`project`"));
-        assert!(entry_state("pedido","jev-orchestrator",&["Rust".into()]).pointer("/project/name").is_some());
+        assert!(entry_state("pedido","JayV",&["Rust".into()]).pointer("/project/name").is_some());
     }
 
     #[test]
