@@ -306,12 +306,12 @@ mod tests {
         (project.id,chat.id)
     }
 
-    #[test] fn o_backoff_dobra_ate_um_minuto() {
+    #[test] fn the_backoff_doubles_up_to_a_minute() {
         let steps:Vec<u64>=std::iter::successors(Some(backoff(None)),|pause|Some(backoff(Some(*pause)))).take(6).map(|pause|pause.as_secs()).collect();
         assert_eq!(steps,[5,10,20,40,60,60]);
     }
 
-    #[tokio::test] async fn a_fila_sobe_em_ordem_agrupada_por_tabela() {
+    #[tokio::test] async fn the_queue_uploads_in_order_grouped_by_table() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         let (project,chat)=a_chat(&store).await;
         store.lock().await.enqueue_prompt(&chat,"oi",None).unwrap();
@@ -327,7 +327,7 @@ mod tests {
         assert!(sent["row_deleted_at"].is_null(),"recriar desfaz uma exclusão anterior");
     }
 
-    #[tokio::test] async fn sem_rede_a_fila_fica_inteira() {
+    #[tokio::test] async fn offline_the_queue_stays_whole() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         a_chat(&store).await;
         let backend=FakeBackend::default();
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(queue(&store).await.len(),2);
     }
 
-    #[tokio::test] async fn sessao_vencida_para_sem_perder_nada() {
+    #[tokio::test] async fn an_expired_session_stops_without_losing_anything() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         a_chat(&store).await;
         let backend=FakeBackend::default();
@@ -348,7 +348,7 @@ mod tests {
 
     /// Duas máquinas abriram o turno 1 do mesmo chat sem rede. A segunda a
     /// subir renumera o seu e sobe de novo — os dois pedidos ficam.
-    #[tokio::test] async fn ordinal_repetido_renumera_o_turno_e_sobe_de_novo() {
+    #[tokio::test] async fn a_repeated_ordinal_renumbers_the_turn_and_uploads_again() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         let (_,chat)=a_chat(&store).await;
         let mine=store.lock().await.enqueue_prompt(&chat,"daqui",None).unwrap();
@@ -362,7 +362,7 @@ mod tests {
         assert!(store.lock().await.turn("de-la").unwrap().is_some(),"o turno da outra máquina desceu");
     }
 
-    #[tokio::test] async fn a_recusa_marca_a_entrada_e_a_fila_segue() {
+    #[tokio::test] async fn a_refusal_marks_the_entry_and_the_queue_moves_on() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         let (project,_)=a_chat(&store).await;
         let backend=FakeBackend::default();
@@ -375,7 +375,7 @@ mod tests {
         assert!(failed.1.contains("coluna desconhecida"));
     }
 
-    #[tokio::test] async fn apagar_sobe_como_exclusao_marcada() {
+    #[tokio::test] async fn deleting_uploads_as_a_marked_deletion() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         let (_,chat)=a_chat(&store).await;
         let backend=FakeBackend::default();
@@ -386,7 +386,7 @@ mod tests {
         assert!(queue(&store).await.is_empty());
     }
 
-    #[tokio::test] async fn o_download_segue_a_ordem_das_tabelas_e_recua_o_cursor() {
+    #[tokio::test] async fn the_download_follows_table_order_and_rewinds_the_cursor() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         let backend=FakeBackend::default();
         backend.seed(table("chats").unwrap(),json!({"id":"c1","code":"ABC123","project_id":"p1","title":"Remoto","named":1,"created_at":"x","updated_at":"x","row_updated_at":"2026-09-30T11:00:00Z","row_deleted_at":null}));

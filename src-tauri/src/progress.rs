@@ -109,7 +109,7 @@ impl Debounce {
 mod tests {
     use super::*;
 
-    #[test] fn o_canal_mudo_nao_derruba_o_nucleo() {
+    #[test] fn a_silent_channel_does_not_bring_down_the_core() {
         let pulse=Pulse::silent();
         pulse.beat(Beat::Running);
         pulse.beat(Beat::Chunk{text:"nada escuta".into()});
@@ -118,29 +118,29 @@ mod tests {
 
     /// O canal fechado é o caso da janela que sumiu no meio do pedido. Ele não
     /// pode virar erro: o turno continua e termina.
-    #[test] fn o_canal_fechado_nao_derruba_o_nucleo() {
+    #[test] fn a_closed_channel_does_not_bring_down_the_core() {
         let (pulse,receiver)=Pulse::channel();
         drop(receiver);
         pulse.beat(Beat::Running);
     }
 
-    #[test] fn os_pedacos_chegam_na_ordem() {
+    #[test] fn chunks_arrive_in_order() {
         let (pulse,mut receiver)=Pulse::channel();
         pulse.beat(Beat::Chunk{text:"um ".into()});
         pulse.beat(Beat::Chunk{text:"dois".into()});
         pulse.beat(Beat::Done{input_tokens:10,output_tokens:2,latency_ms:5});
-        let mut texto=String::new();
-        let mut fechou=false;
+        let mut collected=String::new();
+        let mut closed=false;
         while let Ok(beat)=receiver.try_recv() {
-            match &beat { Beat::Chunk{text}=>texto.push_str(text), other=>fechou=other.settles() }
+            match &beat { Beat::Chunk{text}=>collected.push_str(text), other=>closed=other.settles() }
         }
-        assert_eq!(texto,"um dois");
-        assert!(fechou);
+        assert_eq!(collected,"um dois");
+        assert!(closed);
     }
 
     /// Cada etapa se descreve sozinha no JSON: a tela desenha a linha sem um
     /// formato por tipo de evento.
-    #[test] fn o_detalhe_carrega_o_proprio_tipo() {
+    #[test] fn the_detail_carries_its_own_kind() {
         let beat=Beat::Route{provider:"claude".into(),model:"claude-sonnet-4-5".into(),reason:"melhor pontuação".into()};
         let detail=beat.detail();
         assert_eq!(detail["kind"],"route");
@@ -150,40 +150,40 @@ mod tests {
 
     /// Muitos pedaços pequenos e nenhum tempo decorrido dão uma escrita só. Era
     /// isto que faltava para o texto parcial não virar um log de tokens.
-    #[test] fn muitos_pedacos_pequenos_dao_uma_escrita_so() {
-        let agora=Instant::now();
-        let mut folga=Debounce::start(agora);
-        let mut escritas=0;
-        for _ in 0..200 { if folga.accept(4,agora) { escritas+=1; folga.wrote(agora); } }
-        assert_eq!(escritas,200*4/FLUSH_BYTES);
+    #[test] fn many_small_chunks_make_a_single_write() {
+        let now=Instant::now();
+        let mut slack=Debounce::start(now);
+        let mut writes=0;
+        for _ in 0..200 { if slack.accept(4,now) { writes+=1; slack.wrote(now); } }
+        assert_eq!(writes,200*4/FLUSH_BYTES);
     }
 
-    #[test] fn o_tempo_sozinho_forca_a_escrita() {
-        let agora=Instant::now();
-        let mut folga=Debounce::start(agora);
-        assert!(!folga.accept(1,agora),"um byte não justifica ir ao disco");
-        assert!(folga.accept(1,agora+FLUSH_AFTER),"a janela venceu e o texto tem de ser gravado");
+    #[test] fn time_alone_forces_a_write() {
+        let now=Instant::now();
+        let mut slack=Debounce::start(now);
+        assert!(!slack.accept(1,now),"um byte não justifica ir ao disco");
+        assert!(slack.accept(1,now+FLUSH_AFTER),"a janela venceu e o texto tem de ser gravado");
     }
 
-    #[test] fn o_volume_sozinho_forca_a_escrita() {
-        let agora=Instant::now();
-        let mut folga=Debounce::start(agora);
-        assert!(folga.accept(FLUSH_BYTES,agora),"o texto acumulado passou do teto");
+    #[test] fn volume_alone_forces_a_write() {
+        let now=Instant::now();
+        let mut slack=Debounce::start(now);
+        assert!(slack.accept(FLUSH_BYTES,now),"o texto acumulado passou do teto");
     }
 
     /// A janela recomeça na escrita. Sem isto, o primeiro estouro deixaria toda
     /// gravação seguinte vencida e a folga viraria enfeite.
-    #[test] fn a_janela_recomeca_na_escrita() {
-        let inicio=Instant::now();
-        let mut folga=Debounce::start(inicio);
-        let vencida=inicio+FLUSH_AFTER;
-        assert!(folga.accept(1,vencida));
-        folga.wrote(vencida);
-        assert!(!folga.accept(1,vencida),"a folga voltou a valer depois de gravar");
-        assert_eq!(folga.waiting(),1);
+    #[test] fn the_window_restarts_on_write() {
+        let start=Instant::now();
+        let mut slack=Debounce::start(start);
+        let due=start+FLUSH_AFTER;
+        assert!(slack.accept(1,due));
+        slack.wrote(due);
+        assert!(!slack.accept(1,due),"a folga voltou a valer depois de gravar");
+        assert_eq!(slack.waiting(),1);
     }
 
-    #[test] fn so_o_fim_do_turno_pede_descarga() {
+    #[test] fn only_the_end_of_the_turn_asks_for_a_flush() {
         assert!(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0}.settles());
         assert!(Beat::Failed{error:"caiu".into()}.settles());
         assert!(!Beat::Running.settles());

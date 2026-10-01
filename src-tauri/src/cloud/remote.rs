@@ -169,7 +169,7 @@ mod tests {
 
     fn query(request:&Request)->Vec<(String,String)> { request.url().query_pairs().map(|(key,value)|(key.into_owned(),value.into_owned())).collect() }
 
-    #[test] fn o_upsert_usa_a_chave_de_cada_tabela() {
+    #[test] fn the_upsert_uses_each_tables_key() {
         let request=remote().push_request(table("projects").unwrap(),&[json!({"id":"p1"})]).expect("request");
         assert_eq!(request.method(),Method::POST);
         assert_eq!(request.url().path(),"/rest/v1/projects");
@@ -184,13 +184,13 @@ mod tests {
         assert_eq!(query(&remote().push_request(table("llm_models").unwrap(),&[]).unwrap())[0].1,"user_id,agent,model");
     }
 
-    #[test] fn sem_sessao_o_token_e_a_chave_publicavel() {
+    #[test] fn without_session_the_token_is_the_publishable_key() {
         let anonymous=Remote::with_base(reqwest::Client::new(),"https://exemplo.supabase.co",PUBLISHABLE_KEY,None);
         let request=anonymous.pull_request(table("projects").unwrap(),"",10).unwrap();
         assert_eq!(request.headers()["Authorization"],format!("Bearer {PUBLISHABLE_KEY}"));
     }
 
-    #[test] fn o_download_pede_o_que_mudou_desde_o_cursor() {
+    #[test] fn the_download_asks_for_what_changed_since_the_cursor() {
         let request=remote().pull_request(table("chats").unwrap(),"2026-09-30T12:00:00Z",1000).unwrap();
         assert_eq!(request.method(),Method::GET);
         let pairs=query(&request);
@@ -200,7 +200,7 @@ mod tests {
         assert!(!query(&remote().pull_request(table("chats").unwrap(),"",1000).unwrap()).iter().any(|(key,_)|key=="synced_at"),"sem cursor baixa tudo");
     }
 
-    #[test] fn excluir_marca_a_linha_pela_chave() {
+    #[test] fn delete_marks_the_row_by_its_key() {
         let request=remote().soft_delete_request(table("llm_models").unwrap(),&json!(["claude","opus, \"novo\""]),"2026-09-30T12:00:00Z").unwrap();
         assert_eq!(request.method(),Method::PATCH);
         assert_eq!(query(&request),[("agent".to_string(),"eq.claude".to_string()),("model".to_string(),"eq.opus, \"novo\"".to_string())]);
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(body,json!({"row_deleted_at":"2026-09-30T12:00:00Z","row_updated_at":"2026-09-30T12:00:00Z"}));
     }
 
-    #[test] fn cada_status_vira_o_erro_que_a_fila_entende() {
+    #[test] fn each_status_becomes_the_error_the_queue_understands() {
         assert_eq!(classify(401,r#"{"code":"PGRST301","message":"JWT expired"}"#),RemoteError::Unauthorized);
         assert_eq!(classify(409,r#"{"code":"23505","message":"duplicate key","details":"Key (chat_id, ordinal)=(c, 2) already exists."}"#),
             RemoteError::Conflict{code:"23505".into(),detail:"duplicate key — Key (chat_id, ordinal)=(c, 2) already exists.".into()});
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(classify(400,r#"{"code":"PGRST204","message":"coluna desconhecida"}"#),RemoteError::Rejected{status:400,detail:"coluna desconhecida".into()});
     }
 
-    #[tokio::test] async fn sem_rede_o_erro_e_offline() {
+    #[tokio::test] async fn without_network_the_error_is_offline() {
         let unreachable=Remote::with_base(reqwest::Client::new(),"http://127.0.0.1:9",PUBLISHABLE_KEY,Some("jwt".into()));
         assert!(matches!(unreachable.pull(table("projects").unwrap(),"",1).await,Err(RemoteError::Offline(_))));
     }

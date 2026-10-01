@@ -381,6 +381,10 @@ impl WorkspaceStore {
 
     pub fn save_llm_settings(&mut self, settings:&crate::llm::LlmSettings) -> Result<crate::llm::LlmSettings> {crate::llm::save(&mut self.connection,settings)}
 
+    pub fn core_settings(&self, defaults:&crate::core_settings::CoreSettings) -> Result<crate::core_settings::CoreSettings> {crate::core_settings::load(&self.connection,defaults)}
+
+    pub fn save_core_settings(&mut self, settings:&crate::core_settings::CoreSettings) -> Result<crate::core_settings::CoreSettings> {crate::core_settings::save(&self.connection,settings)}
+
     pub fn database_path(&self) -> &Path {&self.path}
 
     /// A conexão crua, para a fila de saída e a sincronização: é o único
@@ -540,7 +544,7 @@ mod tests {
     fn store(root:&tempfile::TempDir)->WorkspaceStore{WorkspaceStore::open(root.path().join("workspace.sqlite3")).expect("workspace")}
 
     #[test]
-    fn o_banco_fica_ao_lado_da_configuracao_que_existe() {
+    fn the_database_sits_next_to_an_existing_configuration() {
         let root=tempfile::tempdir().expect("root");
         let config=root.path().join("config.yaml");
         fs::write(&config,"models: {}").expect("config");
@@ -548,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn sem_configuracao_o_banco_vai_para_a_pasta_de_dados_do_sistema() {
+    fn without_configuration_the_database_goes_to_the_system_data_folder() {
         let root=tempfile::tempdir().expect("root");
         let config=root.path().join("config.yaml");
         assert_eq!(database_location_in(&config,root.path(),Some("/dados".into())),PathBuf::from("/dados/ai.jayv.desktop/workspace.sqlite3"));
@@ -557,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn o_pedido_e_o_turno_entram_no_banco_no_mesmo_ato() {
+    fn the_request_and_the_turn_enter_the_database_together() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
@@ -574,23 +578,23 @@ mod tests {
     }
 
     #[test]
-    fn mandar_a_mesma_frase_duas_vezes_deixa_as_duas_no_chat() {
+    fn sending_the_same_sentence_twice_keeps_both_in_the_chat() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
 
-        let primeiro=store.enqueue_prompt(&chat.id,"de novo",None).expect("primeiro");
-        let segundo=store.enqueue_prompt(&chat.id,"de novo",None).expect("segundo");
+        let first=store.enqueue_prompt(&chat.id,"de novo",None).expect("primeiro");
+        let second=store.enqueue_prompt(&chat.id,"de novo",None).expect("segundo");
 
-        assert_ne!(primeiro.id,segundo.id,"repetir a frase é um pedido novo, com número novo");
+        assert_ne!(first.id,second.id,"repetir a frase é um pedido novo, com número novo");
         let saved=store.snapshot().expect("snapshot");
         let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
         assert_eq!(saved.messages.len(),2,"nenhum pedido some do chat por parecer com o anterior");
     }
 
     #[test]
-    fn retentar_nao_escreve_o_pedido_duas_vezes() {
+    fn retrying_does_not_write_the_request_twice() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
@@ -599,10 +603,10 @@ mod tests {
         store.append_answer(&chat.id,&turn.id,"deu erro").expect("resposta");
         store.set_turn_status(&turn.id,TurnStatus::Failed).expect("falhou");
 
-        let de_novo=store.enqueue_prompt(&chat.id,"tenta",Some(&turn.id)).expect("retentativa");
+        let again=store.enqueue_prompt(&chat.id,"tenta",Some(&turn.id)).expect("retentativa");
 
-        assert_eq!(de_novo.id,turn.id,"a retentativa é o mesmo pedido");
-        assert_eq!(de_novo.status,TurnStatus::Queued,"e ele volta para o fim do seu próprio trabalho, não para o ar");
+        assert_eq!(again.id,turn.id,"a retentativa é o mesmo pedido");
+        assert_eq!(again.status,TurnStatus::Queued,"e ele volta para o fim do seu próprio trabalho, não para o ar");
         let saved=store.snapshot().expect("snapshot");
         let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
         assert_eq!(saved.messages.len(),1,"o pedido continua único e a resposta que falhou saiu");
@@ -610,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn o_texto_da_fila_e_lido_de_volta_do_banco_e_nao_da_tela() {
+    fn the_queued_text_is_read_back_from_the_database_not_the_screen() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
@@ -624,12 +628,12 @@ mod tests {
         assert!(store.claim_next_turn().expect("consulta").is_none(),"o segundo espera o primeiro voltar");
 
         store.set_turn_status(&turn.id,TurnStatus::Answered).expect("respondido");
-        let (_,seguinte)=store.claim_next_turn().expect("consulta").expect("agora é a vez dele");
-        assert_eq!(seguinte,"segundo");
+        let (_,following)=store.claim_next_turn().expect("consulta").expect("agora é a vez dele");
+        assert_eq!(following,"segundo");
     }
 
     #[test]
-    fn a_fila_sobrevive_ao_fechamento_do_aplicativo() {
+    fn the_queue_survives_closing_the_app() {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
         let chat_id={
@@ -653,52 +657,52 @@ mod tests {
     /// chegava ao banco — ficava presa esperando o cadeado do modelo — e a
     /// primeira, ao terminar, redesenhava a conversa a partir do disco.
     #[test]
-    fn mandar_por_cima_de_um_pedido_em_andamento_nao_apaga_o_que_foi_escrito() {
+    fn sending_over_a_running_request_never_erases_what_was_written() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
 
         store.enqueue_prompt(&chat.id,"o primeiro pedido",None).expect("primeiro");
-        let (primeiro,_)=store.claim_next_turn().expect("consulta").expect("assume");
+        let (first,_)=store.claim_next_turn().expect("consulta").expect("assume");
         // O modelo está respondendo o primeiro. O desenvolvedor manda mais dois.
-        let segundo=store.enqueue_prompt(&chat.id,"o segundo pedido",None).expect("segundo");
-        let terceiro=store.enqueue_prompt(&chat.id,"o terceiro pedido",None).expect("terceiro");
+        let second=store.enqueue_prompt(&chat.id,"o segundo pedido",None).expect("segundo");
+        let third=store.enqueue_prompt(&chat.id,"o terceiro pedido",None).expect("terceiro");
 
-        let escrito=|store:&WorkspaceStore|store.snapshot().expect("snapshot").chats.iter().find(|entry|entry.id==chat.id).expect("chat").messages.iter().filter(|message|message.role=="user").map(|message|message.content.clone()).collect::<Vec<_>>();
-        assert_eq!(escrito(&store),["o primeiro pedido","o segundo pedido","o terceiro pedido"],"os três estão no disco antes de qualquer resposta");
+        let written_snapshot=|store:&WorkspaceStore|store.snapshot().expect("snapshot").chats.iter().find(|entry|entry.id==chat.id).expect("chat").messages.iter().filter(|message|message.role=="user").map(|message|message.content.clone()).collect::<Vec<_>>();
+        assert_eq!(written_snapshot(&store),["o primeiro pedido","o segundo pedido","o terceiro pedido"],"os três estão no disco antes de qualquer resposta");
 
         // A primeira resposta chega e a tela é redesenhada a partir do banco.
-        store.append_answer(&chat.id,&primeiro.id,"pronto").expect("resposta");
-        store.set_turn_status(&primeiro.id,TurnStatus::Answered).expect("fechado");
-        assert_eq!(escrito(&store),["o primeiro pedido","o segundo pedido","o terceiro pedido"],"nada some do chat quando a conversa é redesenhada");
+        store.append_answer(&chat.id,&first.id,"pronto").expect("resposta");
+        store.set_turn_status(&first.id,TurnStatus::Answered).expect("fechado");
+        assert_eq!(written_snapshot(&store),["o primeiro pedido","o segundo pedido","o terceiro pedido"],"nada some do chat quando a conversa é redesenhada");
 
         assert_eq!(store.queue_depth(&chat.id).expect("fila"),2,"os dois que esperam continuam na fila");
-        assert_eq!(store.claim_next_turn().expect("consulta").expect("vez").0.id,segundo.id,"a vez é de quem chegou primeiro");
-        store.set_turn_status(&segundo.id,TurnStatus::Answered).expect("fechado");
-        assert_eq!(store.claim_next_turn().expect("consulta").expect("vez").0.id,terceiro.id);
+        assert_eq!(store.claim_next_turn().expect("consulta").expect("vez").0.id,second.id,"a vez é de quem chegou primeiro");
+        store.set_turn_status(&second.id,TurnStatus::Answered).expect("fechado");
+        assert_eq!(store.claim_next_turn().expect("consulta").expect("vez").0.id,third.id);
     }
 
     #[test]
-    fn sair_do_chat_no_meio_da_fila_nao_desfaz_a_fila() {
+    fn leaving_the_chat_mid_queue_does_not_undo_the_queue() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
-        let aqui=store.create_chat(&project.id,None).expect("chat");
-        let ali=store.create_chat(&project.id,None).expect("outro");
-        store.enqueue_prompt(&aqui.id,"fica esperando",None).expect("pedido");
+        let here=store.create_chat(&project.id,None).expect("chat");
+        let there=store.create_chat(&project.id,None).expect("outro");
+        store.enqueue_prompt(&here.id,"fica esperando",None).expect("pedido");
         store.claim_next_turn().expect("consulta").expect("assume");
-        store.enqueue_prompt(&aqui.id,"este também",None).expect("pedido");
+        store.enqueue_prompt(&here.id,"este também",None).expect("pedido");
 
         // O desenvolvedor vai para outro chat e manda outra coisa de lá.
-        store.enqueue_prompt(&ali.id,"de outro chat",None).expect("pedido");
+        store.enqueue_prompt(&there.id,"de outro chat",None).expect("pedido");
 
-        assert_eq!(store.queue_depth(&aqui.id).expect("fila"),2,"a fila do chat de origem não se desfaz porque ninguém está olhando");
-        assert_eq!(store.queue_depth(&ali.id).expect("fila"),1);
+        assert_eq!(store.queue_depth(&here.id).expect("fila"),2,"a fila do chat de origem não se desfaz porque ninguém está olhando");
+        assert_eq!(store.queue_depth(&there.id).expect("fila"),1);
     }
 
     #[test]
-    fn um_banco_anterior_a_marca_de_batismo_continua_abrindo() {
+    fn a_database_older_than_the_naming_flag_still_opens() {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
         {
@@ -725,24 +729,24 @@ mod tests {
     /// dá assunto a um `SIM` — sem ele, a resposta chegaria ao portão como uma
     /// palavra solta e seria barrada por faltas que o pedido de origem já supriu.
     #[test]
-    fn o_turno_resposta_encontra_o_pedido_que_originou_a_pergunta() {
+    fn the_answer_turn_finds_the_request_behind_the_question() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
-        let pergunta=store.enqueue_prompt(&chat.id,"Troque o provedor padrão em config.yaml",None).expect("pedido");
-        store.append_answer(&chat.id,&pergunta.id,"Qual provedor?").expect("resposta");
-        store.ask_question(&pergunta.id,"single","Qual provedor?",&["Anthropic".into(),"OpenAI".into()],"jev").expect("pergunta");
+        let question_turn=store.enqueue_prompt(&chat.id,"Troque o provedor padrão em config.yaml",None).expect("pedido");
+        store.append_answer(&chat.id,&question_turn.id,"Qual provedor?").expect("resposta");
+        store.ask_question(&question_turn.id,"single","Qual provedor?",&["Anthropic".into(),"OpenAI".into()],"jev").expect("pergunta");
 
-        let aberta=store.snapshot().expect("snapshot").chats.into_iter().find(|item|item.id==chat.id).expect("chat").question.expect("pergunta na caixa");
-        assert_eq!(aberta.turn_id,pergunta.id,"é o retrato do banco que veste a caixa de enviar mensagem");
+        let open_question=store.snapshot().expect("snapshot").chats.into_iter().find(|item|item.id==chat.id).expect("chat").question.expect("pergunta na caixa");
+        assert_eq!(open_question.turn_id,question_turn.id,"é o retrato do banco que veste a caixa de enviar mensagem");
 
-        let resposta=store.enqueue_prompt(&chat.id,"Resposta à pergunta «Qual provedor?»: Anthropic",None).expect("turno-resposta");
-        assert!(store.settle_question(&pergunta.id,turns::QUESTION_ANSWERED,Some(&resposta.id)).expect("encerrar"));
+        let answer_turn=store.enqueue_prompt(&chat.id,"Resposta à pergunta «Qual provedor?»: Anthropic",None).expect("turno-resposta");
+        assert!(store.settle_question(&question_turn.id,turns::QUESTION_ANSWERED,Some(&answer_turn.id)).expect("encerrar"));
 
-        assert_eq!(store.question_origin(&resposta.id).expect("origem").as_deref(),Some("Troque o provedor padrão em config.yaml"));
-        assert_eq!(store.chat_of_turn(&resposta.id).expect("chat").as_deref(),Some(chat.id.as_str()));
-        assert!(store.question_origin(&pergunta.id).expect("origem").is_none(),"o pedido original não responde a pergunta nenhuma");
+        assert_eq!(store.question_origin(&answer_turn.id).expect("origem").as_deref(),Some("Troque o provedor padrão em config.yaml"));
+        assert_eq!(store.chat_of_turn(&answer_turn.id).expect("chat").as_deref(),Some(chat.id.as_str()));
+        assert!(store.question_origin(&question_turn.id).expect("origem").is_none(),"o pedido original não responde a pergunta nenhuma");
         assert!(store.snapshot().expect("snapshot").chats.into_iter().find(|item|item.id==chat.id).expect("chat").question.is_none(),"respondida não trava mais a caixa");
     }
 
@@ -791,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn o_pedido_e_a_resposta_ficam_presos_ao_mesmo_turno() {
+    fn the_request_and_the_answer_are_bound_to_the_same_turn() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
@@ -808,13 +812,13 @@ mod tests {
     }
 
     #[test]
-    fn retentar_apaga_a_resposta_que_falhou_mas_nunca_o_pedido() {
+    fn retrying_erases_the_failed_answer_but_never_the_request() {
         let root=tempfile::tempdir().expect("root");
         let mut store=store(&root);
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
-        let antigo=store.open_turn(&chat.id).expect("turno");
-        store.append_exchange(&chat.id,&antigo.id,"o de ontem","respondido").expect("troca");
+        let legacy_turn=store.open_turn(&chat.id).expect("turno");
+        store.append_exchange(&chat.id,&legacy_turn.id,"o de ontem","respondido").expect("troca");
         let turn=store.open_turn(&chat.id).expect("turno");
         store.append_exchange(&chat.id,&turn.id,"revise o frete","falhou: sem rede").expect("troca");
 
@@ -826,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn um_banco_antigo_sem_turno_nas_mensagens_continua_abrindo() {
+    fn an_old_database_without_turns_in_messages_still_opens() {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
         {

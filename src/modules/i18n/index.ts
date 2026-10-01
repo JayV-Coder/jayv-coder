@@ -39,6 +39,9 @@ function detect(locales: LocaleOption[]): Locale {
 function apply(locale: Locale, locales: LocaleOption[]) {
   document.documentElement.lang = locale;
   document.documentElement.dir = locales.find((known) => known.id === locale)?.rtl ? "rtl" : "ltr";
+  // O modelo responde no idioma da tela, não no do pedido.
+  const name = locales.find((known) => known.id === locale)?.name ?? locale;
+  void commands.setReplyLanguage({ tag: locale, name }).catch(() => {});
 }
 
 /** Antes da lista chegar, vale o idioma salvo: sem isso a tela piscaria em

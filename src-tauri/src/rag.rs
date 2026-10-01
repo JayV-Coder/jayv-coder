@@ -46,6 +46,8 @@ impl RepositoryRag {
     }
     pub fn project_info(&self) -> ProjectInfo { let mut languages=self.files.iter().map(|f|f.language.clone()).collect::<Vec<_>>(); languages.sort(); languages.dedup(); ProjectInfo { root:self.root.to_string_lossy().to_string(), name:self.root.file_name().unwrap_or_default().to_string_lossy().to_string(), languages } }
     pub fn root(&self) -> &Path { &self.root }
+    /// Força a próxima leitura da pasta: as regras de privacidade mudaram.
+    pub fn invalidate(&mut self) { self.indexed=false; }
     /// Aponta o índice para outra pasta — é assim que um chat de projeto faz o
     /// Jev olhar o repositório dele. Reindexar custa uma varredura inteira do
     /// disco, então só acontece quando o caminho muda de verdade — ou na

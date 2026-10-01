@@ -429,10 +429,12 @@ fn search(command:&str,dirs:&[PathBuf],extensions:&[String])->Option<PathBuf> {
     if command.is_empty() { return None; }
     let runnable=|path:&Path|path.is_file()&&executable(path);
     let variants=|base:PathBuf|->Vec<PathBuf> {
-        let mut found=vec![base.clone()];
         let has_extension=base.extension().is_some_and(|extension|extensions.iter().any(|known|known.trim_start_matches('.').eq_ignore_ascii_case(&extension.to_string_lossy())));
-        if !has_extension { found.extend(extensions.iter().filter(|extension|!extension.is_empty()).map(|extension|PathBuf::from(format!("{}{extension}",base.display())))); }
-        found
+        // No Windows o arquivo sem extensão ao lado do `copilot.cmd` é o script
+        // de shell que o npm deixa para o Git Bash: o `CreateProcess` não o abre.
+        // Lá, só vale o nome com uma extensão do `PATHEXT`.
+        if has_extension||extensions.is_empty() { return vec![base]; }
+        extensions.iter().filter(|extension|!extension.is_empty()).map(|extension|PathBuf::from(format!("{}{extension}",base.display()))).collect::<Vec<_>>()
     };
     if command.contains('/')||command.contains('\\') { return variants(PathBuf::from(command)).into_iter().find(|path|runnable(path)); }
     dirs.iter().flat_map(|directory|variants(directory.join(command))).find(|path|runnable(path))
@@ -568,7 +570,7 @@ mod tests {
 
     /// Claude e Codex nascem com todos os modelos mais recentes ligados — os
     /// apelidos do Claude seguem a versão nova sozinhos; o Copilot, com um.
-    #[test] fn o_banco_nasce_com_os_modelos_mais_recentes() {
+    #[test] fn the_database_starts_with_the_latest_models() {
         let loaded=load(&memory()).expect("leitura");
         assert_eq!(loaded.agents.iter().map(|agent|agent.id).collect::<Vec<_>>(),AgentId::ALL);
         let of=|id:AgentId|loaded.models.iter().filter(|model|model.agent==id).map(|model|model.model.as_str()).collect::<Vec<_>>();
@@ -588,7 +590,7 @@ mod tests {
     /// No Windows o npm instala `claude.cmd` e o instalador nativo põe
     /// `claude.exe` em `~/.local/bin`, que o app aberto pelo menu nem sempre
     /// tem no PATH. Procurar só `claude`, só no PATH, dava "não encontrado".
-    #[test] fn acha_o_agente_pela_extensao_e_nas_pastas_de_instalacao() {
+    #[test] fn finds_the_agent_by_extension_and_in_install_folders() {
         let path_dir=tempfile::tempdir().expect("PATH");
         let install_dir=tempfile::tempdir().expect("instalação");
         runnable_file(&path_dir.path().join("codex.cmd"));
@@ -598,12 +600,16 @@ mod tests {
         assert_eq!(search("codex",&dirs,&windows),Some(path_dir.path().join("codex.cmd")));
         assert_eq!(search("claude",&dirs,&windows),Some(install_dir.path().join("claude.exe")));
         assert_eq!(search("copilot",&dirs,&windows),None);
+        // O npm deixa `copilot` (shell, para o Git Bash) ao lado do `copilot.cmd`.
+        runnable_file(&path_dir.path().join("copilot"));
+        runnable_file(&path_dir.path().join("copilot.cmd"));
+        assert_eq!(search("copilot",&dirs,&windows),Some(path_dir.path().join("copilot.cmd")),"no Windows o atalho sem extensão nunca é o escolhido");
         assert_eq!(search("codex.cmd",&dirs,&windows),Some(path_dir.path().join("codex.cmd")),"quem já escreveu a extensão não ganha outra");
         let full=install_dir.path().join("claude");
         assert_eq!(search(&full.display().to_string(),&[],&windows),Some(install_dir.path().join("claude.exe")),"caminho completo sem extensão também vale");
     }
 
-    #[test] fn salvar_e_ler_devolve_o_mesmo() {
+    #[test] fn save_then_load_returns_the_same() {
         let mut connection=memory();
         let wanted=settings(vec![agent(AgentId::Claude,json!({"effort":"high","blockedTools":["Bash","Bash"]})),agent(AgentId::Codex,Value::Null),agent(AgentId::Copilot,Value::Null)]);
         let saved=save(&mut connection,&wanted).expect("salvar");
@@ -614,7 +620,7 @@ mod tests {
         assert_eq!(claude.blocked_tools,["Bash"],"a ferramenta repetida vira uma só");
     }
 
-    #[test] fn valor_fora_da_lista_nao_chega_ao_banco() {
+    #[test] fn a_value_outside_the_list_never_reaches_the_database() {
         let wrong=settings(vec![agent(AgentId::Codex,json!({"sandbox":"tudo-liberado"}))]);
         assert!(validate(&wrong).unwrap_err().to_string().contains("sandbox"));
         let timeout=settings(vec![AgentSettings{timeout:5,..agent(AgentId::Claude,Value::Null)}]);
@@ -623,20 +629,20 @@ mod tests {
         assert!(validate(&spaced).is_err());
     }
 
-    #[test] fn agente_ligado_sem_modelo_ativo_e_recusado() {
+    #[test] fn an_enabled_agent_without_an_active_model_is_refused() {
         let mut lonely=settings(vec![agent(AgentId::Claude,Value::Null)]);
         lonely.models.retain(|model|model.agent!=AgentId::Claude);
         assert!(validate(&lonely).unwrap_err().to_string().contains("Claude Code"));
     }
 
-    #[test] fn o_modelo_reserva_precisa_ser_do_proprio_agente() {
+    #[test] fn the_fallback_model_must_belong_to_the_same_agent() {
         let wrong=settings(vec![agent(AgentId::Claude,json!({"fallbackModel":"gpt-5"}))]);
         assert!(validate(&wrong).is_err());
         let right=settings(vec![agent(AgentId::Claude,json!({"fallbackModel":"sonnet"}))]);
         assert!(validate(&right).is_ok());
     }
 
-    #[test] fn o_claude_sempre_fala_em_stream_json() {
+    #[test] fn claude_always_speaks_stream_json() {
         let args=agent(AgentId::Claude,json!({"permissionMode":"plan","maxBudgetUsd":2.5})).args();
         for fixed in ["--print","stream-json","--include-partial-messages","{model}"] { assert!(args.iter().any(|arg|arg==fixed),"falta {fixed}"); }
         assert!(!args.iter().any(|arg|arg=="--no-session-persistence"),"guardar sessões é o padrão");
@@ -646,7 +652,7 @@ mod tests {
         assert!(args.windows(2).any(|pair|pair==["--max-budget-usd","2.50"]));
     }
 
-    #[test] fn o_codex_le_da_entrada_e_so_abre_a_rede_quando_pode_escrever() {
+    #[test] fn codex_reads_stdin_and_only_opens_the_network_when_it_can_write() {
         let args=agent(AgentId::Codex,json!({"sandbox":"read-only","networkAccess":true})).args();
         let cleaned:CodexOptions=serde_json::from_value(validate(&settings(vec![agent(AgentId::Codex,json!({"sandbox":"read-only","networkAccess":true}))])).expect("válido").agents[1].options.clone()).expect("opções");
         assert!(!cleaned.network_access);
@@ -654,14 +660,14 @@ mod tests {
         assert!(args.windows(2).any(|pair|pair==["--sandbox","read-only"]));
     }
 
-    #[test] fn o_copilot_recebe_o_pedido_no_argumento() {
+    #[test] fn copilot_receives_the_request_as_an_argument() {
         let args=agent(AgentId::Copilot,json!({"toolAccess":"all","blockedTools":["shell(rm)"]})).args();
         assert!(args.windows(2).any(|pair|pair==["-p","{prompt}"]));
         assert!(args.iter().any(|arg|arg=="--allow-all-tools"));
         assert!(args.windows(2).any(|pair|pair==["--deny-tool","shell(rm)"]));
     }
 
-    #[test] fn a_configuracao_do_orquestrador_sai_do_banco() {
+    #[test] fn the_orchestrator_configuration_comes_from_the_database() {
         let (providers,models)=to_config(&settings(vec![agent(AgentId::Claude,Value::Null),agent(AgentId::Codex,Value::Null),agent(AgentId::Copilot,Value::Null)]));
         assert_eq!(providers.len(),3);
         assert!(providers.values().all(|provider|provider.kind=="cli"&&provider.local.is_none()));
@@ -670,7 +676,7 @@ mod tests {
 
     /// O atalho `.cmd` do npm não recebe quebra de linha no Windows; o pedido
     /// do Copilot vai inteiro no `-p`. O Node roda o script do pacote direto.
-    #[test] fn o_atalho_do_npm_vira_node_com_o_script_do_pacote() {
+    #[test] fn the_npm_shim_becomes_node_with_the_package_script() {
         let dir=tempfile::tempdir().expect("pasta");
         let package=dir.path().join("node_modules").join("@github").join("copilot");
         std::fs::create_dir_all(&package).expect("pacote");
@@ -685,7 +691,7 @@ mod tests {
         assert_eq!(launcher(&native),(native.clone(),vec![]),"binário nativo abre como está");
     }
 
-    #[test] fn o_node_mais_novo_do_nvm_vem_primeiro() {
+    #[test] fn the_newest_nvm_node_comes_first() {
         let root=tempfile::tempdir().expect("nvm");
         for version in ["v18.20.0","v24.2.0","v22.11.0"] { std::fs::create_dir_all(root.path().join(version).join("bin")).expect("versão"); }
         let found=versions(root.path(),&["bin"]);
@@ -693,7 +699,7 @@ mod tests {
         assert_eq!(found.len(),3);
     }
 
-    #[test] fn o_path_do_agente_comeca_pela_pasta_dele() {
+    #[test] fn the_agent_path_starts_with_its_own_folder() {
         let path=agent_path(Path::new("/opt/tools/bin/copilot")).expect("path");
         assert_eq!(env::split_paths(&path).next(),Some(PathBuf::from("/opt/tools/bin")));
     }

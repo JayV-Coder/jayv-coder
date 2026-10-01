@@ -207,6 +207,40 @@ export interface KnownModel {
   speed: Speed;
 }
 
+export type Permission = "allow" | "ask" | "deny";
+export const COMPLEXITIES = ["trivial", "simple", "medium", "complex"] as const;
+export type Complexity = (typeof COMPLEXITIES)[number];
+
+/** O que se ajusta no Jev e no app (ver `src-tauri/src/core_settings.rs`). */
+export interface CoreSettings {
+  adaptiveRouting: boolean;
+  confidenceThreshold: number;
+  preferLocal: boolean;
+  budgets: Record<Complexity, number>;
+  cacheTtl: number;
+  exitRules: { read: Permission; write: Permission; shell: Permission };
+  privacy: { deny: string[]; localOnly: string[]; redactSecrets: boolean };
+}
+
+/** Os números da portaria, que chegam do Supabase e só se leem aqui. */
+export interface GateParameters {
+  scopeDemand: [number, number, number];
+  blockMargin: number;
+  weights: Record<string, number>;
+  scopeLevels: [string, string, string];
+  noulLine: number;
+}
+
+export interface CoreSnapshot {
+  settings: CoreSettings;
+  defaults: CoreSettings;
+  gate: GateParameters;
+  confidenceRange: [number, number];
+  budgetRange: [number, number];
+  cacheTtlRange: [number, number];
+  version: string;
+}
+
 export interface SettingsSnapshot {
   settings: LlmSettings;
   catalog: Record<AgentId, KnownModel[]>;

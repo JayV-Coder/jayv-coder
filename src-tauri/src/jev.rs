@@ -430,7 +430,7 @@ impl VerificationVerdict {
     /// O seed sai destas mesmas funções. Uma pergunta que mude aqui sem o seed
     /// ser gerado de novo deixaria o Supabase perguntando a versão antiga.
     #[test]
-    fn o_seed_do_jev_e_o_que_o_rust_pergunta_hoje() {
+    fn the_jev_seed_is_what_rust_asks_today() {
         let rows=seed_rows(include_str!("../../supabase/migrations/20261001120100_seed_jev_en.sql"));
         let mut sets:BTreeMap<String,BTreeMap<String,Question>>=BTreeMap::new();
         let mut parameters:BTreeMap<String,Value>=BTreeMap::new();
@@ -549,7 +549,7 @@ impl VerificationVerdict {
     }
 
     #[test]
-    fn surfaces_validation_detail_and_a_portuguese_session_message() {
+    fn surfaces_validation_detail_and_the_session_message() {
         let invalid=status_error(422,r#"{"detail":"questions.complexity.criteria: must contain at least 2 items"}"#).to_string();
         assert!(invalid.contains("422") && invalid.contains("questions.complexity.criteria"),"{invalid}");
         let unauthorized=status_error(401,r#"{"error":"sessão inválida ou expirada","code":"session"}"#).to_string();
@@ -560,7 +560,7 @@ impl VerificationVerdict {
     /// O limite do dia não passa esperando alguns segundos: tentar de novo
     /// só gastaria tempo. O 429 da TypeSafe, sim, é passageiro.
     #[test]
-    fn o_limite_diario_nao_e_tentado_de_novo() {
+    fn the_daily_limit_is_not_retried() {
         let body=r#"{"error":"limite diário do Jev atingido","code":"daily_limit"}"#;
         assert!(status_error(429,body).to_string().contains("daily Jev limit"));
         assert!(!worth_retrying(429,body));
@@ -736,7 +736,7 @@ impl VerificationVerdict {
     }
 
     #[test]
-    fn o_jev_e_a_funcao_do_projeto_chamada_com_a_sessao() {
+    fn the_jev_is_the_project_function_called_with_the_session() {
         assert!(Client::for_session("   ").is_err());
         let client=Client::for_session("jwt").expect("cliente");
         assert_eq!(client.endpoint(),format!("{}/functions/v1/jev",crate::cloud::PROJECT_URL));

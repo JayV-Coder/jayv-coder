@@ -44,6 +44,19 @@ Nada de texto em português (ou em qualquer idioma) fixo no código.
 Logs internos (`eprintln!`, `console.error`) e comentários de código não são
 texto para o usuário e não precisam de i18n.
 
+## Código: nomes sempre em inglês
+
+Todo identificador — `fn`/`function`, `const`, `let`/variável, parâmetro,
+`struct`/`enum`/`class`/`interface`/`type`, campo, módulo e nome de teste —
+é escrito em inglês, no Rust e no React/TS/JS. Vale também para os testes
+(`fn a_retry_reopens_the_same_turn`, não `fn retentar_reabre_o_turno`).
+
+- Comentários e mensagens de `assert!` podem continuar em português.
+- Dado já gravado em português (ex.: os tipos de saída `comando`/`arquivo`
+  de checks antigos) não é identificador: fica como string entre aspas, só
+  para a leitura do legado.
+- Códigos de idioma (`ja`, `de`, `pt-BR`) não são palavras e ficam como estão.
+
 ## Instruções para o Jev e para os LLMs: sempre em inglês
 
 Tudo que é escrito para um modelo ler fica em inglês, seja qual for o idioma

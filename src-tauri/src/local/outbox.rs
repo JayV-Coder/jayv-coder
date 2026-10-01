@@ -243,13 +243,13 @@ mod tests {
     /// Os padrões dos agentes nascem em toda máquina nova. Se subissem, a
     /// primeira abertura num computador novo apagaria a configuração que o
     /// desenvolvedor já tem no Supabase.
-    #[test] fn um_banco_novo_nasce_com_a_fila_vazia() {
+    #[test] fn a_new_database_starts_with_an_empty_queue() {
         let store=WorkspaceStore::in_memory().expect("store");
         assert!(pending(store.connection(),100).expect("fila").is_empty());
         assert!(!store.llm_settings().expect("llm").agents.is_empty());
     }
 
-    #[test] fn criar_um_projeto_poe_uma_entrada_na_fila() {
+    #[test] fn creating_a_project_queues_an_entry() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let queue=entries(&store,"projects");
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(row(store.connection(),table("projects").unwrap(),&queue[0].key).expect("linha"),Some(json!({"id":project.id,"name":"Loja","created_at":project.created_at.to_rfc3339()})));
     }
 
-    #[test] fn escritas_no_mesmo_turno_viram_uma_entrada_so() {
+    #[test] fn writes_in_the_same_turn_become_one_entry() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let chat=store.create_chat(&project.id,None).expect("chat");
@@ -274,7 +274,7 @@ mod tests {
 
     /// O rascunho do streaming muda a cada pedaço que chega. Se ele subisse,
     /// cada resposta viraria centenas de envios.
-    #[test] fn o_rascunho_do_streaming_nao_entra_na_fila() {
+    #[test] fn the_streaming_draft_is_not_queued() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let chat=store.create_chat(&project.id,None).expect("chat");
@@ -285,7 +285,7 @@ mod tests {
         assert!(pending(store.connection(),100).expect("fila").is_empty());
     }
 
-    #[test] fn apagar_um_chat_apaga_tambem_os_filhos_no_remoto() {
+    #[test] fn deleting_a_chat_also_deletes_its_children_remotely() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let chat=store.create_chat(&project.id,None).expect("chat");
@@ -300,7 +300,7 @@ mod tests {
         assert!(!queue.iter().any(|entry|entry.table=="projects"),"o projeto não foi tocado");
     }
 
-    #[test] fn o_que_vem_do_remoto_nao_volta_para_a_fila() {
+    #[test] fn what_comes_from_remote_does_not_go_back_to_the_queue() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let applied=apply_remote(store.connection_mut(),table("projects").unwrap(),&[json!({"id":"p1","name":"Remoto","created_at":"2026-09-30T12:00:00+00:00","row_updated_at":"2026-09-30T12:00:00Z","row_deleted_at":null,"synced_at":"2026-09-30T12:00:00Z"})]).expect("aplica");
         assert_eq!(applied,1);
@@ -310,7 +310,7 @@ mod tests {
 
     /// A escrita local ainda não subiu: quem decide entre as duas é o
     /// servidor, na subida. Aplicar a remota aqui apagaria a local antes disso.
-    #[test] fn a_linha_com_escrita_pendente_nao_e_sobrescrita() {
+    #[test] fn a_row_with_a_pending_write_is_not_overwritten() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Local",None).expect("projeto");
         let applied=apply_remote(store.connection_mut(),table("projects").unwrap(),&[json!({"id":project.id,"name":"Remoto","created_at":"2026-09-30T12:00:00+00:00","row_deleted_at":null})]).expect("aplica");
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(project_name(&store,&project.id).as_deref(),Some("Local"));
     }
 
-    #[test] fn a_linha_apagada_no_remoto_sai_do_cache() {
+    #[test] fn a_row_deleted_remotely_leaves_the_cache() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let chat=store.create_chat(&project.id,None).expect("chat");
@@ -331,7 +331,7 @@ mod tests {
 
     /// A escrita chegou enquanto a anterior subia. Dar a entrada por entregue
     /// perderia a segunda.
-    #[test] fn entregar_uma_versao_antiga_nao_tira_a_entrada() {
+    #[test] fn delivering_an_old_version_keeps_the_entry() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let chat=store.create_chat(&project.id,None).expect("chat");
@@ -345,7 +345,7 @@ mod tests {
         assert!(entries(&store,"chats").is_empty());
     }
 
-    #[test] fn a_entrada_que_falhou_sai_da_fila_ate_a_proxima_escrita() {
+    #[test] fn a_failed_entry_leaves_the_queue_until_the_next_write() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
         let chat=store.create_chat(&project.id,None).expect("chat");
@@ -365,7 +365,7 @@ mod tests {
 
     /// Dois computadores com o mesmo usuário: o pedido que outro computador
     /// pôs na fila é dele, e atender aqui também faria o trabalho duas vezes.
-    #[test] fn a_fila_so_atende_pedidos_desta_maquina() {
+    #[test] fn the_queue_only_serves_this_machines_requests() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let (chat,turn)=remote_chat(&mut store);
         apply_remote(store.connection_mut(),table("messages").unwrap(),&[json!({"uid":"m1","chat_id":chat,"turn_id":turn,"role":"user","content":"oi","created_at":"2026-09-30T12:00:00+00:00"})]).expect("mensagem");
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!((claimed.id,prompt.as_str()),(mine.id,"daqui"));
     }
 
-    #[test] fn mensagens_baixadas_fora_de_ordem_aparecem_pela_hora() {
+    #[test] fn messages_downloaded_out_of_order_show_by_time() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let (chat,turn)=remote_chat(&mut store);
         apply_remote(store.connection_mut(),table("messages").unwrap(),&[
@@ -390,7 +390,7 @@ mod tests {
     /// O pai foi apagado aqui e a exclusão ainda não subiu: o filho que chega
     /// do remoto não tem onde se pendurar. Ele fica de fora, e o resto da
     /// página entra — uma linha órfã não pode travar a sincronização inteira.
-    #[test] fn a_linha_sem_pai_aqui_fica_de_fora_e_o_resto_entra() {
+    #[test] fn a_row_without_a_local_parent_is_skipped_and_the_rest_applies() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let (chat,_)=remote_chat(&mut store);
         let applied=apply_remote(store.connection_mut(),table("turns").unwrap(),&[
@@ -402,7 +402,7 @@ mod tests {
         assert!(store.turn("orfao").expect("turno").is_none());
     }
 
-    #[test] fn o_cursor_de_cada_tabela_fica_guardado() {
+    #[test] fn each_tables_cursor_is_kept() {
         let store=WorkspaceStore::in_memory().expect("store");
         let chats=table("chats").unwrap();
         assert_eq!(cursor(store.connection(),chats).expect("cursor"),None);

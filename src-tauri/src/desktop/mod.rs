@@ -129,7 +129,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             session::set_session,session::clear_session,session::connection_status,session::get_locales,session::get_translations,
             prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,
             projects::get_workspace,projects::create_project,projects::create_chat,projects::clear_chat,projects::delete_chat,projects::delete_project,
-            settings::get_settings,settings::save_settings,settings::check_agent,
+            settings::get_settings,settings::save_settings,settings::check_agent,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,
             system::system_status,
             gate::gate_feed,
             files::open_file,
@@ -147,7 +147,7 @@ mod tests {
     /// dividiam um cadeado, o segundo envio ficava parado na porta até o modelo
     /// devolver o primeiro — e sumia da tela no redesenho. Quem voltar a pedir
     /// o estado do orquestrador aqui traz o bug de volta inteiro.
-    #[test] fn aceitar_um_pedido_nao_espera_pelo_orquestrador() {
+    #[test] fn accepting_a_request_does_not_wait_for_the_orchestrator() {
         let source=include_str!("commands/prompts.rs");
         let command=source.split("async fn enqueue_prompt").nth(1).expect("falta o comando de envio");
         let signature=command.split(')').next().expect("assinatura");
@@ -158,7 +158,7 @@ mod tests {
     /// O ambiente só pode mudar enquanto o processo tem uma thread só. Quem
     /// mover o contorno para depois do orquestrador ou do Builder corre o risco
     /// de o WebKit já ter lido o ambiente — e o app volta a abrir e fechar.
-    #[test] fn o_webkit_sai_do_dmabuf_antes_de_tudo_subir() {
+    #[test] fn webkit_leaves_dmabuf_before_anything_starts() {
         let source=include_str!("mod.rs");
         let body=source.split("pub fn run_desktop").nth(1).expect("falta run_desktop");
         let workaround=body.find("keep_webkit_off_dmabuf();").expect("run_desktop precisa desligar o DMA-BUF do WebKit");

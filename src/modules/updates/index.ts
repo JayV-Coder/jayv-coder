@@ -5,18 +5,23 @@ import { notify } from "@/modules/feedback";
 import { t } from "@/modules/i18n";
 
 /** Pergunta ao repositório de releases se há versão nova. O aviso fica na tela
- * até a pessoa decidir: atualizar baixa, instala e reabre o aplicativo. Sem
- * rede, ou numa build de desenvolvimento, a consulta falha calada — não há o
- * que avisar a quem só quer trabalhar. */
-export async function checkForUpdate() {
+ * até a pessoa decidir: atualizar baixa, instala e reabre o aplicativo. Na
+ * consulta automática, sem rede ou numa build de desenvolvimento, a falha fica
+ * calada — não há o que avisar a quem só quer trabalhar. Quem pediu pelo botão
+ * (`announce`) ouve também "já está na mais nova" e o erro. */
+export async function checkForUpdate(announce = false) {
   let update: Update | null;
   try {
     update = await check();
   } catch (error) {
     console.warn("update check failed", error);
+    if (announce) notify(t("update.checkFailed", { error: String(error) }), true);
     return;
   }
-  if (!update) return;
+  if (!update) {
+    if (announce) notify(t("update.latest"));
+    return;
+  }
   const found = update;
   toast(t("update.available", { version: found.version }), {
     duration: Infinity,

@@ -15,3 +15,5 @@ export { ClaudeOptionsForm } from "./ClaudeOptionsForm";
 export { CodexOptionsForm } from "./CodexOptionsForm";
 export { CopilotOptionsForm } from "./CopilotOptionsForm";
 export { AgentPanel, AGENT_NAMES } from "./AgentPanel";
+export { JevPanel } from "./JevPanel";
+export { AppPanel } from "./AppPanel";

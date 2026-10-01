@@ -504,7 +504,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn o_primeiro_pedido_de_um_chat_vira_o_turno_01() {
+    fn a_chats_first_request_becomes_turn_01() {
         let connection=bench("XY4T9B");
         let turn=open_turn(&connection,"chat-1").expect("turno");
 
@@ -514,81 +514,81 @@ mod tests {
     }
 
     #[test]
-    fn cada_pedido_novo_ganha_o_numero_seguinte_do_seu_chat() {
+    fn each_new_request_gets_the_next_number_in_its_chat() {
         let connection=bench("XY4T9B");
         connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES('chat-2','K7M2QX','p','Outro','','')",[]).expect("segundo chat");
 
-        let primeiro=open_turn(&connection,"chat-1").expect("turno");
-        let segundo=open_turn(&connection,"chat-1").expect("turno");
-        let outro=open_turn(&connection,"chat-2").expect("turno");
+        let first=open_turn(&connection,"chat-1").expect("turno");
+        let second=open_turn(&connection,"chat-1").expect("turno");
+        let other_chat_turn=open_turn(&connection,"chat-2").expect("turno");
 
-        assert_eq!([primeiro.ordinal,segundo.ordinal],[1,2]);
-        assert_eq!(segundo.code,"XY4T9B·02");
-        assert_eq!(outro.code,"K7M2QX·01","a contagem é por chat, não global");
-        assert_ne!(primeiro.id,segundo.id,"dois turnos nunca compartilham o id");
+        assert_eq!([first.ordinal,second.ordinal],[1,2]);
+        assert_eq!(second.code,"XY4T9B·02");
+        assert_eq!(other_chat_turn.code,"K7M2QX·01","a contagem é por chat, não global");
+        assert_ne!(first.id,second.id,"dois turnos nunca compartilham o id");
     }
 
     #[test]
-    fn retentar_pede_o_turno_pelo_nome_e_nao_gasta_numero_novo() {
+    fn retrying_names_the_turn_and_spends_no_new_number() {
         let connection=bench("XY4T9B");
-        let primeiro=open_or_reopen(&connection,"chat-1",None).expect("turno");
-        set_status(&connection,&primeiro.id,TurnStatus::Failed).expect("falhou");
+        let first=open_or_reopen(&connection,"chat-1",None).expect("turno");
+        set_status(&connection,&first.id,TurnStatus::Failed).expect("falhou");
 
-        let de_novo=open_or_reopen(&connection,"chat-1",Some(&primeiro.id)).expect("retentativa");
-        assert_eq!(de_novo.id,primeiro.id,"a retentativa é o mesmo pedido");
-        assert_eq!(de_novo.code,"XY4T9B·01","o código do balão não muda ao retentar");
-        assert_eq!(de_novo.status,TurnStatus::Queued,"o pedido voltou para a fila");
+        let again=open_or_reopen(&connection,"chat-1",Some(&first.id)).expect("retentativa");
+        assert_eq!(again.id,first.id,"a retentativa é o mesmo pedido");
+        assert_eq!(again.code,"XY4T9B·01","o código do balão não muda ao retentar");
+        assert_eq!(again.status,TurnStatus::Queued,"o pedido voltou para a fila");
 
-        let seguinte=open_or_reopen(&connection,"chat-1",None).expect("turno");
-        assert_eq!(seguinte.ordinal,2,"a retentativa não queimou o número 2");
+        let following=open_or_reopen(&connection,"chat-1",None).expect("turno");
+        assert_eq!(following.ordinal,2,"a retentativa não queimou o número 2");
     }
 
     #[test]
-    fn um_turno_de_outro_chat_nunca_e_reaberto_aqui() {
+    fn a_turn_from_another_chat_is_never_reopened_here() {
         let connection=bench("XY4T9B");
         connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES('chat-2','K7M2QX','p','Outro','','')",[]).expect("segundo chat");
-        let alheio=open_turn(&connection,"chat-2").expect("turno");
+        let foreign=open_turn(&connection,"chat-2").expect("turno");
 
-        assert!(open_or_reopen(&connection,"chat-1",Some(&alheio.id)).is_err(),"o pedido de outro chat não se reabre aqui");
+        assert!(open_or_reopen(&connection,"chat-1",Some(&foreign.id)).is_err(),"o pedido de outro chat não se reabre aqui");
         assert!(open_or_reopen(&connection,"chat-1",Some("inexistente")).is_err(),"turno que não existe não vira turno novo em silêncio");
     }
 
     #[test]
-    fn um_pedido_em_voo_volta_para_a_fila_quando_o_app_reabre() {
+    fn a_flying_request_goes_back_to_the_queue_when_the_app_reopens() {
         let connection=bench("XY4T9B");
-        let voando=open_turn(&connection,"chat-1").expect("turno");
-        set_status(&connection,&voando.id,TurnStatus::Flying).expect("estado");
-        let respondido=open_turn(&connection,"chat-1").expect("turno");
-        set_status(&connection,&respondido.id,TurnStatus::Answered).expect("estado");
+        let flying=open_turn(&connection,"chat-1").expect("turno");
+        set_status(&connection,&flying.id,TurnStatus::Flying).expect("estado");
+        let answered=open_turn(&connection,"chat-1").expect("turno");
+        set_status(&connection,&answered.id,TurnStatus::Answered).expect("estado");
 
-        let retomados=requeue_interrupted_turns(&connection).expect("varredura");
+        let resumed=requeue_interrupted_turns(&connection).expect("varredura");
 
-        assert_eq!(retomados,1,"só o que ficou pela metade é retomado");
-        assert_eq!(status_of(&connection,&voando.id),TurnStatus::Queued,"o pedido aceito volta para a fila em vez de ser descartado");
-        assert_eq!(status_of(&connection,&respondido.id),TurnStatus::Answered,"quem já tinha resposta não é tocado");
+        assert_eq!(resumed,1,"só o que ficou pela metade é retomado");
+        assert_eq!(status_of(&connection,&flying.id),TurnStatus::Queued,"o pedido aceito volta para a fila em vez de ser descartado");
+        assert_eq!(status_of(&connection,&answered.id),TurnStatus::Answered,"quem já tinha resposta não é tocado");
     }
 
     #[test]
-    fn retentar_reabre_o_mesmo_turno_sem_gastar_numero_novo() {
+    fn retrying_reopens_the_same_turn_without_a_new_number() {
         let connection=bench("XY4T9B");
-        let primeiro=open_turn(&connection,"chat-1").expect("turno");
-        set_status(&connection,&primeiro.id,TurnStatus::Failed).expect("estado");
+        let first=open_turn(&connection,"chat-1").expect("turno");
+        set_status(&connection,&first.id,TurnStatus::Failed).expect("estado");
 
-        let retentado=reopen_turn(&connection,&primeiro.id).expect("retentativa");
+        let retried=reopen_turn(&connection,&first.id).expect("retentativa");
 
-        assert_eq!(retentado.id,primeiro.id,"a retentativa é o mesmo pedido");
-        assert_eq!(retentado.code,"XY4T9B·01");
-        assert_eq!(retentado.status,TurnStatus::Queued,"retentar põe o pedido de volta na fila, não direto no ar");
+        assert_eq!(retried.id,first.id,"a retentativa é o mesmo pedido");
+        assert_eq!(retried.code,"XY4T9B·01");
+        assert_eq!(retried.status,TurnStatus::Queued,"retentar põe o pedido de volta na fila, não direto no ar");
         assert_eq!(open_turn(&connection,"chat-1").expect("seguinte").ordinal,2,"a numeração continua de onde parou");
     }
 
     #[test]
-    fn o_veredito_de_entrada_volta_inteiro_do_banco() {
+    fn the_entry_verdict_comes_back_whole_from_the_database() {
         use crate::gatekeeper::{heuristic_entry,judge};
         let connection=bench("XY4T9B");
-        let turno=open_turn(&connection,"chat-1").expect("turno");
-        let pedido="Corrigir o cálculo do frete em src/checkout.rs; pronto quando o teste de frete passar";
-        let check=judge(&turno,pedido,&heuristic_entry(pedido),"heurística local");
+        let this_turn=open_turn(&connection,"chat-1").expect("turno");
+        let request_text="Corrigir o cálculo do frete em src/checkout.rs; pronto quando o teste de frete passar";
+        let check=judge(&this_turn,request_text,&heuristic_entry(request_text),"heurística local");
 
         record_entry(&connection,&check).expect("gravar");
         let feed=feed(&connection,None).expect("feed");
@@ -599,12 +599,12 @@ mod tests {
     }
 
     #[test]
-    fn retentar_troca_as_saidas_em_vez_de_empilhar() {
+    fn retrying_replaces_the_exits_instead_of_stacking_them() {
         let connection=bench("XY4T9B");
-        let turno=open_turn(&connection,"chat-1").expect("turno");
-        record_exits(&connection,&turno,&[ExitCheck::new(&turno,"command","rm -rf build",Some("permissions.shell · deny".into()))]).expect("primeira tentativa");
+        let this_turn=open_turn(&connection,"chat-1").expect("turno");
+        record_exits(&connection,&this_turn,&[ExitCheck::new(&this_turn,"command","rm -rf build",Some("permissions.shell · deny".into()))]).expect("primeira tentativa");
 
-        record_exits(&connection,&turno,&[ExitCheck::new(&turno,"command","cargo test",None)]).expect("retentativa");
+        record_exits(&connection,&this_turn,&[ExitCheck::new(&this_turn,"command","cargo test",None)]).expect("retentativa");
 
         let feed=feed(&connection,None).expect("feed");
         assert_eq!(feed.exits.len(),1,"o que a tentativa anterior pediu deixou de valer");
@@ -613,12 +613,12 @@ mod tests {
     }
 
     #[test]
-    fn o_placar_conta_tudo_o_que_ja_passou_nao_so_o_que_cabe_na_tela() {
+    fn the_tally_counts_everything_not_just_what_fits_on_screen() {
         use crate::gatekeeper::{heuristic_entry,judge};
         let connection=bench("XY4T9B");
         for _ in 0..FEED_WINDOW+40 {
-            let turno=open_turn(&connection,"chat-1").expect("turno");
-            record_entry(&connection,&judge(&turno,"x",&heuristic_entry("x"),"heurística local")).expect("gravar");
+            let this_turn=open_turn(&connection,"chat-1").expect("turno");
+            record_entry(&connection,&judge(&this_turn,"x",&heuristic_entry("x"),"heurística local")).expect("gravar");
         }
 
         let feed=feed(&connection,None).expect("feed");
@@ -628,17 +628,17 @@ mod tests {
     }
 
     #[test]
-    fn a_visao_do_turno_traz_o_codigo_o_estado_e_os_dois_vereditos() {
+    fn the_turn_view_carries_the_code_the_status_and_both_verdicts() {
         use crate::gatekeeper::{heuristic_entry,judge};
         let connection=bench("XY4T9B");
-        let turno=open_turn(&connection,"chat-1").expect("turno");
-        let check=judge(&turno,"x",&heuristic_entry("x"),"heurística local");
+        let this_turn=open_turn(&connection,"chat-1").expect("turno");
+        let check=judge(&this_turn,"x",&heuristic_entry("x"),"heurística local");
         record_entry(&connection,&check).expect("entrada");
-        record_exits(&connection,&turno,&[
-            ExitCheck::new(&turno,"command","cargo test",None),
-            ExitCheck::new(&turno,"command","rm -rf build",Some("permissions.shell · deny".into())),
+        record_exits(&connection,&this_turn,&[
+            ExitCheck::new(&this_turn,"command","cargo test",None),
+            ExitCheck::new(&this_turn,"command","rm -rf build",Some("permissions.shell · deny".into())),
         ]).expect("saídas");
-        set_status(&connection,&turno.id,TurnStatus::Answered).expect("estado");
+        set_status(&connection,&this_turn.id,TurnStatus::Answered).expect("estado");
 
         let views=views_for_chat(&connection,"chat-1").expect("visões");
 
@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn um_turno_que_nao_passou_por_portao_nenhum_nao_tem_o_que_pintar() {
+    fn a_turn_that_passed_no_gate_has_nothing_to_paint() {
         let connection=bench("XY4T9B");
         open_turn(&connection,"chat-1").expect("turno");
 
@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn os_turnos_do_chat_vem_na_ordem_em_que_foram_pedidos() {
+    fn a_chats_turns_come_in_the_order_they_were_requested() {
         let connection=bench("XY4T9B");
         for _ in 0..3 {open_turn(&connection,"chat-1").expect("turno");}
 
@@ -673,13 +673,13 @@ mod tests {
 
     /// A coluna é uma chegada: o que acabou de acontecer fica em cima.
     #[test]
-    fn o_feed_mostra_o_mais_novo_primeiro() {
+    fn the_feed_shows_the_newest_first() {
         use crate::gatekeeper::{heuristic_entry,judge};
         let connection=bench("XY4T9B");
-        for pedido in ["primeiro","segundo","terceiro"] {
-            let turno=open_turn(&connection,"chat-1").expect("turno");
-            record_entry(&connection,&judge(&turno,pedido,&heuristic_entry(pedido),"heurística local")).expect("gravar");
-            record_exits(&connection,&turno,&[ExitCheck::new(&turno,"command",pedido,None)]).expect("saídas");
+        for request_text in ["primeiro","segundo","terceiro"] {
+            let this_turn=open_turn(&connection,"chat-1").expect("turno");
+            record_entry(&connection,&judge(&this_turn,request_text,&heuristic_entry(request_text),"heurística local")).expect("gravar");
+            record_exits(&connection,&this_turn,&[ExitCheck::new(&this_turn,"command",request_text,None)]).expect("saídas");
         }
 
         let feed=feed(&connection,None).expect("feed");
@@ -689,14 +689,14 @@ mod tests {
     }
 
     #[test]
-    fn a_portaria_de_um_projeto_so_ve_os_chats_dele() {
+    fn a_projects_gate_only_sees_its_own_chats() {
         use crate::gatekeeper::{heuristic_entry,judge};
         let connection=bench("XY4T9B");
         connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES('chat-2','K7M2QX','p','Outro','','')",[]).expect("segundo chat");
         for chat in ["chat-1","chat-2"] {
-            let turno=open_turn(&connection,chat).expect("turno");
-            record_entry(&connection,&judge(&turno,"x",&heuristic_entry("x"),"heurística local")).expect("gravar");
-            record_exits(&connection,&turno,&[ExitCheck::new(&turno,"file",".env",Some("privacy.deny · .env".into()))]).expect("saídas");
+            let this_turn=open_turn(&connection,chat).expect("turno");
+            record_entry(&connection,&judge(&this_turn,"x",&heuristic_entry("x"),"heurística local")).expect("gravar");
+            record_exits(&connection,&this_turn,&[ExitCheck::new(&this_turn,"file",".env",Some("privacy.deny · .env".into()))]).expect("saídas");
         }
 
         let feed=feed(&connection,Some(&BTreeSet::from(["chat-1".to_string()]))).expect("feed");
@@ -715,7 +715,7 @@ mod tests {
     /// chat com o código que o turno vai herdar.
 
     #[test]
-    fn o_pedido_nasce_na_fila_e_so_voa_quando_chega_a_vez_dele() {
+    fn a_request_starts_queued_and_only_flies_on_its_turn() {
         let connection=bench("XY4T9B");
         let turn=open_turn(&connection,"chat-1").expect("turno");
 
@@ -723,46 +723,46 @@ mod tests {
     }
 
     #[test]
-    fn a_fila_entrega_os_pedidos_na_ordem_em_que_foram_enviados() {
+    fn the_queue_delivers_requests_in_the_order_they_were_sent() {
         let connection=bench("XY4T9B");
-        let primeiro=open_turn(&connection,"chat-1").expect("primeiro");
-        let segundo=open_turn(&connection,"chat-1").expect("segundo");
+        let first=open_turn(&connection,"chat-1").expect("primeiro");
+        let second=open_turn(&connection,"chat-1").expect("segundo");
 
-        let vez=next_queued(&connection).expect("consulta").expect("há fila");
-        assert_eq!(vez.id,primeiro.id,"quem chegou antes é atendido antes");
-        set_status(&connection,&primeiro.id,TurnStatus::Answered).expect("respondido");
-        let vez=next_queued(&connection).expect("consulta").expect("ainda há fila");
-        assert_eq!(vez.id,segundo.id,"o seguinte só é chamado depois que o anterior sai");
-        set_status(&connection,&segundo.id,TurnStatus::Answered).expect("respondido");
+        let next_up=next_queued(&connection).expect("consulta").expect("há fila");
+        assert_eq!(next_up.id,first.id,"quem chegou antes é atendido antes");
+        set_status(&connection,&first.id,TurnStatus::Answered).expect("respondido");
+        let next_up=next_queued(&connection).expect("consulta").expect("ainda há fila");
+        assert_eq!(next_up.id,second.id,"o seguinte só é chamado depois que o anterior sai");
+        set_status(&connection,&second.id,TurnStatus::Answered).expect("respondido");
         assert!(next_queued(&connection).expect("consulta").is_none(),"fila vazia não chama ninguém");
     }
 
     #[test]
-    fn enquanto_um_pedido_esta_no_ar_a_fila_nao_chama_o_seguinte() {
+    fn while_a_request_is_flying_the_queue_does_not_call_the_next() {
         let connection=bench("XY4T9B");
-        let voando=open_turn(&connection,"chat-1").expect("primeiro");
-        let esperando=open_turn(&connection,"chat-1").expect("segundo");
-        set_status(&connection,&voando.id,TurnStatus::Flying).expect("saiu");
+        let flying=open_turn(&connection,"chat-1").expect("primeiro");
+        let waiting=open_turn(&connection,"chat-1").expect("segundo");
+        set_status(&connection,&flying.id,TurnStatus::Flying).expect("saiu");
 
         assert!(is_flying(&connection).expect("consulta"),"há um pedido sendo atendido");
-        assert_eq!(next_queued(&connection).expect("consulta").map(|turn|turn.id),Some(esperando.id),"o seguinte está lá, esperando a vez");
+        assert_eq!(next_queued(&connection).expect("consulta").map(|turn|turn.id),Some(waiting.id),"o seguinte está lá, esperando a vez");
     }
 
     #[test]
-    fn a_fila_de_um_chat_nao_atropela_a_de_outro() {
+    fn one_chats_queue_does_not_run_over_anothers() {
         let connection=bench("XY4T9B");
         connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES('chat-2','K7M2QX','p','Outro','','')",[]).expect("segundo chat");
-        let aqui=open_turn(&connection,"chat-1").expect("aqui");
-        let ali=open_turn(&connection,"chat-2").expect("ali");
+        let here=open_turn(&connection,"chat-1").expect("aqui");
+        let there=open_turn(&connection,"chat-2").expect("ali");
 
         assert_eq!(queue_depth(&connection,"chat-1").expect("fila"),1);
         assert_eq!(queue_depth(&connection,"chat-2").expect("fila"),1);
-        assert_eq!(place_in_queue(&connection,&aqui.id).expect("posição"),Some(1));
-        assert_eq!(place_in_queue(&connection,&ali.id).expect("posição"),Some(1),"cada chat tem a sua própria fila");
+        assert_eq!(place_in_queue(&connection,&here.id).expect("posição"),Some(1));
+        assert_eq!(place_in_queue(&connection,&there.id).expect("posição"),Some(1),"cada chat tem a sua própria fila");
     }
 
     #[test]
-    fn o_pedido_que_o_fechamento_pegou_no_ar_volta_para_a_fila_em_vez_de_morrer() {
+    fn a_request_caught_flying_at_shutdown_goes_back_to_the_queue_instead_of_dying() {
         let connection=bench("XY4T9B");
         let turn=open_turn(&connection,"chat-1").expect("turno");
         set_status(&connection,&turn.id,TurnStatus::Flying).expect("saiu");
@@ -776,35 +776,35 @@ mod tests {
     /// pelo turno que a responde e não volta. O `pending_question` é o que veste
     /// a caixa de enviar mensagem — depois do desfecho ela não veste mais nada.
     #[test]
-    fn a_pergunta_nasce_pendente_e_o_turno_resposta_a_encerra() {
+    fn a_question_starts_pending_and_the_answer_turn_closes_it() {
         let connection=bench("XY4T9B");
-        let pergunta=open_turn(&connection,"chat-1").expect("turno");
-        ask(&connection,&pergunta.id,"single","Qual provedor?",&["Anthropic".into(),"OpenAI".into()],"jev").expect("pergunta");
+        let question_turn=open_turn(&connection,"chat-1").expect("turno");
+        ask(&connection,&question_turn.id,"single","Qual provedor?",&["Anthropic".into(),"OpenAI".into()],"jev").expect("pergunta");
 
-        let aberta=pending_question(&connection,"chat-1").expect("consulta").expect("pergunta em aberto");
-        assert_eq!(aberta.turn_id,pergunta.id);
-        assert_eq!(aberta.status,QUESTION_PENDING);
-        assert_eq!(aberta.options,vec!["Anthropic".to_string(),"OpenAI".to_string()]);
-        assert_eq!(aberta.code,pergunta.code,"a caixa mostra de qual pedido veio a pergunta");
+        let open_question=pending_question(&connection,"chat-1").expect("consulta").expect("pergunta em aberto");
+        assert_eq!(open_question.turn_id,question_turn.id);
+        assert_eq!(open_question.status,QUESTION_PENDING);
+        assert_eq!(open_question.options,vec!["Anthropic".to_string(),"OpenAI".to_string()]);
+        assert_eq!(open_question.code,question_turn.code,"a caixa mostra de qual pedido veio a pergunta");
 
-        let resposta=open_turn(&connection,"chat-1").expect("turno-resposta");
-        assert!(settle_question(&connection,&pergunta.id,QUESTION_ANSWERED,Some(&resposta.id)).expect("encerrar"));
+        let answer_turn=open_turn(&connection,"chat-1").expect("turno-resposta");
+        assert!(settle_question(&connection,&question_turn.id,QUESTION_ANSWERED,Some(&answer_turn.id)).expect("encerrar"));
         assert!(pending_question(&connection,"chat-1").expect("consulta").is_none(),"respondida não trava mais a caixa");
-        assert_eq!(question_of(&connection,&pergunta.id).expect("consulta").expect("pergunta").status,QUESTION_ANSWERED);
+        assert_eq!(question_of(&connection,&question_turn.id).expect("consulta").expect("pergunta").status,QUESTION_ANSWERED);
     }
 
     /// Duas mãos na mesma pergunta — o clique repetido, a janela aberta duas
     /// vezes — e só a primeira encerra. A segunda descobre pelo retorno que
     /// chegou tarde, em vez de mandar um pedido a mais para o modelo.
     #[test]
-    fn a_mesma_pergunta_nao_e_encerrada_duas_vezes() {
+    fn the_same_question_is_not_closed_twice() {
         let connection=bench("XY4T9B");
-        let pergunta=open_turn(&connection,"chat-1").expect("turno");
-        ask(&connection,&pergunta.id,"noul","Devo seguir?",&[],"jev").expect("pergunta");
+        let question_turn=open_turn(&connection,"chat-1").expect("turno");
+        ask(&connection,&question_turn.id,"noul","Devo seguir?",&[],"jev").expect("pergunta");
 
-        assert!(settle_question(&connection,&pergunta.id,QUESTION_DISMISSED,None).expect("ignorar"));
-        assert!(!settle_question(&connection,&pergunta.id,QUESTION_ANSWERED,None).expect("segunda tentativa"),"o segundo desfecho não vale");
-        assert_eq!(question_of(&connection,&pergunta.id).expect("consulta").expect("pergunta").status,QUESTION_DISMISSED,"quem ignorou primeiro decidiu");
+        assert!(settle_question(&connection,&question_turn.id,QUESTION_DISMISSED,None).expect("ignorar"));
+        assert!(!settle_question(&connection,&question_turn.id,QUESTION_ANSWERED,None).expect("segunda tentativa"),"o segundo desfecho não vale");
+        assert_eq!(question_of(&connection,&question_turn.id).expect("consulta").expect("pergunta").status,QUESTION_DISMISSED,"quem ignorou primeiro decidiu");
     }
 
     pub(super) fn bench(chat_code:&str)->Connection {

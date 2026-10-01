@@ -119,7 +119,7 @@ impl EntryCheck {
         steps.push(if met("says_where"){"Work in the places the request names; if something outside them must change, say which file and why."}else{"No location was given: find where this belongs in the project first and list the files you will touch."}.into());
         steps.push(if met("says_when_done"){"Use the request's own done criterion as your final check and report how it was verified."}else{"No done criterion was given: end by saying how the developer can confirm the work is finished (a test, a command or an observable behaviour)."}.into());
         if !met("bundles_requests") {steps.push("The request bundles independent items: handle them one at a time, in the order given, and report the outcome of each separately.".into());}
-        steps.push("Preserve behaviour the request does not mention, and answer in the language the request was written in.".into());
+        steps.push("Preserve behaviour the request does not mention.".into());
         let steps=steps.iter().map(|step|format!("- {step}")).collect::<Vec<_>>().join("\n");
         Some(format!("REQUEST (verbatim from the developer):\n{}\n\nHOW TO CARRY IT OUT (JayV entry gate: {}/100, scope \"{}\"):\n{steps}",request.trim(),self.score,self.scope))
     }
@@ -431,7 +431,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     /// Os níveis são identificadores em inglês; os checks antigos, gravados em
     /// português, continuam lidos no nível certo.
     #[test]
-    fn o_escopo_e_em_ingles_e_aceita_a_grafia_antiga() {
+    fn the_scope_is_english_and_accepts_the_legacy_spelling() {
         assert_eq!(SCOPE_LEVELS,["small change","feature","whole system"]);
         for (level,(english,portuguese)) in SCOPE_LEVELS.iter().zip(["ajuste pequeno","funcionalidade","sistema inteiro"]).enumerate() {
             assert_eq!((scope_level_of(english),scope_level_of(portuguese)),(level,level));
@@ -441,7 +441,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     /// Os números do painel valem: uma margem maior bloqueia o que a padrão
     /// só deixaria passar com ressalva.
     #[test]
-    fn os_parametros_do_cache_mudam_o_veredito() {
+    fn cached_parameters_change_the_verdict() {
         let reading=EntryReading{scope_score:0.0,goal_is_clear:0.0,says_where:0.0,says_when_done:0.0,bundles_requests:0.6};
         let defaults=crate::local::global::JevParameters::default();
         assert_eq!(verdict_with(&reading,&defaults),EntryVerdict::Block);
@@ -477,7 +477,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     }
 
     #[test]
-    fn a_bigger_pedido_has_to_say_more_to_get_through() {
+    fn a_bigger_request_has_to_say_more_to_get_through() {
         let precise=reading(0.2,0.9,0.9,0.9,0.05);
         assert_eq!(judge(&turn_at("c"),"x",&precise,"jev").verdict,EntryVerdict::Pass);
         // A mesma clareza fraca atravessa como ajuste pequeno e barra como sistema inteiro.
@@ -517,7 +517,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     }
 
     #[test]
-    fn a_blocked_pedido_explains_itself_and_an_asked_one_carries_an_instruction() {
+    fn a_blocked_request_explains_itself_and_an_asked_one_carries_an_instruction() {
         let blocked=judge(&turn_at("chat"),"arruma tudo ai",&reading(1.9,0.2,0.1,0.05,0.6),"heuristica");
         assert_eq!(blocked.verdict,EntryVerdict::Block);
         let reply=blocked.reply();
@@ -536,7 +536,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     }
 
     #[test]
-    fn a_released_pedido_reaches_the_model_rewritten_with_what_the_gate_read() {
+    fn a_released_request_reaches_the_model_rewritten_with_what_the_gate_read() {
         let request="Adicione paginação em src/components/Table.tsx; pronto quando `npm test` passar";
         let passed=judge(&turn_at("chat"),request,&reading(1.0,0.9,0.9,0.9,0.05),"jev");
         assert_eq!(passed.verdict,EntryVerdict::Pass);

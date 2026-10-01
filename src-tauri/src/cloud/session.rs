@@ -104,44 +104,44 @@ mod tests {
 
     /// O JWKS como o projeto o publica, com `ext` e `key_ops`: ler e achar a
     /// chave pelo `kid` é o que a primeira abertura do app faz.
-    #[test] fn o_jwks_do_projeto_e_lido() {
+    #[test] fn the_project_jwks_is_read() {
         let keys:JwkSet=serde_json::from_str(include_str!("testdata/project_jwks.json")).expect("o JWKS publicado tem de ser legível");
         let jwk=keys.find("0a44491d-b641-4447-973b-32c13254f83c").expect("a chave do projeto");
         DecodingKey::from_jwk(jwk).expect("a chave vira chave de verificação");
     }
 
-    #[test] fn o_token_valido_devolve_o_usuario() {
+    #[test] fn a_valid_token_returns_the_user() {
         let identity=validate(&token(KEY_A,"test-key",claims(NOW+60)),&keys(),NOW).expect("válido");
         assert_eq!(identity,Identity{user_id:USER.into(),email:Some("dev@teste.local".into()),expires_at:NOW+60});
     }
 
-    #[test] fn o_token_vencido_e_recusado() {
+    #[test] fn an_expired_token_is_refused() {
         let error=validate(&token(KEY_A,"test-key",claims(NOW-1)),&keys(),NOW).unwrap_err();
         assert!(matches!(error,SessionError::Expired));
         assert_eq!(error.to_string(),"session expired");
     }
 
-    #[test] fn outro_emissor_e_recusado() {
+    #[test] fn another_issuer_is_refused() {
         let mut other=claims(NOW+60);
         other["iss"]=json!("https://outro.supabase.co/auth/v1");
         assert!(matches!(validate(&token(KEY_A,"test-key",other),&keys(),NOW),Err(SessionError::Invalid(_))));
     }
 
-    #[test] fn outro_publico_e_recusado() {
+    #[test] fn another_audience_is_refused() {
         let mut other=claims(NOW+60);
         other["aud"]=json!("anon");
         assert!(matches!(validate(&token(KEY_A,"test-key",other),&keys(),NOW),Err(SessionError::Invalid(_))));
     }
 
-    #[test] fn a_assinatura_de_outra_chave_e_recusada() {
+    #[test] fn a_signature_from_another_key_is_refused() {
         assert!(matches!(validate(&token(KEY_B,"test-key",claims(NOW+60)),&keys(),NOW),Err(SessionError::Invalid(_))));
     }
 
-    #[test] fn kid_desconhecido_pede_o_jwks_de_novo() {
+    #[test] fn an_unknown_kid_fetches_the_jwks_again() {
         assert!(matches!(validate(&token(KEY_A,"rotacionada",claims(NOW+60)),&keys(),NOW),Err(SessionError::UnknownKey)));
     }
 
-    #[test] fn sem_rede_o_ultimo_usuario_segue_com_o_token_vencido() {
+    #[test] fn offline_the_last_user_keeps_going_with_an_expired_token() {
         let expired=token(KEY_A,"test-key",claims(NOW-3_600));
         assert_eq!(validate_offline(&expired,&keys(),Some(USER),NOW).expect("último usuário").user_id,USER);
         assert!(matches!(validate_offline(&expired,&keys(),Some("outro"),NOW),Err(SessionError::Expired)));

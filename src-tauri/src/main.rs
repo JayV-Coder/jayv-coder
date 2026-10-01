@@ -80,7 +80,7 @@ mod tests {
     /// como argumento. Se o clap o lesse como subcomando, o processo morreria
     /// antes de repassar o link à janela aberta — e o login pelo GitHub não
     /// voltaria nunca.
-    #[test] fn o_link_do_login_sobe_o_aplicativo_de_mesa() {
+    #[test] fn the_login_link_starts_the_desktop_app() {
         let cli=parse(["jayv","jayv://auth/callback?code=abc&state=x"]).expect("o link não é argumento do clap");
         assert!(cli.command.is_none());
         assert!(parse(["jayv"]).expect("sem nada").command.is_none());

@@ -93,7 +93,7 @@ pub struct PermissionsConfig {
 }
 impl Default for PermissionsConfig { fn default() -> Self { Self { read: allow(), search: allow(), write: ask(), shell: ask() } } }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrivacyConfig {
     #[serde(default = "default_deny")] pub deny: Vec<String>,
     #[serde(default)] pub local_only: Vec<String>,

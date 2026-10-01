@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentProbe, Chat, EntryCheck, ExitCheck, GateFeed, LlmSettings, Project,
+  AgentProbe, Chat, CoreSettings, CoreSnapshot, EntryCheck, ExitCheck, GateFeed, LlmSettings, Project,
   SettingsSnapshot, SystemStatus, Turn, WorkspaceData,
 } from "./types";
 
@@ -25,6 +25,9 @@ export const commands = {
   systemStatus: () => invoke<SystemStatus>("system_status"),
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),
+  getCoreSettings: () => invoke<CoreSnapshot>("get_core_settings"),
+  saveCoreSettings: (settings: CoreSettings) => invoke<CoreSnapshot>("save_core_settings", { settings }),
+  setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
   checkAgent: (command: string) => invoke<AgentProbe>("check_agent", { command }),
   setSession: (token: string) => invoke<SessionView>("set_session", { token }),
   clearSession: () => invoke<void>("clear_session"),

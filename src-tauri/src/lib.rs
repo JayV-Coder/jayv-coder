@@ -6,6 +6,7 @@ pub mod cloud;
 pub mod config;
 pub mod desktop;
 pub mod context_engine;
+pub mod core_settings;
 pub mod firewall;
 pub mod gatekeeper;
 pub mod graph;

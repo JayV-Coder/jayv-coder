@@ -69,6 +69,21 @@ impl From<SessionError> for Text { fn from(error:SessionError)->Self{(&error).in
 /// O erro de um comando do Tauri: a tela recebe `{ key, params }`.
 pub fn failure(error:impl Into<anyhow::Error>)->Text{Text::from(error.into())}
 
+/// O idioma que o desenvolvedor escolheu no app: o modelo responde nele.
+#[derive(Debug,Clone,PartialEq,Eq,Deserialize)]
+pub struct ReplyLanguage{pub tag:String,pub name:String}
+
+static REPLY_LANGUAGE:std::sync::RwLock<Option<ReplyLanguage>>=std::sync::RwLock::new(None);
+
+/// A tela avisa o idioma ao abrir e a cada troca. Fica fora do orquestrador de
+/// propósito: trocar o idioma não espera o pedido que está no ar.
+pub fn set_reply_language(language:Option<ReplyLanguage>) {
+    let language=language.filter(|language|!language.tag.trim().is_empty());
+    *REPLY_LANGUAGE.write().unwrap_or_else(|poisoned|poisoned.into_inner())=language;
+}
+
+pub fn reply_language()->Option<ReplyLanguage>{REPLY_LANGUAGE.read().unwrap_or_else(|poisoned|poisoned.into_inner()).clone()}
+
 const NOTICE:&str="jayv:notice:";
 
 /// Um aviso gravado como mensagem do chat.
@@ -96,6 +111,15 @@ fn english(text:&Text)->String {
         "gate.missing"=>"What is missing:".into(),
         "gate.missing.item"=>format!("- {}: {}",param("criterion"),param("reading")),
         "turn.noAnswer"=>"The run ended without an answer.".into(),
+        "guidance.failed"=>format!("The request could not run because {}.",param("problem")),
+        "guidance.fix"=>"Open Settings, turn an agent on and keep at least one of its models active.".into(),
+        "guidance.nothingConfigured"=>"no LLM provider or model is configured".into(),
+        "guidance.noModels"=>"providers are declared but no model is configured".into(),
+        "guidance.noAgent"=>"no agent is on".into(),
+        "guidance.noFittingModel"=>"no configured model fits this request".into(),
+        "guidance.unknownProvider"=>format!("the selected model points to the provider `{}`, which does not exist",param("provider")),
+        "explain.last"=>format!("The last request used {} through {}. The context had {} files and an estimated budget of {} tokens.",param("model"),param("provider"),param("files"),param("tokens")),
+        "explain.none"=>"There is no previous routing decision in this session.".into(),
         key if key.starts_with("scope.")=>key[6..].parse::<usize>().ok().and_then(|level|crate::gatekeeper::SCOPE_LEVELS.get(level)).map_or_else(||key.to_string(),|scope|scope.to_string()),
         key if key.starts_with("criterion.")=>key[10..].replace('_'," ").replace('.'," "),
         key if text.params.is_empty()=>key.to_string(),
@@ -127,5 +151,14 @@ fn english(text:&Text)->String {
         assert_eq!(for_model("plain text"),"plain text");
         let blocked=notice(&[Text::new("gate.blocked").with("score",30u8).with("demand",55u8).with("scope",Text::new("scope.1"))]);
         assert_eq!(for_model(&blocked),"The JayV entry gate blocked this request with 30 out of 100 (the minimum for a feature is 55).");
+    }
+
+    #[test] fn the_reply_language_follows_the_app_and_falls_back_to_the_request() {
+        set_reply_language(Some(ReplyLanguage{tag:"ja".into(),name:"日本語".into()}));
+        let note=crate::orchestrator::language_note();
+        assert!(note.contains("日本語") && note.contains("`ja`"),"{note}");
+        set_reply_language(Some(ReplyLanguage{tag:"  ".into(),name:"".into()}));
+        assert!(reply_language().is_none(),"an empty tag is no choice");
+        assert!(crate::orchestrator::language_note().contains("language their request is written in"));
     }
 }

@@ -41,7 +41,6 @@ function render(releases) {
     "",
     "Instaladores do JayV para Windows, macOS e Linux. Quem já tem o JayV instalado recebe as versões novas pela atualização automática do próprio aplicativo.",
     "",
-    "> Este arquivo é gerado pelo GitHub Actions a cada release; não edite à mão.",
     "",
   ];
   if (list.length === 0) return [...lines, "Nenhum release publicado ainda.", ""].join("\n");

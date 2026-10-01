@@ -15,7 +15,8 @@ pub struct LocaleRow { pub id:String, pub name:String, pub rtl:bool, pub positio
 
 /// Os números da portaria. Cada um vem do cache quando lá está e é válido;
 /// faltando ou torto, vale a constante do Rust.
-#[derive(Debug,Clone,PartialEq)]
+#[derive(Debug,Clone,PartialEq,serde::Serialize)]
+#[serde(rename_all="camelCase")]
 pub struct JevParameters {
     pub scope_demand:[f64;3],
     pub block_margin:f64,
@@ -148,7 +149,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test] fn o_jwks_e_o_ultimo_usuario_sobrevivem_ao_fechamento() {
+    #[test] fn the_jwks_and_last_user_survive_closing() {
         let dir=tempfile::tempdir().expect("dir");
         let path=dir.path().join("cache.sqlite3");
         let keys:JwkSet=serde_json::from_str(include_str!("../cloud/testdata/jwks.json")).expect("jwks");
@@ -165,7 +166,7 @@ mod tests {
         assert_eq!(cache.last_user().expect("usuário"),None);
     }
 
-    #[test] fn idiomas_e_traducoes_voltam_como_foram_gravados() {
+    #[test] fn locales_and_translations_come_back_as_stored() {
         let mut cache=GlobalCache::in_memory().expect("cache");
         cache.save_locales(&[LocaleRow{id:"en".into(),name:"English".into(),rtl:false,position:1},LocaleRow{id:"ar".into(),name:"العربية".into(),rtl:true,position:0}]).expect("idiomas");
         assert_eq!(cache.locales().expect("idiomas").iter().map(|row|row.id.as_str()).collect::<Vec<_>>(),["ar","en"]);
@@ -175,7 +176,7 @@ mod tests {
         assert!(cache.translations("ar").expect("vazio").is_empty());
     }
 
-    #[test] fn sem_parametros_no_cache_valem_as_constantes() {
+    #[test] fn without_cached_parameters_the_constants_apply() {
         let cache=GlobalCache::in_memory().expect("cache");
         let parameters=cache.jev_parameters().expect("parâmetros");
         assert_eq!(parameters.scope_demand,gatekeeper::SCOPE_DEMAND);
@@ -186,7 +187,7 @@ mod tests {
 
     /// Um valor torto vindo do painel não derruba a portaria: só ele volta ao
     /// padrão, os outros valem.
-    #[test] fn o_valor_valido_substitui_e_o_torto_cai_no_padrao() {
+    #[test] fn a_valid_value_replaces_and_a_malformed_one_falls_back_to_default() {
         let mut cache=GlobalCache::in_memory().expect("cache");
         cache.save_jev_parameters(&BTreeMap::from([
             ("block_margin".to_string(),json!(0.3)),

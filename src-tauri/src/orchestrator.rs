@@ -1,7 +1,7 @@
 use crate::{
     agents::AgentRegistry, cache::SemanticCache, config::Config,
     context_engine::{optimize_for_budget, rank_fragments, ContextFragment},
-    firewall::ContextFirewall, graph::ExecutionGraph, jev, memory::MemoryManager,
+    firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::MemoryManager,
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
     progress::{Beat, Pulse},
     providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
@@ -16,12 +16,14 @@ const TRUNCATION_MARKER:&str="\n[CONTEXT_TRUNCATED]";
 const PERFORMANCE_FILE:&str=".jev_performance.json";
 const DEFAULT_BUDGET:usize=12_000;
 const HISTORY_MESSAGES:usize=6;
-const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, same language as the request, no quotes, no trailing period, no explanation.";
+const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, no quotes, no trailing period, no explanation.";
 const TITLE_PROMPT_CHARS:usize=600;
 const REQUEST_MARGIN:usize=120;
 const SNIPPET_WRAPPER:usize=4;
 const NEUTRAL_SIGNAL:f64=0.5;
 const CLARIFY_NOTE:&str="Routing confidence was low. If the request is ambiguous, ask one specific clarifying question before assuming an approach.";
+/// Sem idioma escolhido no app, o modelo segue o idioma do pedido.
+const REQUEST_LANGUAGE_NOTE:&str="Reply to the developer in the language their request is written in.";
 const NO_REPOSITORY_NOTE:&str="No repository files were supplied: this request does not depend on them. Answer from general knowledge and never guess this codebase's contents.";
 const TOOLS_NOTE:&str="This asks for commands to run or files to change, which this orchestrator cannot execute. Hand back the exact commands or edits for the developer to apply.";
 const DESTRUCTIVE_NOTE:&str="This would overwrite or remove existing work. State the exact effect and how to undo it before giving the change.";
@@ -89,6 +91,23 @@ impl Orchestrator {
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
     /// fala deles; sem esta chamada o orquestrador não tem com quem conversar.
+    /// Os valores de partida das configurações do Jev e do app: o que o
+    /// `config.yaml` diz, ou os padrões.
+    pub fn core_defaults(&self)->crate::core_settings::CoreSettings {
+        Config::load(&self.config_path).map(|config|crate::core_settings::CoreSettings::from_config(&config)).unwrap_or_else(|_|crate::core_settings::CoreSettings::from_config(&Config::default()))
+    }
+
+    /// Passa a usar as configurações do Jev e do app. Privacidade nova é
+    /// firewall novo, e a pasta é lida de novo no próximo pedido; validade nova
+    /// é cache novo.
+    pub fn use_core(&mut self,settings:&crate::core_settings::CoreSettings) {
+        let privacy=self.config.privacy.clone();
+        let ttl=self.config.jev.context.cache_ttl;
+        settings.apply(&mut self.config);
+        if self.config.privacy!=privacy { self.firewall=ContextFirewall::new(self.config.privacy.clone()); self.rag.invalidate(); }
+        if self.config.jev.context.cache_ttl!=ttl { self.cache=SemanticCache::new(self.config.jev.context.cache_ttl,1000); }
+    }
+
     pub fn use_llm(&mut self,settings:&crate::llm::LlmSettings) {
         let (providers,models)=crate::llm::to_config(settings);
         self.providers=build_providers(&providers,&self.workdir);
@@ -140,7 +159,7 @@ impl Orchestrator {
             let response=ProviderResponse { response:guidance, input_tokens:0, output_tokens:0, model:"configuration".into(), provider:"jev".into(), latency_ms:0 };
             pulse.beat(Beat::Chunk{text:response.response.clone()});
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
-            self.memory.add_message(session_id,"assistant",response.response.clone());
+            self.memory.add_message(session_id,"assistant",i18n::for_model(&response.response));
             let model_selection=ModelSelection { model_name:"configuration".into(), provider:"jev".into(), estimated_tokens:selection.estimated_tokens, score:0.0, reason:"LLM configuration is required before execution".into() };
             let decision=Decision { model_provider:"jev".into(), model_name:"configuration".into(), estimated_tokens:model_selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
             self.last_decision=Some(decision.clone());
@@ -242,7 +261,7 @@ impl Orchestrator {
         let provider=self.providers.get(&model.provider)?;
         let request:String=prompt.trim().chars().take(TITLE_PROMPT_CHARS).collect();
         let messages=[
-            ChatMessage{role:"system".into(),content:TITLE_INSTRUCTIONS.into()},
+            ChatMessage{role:"system".into(),content:format!("{TITLE_INSTRUCTIONS}\n{}",language_note())},
             ChatMessage{role:"user".into(),content:format!("Intent read by Jev: {intent}\n\nRequest:\n{request}")},
         ];
         clean_title(&provider.chat(&messages,&model.model).await.ok()?.response)
@@ -254,6 +273,7 @@ impl Orchestrator {
         let agent=self.agents.select(capabilities);
         let repository_context=safe_context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
+        let system=format!("{system}\n{}",language_note());
         let user=if repository_context.is_empty(){input.into()}else{format!("TASK:\n{input}\n\nREPOSITORY CONTEXT:\n{repository_context}")};
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).rev().cloned());
@@ -269,29 +289,38 @@ impl Orchestrator {
         filtered
     }
 
+    /// O que falta configurar, gravado como aviso: cada um o lê no seu idioma.
     fn configuration_guidance(&self, selection:&ModelSelection)->Option<String> {
         let problem=if self.config.models.is_empty() && self.providers.is_empty() {
-            "nenhum provedor de LLM nem modelo está configurado".to_string()
+            Text::new("guidance.nothingConfigured")
         } else if self.config.models.is_empty() {
-            "há provedores declarados, mas nenhum modelo está configurado".to_string()
+            Text::new("guidance.noModels")
         } else if self.providers.is_empty() {
-            "nenhum agente está ligado; ligue o Claude Code, o Codex ou o Copilot".to_string()
+            Text::new("guidance.noAgent")
         } else if selection.provider=="jev" {
-            "nenhum modelo configurado atende a esta solicitação; confira capacidades e `context_window`".to_string()
+            Text::new("guidance.noFittingModel")
         } else if !self.providers.contains_key(&selection.provider) {
-            format!("o modelo selecionado aponta para o provedor `{}`, mas ele não existe ou seu `type` não é suportado",selection.provider)
+            Text::new("guidance.unknownProvider").with("provider",&selection.provider)
         } else {
             return None;
         };
-        Some(format!(
-            "Não consegui executar sua solicitação porque {problem}.\n\nAbra a tela Configuração do LLM, ligue um agente e deixe ao menos um modelo ativo nele."
-        ))
+        Some(i18n::notice(&[Text::new("guidance.failed").with("problem",problem),Text::new("guidance.fix")]))
     }
 
     fn explanation_result(&self,user_input:&str,normalized:&str)->ProcessResult {
-        let response=self.last_decision.as_ref().map(|d|format!("The last request used {} through {}. The context contained {} files and the estimated budget was {} tokens.",d.model_name,d.model_provider,d.context_files_count,d.estimated_tokens)).unwrap_or_else(||"There is no previous routing decision in this session.".into());
+        let explained=self.last_decision.as_ref().map(|d|Text::new("explain.last").with("model",&d.model_name).with("provider",&d.model_provider).with("files",d.context_files_count).with("tokens",d.estimated_tokens)).unwrap_or_else(||Text::new("explain.none"));
+        let response=i18n::notice(&[explained]);
         let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
         ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
+    }
+}
+
+/// A língua das respostas: a que o desenvolvedor escolheu no app ou, sem
+/// escolha, a do pedido. Código, comandos e caminhos ficam como estão.
+pub fn language_note()->String {
+    match i18n::reply_language() {
+        Some(language)=>format!("Write every reply to the developer in {} (BCP 47 tag `{}`), whatever language the request, the history or these instructions are written in. Keep code, identifiers, commands and file paths exactly as they are.",language.name,language.tag),
+        None=>REQUEST_LANGUAGE_NOTE.into(),
     }
 }
 
@@ -503,7 +532,7 @@ mod tests {
     /// no prompt, um caminho de arquivo devolvido pela resposta não quer dizer
     /// nada, e o portão de saída não tem contra o que medi-lo.
     #[test]
-    fn o_prompt_diz_em_que_pasta_o_projeto_esta() {
+    fn the_prompt_says_which_folder_the_project_is_in() {
         let dir=repository(&[("router.rs",filler("router",200))]);
         let mut orchestrator=orchestrator(&dir);
         let plan=plan_context("general","trivial");
@@ -716,9 +745,9 @@ mod tests {
         assert_eq!(result.decision.model_provider,"jev");
         assert_eq!(result.decision.model_name,"configuration");
         let response=result.result.expect("Jev configuration guidance").response;
-        assert!(response.contains("nenhum provedor de LLM nem modelo está configurado"));
-        assert!(response.contains("tela Configuração do LLM"));
-        assert!(response.contains("ligue um agente"));
+        let lines=crate::i18n::read_notice(&response).expect("a guidance notice the screen translates");
+        assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.fix"]);
+        assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.nothingConfigured"))));
         assert!(!response.contains("provider named 'none'"));
     }
 }

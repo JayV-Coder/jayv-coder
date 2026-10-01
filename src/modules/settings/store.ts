@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   bus, commands, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type KnownModel,
-  type SettingsSnapshot,
+  type CoreSettings, type CoreSnapshot, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { t, type Key } from "@/modules/i18n";
@@ -26,6 +26,11 @@ interface SettingsState {
   /** O que foi gravado por último, para saber se há alteração pendente. */
   saved: string;
   saving: boolean;
+  /** As abas do Jev e do app: o rascunho, o que está gravado e o resto do
+   * retrato (padrões, limites, números da portaria). */
+  core: CoreSettings | null;
+  coreSnapshot: CoreSnapshot | null;
+  savedCore: string;
 }
 
 let next = 0;
@@ -35,12 +40,30 @@ const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null
 export const useSettings = create<SettingsState>(() => ({
   loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [] }, timeoutRange: [30, 3600],
   contextRange: [8000, 2000000], probes: noProbes(), saved: "", saving: false,
+  core: null, coreSnapshot: null, savedCore: "",
 }));
 
 const payload = ({ agents, models }: Pick<SettingsState, "agents" | "models">) =>
   ({ agents, models: models.map(({ uid: _, ...model }) => model) });
 
-export const isDirty = (state: SettingsState) => state.loaded && JSON.stringify(payload(state)) !== state.saved;
+export const isAgentsDirty = (state: SettingsState) => state.loaded && JSON.stringify(payload(state)) !== state.saved;
+export const isCoreDirty = (state: SettingsState) => state.core !== null && JSON.stringify(state.core) !== state.savedCore;
+export const isDirty = (state: SettingsState) => isAgentsDirty(state) || isCoreDirty(state);
+
+function applyCore(snapshot: CoreSnapshot) {
+  useSettings.setState({ core: snapshot.settings, coreSnapshot: snapshot, savedCore: JSON.stringify(snapshot.settings) });
+}
+
+/** Muda um campo das abas do Jev e do app. */
+export function updateCore(patch: Partial<CoreSettings>) {
+  useSettings.setState((state) => (state.core ? { core: { ...state.core, ...patch } } : state));
+}
+
+/** Volta as abas do Jev e do app aos valores de partida (sem salvar). */
+export function restoreCoreDefaults() {
+  const defaults = useSettings.getState().coreSnapshot?.defaults;
+  if (defaults) useSettings.setState({ core: defaults });
+}
 
 function apply(snapshot: SettingsSnapshot) {
   const { settings, catalog, timeoutRange, contextRange } = snapshot;
@@ -53,7 +76,9 @@ function apply(snapshot: SettingsSnapshot) {
 
 export async function loadSettings() {
   try {
-    apply(await commands.getSettings());
+    const [agents, core] = await Promise.all([commands.getSettings(), commands.getCoreSettings()]);
+    apply(agents);
+    applyCore(core);
     for (const agent of AGENTS) void checkAgent(agent);
   } catch (error) {
     reportError(error);
@@ -179,7 +204,9 @@ export async function saveSettings() {
   const state = useSettings.getState();
   useSettings.setState({ saving: true });
   try {
-    apply(await commands.saveSettings(payload(state)));
+    // Cada parte só vai ao núcleo se mudou: salvar o Jev não regrava agentes.
+    if (isAgentsDirty(state)) apply(await commands.saveSettings(payload(state)));
+    if (isCoreDirty(state) && state.core) applyCore(await commands.saveCoreSettings(state.core));
     notify(t("settings.saved"));
     bus.emit("settings:saved", {});
   } catch (error) {

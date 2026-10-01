@@ -330,6 +330,9 @@ struct CliProvider { name:String, config:ProviderConfig, workdir:Workdir }
 
 /// O argumento que vira o texto do pedido.
 const PROMPT:&str="{prompt}";
+/// Até quantos caracteres o pedido vai no argumento; acima disso, pela entrada
+/// padrão. Bem abaixo do teto do Windows, que conta a linha de comando inteira.
+const INLINE_LIMIT:usize=8_000;
 
 /// O que uma linha do agente é: resposta ou relato do trabalho. A decisão é
 /// pelo conteúdo, não pela configuração — `claude --print` escreve o texto
@@ -410,13 +413,22 @@ impl CliProvider {
     /// não lê a entrada — é o caso do Copilot, que só aceita `-p`.
     fn inline(&self)->bool { self.config.args.iter().any(|arg|arg==PROMPT) }
 
+    /// Se este pedido cabe no argumento. A linha de comando tem teto — 32.767
+    /// caracteres no Windows (o erro 206), 128 KB por argumento no Linux — e
+    /// o pedido leva histórico e trechos do repositório. Acima do limite ele vai
+    /// pela entrada padrão, que o Copilot lê como lê o `-p`.
+    fn inline_for(&self,prompt:&str)->bool { self.inline() && prompt.chars().count()<=INLINE_LIMIT }
+
     /// A linha de comando deste pedido. O modelo reserva igual ao modelo do
     /// pedido sai inteiro: o Claude recusa os dois iguais, e a reserva é por
     /// agente enquanto o modelo é por pedido.
     fn args(&self,model:&str,prompt:&str)->Vec<String> {
+        let inline=self.inline_for(prompt);
         let mut args=Vec::new();
-        let mut given=self.config.args.iter();
+        let mut given=self.config.args.iter().peekable();
         while let Some(arg)=given.next() {
+            // Pedido grande demais para o argumento: some a flag e o lugar dele.
+            if !inline && given.peek().is_some_and(|next|next.as_str()==PROMPT) { given.next(); continue; }
             if arg=="--fallback-model" {
                 if let Some(reserve)=given.next().filter(|reserve|reserve.as_str()!=model) { args.extend([arg.clone(),reserve.clone()]); }
                 continue;
@@ -438,7 +450,7 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
-        process.args(lead).args(self.args(model,prompt)).stdin(if self.inline(){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        process.args(lead).args(self.args(model,prompt)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
@@ -567,15 +579,15 @@ mod tests {
     /// Um agente de linha de comando lê o repositório em que ele foi aberto.
     /// Rodá-lo na pasta de onde o aplicativo subiu faria o chat de um projeto
     /// receber respostas sobre outro repositório.
-    #[tokio::test] async fn o_agente_de_linha_de_comando_roda_na_pasta_do_projeto() {
-        let projeto=tempfile::tempdir().expect("pasta do projeto");
-        let esperado=projeto.path().canonicalize().expect("caminho real");
+    #[tokio::test] async fn the_cli_agent_runs_in_the_project_folder() {
+        let project_dir=tempfile::tempdir().expect("pasta do projeto");
+        let expected=project_dir.path().canonicalize().expect("caminho real");
         let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("pwd".into()),..config("cli")},workdir:Workdir::default()};
-        provider.workdir.focus(esperado.clone());
+        provider.workdir.focus(expected.clone());
 
         let answer=provider.chat(&[ChatMessage{role:"user".into(),content:"onde estou?".into()}],"modelo").await.expect("pwd");
 
-        assert_eq!(answer.response.trim(),esperado.to_string_lossy(),"o agente foi aberto na pasta do projeto do chat");
+        assert_eq!(answer.response.trim(),expected.to_string_lossy(),"o agente foi aberto na pasta do projeto do chat");
     }
 
     fn script(body:&str)->CliProvider {
@@ -585,25 +597,25 @@ mod tests {
 
     /// O Claude em `stream-json` explica a falha na saída, não no canal de
     /// erro. É esse texto que tem de chegar à tela.
-    #[tokio::test] async fn a_falha_anunciada_na_saida_chega_com_o_motivo() {
+    #[tokio::test] async fn a_failure_announced_on_stdout_arrives_with_its_reason() {
         let provider=script(r#"echo '{"type":"result","subtype":"success","is_error":true,"result":"There is an issue with the selected model"}'; exit 1"#);
         let error=provider.chat(&ask(),"modelo").await.expect_err("falhou").to_string();
         assert!(error.contains("There is an issue with the selected model"),"{error}");
         assert!(error.contains("provider.failed") && error.contains("code: 1"),"{error}");
     }
 
-    #[tokio::test] async fn a_falha_anunciada_vale_mesmo_com_saida_zero() {
+    #[tokio::test] async fn an_announced_failure_counts_even_with_exit_zero() {
         let provider=script(r#"echo '{"type":"result","is_error":true,"result":"cota esgotada"}'"#);
         let error=provider.chat(&ask(),"modelo").await.expect_err("falhou").to_string();
         assert!(error.contains("cota esgotada"),"{error}");
     }
 
-    #[tokio::test] async fn sem_canal_de_erro_a_saida_explica_a_falha() {
+    #[tokio::test] async fn without_stderr_stdout_explains_the_failure() {
         let error=script("echo 'login expirado'; exit 2").chat(&ask(),"modelo").await.expect_err("falhou").to_string();
         assert!(error.contains("login expirado")&&error.contains("code: 2"),"{error}");
     }
 
-    #[tokio::test] async fn a_falha_muda_diz_o_codigo_e_o_que_fazer() {
+    #[tokio::test] async fn a_silent_failure_states_the_code_and_what_to_do() {
         let error=script("exit 3").chat(&ask(),"modelo").await.expect_err("falhou").to_string();
         assert!(error.contains("provider.failedSilent")&&error.contains("code: 3")&&error.contains("command: sh"),"{error}");
     }
@@ -612,7 +624,7 @@ mod tests {
     /// mesma pasta do script — fora do PATH de um app aberto pelo menu. O agente
     /// tem de abrir mesmo assim.
     #[cfg(unix)]
-    #[tokio::test] async fn o_script_do_npm_acha_o_interpretador_ao_lado_dele() {
+    #[tokio::test] async fn the_npm_script_finds_the_interpreter_next_to_it() {
         use std::os::unix::fs::PermissionsExt;
         let bin=tempfile::tempdir().expect("bin");
         let runnable=|path:&std::path::Path,body:&str|{std::fs::write(path,body).expect("script");std::fs::set_permissions(path,std::fs::Permissions::from_mode(0o755)).expect("chmod");};
@@ -623,7 +635,7 @@ mod tests {
         assert!(answer.response.contains("resposta do agente"),"{}",answer.response);
     }
 
-    #[tokio::test] async fn o_agente_que_nao_esta_instalado_diz_isso() {
+    #[tokio::test] async fn an_agent_that_is_not_installed_says_so() {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("jayv-agente-que-nao-existe".into()),..config("cli")},workdir:Workdir::default()};
         let error=provider.chat(&ask(),"modelo").await.expect_err("não instalado");
         assert_eq!(crate::i18n::Text::from(error).key,"provider.notInstalled");
@@ -637,45 +649,45 @@ mod tests {
     }
     /// Um pedaço da rede corta onde quiser, inclusive no meio de um evento.
     /// Ler meio JSON é ler nada — a metade tem de esperar pela outra.
-    #[test] fn a_metade_de_um_evento_espera_pela_outra() {
-        let mut balde=b"data: {\"a\":1}\ndata: {\"b\"".to_vec();
-        assert_eq!(ready_lines(&mut balde),vec!["data: {\"a\":1}".to_string()]);
-        assert_eq!(ready_lines(&mut balde),Vec::<String>::new(),"o que sobrou nao virou linha");
-        balde.extend_from_slice(b":2}\n");
-        assert_eq!(ready_lines(&mut balde),vec!["data: {\"b\":2}".to_string()]);
-        assert!(balde.is_empty(),"o balde esvazia quando a linha fecha");
+    #[test] fn half_an_event_waits_for_the_other_half() {
+        let mut bucket=b"data: {\"a\":1}\ndata: {\"b\"".to_vec();
+        assert_eq!(ready_lines(&mut bucket),vec!["data: {\"a\":1}".to_string()]);
+        assert_eq!(ready_lines(&mut bucket),Vec::<String>::new(),"o que sobrou nao virou linha");
+        bucket.extend_from_slice(b":2}\n");
+        assert_eq!(ready_lines(&mut bucket),vec!["data: {\"b\":2}".to_string()]);
+        assert!(bucket.is_empty(),"o balde esvazia quando a linha fecha");
     }
 
-    #[test] fn o_fluxo_da_openai_rende_texto_e_a_conta_dos_tokens() {
-        let mut colheita=Harvest::default();
-        assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[{\"delta\":{\"content\":\"oi\"}}]}",&mut colheita),Some("oi".into()));
-        assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}",&mut colheita),None);
-        assert_eq!((colheita.input_tokens,colheita.output_tokens),(12,7));
+    #[test] fn the_openai_stream_yields_text_and_token_counts() {
+        let mut gathered=Harvest::default();
+        assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[{\"delta\":{\"content\":\"oi\"}}]}",&mut gathered),Some("oi".into()));
+        assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}",&mut gathered),None);
+        assert_eq!((gathered.input_tokens,gathered.output_tokens),(12,7));
     }
 
-    #[test] fn o_fluxo_da_anthropic_rende_texto_e_a_conta_dos_tokens() {
-        let mut colheita=Harvest::default();
-        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}",&mut colheita),None);
-        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ola\"}}",&mut colheita),Some("ola".into()));
-        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}",&mut colheita),None);
-        assert_eq!((colheita.input_tokens,colheita.output_tokens),(9,4));
+    #[test] fn the_anthropic_stream_yields_text_and_token_counts() {
+        let mut gathered=Harvest::default();
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}",&mut gathered),None);
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ola\"}}",&mut gathered),Some("ola".into()));
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}",&mut gathered),None);
+        assert_eq!((gathered.input_tokens,gathered.output_tokens),(9,4));
     }
 
     /// Comentário, batida de coração e despedida não são resposta. Tratá-los
     /// como texto encheria a resposta de ruído do protocolo.
-    #[test] fn o_que_nao_e_evento_nao_acrescenta_nada() {
-        let mut colheita=Harvest::default();
+    #[test] fn what_is_not_an_event_adds_nothing() {
+        let mut gathered=Harvest::default();
         for line in ["",": keep-alive","event: message_stop","data: [DONE]","data: nao e json","id: 7"] {
-            assert_eq!(read_event(&HttpKind::OpenAi,line,&mut colheita),None,"{line}");
-            assert_eq!(read_event(&HttpKind::Anthropic,line,&mut colheita),None,"{line}");
+            assert_eq!(read_event(&HttpKind::OpenAi,line,&mut gathered),None,"{line}");
+            assert_eq!(read_event(&HttpKind::Anthropic,line,&mut gathered),None,"{line}");
         }
-        assert_eq!(colheita,Harvest::default());
+        assert_eq!(gathered,Harvest::default());
     }
 
     /// O agente não avisa se a linha é resposta ou relato do trabalho dele, e a
     /// configuração também não: `claude --print` escreve o texto direto e
     /// `codex exec` narra. Quem voltar a decidir pelo provedor erra num dos dois.
-    #[test] fn a_linha_do_agente_e_classificada_pelo_conteudo() {
+    #[test] fn an_agent_line_is_classified_by_its_content() {
         assert_eq!(classify("a resposta em texto puro"),Some(Beat::Chunk{text:"a resposta em texto puro\n".into()}));
         assert_eq!(classify("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"oi\"}]}}"),Some(Beat::Chunk{text:"oi\n".into()}));
         assert_eq!(classify("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}"),Some(Beat::Agent{line:"assistant: Read".into()}));
@@ -687,7 +699,7 @@ mod tests {
     /// A escrituração do agente chega dezenas de vezes por resposta. Ela conta
     /// como sinal de vida — quem lê a linha rearma o relógio do silêncio —, mas
     /// virar linha na tela empurraria a portaria e a rota para fora da vista.
-    #[test] fn a_escrituracao_do_agente_nao_vira_etapa() {
+    #[test] fn agent_bookkeeping_does_not_become_a_step() {
         for line in [
             "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":42}",
             "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_name\":\"SessionStart\"}",
@@ -701,7 +713,7 @@ mod tests {
     /// Em `stream-json` o agente conta o trabalho em eventos e a fala dele vem
     /// dentro de um deles. O que fica gravado tem de ser a fala: lida como texto
     /// cru, a resposta do chat seria o protocolo inteiro.
-    #[tokio::test] async fn o_protocolo_do_agente_nao_entra_na_resposta() {
+    #[tokio::test] async fn the_agent_protocol_stays_out_of_the_answer() {
         let stream=[
             "{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/tmp\"}",
             "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":7}",
@@ -711,25 +723,25 @@ mod tests {
         ].join("\n");
         // `cat` primeiro: um agente lê o pedido inteiro antes de responder, e
         // sem isso o teste corre com o fim do processo.
-        let roteiro=format!("cat >/dev/null; printf '%s' '{stream}'");
-        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),roteiro],..config("cli")},workdir:Workdir::default()};
+        let script_body=format!("cat >/dev/null; printf '%s' '{stream}'");
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),script_body],..config("cli")},workdir:Workdir::default()};
         let (pulse,mut beats)=Pulse::channel();
 
         let answer=provider.chat_stream(&[ChatMessage{role:"user".into(),content:"oi".into()}],"modelo",&pulse).await.expect("o agente em eventos");
 
         assert_eq!(answer.response,"ola mundo\n","a resposta e a fala, nao o protocolo");
         drop(pulse);
-        let mut etapas=Vec::new();
-        while let Some(beat)=beats.recv().await { if let Beat::Agent{line}=beat { etapas.push(line); } }
-        assert_eq!(etapas,vec!["system: init".to_string(),"assistant: Read".into(),"result: success".into()],"as etapas sao o trabalho, sem a escrituracao");
+        let mut steps=Vec::new();
+        while let Some(beat)=beats.recv().await { if let Beat::Agent{line}=beat { steps.push(line); } }
+        assert_eq!(steps,vec!["system: init".to_string(),"assistant: Read".into(),"result: success".into()],"as etapas sao o trabalho, sem a escrituracao");
     }
 
     /// O relógio do provedor de linha de comando conta silêncio, não trabalho.
     /// Um agente que fala a cada poucos segundos há dez minutos está vivo; era
     /// o prazo do conjunto que matava o pedido detalhado no meio.
-    #[tokio::test] async fn o_agente_que_fala_de_vez_em_quando_nao_estoura_o_prazo() {
-        let fala="for i in 1 2 3 4; do echo linha $i; sleep 0.4; done";
-        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),fala.into()],timeout:1,..config("cli")},workdir:Workdir::default()};
+    #[tokio::test] async fn an_agent_that_speaks_now_and_then_does_not_time_out() {
+        let chatter="for i in 1 2 3 4; do echo linha $i; sleep 0.4; done";
+        let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),chatter.into()],timeout:1,..config("cli")},workdir:Workdir::default()};
 
         let answer=provider.chat(&[ChatMessage{role:"user".into(),content:"fale devagar".into()}],"modelo").await.expect("o agente falante");
 
@@ -739,28 +751,28 @@ mod tests {
 
     /// E o agente que emudece tem de cair — e cair dizendo o que houve, porque
     /// `CLI provider timed out` mandava o desenvolvedor procurar no lugar errado.
-    #[tokio::test] async fn o_agente_que_emudece_cai_e_diz_por_que() {
+    #[tokio::test] async fn an_agent_that_goes_silent_is_stopped_and_says_why() {
         let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("sleep".into()),args:vec!["60".into()],timeout:1,..config("cli")},workdir:Workdir::default()};
 
-        let erro=provider.chat(&[ChatMessage{role:"user".into(),content:"fique calado".into()}],"modelo").await.expect_err("o agente mudo");
+        let error=provider.chat(&[ChatMessage{role:"user".into(),content:"fique calado".into()}],"modelo").await.expect_err("o agente mudo");
 
-        let erro=erro.to_string();
-        assert!(erro.contains("provider.silent") && erro.contains("seconds: 1"),"o erro diz o que houve e a tela aponta o `timeout`: {erro}");
+        let error=error.to_string();
+        assert!(error.contains("provider.silent") && error.contains("seconds: 1"),"o erro diz o que houve e a tela aponta o `timeout`: {error}");
     }
 
     /// A conversa acompanhada tem de render a mesma resposta que a esperada, e
     /// os pedaços anunciados têm de somar exatamente ela: um pedaço a mais na
     /// tela é texto duplicado, um a menos é texto que ninguém viu chegar.
-    #[tokio::test] async fn o_agente_acompanhado_anuncia_a_mesma_resposta_que_devolve() {
+    #[tokio::test] async fn a_followed_agent_announces_the_same_answer_it_returns() {
         let provider=CliProvider{name:"cli".into(),config:ProviderConfig{command:Some("cat".into()),args:vec![],..config("cli")},workdir:Workdir::default()};
         let (pulse,mut beats)=Pulse::channel();
 
         let answer=provider.chat_stream(&[ChatMessage{role:"user".into(),content:"uma linha\noutra linha".into()}],"modelo",&pulse).await.expect("cat");
 
         drop(pulse);
-        let mut anunciado=String::new();
-        while let Some(beat)=beats.recv().await { if let Beat::Chunk{text}=beat { anunciado.push_str(&text); } }
-        assert_eq!(anunciado,answer.response,"o que a tela viu e o que ficou gravado sao o mesmo texto");
+        let mut announced=String::new();
+        while let Some(beat)=beats.recv().await { if let Beat::Chunk{text}=beat { announced.push_str(&text); } }
+        assert_eq!(announced,answer.response,"o que a tela viu e o que ficou gravado sao o mesmo texto");
         assert!(answer.response.contains("uma linha"),"a resposta chegou: {:?}",answer.response);
     }
 
@@ -770,13 +782,33 @@ mod tests {
         assert!(result.is_err()); assert_eq!(calls.get(),1);
     }
 
-    #[test] fn o_pedido_vai_no_argumento_quando_o_agente_pede() {
+    #[test] fn the_request_goes_as_an_argument_when_the_agent_asks() {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         assert!(provider.inline());
         assert_eq!(provider.args("gpt-5","oi {model}"),["-p","oi {model}","--model","gpt-5"]);
     }
 
-    #[test] fn a_reserva_igual_ao_modelo_sai_da_linha() {
+    /// Um pedido com histórico e contexto estoura a linha de comando: 32.767
+    /// caracteres no Windows (erro 206), 128 KB por argumento no Linux. Ele vai
+    /// pela entrada padrão, e o `-p` sai junto com o lugar do pedido.
+    #[test] fn a_long_request_goes_through_stdin_instead_of_the_argument() {
+        let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
+        let long="x".repeat(INLINE_LIMIT+1);
+        assert!(!provider.inline_for(&long));
+        assert_eq!(provider.args("gpt-5",&long),["--model","gpt-5"]);
+        assert!(provider.inline_for("short"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test] async fn a_long_request_reaches_the_agent_whole_through_stdin() {
+        let long="y".repeat(INLINE_LIMIT*20);
+        let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),"wc -c".into(),"-p".into(),"{prompt}".into()],..config("cli")},workdir:Workdir::default()};
+        let answer=provider.chat(&[ChatMessage{role:"user".into(),content:long.clone()}],"model").await.expect("the agent opens");
+        let counted:usize=answer.response.trim().parse().expect("byte count");
+        assert!(counted>=long.len(),"the whole request arrived: {counted}");
+    }
+
+    #[test] fn a_fallback_equal_to_the_model_is_dropped() {
         let provider=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--model".into(),"{model}".into(),"--fallback-model".into(),"haiku".into()],..config("cli")},workdir:Workdir::default()};
         assert!(!provider.inline());
         assert_eq!(provider.args("haiku",""),["--model","haiku"]);

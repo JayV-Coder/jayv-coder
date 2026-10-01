@@ -205,7 +205,7 @@ mod tests {
 
     fn candidate(prompt:&str,options:&[&str])->Candidate { Candidate{prompt:prompt.into(),options:options.iter().map(|option|option.to_string()).collect()} }
 
-    #[test] fn a_pergunta_no_fim_da_resposta_e_o_enunciado() {
+    #[test] fn the_question_at_the_end_of_the_answer_is_the_prompt() {
         let extracted=extract("Li os três arquivos e o índice está desatualizado.\n\nQuer que eu regenere o índice?").expect("pergunta");
         assert_eq!(extracted,candidate("Quer que eu regenere o índice?",&[]));
     }
@@ -213,11 +213,11 @@ mod tests {
     /// Uma interrogação no meio de um texto que segue explicando não é convite
     /// para responder. Travar o box por causa dela seria pior que não ter
     /// interação nenhuma.
-    #[test] fn uma_pergunta_no_meio_do_texto_nao_conta() {
+    #[test] fn a_question_in_the_middle_of_the_text_does_not_count() {
         assert_eq!(extract("Por que estava lento? Porque o índice era relido a cada busca. Já corrigi."),None);
     }
 
-    #[test] fn a_lista_logo_abaixo_do_enunciado_e_a_alternativa() {
+    #[test] fn the_list_right_below_the_prompt_is_the_options() {
         for list in [
             "- Vite\n- Webpack\n- esbuild",
             "* Vite\n* Webpack\n* esbuild",
@@ -229,17 +229,17 @@ mod tests {
         }
     }
 
-    #[test] fn negrito_e_cabecalho_saem_do_enunciado() {
+    #[test] fn bold_and_headings_are_stripped_from_the_prompt() {
         assert_eq!(extract("**Devo aplicar a migração agora?**").expect("pergunta").prompt,"Devo aplicar a migração agora?");
         assert_eq!(extract("## E o teste, escrevo antes?").expect("pergunta").prompt,"E o teste, escrevo antes?");
     }
 
     /// Uma lista sem pergunta acima dela é um relatório, não uma escolha.
-    #[test] fn uma_lista_sem_enunciado_nao_habilita_nada() {
+    #[test] fn a_list_without_a_prompt_enables_nothing() {
         assert_eq!(extract("Mudei três arquivos:\n\n- lib.rs\n- turns.rs\n- main.js"),None);
     }
 
-    #[test] fn uma_frase_comum_nao_e_item_de_lista() {
+    #[test] fn a_plain_sentence_is_not_a_list_item() {
         assert_eq!(bullet("Ok. Continuo amanhã"),None);
         assert_eq!(bullet("- "),None);
         assert_eq!(bullet("1."),None);
@@ -248,17 +248,17 @@ mod tests {
 
     /// Sem o JEV a leitura é a mais simples que se sustenta. Ela habilita a
     /// interação do mesmo jeito: o box não fica esperando uma chave de API.
-    #[test] fn a_reserva_le_lista_como_escolha_e_enunciado_sozinho_como_sim_ou_nao() {
-        let escolha=guess(&candidate("Qual deles?",&["Vite","Webpack"])).expect("escolha");
-        assert_eq!((escolha.kind,escolha.options.len(),escolha.source.as_str()),(Shape::Single,2,LOCAL_SOURCE));
-        let confirmacao=guess(&candidate("Regenero o índice?",&[])).expect("sim ou não");
-        assert_eq!((confirmacao.kind,confirmacao.options.len()),(Shape::Noul,0));
+    #[test] fn the_fallback_reads_a_list_as_a_choice_and_a_lone_prompt_as_yes_or_no() {
+        let choice=guess(&candidate("Qual deles?",&["Vite","Webpack"])).expect("escolha");
+        assert_eq!((choice.kind,choice.options.len(),choice.source.as_str()),(Shape::Single,2,LOCAL_SOURCE));
+        let confirmation=guess(&candidate("Regenero o índice?",&[])).expect("sim ou não");
+        assert_eq!((confirmation.kind,confirmation.options.len()),(Shape::Noul,0));
     }
 
     /// O "não é pergunta" do JEV é veredito, não silêncio: quem voltar a
     /// consultar a heurística por cima dele faz o box travar contra a decisão
     /// de quem devia decidir.
-    #[test] fn o_veredito_de_que_nao_ha_pergunta_nao_habilita_nada() {
+    #[test] fn a_no_question_verdict_enables_nothing() {
         let extracted=candidate("Qual deles?",&["Vite","Webpack"]);
         assert_eq!(shape("none",&extracted,true),None);
         assert_eq!(shape("single",&extracted,true),Some(Shape::Single));
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(shape("noul",&candidate("Sigo?",&[]),false),Some(Shape::Noul));
     }
 
-    #[test] fn a_escolha_clicada_vira_sempre_a_mesma_linha() {
+    #[test] fn a_clicked_choice_always_becomes_the_same_line() {
         let options=vec!["Vite".to_string(),"esbuild".to_string()];
         assert_eq!(i18n::for_model(&compose("Sigo?",Shape::Noul,&[],&[YES.into()],None).expect("sim")),"Answer to the question «Sigo?»: YES");
         assert_eq!(i18n::for_model(&compose("Sigo?",Shape::Noul,&[],&[NO.into()],None).expect("não")),"Answer to the question «Sigo?»: NO");
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(i18n::for_model(&compose("Qual?",Shape::Single,&options,&[],Some(" só no build ")).expect("texto")),"Answer to the question «Qual?»: só no build");
     }
 
-    #[test] fn a_escolha_que_a_pergunta_nao_ofereceu_e_recusada() {
+    #[test] fn a_choice_the_question_did_not_offer_is_refused() {
         let options=vec!["Vite".to_string()];
         assert!(compose("Qual?",Shape::Single,&options,&["Rollup".into()],None).is_err(),"a tela não inventa alternativa");
         assert!(compose("Qual?",Shape::Single,&options,&[],None).is_err(),"sem escolha e sem texto não há resposta");
@@ -291,32 +291,32 @@ mod tests {
     /// Um `SIM` sozinho seria barrado por faltas que o pedido de origem já tinha
     /// suprido. Quem voltar a pontuar a resposta sozinha faz a portaria barrar o
     /// próprio fluxo que ela mandou o modelo abrir.
-    #[test] fn o_par_carrega_o_pedido_que_fez_a_pergunta_nascer() {
-        let par=pair("Regenere o índice do RAG em src-tauri/src/rag.rs e diga quantos arquivos entraram.","Answer to the question «Sigo?»: YES");
-        assert!(par.starts_with("Regenere o índice"),"o pedido original abre o par: {par}");
-        assert!(par.ends_with("YES"),"a resposta fecha o par: {par}");
-        assert!(par.contains("«Sigo?»"),"a pergunta viaja dentro da linha da resposta: {par}");
+    #[test] fn the_pair_carries_the_request_that_raised_the_question() {
+        let paired=pair("Regenere o índice do RAG em src-tauri/src/rag.rs e diga quantos arquivos entraram.","Answer to the question «Sigo?»: YES");
+        assert!(paired.starts_with("Regenere o índice"),"o pedido original abre o par: {paired}");
+        assert!(paired.ends_with("YES"),"a resposta fecha o par: {paired}");
+        assert!(paired.contains("«Sigo?»"),"a pergunta viaja dentro da linha da resposta: {paired}");
         assert_eq!(pair("   ","Answer: YES"),"Answer: YES","sem pedido de origem, o par é a resposta");
     }
 
     /// A prova do par contra a portaria de verdade: a mesma resposta, pontuada
     /// sozinha e em par. O portão não sabe que é resposta — ele lê texto —, e é
     /// por isso que o par tem de chegar montado até ele.
-    #[test] fn a_portaria_pontua_melhor_a_resposta_em_par_do_que_o_sim_sozinho() {
+    #[test] fn the_gate_scores_the_paired_answer_higher_than_a_bare_yes() {
         use crate::{gatekeeper::{self,EntryVerdict},turns::{Turn,TurnStatus}};
         let turn=Turn{id:"t1".into(),chat_id:"c1".into(),code:"XY4T9B·02".into(),ordinal:2,status:TurnStatus::Flying,created_at:chrono::Utc::now()};
         let judge=|text:&str|gatekeeper::judge(&turn,text,&gatekeeper::heuristic_entry(text),"local");
 
-        let sozinho=compose("Regenero o índice agora?",Shape::Noul,&[],&[YES.into()],None).expect("resposta");
-        let par=pair("Regenere o índice do RAG em src-tauri/src/rag.rs; pronto quando cargo test passar.",&sozinho);
+        let bare_answer=compose("Regenero o índice agora?",Shape::Noul,&[],&[YES.into()],None).expect("resposta");
+        let paired=pair("Regenere o índice do RAG em src-tauri/src/rag.rs; pronto quando cargo test passar.",&bare_answer);
 
-        let solto=judge(&sozinho);
-        let junto=judge(&par);
-        assert!(junto.score>solto.score,"o par diz onde mexer e quando está pronto: {} contra {}",junto.score,solto.score);
-        assert_ne!(junto.verdict,EntryVerdict::Block,"a portaria não barra o fluxo que ela própria mandou abrir");
+        let bare=judge(&bare_answer);
+        let paired_check=judge(&paired);
+        assert!(paired_check.score>bare.score,"o par diz onde mexer e quando está pronto: {} contra {}",paired_check.score,bare.score);
+        assert_ne!(paired_check.verdict,EntryVerdict::Block,"a portaria não barra o fluxo que ela própria mandou abrir");
     }
 
-    #[test] fn o_tipo_vai_e_volta_do_banco_como_texto() {
+    #[test] fn the_kind_round_trips_through_the_database_as_text() {
         for kind in [Shape::Noul,Shape::Single,Shape::Multiple] {
             assert_eq!(Shape::parse(kind.as_str()).expect("tipo"),kind);
         }

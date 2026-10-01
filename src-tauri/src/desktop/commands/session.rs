@@ -66,6 +66,8 @@ impl From<&Identity> for SessionView {
 async fn adopt(desk:&SharedDesktopState,workspace:&SharedWorkspace,store:WorkspaceStore)->anyhow::Result<()> {
     let (mut desk,mut workspace)=both(desk,workspace).await;
     desk.orchestrator.use_llm(&store.llm_settings()?);
+    let defaults=desk.orchestrator.core_defaults();
+    desk.orchestrator.use_core(&store.core_settings(&defaults)?);
     desk.orchestrator.memory=MemoryManager::default();
     for chat in store.snapshot()?.chats {
         let conversation=store.conversation(&chat.id)?;
