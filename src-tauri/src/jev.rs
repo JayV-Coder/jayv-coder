@@ -2,9 +2,8 @@ use crate::providers::{retry_after, with_retry, RetryError, RetryPolicy};
 use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::{BTreeMap, HashMap}, env, time::Duration};
+use std::{collections::{BTreeMap, HashMap}, time::Duration};
 
-pub const DEFAULT_BASE_URL:&str="https://api.typesafe.ai";
 pub const DEFAULT_MODEL:&str="jev-latest";
 pub const DEFAULT_TIMEOUT:u64=30;
 pub const DEFAULT_ATTEMPTS:u32=4;
@@ -16,10 +15,9 @@ pub const COMPLEXITY_BUCKETS:[&str;4]=["trivial","simple","medium","complex"];
 pub const ROUTING_QUESTION_IDS:[&str;5]=["complexity","intent","is_destructive","needs_repository_context","needs_tools"];
 pub const VERIFICATION_QUESTION_IDS:[&str;3]=["addresses_request","unsupported_claims","verifiable_claims"];
 
-pub fn api_key()->Option<String>{env::var("TYPESAFE_API_KEY").ok().map(|value|value.trim().to_string()).filter(|value|!value.is_empty())}
-pub fn base_url()->String{env::var("TYPESAFE_BASE_URL").ok().map(|value|value.trim().to_string()).filter(|value|!value.is_empty()).unwrap_or_else(||DEFAULT_BASE_URL.into())}
-pub fn model()->String{env::var("TYPESAFE_DEFAULT_MODEL").ok().map(|value|value.trim().to_string()).filter(|value|!value.is_empty()).unwrap_or_else(||DEFAULT_MODEL.into())}
-pub fn is_configured()->bool{api_key().is_some()}
+/// O Jev está ao alcance quando há sessão: a chave da TypeSafe mora na função
+/// `jev` do projeto, e é o token do usuário que abre a porta.
+pub fn is_configured()->bool{crate::cloud::session::current().is_some()}
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
 pub struct NoulCriteria{#[serde(rename="true")] pub yes:Value,#[serde(rename="false")] pub no:Value}
@@ -104,70 +102,82 @@ fn error_detail(body:&str)->String {
 fn status_error(status:u16,body:&str)->anyhow::Error {
     let detail=error_detail(body);
     match status {
-        401=>anyhow!("a TypeSafe recusou a credencial (401); confira `TYPESAFE_API_KEY` no `.env` — sem uma chave válida o Jev continua funcionando apenas com as heurísticas locais"),
+        401=>anyhow!("sessão expirada (401): entre de novo para falar com o Jev — até lá a portaria segue com as heurísticas locais"),
+        429 if is_daily_limit(body)=>anyhow!("limite diário do Jev atingido: a portaria segue com as heurísticas locais até amanhã"),
         422=>anyhow!("a TypeSafe rejeitou a requisição (422): {detail}"),
         429=>anyhow!("a TypeSafe aplicou limite de requisições (429) e as tentativas se esgotaram: {detail}"),
         529=>anyhow!("o serviço da TypeSafe está sobrecarregado (529) e as tentativas se esgotaram: {detail}"),
         _=>anyhow!("a TypeSafe retornou {status}: {detail}"),
     }
 }
+/// A função `jev` responde 429 com `code: daily_limit` quando o usuário gastou
+/// as chamadas do dia — diferente do 429 passageiro da TypeSafe.
+fn is_daily_limit(body:&str)->bool { serde_json::from_str::<Value>(body).ok().and_then(|value|value.get("code").and_then(Value::as_str).map(|code|code=="daily_limit")).unwrap_or(false) }
+fn worth_retrying(status:u16,body:&str)->bool { retryable_status(status) && !is_daily_limit(body) }
 fn transport_error(error:reqwest::Error)->anyhow::Error {
-    if error.is_timeout(){anyhow!("a TypeSafe excedeu o tempo limite; verifique a conexão de rede ou aumente o tempo limite do cliente Jev")}
-    else if error.is_connect(){anyhow!("não foi possível conectar à TypeSafe; verifique a conexão de rede e `TYPESAFE_BASE_URL`")}
-    else{anyhow!("falha ao enviar a solicitação à TypeSafe: {}",error.without_url())}
+    if error.is_timeout(){anyhow!("o Jev excedeu o tempo limite; verifique a conexão de rede")}
+    else if error.is_connect(){anyhow!("não foi possível conectar ao Jev; verifique a conexão de rede")}
+    else{anyhow!("falha ao enviar a solicitação ao Jev: {}",error.without_url())}
 }
 
-pub struct Client{http:reqwest::Client,base_url:String,api_key:String,model:String,attempts:u32}
+/// O corpo da chamada à função: o conjunto de perguntas, o estado e, quando
+/// só parte do conjunto vale para este caso, quais perguntas.
+pub fn call_body(set:&str,state:Value,include:Option<&[&str]>)->Value {
+    let mut body=json!({"set":set,"state":state});
+    if let Some(include)=include {body["include"]=json!(include);}
+    body
+}
+
+pub struct Client{http:reqwest::Client,token:String,attempts:u32}
 impl Client {
-    pub fn from_env()->Result<Self> {
-        let key=api_key().ok_or_else(||anyhow!("a integração com o Jev da TypeSafe não está configurada; defina `TYPESAFE_API_KEY` no `.env` para ativar o roteamento semântico"))?;
-        Self::new(key,base_url(),model(),DEFAULT_TIMEOUT)
+    pub fn from_session()->Result<Self> {
+        let token=crate::cloud::session::current().ok_or_else(||anyhow!("sem sessão: entre na sua conta para o Jev avaliar os pedidos"))?;
+        Self::for_session(token)
     }
-    pub fn new(api_key:impl Into<String>,base_url:impl Into<String>,model:impl Into<String>,timeout:u64)->Result<Self> {
-        let api_key=api_key.into().trim().to_string();
-        if api_key.is_empty(){return Err(anyhow!("informe a `TYPESAFE_API_KEY` para falar com o Jev"));}
-        let http=reqwest::Client::builder().timeout(Duration::from_secs(timeout.max(5))).build().context("não foi possível criar o cliente HTTP da TypeSafe")?;
-        Ok(Self{http,base_url:base_url.into().trim().trim_end_matches('/').to_string(),api_key,model:model.into(),attempts:DEFAULT_ATTEMPTS})
+    pub fn for_session(token:impl Into<String>)->Result<Self> {
+        let token=token.into().trim().to_string();
+        if token.is_empty(){return Err(anyhow!("sem sessão para falar com o Jev"));}
+        let http=reqwest::Client::builder().timeout(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("não foi possível criar o cliente HTTP do Jev")?;
+        Ok(Self{http,token,attempts:DEFAULT_ATTEMPTS})
     }
     pub fn with_attempts(mut self,attempts:u32)->Self{self.attempts=attempts.max(1);self}
-    pub fn model_name(&self)->&str{&self.model}
-    pub fn endpoint(&self)->String{format!("{}/v1/systemone",self.base_url)}
+    pub fn endpoint(&self)->String{format!("{}/functions/v1/jev",crate::cloud::PROJECT_URL)}
 
-    pub async fn evaluate(&self,state:impl Into<Value>,questions:BTreeMap<String,Question>)->Result<Evaluation> {
-        let request=Request::new(state,self.model.clone(),questions);
-        request.validate()?;
-        self.send(&request).await
+    /// Pede ao Jev a avaliação de `state` pelas perguntas do conjunto `set`,
+    /// guardadas no Supabase.
+    pub async fn evaluate(&self,set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation> {
+        self.send(&call_body(set,state.into(),include)).await
     }
 
     pub async fn route(&self,input:&RoutingInput)->Result<RoutingDecision> {
-        let evaluation=self.evaluate(routing_state(input),routing_questions()).await?;
+        let evaluation=self.evaluate("routing",routing_state(input),None).await?;
         RoutingDecision::from_evaluation(&evaluation)
     }
 
     pub async fn verify(&self,input:&VerificationInput)->Result<VerificationVerdict> {
-        if !input.has_context(){return Ok(VerificationVerdict::unchecked(self.model.clone()));}
-        let evaluation=self.evaluate(verification_state(input),verification_questions()).await?;
+        if !input.has_context(){return Ok(VerificationVerdict::unchecked(DEFAULT_MODEL));}
+        let evaluation=self.evaluate("verification",verification_state(input),None).await?;
         VerificationVerdict::from_evaluation(&evaluation)
     }
 
-    async fn send(&self,request:&Request)->Result<Evaluation> {
+    async fn send(&self,body:&Value)->Result<Evaluation> {
         let endpoint=self.endpoint();
         let endpoint=endpoint.as_str();
         with_retry(retry_policy(self.attempts),move |_attempt| async move {
-            let response=self.http.post(endpoint).bearer_auth(&self.api_key).json(request).send().await.map_err(|error|RetryError::retryable(transport_error(error),None))?;
+            let response=self.http.post(endpoint).header("apikey",crate::cloud::PUBLISHABLE_KEY).bearer_auth(&self.token).json(body).send().await.map_err(|error|RetryError::retryable(transport_error(error),None))?;
             let status=response.status().as_u16();
             let pause=retry_after(response.headers());
             let body=response.text().await.unwrap_or_default();
-            if (200..300).contains(&status){return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("a TypeSafe devolveu uma resposta em formato inesperado: {}",error_detail(&body)))));}
+            if (200..300).contains(&status){return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("o Jev devolveu uma resposta em formato inesperado: {}",error_detail(&body)))));}
             let failure=status_error(status,&body);
-            Err(if retryable_status(status){RetryError::retryable(failure,pause)}else{RetryError::fatal(failure)})
+            Err(if worth_retrying(status,&body){RetryError::retryable(failure,pause)}else{RetryError::fatal(failure)})
         }).await
     }
 }
 
-pub async fn evaluate(state:impl Into<Value>,questions:BTreeMap<String,Question>)->Result<Evaluation>{Client::from_env()?.evaluate(state,questions).await}
-pub async fn route(input:&RoutingInput)->Result<RoutingDecision>{Client::from_env()?.route(input).await}
-pub async fn verify(input:&VerificationInput)->Result<VerificationVerdict>{Client::from_env()?.verify(input).await}
+pub async fn evaluate(set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation>{Client::from_session()?.evaluate(set,state,include).await}
+pub async fn route(input:&RoutingInput)->Result<RoutingDecision>{Client::from_session()?.route(input).await}
+pub async fn verify(input:&VerificationInput)->Result<VerificationVerdict>{Client::from_session()?.verify(input).await}
 
 #[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
 pub struct RoutingInput {
@@ -539,12 +549,23 @@ impl VerificationVerdict {
     }
 
     #[test]
-    fn surfaces_validation_detail_and_a_portuguese_credential_message() {
+    fn surfaces_validation_detail_and_a_portuguese_session_message() {
         let invalid=status_error(422,r#"{"detail":"questions.complexity.criteria: must contain at least 2 items"}"#).to_string();
         assert!(invalid.contains("422") && invalid.contains("questions.complexity.criteria"),"{invalid}");
-        let unauthorized=status_error(401,r#"{"error":{"message":"invalid api key"}}"#).to_string();
-        assert!(unauthorized.contains("TYPESAFE_API_KEY") && unauthorized.contains("heurísticas locais"),"{unauthorized}");
+        let unauthorized=status_error(401,r#"{"error":"sessão inválida ou expirada","code":"session"}"#).to_string();
+        assert!(unauthorized.contains("sessão expirada") && unauthorized.contains("heurísticas locais"),"{unauthorized}");
         assert_eq!(error_detail("boom"),"boom");
+    }
+
+    /// O limite do dia não passa esperando alguns segundos: tentar de novo
+    /// só gastaria tempo. O 429 da TypeSafe, sim, é passageiro.
+    #[test]
+    fn o_limite_diario_nao_e_tentado_de_novo() {
+        let body=r#"{"error":"limite diário do Jev atingido","code":"daily_limit"}"#;
+        assert!(status_error(429,body).to_string().contains("limite diário do Jev"));
+        assert!(!worth_retrying(429,body));
+        assert!(worth_retrying(429,r#"{"error":{"message":"rate limited"}}"#));
+        assert!(worth_retrying(503,""));
     }
 
     #[test]
@@ -715,11 +736,11 @@ impl VerificationVerdict {
     }
 
     #[test]
-    fn never_panics_without_a_configured_key() {
-        assert!(Client::new("   ",DEFAULT_BASE_URL,DEFAULT_MODEL,DEFAULT_TIMEOUT).is_err());
-        let client=Client::new("chave","https://api.typesafe.ai/",DEFAULT_MODEL,DEFAULT_TIMEOUT).expect("cliente");
-        assert_eq!(client.endpoint(),"https://api.typesafe.ai/v1/systemone");
-        assert_eq!(client.model_name(),"jev-latest");
+    fn o_jev_e_a_funcao_do_projeto_chamada_com_a_sessao() {
+        assert!(Client::for_session("   ").is_err());
+        let client=Client::for_session("jwt").expect("cliente");
+        assert_eq!(client.endpoint(),format!("{}/functions/v1/jev",crate::cloud::PROJECT_URL));
+        assert_eq!(call_body("entry",json!({"user_request":"oi"}),None),json!({"set":"entry","state":{"user_request":"oi"}}));
+        assert_eq!(call_body("asking",json!({}),Some(&["kind"])),json!({"set":"asking","state":{},"include":["kind"]}));
     }
 }
-

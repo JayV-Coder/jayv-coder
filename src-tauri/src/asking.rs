@@ -120,12 +120,11 @@ pub fn questions()->BTreeMap<String,Question> {
 }
 
 async fn consult(answer:&str,candidate:&Candidate)->Result<Option<Pending>> {
-    let mut questions=questions();
-    if candidate.options.is_empty() {questions.remove(OPTIONS_QUESTION);}
+    let include:&[&str]=if candidate.options.is_empty() {&[KIND_QUESTION]} else {&[KIND_QUESTION,OPTIONS_QUESTION]};
     let state=json!({"answer":answer,"question":candidate.prompt,"options":candidate.options});
-    let evaluation=jev::evaluate(state,questions).await?;
+    let evaluation=jev::evaluate("asking",state,Some(include)).await?;
     let kind=evaluation.choice(KIND_QUESTION).ok_or_else(||anyhow!("o Jev não devolveu a resposta `{KIND_QUESTION}`"))?;
-    let real=match evaluation.noul(OPTIONS_QUESTION) { Some(noul)=>noul>=NOUL_LINE, None=>candidate.options.is_empty() };
+    let real=match evaluation.noul(OPTIONS_QUESTION) { Some(noul)=>noul>=crate::local::global::current_parameters().noul_line, None=>candidate.options.is_empty() };
     Ok(shape(kind,candidate,real).map(|kind|enable(kind,candidate,JEV_SOURCE)))
 }
 

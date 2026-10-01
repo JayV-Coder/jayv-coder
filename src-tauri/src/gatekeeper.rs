@@ -123,12 +123,15 @@ pub struct EntryReading{pub scope_score:f64,pub goal_is_clear:f64,pub says_where
 
 impl EntryReading {
     pub fn scope_level(&self)->usize{let score=if self.scope_score.is_finite(){self.scope_score}else{0.0};if score<0.67{0}else if score<1.34{1}else{2}}
-    pub fn clarity(&self)->f64 {
-        WEIGHTS.iter().map(|(id,weight)|weight*match *id {
+    pub fn clarity(&self)->f64 { self.clarity_with(&crate::local::global::current_parameters().weights) }
+    /// Um peso cujo critério esta versão não conhece não conta.
+    pub fn clarity_with(&self,weights:&BTreeMap<String,f64>)->f64 {
+        weights.iter().map(|(id,weight)|weight*match id.as_str() {
             "goal_is_clear"=>self.goal_is_clear,
             "says_where"=>self.says_where,
             "says_when_done"=>self.says_when_done,
-            _=>1.0-self.bundles_requests,
+            "bundles_requests"=>1.0-self.bundles_requests,
+            _=>0.0,
         }.clamp(0.0,1.0)).sum()
     }
     pub fn from_evaluation(evaluation:&Evaluation)->Result<Self> {
@@ -153,13 +156,22 @@ fn criterion(id:&str,label:&str,value:f64,demand:f64,inverted:bool,reading:(&str
     Criterion{id:id.into(),label:label.into(),percent:reached,band:Some(band),reading:if within{reading.0.into()}else{reading.1.into()},inverted}
 }
 
+/// Passa, pergunta ou bloqueia: a clareza contra a exigência do tamanho, com
+/// os números do cache.
+pub fn verdict_with(reading:&EntryReading,parameters:&crate::local::global::JevParameters)->EntryVerdict {
+    let demand=parameters.scope_demand[reading.scope_level()];
+    let clarity=reading.clarity_with(&parameters.weights);
+    if clarity+parameters.block_margin<demand{EntryVerdict::Block}else if clarity<demand{EntryVerdict::Ask}else{EntryVerdict::Pass}
+}
+
 /// Monta o veredito a partir das leituras, aplicando a exigência do tamanho.
 pub fn judge(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str)->EntryCheck {
+    let parameters=crate::local::global::current_parameters();
     let level=reading.scope_level();
-    let demand=SCOPE_DEMAND[level];
-    let clarity=reading.clarity();
-    let verdict=if clarity+BLOCK_MARGIN<demand{EntryVerdict::Block}else if clarity<demand{EntryVerdict::Ask}else{EntryVerdict::Pass};
-    let scope=SCOPE_LEVELS[level];
+    let demand=parameters.scope_demand[level];
+    let clarity=reading.clarity_with(&parameters.weights);
+    let verdict=verdict_with(reading,&parameters);
+    let scope=parameters.scope_levels[level].as_str();
     let criteria=vec![
         Criterion{id:"scope".into(),label:"Tamanho do pedido".into(),percent:percent(reading.scope_score/2.0),band:None,reading:scope.into(),inverted:false},
         criterion("goal_is_clear","Objetivo claro",reading.goal_is_clear,demand,false,("o pedido diz o que quer","não dá para saber o que você quer ao final")),
@@ -216,7 +228,7 @@ pub fn entry_questions()->BTreeMap<String,Question> {
 }
 
 pub async fn evaluate_entry(prompt:&str,project:&str,languages:&[String])->Result<EntryReading> {
-    let evaluation=jev::evaluate(entry_state(prompt,project,languages),entry_questions()).await?;
+    let evaluation=jev::evaluate("entry",entry_state(prompt,project,languages),None).await?;
     EntryReading::from_evaluation(&evaluation)
 }
 
@@ -233,7 +245,7 @@ fn regexes()->&'static (Regex,Regex,Regex,Regex,Regex) {
     ))
 }
 
-/// Uma leitura só com o texto do pedido, para quando `TYPESAFE_API_KEY` não
+/// Uma leitura só com o texto do pedido, para quando não há sessão
 /// está definida. Deliberadamente generosa: a portaria local não deve barrar
 /// mais que o Jev.
 pub fn heuristic_entry(prompt:&str)->EntryReading {
@@ -385,6 +397,20 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
 
 #[cfg(test)] mod tests {
     use super::*;
+
+    /// Os números do painel valem: uma margem maior bloqueia o que a padrão
+    /// só deixaria passar com ressalva.
+    #[test]
+    fn os_parametros_do_cache_mudam_o_veredito() {
+        let reading=EntryReading{scope_score:0.0,goal_is_clear:0.0,says_where:0.0,says_when_done:0.0,bundles_requests:0.6};
+        let defaults=crate::local::global::JevParameters::default();
+        assert_eq!(verdict_with(&reading,&defaults),EntryVerdict::Block);
+        let mut lenient=defaults.clone();
+        lenient.block_margin=0.5;
+        assert_eq!(verdict_with(&reading,&lenient),EntryVerdict::Ask);
+        lenient.weights=std::collections::BTreeMap::from([("bundles_requests".to_string(),1.0)]);
+        assert_eq!(verdict_with(&reading,&lenient),EntryVerdict::Pass,"só o peso que veio do cache conta");
+    }
     use crate::{config::{Config,PermissionsConfig,PrivacyConfig},turns::TurnStatus};
 
     /// Um turno de mentira, do tamanho que o portão precisa: ele só lê o id, o

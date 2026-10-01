@@ -26,6 +26,14 @@ pub enum SessionError {
     Invalid(String),
 }
 
+/// O token da sessão validada agora, para quem fala com o Supabase em nome do
+/// usuário — o Jev, por exemplo. O desktop o troca a cada `set_session`.
+static CURRENT:std::sync::RwLock<Option<String>>=std::sync::RwLock::new(None);
+
+pub fn set_current(token:Option<String>) { *CURRENT.write().unwrap_or_else(|poisoned|poisoned.into_inner())=token; }
+
+pub fn current()->Option<String> { CURRENT.read().unwrap_or_else(|poisoned|poisoned.into_inner()).clone() }
+
 #[derive(Deserialize)]
 struct Claims { sub:String, exp:i64, #[serde(default)] email:Option<String> }
 

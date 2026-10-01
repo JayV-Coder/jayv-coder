@@ -47,6 +47,14 @@ impl JevParameters {
     }
 }
 
+/// Os parâmetros em uso agora. O desktop os troca quando o cache é
+/// atualizado; até lá valem as constantes.
+static CURRENT:std::sync::RwLock<Option<JevParameters>>=std::sync::RwLock::new(None);
+
+pub fn current_parameters()->JevParameters { CURRENT.read().unwrap_or_else(|poisoned|poisoned.into_inner()).clone().unwrap_or_default() }
+
+pub fn set_current_parameters(parameters:JevParameters) { *CURRENT.write().unwrap_or_else(|poisoned|poisoned.into_inner())=Some(parameters); }
+
 pub struct GlobalCache { connection:Connection }
 
 impl GlobalCache {
