@@ -18,3 +18,4 @@ export { ToggleRow } from "./ToggleRow";
 export { CheckList } from "./CheckList";
 export { AgentProbeLine } from "./AgentProbeLine";
 export { SettingsSection } from "./SettingsSection";
+export { ConnectionNote } from "./ConnectionNote";

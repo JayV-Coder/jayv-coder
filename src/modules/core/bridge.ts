@@ -25,7 +25,19 @@ export const commands = {
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),
   checkAgent: (command: string) => invoke<AgentProbe>("check_agent", { command }),
+  setSession: (token: string) => invoke<SessionView>("set_session", { token }),
+  clearSession: () => invoke<void>("clear_session"),
+  connectionStatus: () => invoke<ConnectionStatus>("connection_status"),
+  getLocales: () => invoke<{ id: string; name: string; rtl: boolean; position: number }[]>("get_locales"),
+  getTranslations: (locale: string) => invoke<Record<string, string | Record<string, string>>>("get_translations", { locale }),
 };
+
+/** A sessão que o núcleo aceitou. */
+export interface SessionView { userId: string; email: string | null; expiresAt: number }
+
+/** A conexão com o Supabase, como o motor de sincronização a vê. */
+export type Link = "signedOut" | "offline" | "online" | "expired";
+export interface ConnectionStatus { link: Link; pending: number; failed: number }
 
 /** Os avisos que o núcleo manda (ver `src-tauri/src/desktop/events.rs`). */
 export interface CoreEvents {
@@ -36,6 +48,8 @@ export interface CoreEvents {
   "turn-chunk": { chatId: string; turnId: string; text: string };
   "gate-entry": { check: EntryCheck };
   "gate-exit": { checks: ExitCheck[] };
+  "link-changed": { link: Link };
+  "translations-updated": null;
 }
 
 export function onCore<K extends keyof CoreEvents>(event: K, handler: (payload: CoreEvents[K]) => void): Promise<UnlistenFn> {

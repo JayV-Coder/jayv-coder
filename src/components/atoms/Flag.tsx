@@ -20,7 +20,7 @@ const bands = (colors: string[], vertical = false) => colors.map((fill, i) => {
 
 // Desenhadas à mão em vez de emoji: o WebKit do Linux nem sempre tem fonte
 // com bandeiras, e o seletor viraria uma fileira de letras soltas.
-const FLAGS: Record<Locale, ReactNode> = {
+const FLAGS: Record<string, ReactNode> = {
   "pt-BR": <>
     <rect width={30} height={20} fill="#009c3b" />
     <polygon points="15,2.2 27.4,10 15,17.8 2.6,10" fill="#ffdf00" />
@@ -65,7 +65,7 @@ const FLAGS: Record<Locale, ReactNode> = {
 export function Flag({ locale, className, ...props }: { locale: Locale } & SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 30 20" aria-hidden="true" className={cn("h-3.5 w-[21px] shrink-0 rounded-[2px] shadow-[0_0_0_1px_rgba(255,255,255,0.12)]", className)} {...props}>
-      {FLAGS[locale]}
+      {FLAGS[locale] ?? null}
     </svg>
   );
 }

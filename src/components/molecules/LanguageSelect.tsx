@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { CheckIcon, ChevronsUpDownIcon, SearchIcon } from "lucide-react";
-import { LOCALES, setLocale, useLocale, useT, type Locale } from "@/modules/i18n";
+import { setLocale, useLocale, useLocales, useT, type Locale } from "@/modules/i18n";
 import { Flag } from "@/components/atoms";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ const fold = (text: string) => text.normalize("NFD").replace(/\p{Diacritic}/gu, 
 export function LanguageSelect() {
   const t = useT();
   const locale = useLocale();
+  const locales = useLocales();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -21,13 +22,13 @@ export function LanguageSelect() {
   const options = useMemo(() => {
     const here = new Intl.DisplayNames([locale], { type: "language" });
     const english = new Intl.DisplayNames(["en"], { type: "language" });
-    return LOCALES.map((option) => {
+    return locales.map((option) => {
       const translated = here.of(option.id) ?? option.name;
       return { id: option.id as Locale, name: option.name, translated, search: fold([option.name, translated, english.of(option.id), option.id].join(" ")) };
     });
-  }, [locale]);
+  }, [locale, locales]);
   const shown = options.filter((option) => option.search.includes(fold(query.trim())));
-  const current = options.find((option) => option.id === locale)!;
+  const current = options.find((option) => option.id === locale) ?? options[0];
 
   useEffect(() => { setActive(Math.max(0, shown.findIndex((option) => option.id === locale))); }, [query, open]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" }); }, [active]);
