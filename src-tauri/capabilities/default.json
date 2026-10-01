@@ -1,1 +1,1 @@
-{"$schema": "../gen/schemas/desktop-schema.json", "identifier": "default", "description": "Default application capability", "windows": ["main"], "permissions": ["core:default", "dialog:allow-open", "updater:default", "process:allow-restart"]}
+{"$schema": "../gen/schemas/desktop-schema.json", "identifier": "default", "description": "Default application capability", "windows": ["main"], "permissions": ["core:default", "dialog:allow-open", "updater:default", "process:allow-restart", "opener:default", "deep-link:default"]}

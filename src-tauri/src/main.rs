@@ -28,8 +28,14 @@ fn record_startup_error(error:&anyhow::Error) {
     }
 }
 
+/// Os argumentos sem os links `jayv://`: eles são do plugin de deep link, que
+/// os lê do processo e os entrega à janela já aberta.
+fn parse<I,T>(args:I)->Result<Cli,clap::Error> where I:IntoIterator<Item=T>,T:Into<std::ffi::OsString>+Clone {
+    Cli::try_parse_from(args.into_iter().map(Into::into).filter(|arg:&std::ffi::OsString|!arg.to_string_lossy().starts_with("jayv://")))
+}
+
 fn main()->Result<()> {
-    let cli=Cli::parse();
+    let cli=parse(std::env::args_os()).unwrap_or_else(|error|error.exit());
     let desktop=cli.command.is_none();
     let result=run(cli);
     if desktop { if let Err(error)=&result { record_startup_error(error); } }
@@ -44,5 +50,21 @@ fn run(cli:Cli)->Result<()> {
         Some(Commands::Index)=>{let orchestrator=Orchestrator::new(config_path,root)?;println!("Indexed {} files",orchestrator.rag.len());Ok(())},
         Some(Commands::Version)=>{println!("JayV v{}",env!("CARGO_PKG_VERSION"));Ok(())},
         Some(Commands::Run{task})=>{let runtime=tokio::runtime::Runtime::new()?;runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,root)?;let result=orchestrator.process(&task.join(" "),Some("cli"),&jayv_lib::progress::Pulse::silent()).await;if let Some(response)=result.result{println!("{}",response.response);Ok(())}else{Err(anyhow::anyhow!(result.error.unwrap_or_else(||"task failed".into())))}})},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// O sistema abre o JayV com o link do login (`jayv://auth/callback?code=…`)
+    /// como argumento. Se o clap o lesse como subcomando, o processo morreria
+    /// antes de repassar o link à janela aberta — e o login pelo GitHub não
+    /// voltaria nunca.
+    #[test] fn o_link_do_login_sobe_o_aplicativo_de_mesa() {
+        let cli=parse(["jayv","jayv://auth/callback?code=abc&state=x"]).expect("o link não é argumento do clap");
+        assert!(cli.command.is_none());
+        assert!(parse(["jayv"]).expect("sem nada").command.is_none());
+        assert!(matches!(parse(["jayv","status"]).expect("subcomando").command,Some(Commands::Status)));
     }
 }

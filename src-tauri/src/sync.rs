@@ -170,6 +170,19 @@ fn behind(synced_at:&str)->String {
     DateTime::parse_from_rfc3339(synced_at).map(|moment|(moment.with_timezone(&Utc)-OVERLAP).to_rfc3339_opts(SecondsFormat::Micros,true)).unwrap_or_default()
 }
 
+/// Espera até `limit`, voltando antes se alguém escrever. Olhar a fila a cada
+/// dois segundos agrupa as escritas de um momento numa volta só, sem que cada
+/// comando precise lembrar de acordar a sincronização.
+async fn until_written(store:&SharedWorkspace,limit:Duration) {
+    let step=Duration::from_secs(2);
+    let mut waited=Duration::ZERO;
+    while waited<limit {
+        tokio::time::sleep(step.min(limit-waited)).await;
+        waited+=step;
+        if outbox::pending(store.lock().await.connection(),1).is_ok_and(|pending|!pending.is_empty()) {return;}
+    }
+}
+
 /// A espera depois de uma falha de rede: dobra de 5 s até 60 s.
 pub fn backoff(previous:Option<Duration>)->Duration {
     previous.map(|pause|(pause*2).min(Duration::from_secs(60))).unwrap_or(Duration::from_secs(5))
@@ -205,7 +218,7 @@ where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
             Link::SignedOut|Link::Expired=>None,
         };
         match wait {
-            Some(wait)=>{tokio::select!{_=bell.notified()=>{},_=tokio::time::sleep(wait)=>{}}}
+            Some(wait)=>{tokio::select!{_=bell.notified()=>{},_=until_written(&store,wait)=>{}}}
             None=>bell.notified().await,
         }
     }

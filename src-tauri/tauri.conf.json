@@ -4,7 +4,7 @@
   "version": "0.6.0",
   "identifier": "ai.jayv.desktop",
   "build": { "frontendDist": "../dist", "devUrl": "http://localhost:1420", "beforeDevCommand": "npx vite --host 127.0.0.1 --port 1420", "beforeBuildCommand": "npx vite build" },
-  "app": { "windows": [{ "title": "JayV", "width": 1180, "height": 780, "minWidth": 760, "minHeight": 560, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" } },
+  "app": { "windows": [{ "title": "JayV", "width": 1180, "height": 780, "minWidth": 760, "minHeight": 560, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://exvsozyemolrjbjetqww.supabase.co" } },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -14,5 +14,5 @@
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "createUpdaterArtifacts": true
   },
-  "plugins": { "updater": { "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERDMzU3NkVDOENFREUxMkMKUldRczRlMk03SFkxM0Evc0JnRm53U1o4NEUyMUcvelBMYS96T3RKY3VUdUNaMlF3R0Q0djhMaDEK", "endpoints": ["https://github.com/JayV-Coder/jayv-coder-releases/releases/latest/download/latest.json"] } }
+  "plugins": { "deep-link": { "desktop": { "schemes": ["jayv"] } }, "updater": { "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERDMzU3NkVDOENFREUxMkMKUldRczRlMk03SFkxM0Evc0JnRm53U1o4NEUyMUcvelBMYS96T3RKY3VUdUNaMlF3R0Q0djhMaDEK", "endpoints": ["https://github.com/JayV-Coder/jayv-coder-releases/releases/latest/download/latest.json"] } }
 }

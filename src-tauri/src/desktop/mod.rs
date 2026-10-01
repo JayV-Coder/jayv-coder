@@ -7,10 +7,14 @@ pub mod commands;
 pub mod events;
 mod queue;
 
+use crate::cloud::remote::{Backend, Remote};
+use crate::local::global::GlobalCache;
 use crate::orchestrator::Orchestrator;
+use crate::sync::Connectivity;
 use crate::workspace::WorkspaceStore;
-use commands::{gate, prompts, settings, system, workspace as projects};
-use std::{path::PathBuf, sync::Arc};
+use commands::session::{SessionState, SharedSession};
+use commands::{gate, prompts, session, settings, system, workspace as projects};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::sync::{Mutex, Notify};
 
@@ -35,6 +39,17 @@ pub type SharedWorkspace=Arc<Mutex<WorkspaceStore>>;
 /// Toca quando entra pedido novo. O atendente dorme nele em vez de ficar
 /// perguntando ao banco se chegou alguma coisa.
 pub type QueueBell=Arc<Notify>;
+
+/// Toca quando a sincronização precisa rodar já: login, sessão renovada,
+/// logout. É um tipo próprio porque o Tauri guarda o estado pelo tipo, e o
+/// sino da fila também é um `Arc<Notify>`.
+pub struct SyncBell(pub Arc<Notify>);
+
+/// Os comandos que escrevem só valem com alguém logado: sem sessão o banco é
+/// o de memória, e o que se escrevesse nele sumiria no fechamento.
+pub(crate) fn require_session()->Result<(),String> {
+    crate::cloud::session::current().map(drop).ok_or_else(||"faça login para continuar".to_string())
+}
 
 /// Quem precisa dos dois cadeados pega sempre nesta ordem — orquestrador,
 /// depois banco. O atendente segura o orquestrador do começo ao fim do pedido e
@@ -63,32 +78,55 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     keep_webkit_off_dmabuf();
     let mut orchestrator=Orchestrator::unindexed(config_path.clone(),root.clone())?;
-    let database=crate::workspace::database_location(&config_path,&root);
-    let workspace=WorkspaceStore::open(database)?;
+    // O app abre sem usuário: o banco é o de memória até o React entregar a
+    // sessão, e aí vira o `workspace-<usuário>.sqlite3` desta pasta.
+    let data_dir=crate::workspace::database_location(&config_path,&root).parent().map(PathBuf::from).unwrap_or_else(||root.join(".jev"));
+    let cache=GlobalCache::open(&data_dir.join("cache.sqlite3"))?;
+    crate::local::global::set_current_parameters(cache.jev_parameters()?);
+    let workspace=WorkspaceStore::in_memory()?;
     orchestrator.use_llm(&workspace.llm_settings()?);
-    let workspace_data=workspace.snapshot()?;
-    for chat in &workspace_data.chats {
-        orchestrator.memory.set_conversation(chat.id.clone(),workspace.conversation(&chat.id)?);
-    }
 
+    let http=reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
     let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root}));
     let workspace:SharedWorkspace=Arc::new(Mutex::new(workspace));
     let bell:QueueBell=Arc::new(Notify::new());
+    let sync_bell=SyncBell(Arc::new(Notify::new()));
+    let connectivity=Connectivity::default();
+    let session:SharedSession=Arc::new(Mutex::new(SessionState{cache,data_dir,identity:None,http:http.clone()}));
     tauri::Builder::default()
+        // Primeiro de todos: o segundo processo — aberto pelo link do login —
+        // entrega a URL a este e sai antes de subir qualquer outra coisa.
+        .plugin(tauri_plugin_single_instance::init(|app,_args,_cwd|{
+            if let Some(window)=app.get_webview_window("main") {let _=window.unminimize(); let _=window.set_focus();}
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(desk).manage(workspace).manage(bell)
-        .setup(|app|{
-            // O sino toca uma vez na partida: a abertura do banco devolveu à
-            // fila o que o fechamento anterior pegou pela metade, e esses
-            // pedidos têm de ser retomados sem esperar por um envio novo.
-            let (handle,desk,workspace,bell)=(app.handle().clone(),app.state::<SharedDesktopState>().inner().clone(),app.state::<SharedWorkspace>().inner().clone(),app.state::<QueueBell>().inner().clone());
-            bell.notify_one();
-            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell));
+        .manage(desk).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
+        .setup(move |app|{
+            // Em desenvolvimento e no AppImage o esquema `jayv://` não vem do
+            // instalador: registra na partida. Falhar só desliga o login pelo
+            // GitHub, não o app.
+            #[cfg(any(target_os = "linux", windows))] {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(error)=app.deep_link().register_all() {eprintln!("deep link: {error}");}
+            }
+            let handle=app.handle().clone();
+            let desk=app.state::<SharedDesktopState>().inner().clone();
+            let workspace=app.state::<SharedWorkspace>().inner().clone();
+            let bell=app.state::<QueueBell>().inner().clone();
+            let sync_bell=app.state::<SyncBell>().0.clone();
+            let connectivity=app.state::<Connectivity>().inner().clone();
+            let backend=move ||crate::cloud::session::current().map(|token|Arc::new(Remote::new(http.clone(),Some(token))) as Arc<dyn Backend>);
+            tauri::async_runtime::spawn(crate::sync::run(workspace.clone(),backend,connectivity.clone(),sync_bell,bell.clone()));
+            tauri::async_runtime::spawn(session::announce_links(handle.clone(),connectivity.clone()));
+            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            session::set_session,session::clear_session,session::connection_status,session::get_locales,session::get_translations,
             prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,
             projects::get_workspace,projects::create_project,projects::create_chat,projects::clear_chat,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::check_agent,
