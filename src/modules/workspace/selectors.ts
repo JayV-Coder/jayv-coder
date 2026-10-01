@@ -1,6 +1,14 @@
 import type { Chat, Project, TurnView, WorkspaceData } from "@/modules/core";
+import { t } from "@/modules/i18n";
 
 export const RECENT_CHATS = 3;
+
+/** O título do chat. Chat ainda sem nome é gravado sem título, e a tela diz
+ * "novo chat" no idioma de quem lê; `Novo chat` é a grafia dos registros
+ * gravados antes. */
+export function chatTitle(chat: { title: string }): string {
+  return chat.title.trim() && chat.title !== "Novo chat" ? chat.title : t("common.newChat");
+}
 
 export function chatsOf(data: WorkspaceData, projectId: string | null): Chat[] {
   return data.chats

@@ -1,4 +1,4 @@
-use crate::{config::ProviderConfig, model::{ChatMessage, ProviderResponse}, progress::{Beat, Pulse}};
+use crate::{config::ProviderConfig, i18n::Text, model::{ChatMessage, ProviderResponse}, progress::{Beat, Pulse}};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -51,33 +51,33 @@ pub fn build_providers(configs: &HashMap<String, ProviderConfig>, workdir: &Work
 }
 
 pub async fn discover_models(name: &str, config: &ProviderConfig) -> Result<Vec<String>> {
-    if config.kind=="cli" { return Err(anyhow!("provedores CLI não oferecem descoberta automática de modelos")); }
+    if config.kind=="cli" { return Err(anyhow!("CLI providers do not offer model discovery")); }
     let default_base=match config.kind.as_str() {
         "openai"=>"https://api.openai.com/v1",
         "anthropic"=>"https://api.anthropic.com/v1",
-        "openai-compatible"=>config.base_url.as_deref().filter(|value|!value.trim().is_empty()).ok_or_else(||anyhow!("informe a URL base do provedor"))?,
-        _=>return Err(anyhow!("tipo de provedor não suportado")),
+        "openai-compatible"=>config.base_url.as_deref().filter(|value|!value.trim().is_empty()).ok_or_else(||anyhow!("the provider base URL is required"))?,
+        _=>return Err(anyhow!("unsupported provider kind")),
     };
     let client=reqwest::Client::builder().timeout(Duration::from_secs(config.timeout.max(5))).build()?;
     let mut request=client.get(format!("{}/models",default_base.trim_end_matches('/')));
     if config.kind=="anthropic" {
-        let key=config.api_key.as_deref().filter(|key|!key.trim().is_empty()).ok_or_else(||anyhow!("informe a API key para carregar os modelos"))?;
+        let key=config.api_key.as_deref().filter(|key|!key.trim().is_empty()).ok_or_else(||anyhow!("an API key is required to load the models"))?;
         request=request.header("x-api-key",key).header("anthropic-version","2023-06-01");
     } else if let Some(key)=config.api_key.as_deref().filter(|key|!key.trim().is_empty()) {
         request=request.bearer_auth(key);
     } else if config.kind=="openai" {
-        return Err(anyhow!("informe a API key para carregar os modelos"));
+        return Err(anyhow!("an API key is required to load the models"));
     }
     let response=request.send().await.map_err(|error|request_error(name,error))?;
     let status=response.status();
-    let body:Value=response.json().await.context("resposta inválida ao carregar modelos")?;
-    if !status.is_success(){return Err(anyhow!("o provider retornou {status}: {}",provider_error(&body)));}
+    let body:Value=response.json().await.context("invalid response while loading models")?;
+    if !status.is_success(){return Err(anyhow!("the provider returned {status}: {}",provider_error(&body)));}
     let mut models=body.get("data").and_then(Value::as_array).into_iter().flatten()
         .filter_map(|item|item.get("id").and_then(Value::as_str))
         .map(str::to_string).collect::<Vec<_>>();
     models.sort();
     models.dedup();
-    if models.is_empty(){return Err(anyhow!("o provider não retornou modelos disponíveis"));}
+    if models.is_empty(){return Err(anyhow!("the provider returned no available models"));}
     Ok(models)
 }
 
@@ -380,7 +380,7 @@ fn refusal(line:&str)->Option<String> {
     let reason=event.get("result").and_then(Value::as_str).map(str::trim).filter(|reason|!reason.is_empty())
         .map(str::to_string)
         .or_else(||event.get("subtype").and_then(Value::as_str).map(str::to_string))
-        .unwrap_or_else(||"erro sem descrição".into());
+        .unwrap_or_else(||"error without description".into());
     Some(reason)
 }
 
@@ -431,15 +431,18 @@ impl CliProvider {
     fn open(&self,model:&str,prompt:&str)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
         // O caminho achado, com extensão: no Windows `claude` sozinho não
-        // abre o `claude.cmd` do npm.
-        let program=crate::llm::locate(command).unwrap_or_else(||command.into());
+        // abre o `claude.cmd` do npm. Sem caminho nenhum, o agente não está
+        // instalado — dizer isso poupa o desenvolvedor de caçar o erro do SO.
+        let found=crate::llm::locate(command).ok_or_else(||anyhow::Error::new(Text::new("provider.notInstalled").with("provider",&self.name).with("command",command)))?;
+        let (program,lead)=crate::llm::launcher(&found);
         let mut process=Command::new(&program);
         quiet(&mut process);
-        process.args(self.args(model,prompt)).stdin(if self.inline(){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
+        process.args(lead).args(self.args(model,prompt)).stdin(if self.inline(){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
-        process.spawn().with_context(||format!("could not start CLI provider {command}"))
+        process.spawn().map_err(|error|anyhow::Error::new(Text::new("provider.start").with("provider",&self.name).with("path",found.display().to_string()).with("reason",error.to_string())))
     }
 
     /// Quanto tempo o agente pode ficar calado. O `timeout` do provedor não é o
@@ -455,18 +458,18 @@ impl CliProvider {
     /// escreveu na saída — nessa ordem. Nenhuma das três é garantida, então o
     /// código de saída vai sempre junto.
     fn failure(&self,status:Option<std::process::ExitStatus>,refused:Option<String>,complaint:&str,response:&str)->anyhow::Error {
-        let exit=match status.and_then(|status|status.code()) { Some(code)=>format!("saiu com o código {code}"), None if status.is_some()=>"foi interrompido por um sinal".into(), None=>"anunciou um erro".into() };
+        let exit=match status.and_then(|status|status.code()) { Some(code)=>Text::new("provider.exit.code").with("code",code), None if status.is_some()=>Text::new("provider.exit.signal"), None=>Text::new("provider.exit.announced") };
         let reason=refused.filter(|reason|!reason.trim().is_empty())
             .or_else(||Some(tail(complaint,800).to_string()).filter(|text|!text.is_empty()))
             .or_else(||Some(tail(response,800).to_string()).filter(|text|!text.is_empty()));
         match reason {
-            Some(reason)=>anyhow!("o provedor `{}` falhou ({exit}): {reason}",self.name),
-            None=>anyhow!("o provedor `{}` falhou ({exit}) sem escrever o motivo; rode `{}` no terminal para ver o erro",self.name,self.config.command.as_deref().unwrap_or("o comando")),
+            Some(reason)=>Text::new("provider.failed").with("provider",&self.name).with("exit",exit).with("reason",reason).into(),
+            None=>Text::new("provider.failedSilent").with("provider",&self.name).with("exit",exit).with("command",self.config.command.as_deref().unwrap_or(&self.name)).into(),
         }
     }
 
     fn muteness(&self)->anyhow::Error {
-        anyhow!("o provedor `{}` passou {}s sem dar sinal de vida e foi encerrado; se o trabalho costuma demorar mais em silêncio, aumente `timeout` na configuração dele",self.name,self.silence().as_secs())
+        Text::new("provider.silent").with("provider",&self.name).with("seconds",self.silence().as_secs()).into()
     }
 }
 
@@ -536,11 +539,11 @@ impl Provider for CliProvider {
 fn provider_error(body:&Value)->String { body.pointer("/error/message").and_then(Value::as_str).or_else(||body.pointer("/error/type").and_then(Value::as_str)).unwrap_or("unknown error").to_string() }
 fn request_error(provider:&str,error:reqwest::Error)->anyhow::Error {
     if error.is_timeout() {
-        anyhow!("o provider `{provider}` excedeu o tempo limite; verifique o serviço e o valor de `timeout`")
+        Text::new("provider.timeout").with("provider",provider).into()
     } else if error.is_connect() {
-        anyhow!("não foi possível conectar ao provider `{provider}`; verifique se o serviço está em execução, a conexão de rede e `base_url`")
+        Text::new("provider.connect").with("provider",provider).into()
     } else {
-        anyhow!("falha ao enviar a solicitação ao provider `{provider}`: {}",error.without_url())
+        Text::new("provider.send").with("provider",provider).with("reason",error.without_url().to_string()).into()
     }
 }
 
@@ -586,7 +589,7 @@ mod tests {
         let provider=script(r#"echo '{"type":"result","subtype":"success","is_error":true,"result":"There is an issue with the selected model"}'; exit 1"#);
         let error=provider.chat(&ask(),"modelo").await.expect_err("falhou").to_string();
         assert!(error.contains("There is an issue with the selected model"),"{error}");
-        assert!(error.contains("código 1"),"{error}");
+        assert!(error.contains("provider.failed") && error.contains("code: 1"),"{error}");
     }
 
     #[tokio::test] async fn a_falha_anunciada_vale_mesmo_com_saida_zero() {
@@ -597,12 +600,33 @@ mod tests {
 
     #[tokio::test] async fn sem_canal_de_erro_a_saida_explica_a_falha() {
         let error=script("echo 'login expirado'; exit 2").chat(&ask(),"modelo").await.expect_err("falhou").to_string();
-        assert!(error.contains("login expirado")&&error.contains("código 2"),"{error}");
+        assert!(error.contains("login expirado")&&error.contains("code: 2"),"{error}");
     }
 
     #[tokio::test] async fn a_falha_muda_diz_o_codigo_e_o_que_fazer() {
         let error=script("exit 3").chat(&ask(),"modelo").await.expect_err("falhou").to_string();
-        assert!(error.contains("código 3")&&error.contains("no terminal"),"{error}");
+        assert!(error.contains("provider.failedSilent")&&error.contains("code: 3")&&error.contains("command: sh"),"{error}");
+    }
+
+    /// O CLI do npm é um script `#!/usr/bin/env node`, e o Node do nvm mora na
+    /// mesma pasta do script — fora do PATH de um app aberto pelo menu. O agente
+    /// tem de abrir mesmo assim.
+    #[cfg(unix)]
+    #[tokio::test] async fn o_script_do_npm_acha_o_interpretador_ao_lado_dele() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin=tempfile::tempdir().expect("bin");
+        let runnable=|path:&std::path::Path,body:&str|{std::fs::write(path,body).expect("script");std::fs::set_permissions(path,std::fs::Permissions::from_mode(0o755)).expect("chmod");};
+        runnable(&bin.path().join("jayv-fake-node"),"#!/bin/sh\nshift $#\necho resposta do agente\n");
+        runnable(&bin.path().join("agente"),"#!/usr/bin/env jayv-fake-node\n");
+        let provider=CliProvider{name:"agente".into(),config:ProviderConfig{command:Some(bin.path().join("agente").display().to_string()),..config("cli")},workdir:Workdir::default()};
+        let answer=provider.chat(&ask(),"modelo").await.expect("o agente abre com o interpretador da pasta dele");
+        assert!(answer.response.contains("resposta do agente"),"{}",answer.response);
+    }
+
+    #[tokio::test] async fn o_agente_que_nao_esta_instalado_diz_isso() {
+        let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("jayv-agente-que-nao-existe".into()),..config("cli")},workdir:Workdir::default()};
+        let error=provider.chat(&ask(),"modelo").await.expect_err("não instalado");
+        assert_eq!(crate::i18n::Text::from(error).key,"provider.notInstalled");
     }
 
     #[tokio::test] async fn gives_up_after_the_attempt_budget() {
@@ -721,8 +745,7 @@ mod tests {
         let erro=provider.chat(&[ChatMessage{role:"user".into(),content:"fique calado".into()}],"modelo").await.expect_err("o agente mudo");
 
         let erro=erro.to_string();
-        assert!(erro.contains("sem dar sinal de vida"),"{erro}");
-        assert!(erro.contains("`timeout`"),"o erro aponta o que mexer: {erro}");
+        assert!(erro.contains("provider.silent") && erro.contains("seconds: 1"),"o erro diz o que houve e a tela aponta o `timeout`: {erro}");
     }
 
     /// A conversa acompanhada tem de render a mesma resposta que a esperada, e

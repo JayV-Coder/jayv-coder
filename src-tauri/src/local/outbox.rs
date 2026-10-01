@@ -42,7 +42,7 @@ pub enum Op { Upsert, Delete }
 
 impl Op {
     fn parse(value:&str)->Result<Self> {
-        match value {"upsert"=>Ok(Op::Upsert),"delete"=>Ok(Op::Delete),other=>anyhow::bail!("operação desconhecida na fila: `{other}`")}
+        match value {"upsert"=>Ok(Op::Upsert),"delete"=>Ok(Op::Delete),other=>anyhow::bail!("unknown queue operation: `{other}`")}
     }
 }
 
@@ -114,7 +114,7 @@ pub fn pending(connection:&Connection,limit:usize)->Result<Vec<Pending>> {
     let rows=statement.query_map([limit as i64],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,i64>(5)?)))?;
     rows.map(|row|{
         let (seq,table,key,op,at,version)=row?;
-        Ok(Pending{seq,table,key:serde_json::from_str(&key).with_context(||format!("chave inválida na fila: {key}"))?,op:Op::parse(&op)?,at,version})
+        Ok(Pending{seq,table,key:serde_json::from_str(&key).with_context(||format!("invalid queue key: {key}"))?,op:Op::parse(&op)?,at,version})
     }).collect()
 }
 
@@ -197,7 +197,7 @@ fn matching(table:&SyncTable)->String {
 }
 
 fn key_values(table:&SyncTable,key:&Value)->Result<Vec<Sql>> {
-    let parts=key.as_array().filter(|parts|parts.len()==table.key.len()).with_context(||format!("chave de `{}` fora do formato: {key}",table.name))?;
+    let parts=key.as_array().filter(|parts|parts.len()==table.key.len()).with_context(||format!("malformed key for `{}`: {key}",table.name))?;
     Ok(parts.iter().map(to_sql).collect())
 }
 

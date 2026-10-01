@@ -21,6 +21,7 @@ export const commands = {
     invoke<Turn>("answer_question", { answer: { questionTurnId, picked, text } }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
+  openFile: (chatId: string, path: string) => invoke<void>("open_file", { chatId, path }),
   systemStatus: () => invoke<SystemStatus>("system_status"),
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),

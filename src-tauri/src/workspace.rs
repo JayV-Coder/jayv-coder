@@ -1,4 +1,4 @@
-use crate::{gatekeeper::{EntryCheck, ExitCheck, GateFeed}, model::ChatMessage, turns::{self, QuestionView, Turn, TurnStatus, TurnView}};
+use crate::{gatekeeper::{EntryCheck, ExitCheck, GateFeed}, i18n::Text, model::ChatMessage, turns::{self, QuestionView, Turn, TurnStatus, TurnView}};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -107,7 +107,7 @@ impl WorkspaceStore {
     /// de um token já validado, mas ainda assim só entra no nome do arquivo
     /// se for um UUID: é caminho de disco.
     pub fn for_user(dir: &Path, user_id: &str) -> Result<Self> {
-        let user=Uuid::parse_str(user_id).with_context(||format!("usuário inválido: `{user_id}`"))?;
+        let user=Uuid::parse_str(user_id).with_context(||format!("invalid user id: `{user_id}`"))?;
         Self::open(dir.join(format!("workspace-{}.sqlite3",user.hyphenated())))
     }
 
@@ -175,17 +175,17 @@ impl WorkspaceStore {
 
     pub fn create_project(&mut self, name: &str, root_path: Option<String>) -> Result<ProjectRecord> {
         let name=name.trim();
-        anyhow::ensure!(!name.is_empty(),"o nome do projeto é obrigatório");
+        anyhow::ensure!(!name.is_empty(),Text::new("project.nameRequired"));
         let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path:root_path.unwrap_or_default(),created_at:Utc::now()};
         self.connection.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES(?1,?2,?3,?4)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339()])?;
         Ok(project)
     }
 
     pub fn create_chat(&mut self, project_id: &str, title: Option<String>) -> Result<ChatRecord> {
-        anyhow::ensure!(self.project_exists(project_id)?,"projeto não encontrado");
+        anyhow::ensure!(self.project_exists(project_id)?,Text::new("project.notFound"));
         let now=Utc::now();
         let title=title.unwrap_or_default().trim().to_string();
-        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title:if title.is_empty(){"Novo chat".into()}else{title},messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now};
+        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title,messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now};
         self.connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",params![chat.id,chat.code,chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
         Ok(chat)
     }
@@ -202,7 +202,7 @@ impl WorkspaceStore {
     /// com o mesmo número: a resposta anterior sai, o pedido fica onde estava.
     pub fn enqueue_prompt(&mut self, chat_id: &str, user: &str, requested: Option<&str>) -> Result<Turn> {
         let transaction=self.connection.transaction()?;
-        let (named,count):(bool,i64)=transaction.query_row("SELECT named,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context("chat não encontrado")?;
+        let (named,count):(bool,i64)=transaction.query_row("SELECT named,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context(Text::new("chat.notFound"))?;
         let turn=turns::open_or_reopen(&transaction,chat_id,requested)?;
         // A tentativa anterior deixou uma resposta — quase sempre a linha de
         // erro. Ela sai para não empilhar duas respostas sob o mesmo balão; o
@@ -224,7 +224,7 @@ impl WorkspaceStore {
     /// estava escrito — o reenvio do mesmo turno.
     pub fn append_prompt(&mut self, chat_id: &str, turn_id: &str, user: &str) -> Result<bool> {
         let transaction=self.connection.transaction()?;
-        let (named,count):(bool,i64)=transaction.query_row("SELECT named,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context("chat não encontrado")?;
+        let (named,count):(bool,i64)=transaction.query_row("SELECT named,(SELECT COUNT(*) FROM messages WHERE chat_id=?1) FROM chats WHERE id=?1",[chat_id],|row|Ok((row.get(0)?,row.get(1)?))).context(Text::new("chat.notFound"))?;
         if written(&transaction,turn_id)? {return Ok(false);}
         let now=Utc::now();
         if count==0 && !named {transaction.execute("UPDATE chats SET title=?1 WHERE id=?2",params![compact_title(user),chat_id])?;}
@@ -245,7 +245,7 @@ impl WorkspaceStore {
         let Some(turn)=turns::next_queued(&self.connection)? else {return Ok(None)};
         let prompt:String=self.connection.query_row(
             "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY created_at,id LIMIT 1",[&turn.id],|row|row.get(0),
-        ).with_context(||format!("o turno `{}` está na fila sem pedido escrito",turn.id))?;
+        ).with_context(||format!("turn `{}` is queued without a written request",turn.id))?;
         turns::set_status(&self.connection,&turn.id,TurnStatus::Flying)?;
         Ok(Some((Turn{status:TurnStatus::Flying,..turn},prompt)))
     }
@@ -257,7 +257,7 @@ impl WorkspaceStore {
     /// Fecha a troca com o que voltou do modelo — ou com o erro que veio no
     /// lugar dele. Enquanto isto não acontece, o pedido fica pendente.
     pub fn append_answer(&mut self, chat_id: &str, turn_id: &str, assistant: &str) -> Result<()> {
-        anyhow::ensure!(self.contains_chat(chat_id)?,"chat não encontrado");
+        anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
         let now=Utc::now();
         let transaction=self.connection.transaction()?;
         insert_message(&transaction,chat_id,Some(turn_id),"assistant",assistant,now)?;
@@ -284,7 +284,7 @@ impl WorkspaceStore {
     /// gastar uma chamada para lhe dar um nome. Lê a marca no banco em vez de
     /// deduzir do histórico, porque o pedido entra no histórico antes de sair.
     pub fn chat_is_unnamed(&self, chat_id: &str) -> Result<bool> {
-        let named:bool=self.connection.query_row("SELECT named FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).context("chat não encontrado")?;
+        let named:bool=self.connection.query_row("SELECT named FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).context(Text::new("chat.notFound"))?;
         Ok(!named)
     }
 
@@ -292,33 +292,34 @@ impl WorkspaceStore {
     /// conversa e não pode reordenar a lista lateral.
     pub fn rename_chat(&mut self, chat_id: &str, title: &str) -> Result<()> {
         let title=compact_title(title);
-        anyhow::ensure!(self.connection.execute("UPDATE chats SET title=?1,named=1 WHERE id=?2",params![title,chat_id])?>0,"chat não encontrado");
+        anyhow::ensure!(self.connection.execute("UPDATE chats SET title=?1,named=1 WHERE id=?2",params![title,chat_id])?>0,Text::new("chat.notFound"));
         Ok(())
     }
 
     pub fn clear_chat(&mut self, chat_id: &str) -> Result<()> {
-        anyhow::ensure!(self.contains_chat(chat_id)?,"chat não encontrado");
+        anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
         let transaction=self.connection.transaction()?;
         transaction.execute("DELETE FROM messages WHERE chat_id=?1",[chat_id])?;
-        transaction.execute("UPDATE chats SET title='Novo chat',named=0,updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
+        transaction.execute("UPDATE chats SET title='',named=0,updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
         transaction.commit()?;
         Ok(())
     }
 
     pub fn delete_chat(&mut self, chat_id: &str) -> Result<()> {
-        anyhow::ensure!(self.connection.execute("DELETE FROM chats WHERE id=?1",[chat_id])?>0,"chat não encontrado");
+        anyhow::ensure!(self.connection.execute("DELETE FROM chats WHERE id=?1",[chat_id])?>0,Text::new("chat.notFound"));
         Ok(())
     }
 
     pub fn delete_project(&mut self, project_id: &str) -> Result<Vec<String>> {
         let chat_ids=self.chat_ids_for_project(project_id)?;
-        anyhow::ensure!(self.connection.execute("DELETE FROM projects WHERE id=?1",[project_id])?>0,"projeto não encontrado");
+        anyhow::ensure!(self.connection.execute("DELETE FROM projects WHERE id=?1",[project_id])?>0,Text::new("project.notFound"));
         Ok(chat_ids)
     }
 
     pub fn conversation(&self, chat_id: &str) -> Result<Vec<ChatMessage>> {
-        anyhow::ensure!(self.contains_chat(chat_id)?,"chat não encontrado");
-        Ok(self.messages(chat_id)?.into_iter().map(|message|ChatMessage{role:message.role,content:message.content}).collect())
+        anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
+        // É o histórico que o modelo lê: avisos gravados para a tela vão em inglês.
+        Ok(self.messages(chat_id)?.into_iter().map(|message|ChatMessage{role:message.role,content:crate::i18n::for_model(&message.content)}).collect())
     }
 
     pub fn contains_chat(&self, chat_id: &str) -> Result<bool> {
@@ -329,7 +330,7 @@ impl WorkspaceStore {
     /// esse caminho que vai para o índice e para o prompt; projeto sem pasta
     /// devolve nada e quem chama decide o que usar no lugar.
     pub fn chat_root(&self, chat_id: &str) -> Result<Option<PathBuf>> {
-        let root:String=self.connection.query_row("SELECT projects.root_path FROM chats JOIN projects ON projects.id=chats.project_id WHERE chats.id=?1",[chat_id],|row|row.get(0)).context("chat não encontrado")?;
+        let root:String=self.connection.query_row("SELECT projects.root_path FROM chats JOIN projects ON projects.id=chats.project_id WHERE chats.id=?1",[chat_id],|row|row.get(0)).context(Text::new("chat.notFound"))?;
         let root=root.trim();
         Ok((!root.is_empty()).then(||PathBuf::from(root)))
     }
@@ -428,7 +429,7 @@ impl WorkspaceStore {
             let code=new_chat_code();
             if self.connection.query_row("SELECT 1 FROM chats WHERE code=?1",[&code],|row|row.get::<_,i64>(0)).optional()?.is_none(){return Ok(code);}
         }
-        anyhow::bail!("não foi possível gerar um identificador livre para o chat")
+        anyhow::bail!("could not generate a free chat code")
     }
 
     fn project_exists(&self, project_id:&str)->Result<bool>{Ok(self.connection.query_row("SELECT 1 FROM projects WHERE id=?1",[project_id],|row|row.get::<_,i64>(0)).optional()?.is_some())}
@@ -529,7 +530,7 @@ pub(crate) fn parse_time(value:&str)->Result<DateTime<Utc>>{Ok(DateTime::parse_f
 fn compact_title(input: &str) -> String {
     let mut title=input.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
     if input.split_whitespace().count()>7 {title.push('…');}
-    if title.is_empty(){"Novo chat".into()}else{title}
+    title
 }
 
 #[cfg(test)]

@@ -12,7 +12,9 @@ export const TALLY: [keyof Tally, Aspect, Key][] = [
 
 /** O tipo de saída vem do núcleo em português; é por ele que se acha o nome e
  * o ícone. */
-export const EXIT_KINDS: Record<string, Key> = { comando: "exit.kind.command", arquivo: "exit.kind.file" };
+/** Os tipos de saída. `comando` e `arquivo` são a grafia dos checks gravados
+ * antes da troca para identificadores em inglês. */
+export const EXIT_KINDS: Record<string, Key> = { command: "exit.kind.command", file: "exit.kind.file", comando: "exit.kind.command", arquivo: "exit.kind.file" };
 
 const VERDICT_TALLY: Record<EntryCheck["verdict"], keyof Tally> = { pass: "passed", ask: "asked", block: "blocked" };
 const EMPTY: GateFeed = { entries: [], exits: [], tally: { passed: 0, asked: 0, blocked: 0, held: 0 } };

@@ -106,16 +106,44 @@ export function addModel(agent: AgentId) {
   useSettings.setState({ models: [...models, model] });
 }
 
-export async function checkAgent(id: AgentId) {
+/** Confere se o executável do agente responde. `quiet` é a conferência de
+ * fundo: a linha não pisca em "procurando…" e só muda quando o resultado
+ * muda. */
+export async function checkAgent(id: AgentId, quiet = false) {
   const agent = useSettings.getState().agents.find((item) => item.id === id);
-  if (!agent) return;
-  const setProbe = (probe: ProbeState) => useSettings.setState((state) => ({ probes: { ...state.probes, [id]: probe } }));
-  setProbe("checking");
+  if (!agent || !agent.command.trim()) return;
+  const setProbe = (probe: ProbeState) => useSettings.setState((state) => (sameProbe(state.probes[id], probe) ? state : { probes: { ...state.probes, [id]: probe } }));
+  if (!quiet) setProbe("checking");
+  let probe: ProbeState;
   try {
-    setProbe(await commands.checkAgent(agent.command));
+    probe = await commands.checkAgent(agent.command);
   } catch {
-    setProbe({ path: null, version: null });
+    probe = { path: null, version: null };
   }
+  // O comando mudou enquanto a conferência rodava: o resultado é do antigo.
+  if (useSettings.getState().agents.find((item) => item.id === id)?.command !== agent.command) return;
+  setProbe(probe);
+}
+
+function sameProbe(a: ProbeState, b: ProbeState) {
+  if (a === null || b === null || a === "checking" || b === "checking") return a === b;
+  return a.path === b.path && a.version === b.version;
+}
+
+/** De quanto em quanto tempo a tela de configurações confere os agentes
+ * sozinha: instalar ou remover um CLI aparece sem clicar em nada. */
+export const PROBE_EVERY_MS = 10_000;
+
+/** Confere os três agentes agora e depois a cada `PROBE_EVERY_MS`, e também ao
+ * voltar para a janela. Devolve quem para tudo. */
+export function watchAgents() {
+  const all = () => { for (const agent of AGENTS) void checkAgent(agent, true); };
+  const timer = window.setInterval(() => { if (document.visibilityState === "visible") all(); }, PROBE_EVERY_MS);
+  window.addEventListener("focus", all);
+  return () => {
+    window.clearInterval(timer);
+    window.removeEventListener("focus", all);
+  };
 }
 
 export const MODEL_PATTERN = /^[A-Za-z0-9._:/@-]+$/;
@@ -166,5 +194,13 @@ export function discardChanges() {
 }
 
 export function connectSettings() {
-  return bus.on("view:changed", ({ view }) => { if (view === "settings") void loadSettings(); });
+  let stop: (() => void) | null = null;
+  const off = bus.on("view:changed", ({ view }) => {
+    stop?.();
+    stop = null;
+    if (view !== "settings") return;
+    void loadSettings();
+    stop = watchAgents();
+  });
+  return () => { stop?.(); off(); };
 }

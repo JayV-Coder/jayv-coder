@@ -8,7 +8,7 @@ import { ChatRef } from "@/components/molecules";
 import { cn } from "@/lib/utils";
 import { GateItem } from "./GateItem";
 
-const KIND_ICONS: Record<string, typeof FileIcon> = { comando: CommandIcon, arquivo: FileIcon };
+const KIND_ICONS: Record<string, typeof FileIcon> = { command: CommandIcon, file: FileIcon, comando: CommandIcon, arquivo: FileIcon };
 
 /** O que o modelo pediu para rodar ou mexer, e a regra da casa que isso tocou. */
 export function ExitItem({ check }: { check: ExitCheck }) {

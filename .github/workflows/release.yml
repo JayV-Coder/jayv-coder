@@ -184,3 +184,12 @@ jobs:
           github-token: ${{ secrets.RELEASES_TOKEN }}
           script: |
             await github.rest.repos.updateRelease({ owner: process.env.RELEASES_OWNER, repo: process.env.RELEASES_REPO, release_id: Number(process.env.RELEASE_ID), draft: false });
+
+  # O README do repositório de releases lista os instaladores de cada versão
+  # por sistema; é refeito depois de cada release publicado.
+  readme:
+    name: README dos releases
+    needs: publish
+    uses: ./.github/workflows/releases-readme.yml
+    secrets:
+      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}

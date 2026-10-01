@@ -9,6 +9,7 @@ pub mod context_engine;
 pub mod firewall;
 pub mod gatekeeper;
 pub mod graph;
+pub mod i18n;
 pub mod jev;
 pub mod llm;
 pub mod local;

@@ -1,5 +1,6 @@
 //! Os comandos que a tela chama, um módulo por funcionalidade.
 
+pub mod files;
 pub mod gate;
 pub mod prompts;
 pub mod session;

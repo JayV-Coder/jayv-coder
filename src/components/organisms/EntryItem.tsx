@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { EntryCheck } from "@/modules/core";
-import { ENTRY_VERDICTS } from "@/modules/conversation";
+import { ENTRY_VERDICTS, sourceLabel } from "@/modules/conversation";
 import { useGate } from "@/modules/gate";
 import { useT, type Key } from "@/modules/i18n";
 import { openChat } from "@/modules/workspace";
@@ -55,7 +55,7 @@ export function EntryItem({ check }: { check: EntryCheck }) {
         <div id={panelId} className="border-t border-rail bg-[#090b0e] pe-6 pb-[18px] ps-6 xl:ps-[61px]">
           <div className="flex flex-wrap justify-between gap-x-[18px] gap-y-1.5 pt-[13px] pb-1.5 text-[13px] text-dim">
             <span>{t("entry.demand", { scope, demand: check.demand })}</span>
-            <span className="font-gate-mono text-faint">{t("entry.source", { source: check.source })}</span>
+            <span className="font-gate-mono text-faint">{t("entry.source", { source: sourceLabel(check.source) })}</span>
           </div>
           {check.criteria.map((criterion) => <Gauge key={criterion.id} criterion={criterion} />)}
         </div>

@@ -81,7 +81,9 @@ export function setLocale(locale: Locale) {
 export type Params = Record<string, string | number>;
 
 function render(locale: Locale, messages: Messages, key: Key, params?: Params): string {
-  const message: Message = messages[key] ?? en[key];
+  const message: Message | undefined = messages[key] ?? en[key];
+  // A chave veio do núcleo e esta versão da tela ainda não a conhece.
+  if (message === undefined) return key;
   const text = typeof message === "string"
     ? message
     : message[new Intl.PluralRules(locale).select(Number(params?.count ?? 0))] ?? message.other;
@@ -97,6 +99,22 @@ export function translate(locale: Locale, key: Key, params?: Params): string {
  * os módulos guardam. */
 export function t(key: Key, params?: Params) {
   return translate(useI18n.getState().locale, key, params);
+}
+
+/** O texto que o núcleo devolve no lugar de uma frase: a chave e os valores
+ * que ela cita, que podem ser outras chaves (ver `src-tauri/src/i18n.rs`). */
+export interface Text { key: string; params?: Record<string, string | Text> }
+
+export function isText(value: unknown): value is Text {
+  return typeof value === "object" && value !== null && typeof (value as Text).key === "string";
+}
+
+/** O texto do núcleo no idioma atual, com os valores que também são chaves
+ * traduzidos antes. */
+export function say(text: Text): string {
+  const params: Params = {};
+  for (const [name, value] of Object.entries(text.params ?? {})) params[name] = typeof value === "string" ? value : say(value);
+  return t(text.key as Key, params);
 }
 
 /** O texto no idioma atual, para componentes: trocar de idioma — ou chegarem

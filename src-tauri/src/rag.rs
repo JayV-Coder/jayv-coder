@@ -56,7 +56,7 @@ impl RepositoryRag {
     pub fn len(&self) -> usize { self.files.len() }
 }
 
-fn allowed_entry(entry:&DirEntry)->bool { let name=entry.file_name().to_string_lossy(); !matches!(name.as_ref(),".git"|"target"|"node_modules"|"dist"|"build"|"__pycache__"|".jev"|".jev_cache"|".jev_performance.json") }
+pub(crate) fn allowed_entry(entry:&DirEntry)->bool { let name=entry.file_name().to_string_lossy(); !matches!(name.as_ref(),".git"|"target"|"node_modules"|"dist"|"build"|"__pycache__"|".jev"|".jev_cache"|".jev_performance.json") }
 fn language_for(path:&Path)->Option<&'static str> { match path.extension()?.to_str()?.to_lowercase().as_str() { "rs"=>Some("Rust"),"py"=>Some("Python"),"js"|"mjs"|"cjs"=>Some("JavaScript"),"ts"|"tsx"=>Some("TypeScript"),"html"=>Some("HTML"),"css"=>Some("CSS"),"json"=>Some("JSON"),"yaml"|"yml"=>Some("YAML"),"toml"=>Some("TOML"),"md"=>Some("Markdown"),"sh"=>Some("Shell"),_=>None } }
 fn tokenize(value:&str)->HashSet<String> { value.split(|c:char|!c.is_alphanumeric()).filter(|s|s.len()>2).map(str::to_lowercase).collect() }
 fn truncate(value:&str,max:usize)->String { if value.len()<=max { value.into() } else { value.chars().take(max).collect() } }

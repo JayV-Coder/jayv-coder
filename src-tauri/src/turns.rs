@@ -11,6 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::i18n::Text;
 use crate::{gatekeeper::{Criterion, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict, GateFeed, Tally}, workspace::parse_time};
 use std::collections::BTreeSet;
 
@@ -30,7 +31,7 @@ impl TurnStatus {
     /// Um estado que não se reconhece é erro, não `Flying`: cair no padrão
     /// faria um pedido já respondido voltar a girar a ampulheta para sempre.
     fn parse(value:&str)->Result<Self> {
-        Ok(match value{"queued"=>Self::Queued,"flying"=>Self::Flying,"answered"=>Self::Answered,"failed"=>Self::Failed,"blocked"=>Self::Blocked,other=>anyhow::bail!("estado de turno desconhecido: `{other}`")})
+        Ok(match value{"queued"=>Self::Queued,"flying"=>Self::Flying,"answered"=>Self::Answered,"failed"=>Self::Failed,"blocked"=>Self::Blocked,other=>anyhow::bail!("unknown turn status: `{other}`")})
     }
 }
 
@@ -127,8 +128,8 @@ pub fn open_turn(connection:&Connection,chat_id:&str)->Result<Turn> {
 /// ao desenvolvedor um código diferente do que ele viu no balão.
 pub fn open_or_reopen(connection:&Connection,chat_id:&str,requested:Option<&str>)->Result<Turn> {
     let Some(turn_id)=requested else {return open_turn(connection,chat_id)};
-    let existing=turn(connection,turn_id)?.ok_or_else(||anyhow::anyhow!("o turno `{turn_id}` não existe"))?;
-    anyhow::ensure!(existing.chat_id==chat_id,"o turno `{turn_id}` é de outro chat");
+    let existing=turn(connection,turn_id)?.ok_or_else(||Text::new("turn.notFound").with("turn",turn_id))?;
+    anyhow::ensure!(existing.chat_id==chat_id,Text::new("turn.otherChat").with("turn",turn_id));
     reopen_turn(connection,turn_id)
 }
 
@@ -155,7 +156,7 @@ pub fn set_status(connection:&Connection,turn_id:&str,status:TurnStatus)->Result
 /// Retentar não é pedir de novo: o turno volta para a fila com o mesmo número.
 pub fn reopen_turn(connection:&Connection,turn_id:&str)->Result<Turn> {
     set_status(connection,turn_id,TurnStatus::Queued)?;
-    turn(connection,turn_id)?.ok_or_else(||anyhow::anyhow!("o turno `{turn_id}` não existe mais"))
+    turn(connection,turn_id)?.ok_or_else(||Text::new("turn.notFound").with("turn",turn_id).into())
 }
 
 /// Na abertura do banco, todo pedido que ficou pela metade volta para a fila.
@@ -601,9 +602,9 @@ mod tests {
     fn retentar_troca_as_saidas_em_vez_de_empilhar() {
         let connection=bench("XY4T9B");
         let turno=open_turn(&connection,"chat-1").expect("turno");
-        record_exits(&connection,&turno,&[ExitCheck::new(&turno,"comando","rm -rf build",Some("permissions.shell · deny".into()))]).expect("primeira tentativa");
+        record_exits(&connection,&turno,&[ExitCheck::new(&turno,"command","rm -rf build",Some("permissions.shell · deny".into()))]).expect("primeira tentativa");
 
-        record_exits(&connection,&turno,&[ExitCheck::new(&turno,"comando","cargo test",None)]).expect("retentativa");
+        record_exits(&connection,&turno,&[ExitCheck::new(&turno,"command","cargo test",None)]).expect("retentativa");
 
         let feed=feed(&connection,None).expect("feed");
         assert_eq!(feed.exits.len(),1,"o que a tentativa anterior pediu deixou de valer");
@@ -634,8 +635,8 @@ mod tests {
         let check=judge(&turno,"x",&heuristic_entry("x"),"heurística local");
         record_entry(&connection,&check).expect("entrada");
         record_exits(&connection,&turno,&[
-            ExitCheck::new(&turno,"comando","cargo test",None),
-            ExitCheck::new(&turno,"comando","rm -rf build",Some("permissions.shell · deny".into())),
+            ExitCheck::new(&turno,"command","cargo test",None),
+            ExitCheck::new(&turno,"command","rm -rf build",Some("permissions.shell · deny".into())),
         ]).expect("saídas");
         set_status(&connection,&turno.id,TurnStatus::Answered).expect("estado");
 
@@ -678,7 +679,7 @@ mod tests {
         for pedido in ["primeiro","segundo","terceiro"] {
             let turno=open_turn(&connection,"chat-1").expect("turno");
             record_entry(&connection,&judge(&turno,pedido,&heuristic_entry(pedido),"heurística local")).expect("gravar");
-            record_exits(&connection,&turno,&[ExitCheck::new(&turno,"comando",pedido,None)]).expect("saídas");
+            record_exits(&connection,&turno,&[ExitCheck::new(&turno,"command",pedido,None)]).expect("saídas");
         }
 
         let feed=feed(&connection,None).expect("feed");
@@ -695,7 +696,7 @@ mod tests {
         for chat in ["chat-1","chat-2"] {
             let turno=open_turn(&connection,chat).expect("turno");
             record_entry(&connection,&judge(&turno,"x",&heuristic_entry("x"),"heurística local")).expect("gravar");
-            record_exits(&connection,&turno,&[ExitCheck::new(&turno,"arquivo",".env",Some("privacy.deny · .env".into()))]).expect("saídas");
+            record_exits(&connection,&turno,&[ExitCheck::new(&turno,"file",".env",Some("privacy.deny · .env".into()))]).expect("saídas");
         }
 
         let feed=feed(&connection,Some(&BTreeSet::from(["chat-1".to_string()]))).expect("feed");

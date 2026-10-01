@@ -38,11 +38,11 @@ impl JevParameters {
         let levels=|value:Value|->Option<[String;3]> { let list:Vec<String>=serde_json::from_value(value).ok()?; list.try_into().ok() };
         let weights=|value:Value|->Option<BTreeMap<String,f64>> { let map:BTreeMap<String,f64>=serde_json::from_value(value).ok()?; (!map.is_empty() && map.values().all(|weight|*weight>=0.0)).then_some(map) };
         Self {
-            scope_demand:demand(pick("scope_demand")).or_else(||demand(fallback("scope_demand"))).expect("padrão de scope_demand"),
-            block_margin:unit(&pick("block_margin")).or_else(||unit(&fallback("block_margin"))).expect("padrão de block_margin"),
-            weights:weights(pick("weights")).or_else(||weights(fallback("weights"))).expect("padrão de weights"),
-            scope_levels:levels(pick("scope_levels")).or_else(||levels(fallback("scope_levels"))).expect("padrão de scope_levels"),
-            noul_line:unit(&pick("noul_line")).or_else(||unit(&fallback("noul_line"))).expect("padrão de noul_line"),
+            scope_demand:demand(pick("scope_demand")).or_else(||demand(fallback("scope_demand"))).expect("default scope_demand"),
+            block_margin:unit(&pick("block_margin")).or_else(||unit(&fallback("block_margin"))).expect("default block_margin"),
+            weights:weights(pick("weights")).or_else(||weights(fallback("weights"))).expect("default weights"),
+            scope_levels:levels(pick("scope_levels")).or_else(||levels(fallback("scope_levels"))).expect("default scope_levels"),
+            noul_line:unit(&pick("noul_line")).or_else(||unit(&fallback("noul_line"))).expect("default noul_line"),
         }
     }
 }
@@ -88,7 +88,7 @@ impl GlobalCache {
     }
 
     pub fn jwks(&self)->Result<Option<JwkSet>> {
-        self.setting("jwks")?.map(|raw|serde_json::from_str(&raw).context("JWKS do cache ilegível")).transpose()
+        self.setting("jwks")?.map(|raw|serde_json::from_str(&raw).context("unreadable cached JWKS")).transpose()
     }
 
     pub fn save_jwks(&self,keys:&JwkSet)->Result<()> { self.set_setting("jwks",Some(&serde_json::to_string(keys)?)) }

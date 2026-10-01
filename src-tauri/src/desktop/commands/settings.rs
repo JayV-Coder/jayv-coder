@@ -1,6 +1,7 @@
 //! Agentes e modelos: ler, salvar e conferir se o agente está instalado. Tudo
 //! mora no banco; o orquestrador recebe a versão nova assim que ela é gravada.
 
+use crate::i18n::{failure, Text};
 use crate::desktop::{SharedDesktopState, SharedWorkspace};
 use crate::llm::{self, AgentId, KnownModel, LlmSettings, Probe};
 use serde::Serialize;
@@ -23,24 +24,24 @@ fn snapshot(settings:LlmSettings)->SettingsSnapshot {
 }
 
 #[tauri::command]
-pub(crate) async fn get_settings(workspace:State<'_,SharedWorkspace>)->Result<SettingsSnapshot,String>{
+pub(crate) async fn get_settings(workspace:State<'_,SharedWorkspace>)->Result<SettingsSnapshot,Text>{
     let workspace=workspace.lock().await;
-    workspace.llm_settings().map(snapshot).map_err(|error|error.to_string())
+    workspace.llm_settings().map(snapshot).map_err(failure)
 }
 
 /// Grava primeiro e só então troca o orquestrador: uma configuração recusada
 /// não deixa o orquestrador pela metade.
 #[tauri::command]
-pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:LlmSettings)->Result<SettingsSnapshot,String>{crate::desktop::require_session()?;
+pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:LlmSettings)->Result<SettingsSnapshot,Text>{crate::desktop::require_session()?;
     let saved={
         let mut workspace=workspace.lock().await;
-        workspace.save_llm_settings(&settings).map_err(|error|error.to_string())?
+        workspace.save_llm_settings(&settings).map_err(failure)?
     };
     desk.lock().await.orchestrator.use_llm(&saved);
     Ok(snapshot(saved))
 }
 
 #[tauri::command]
-pub(crate) async fn check_agent(command:String)->Result<Probe,String>{
+pub(crate) async fn check_agent(command:String)->Result<Probe,Text>{
     Ok(llm::probe(&command).await)
 }

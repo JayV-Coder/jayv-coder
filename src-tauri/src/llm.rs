@@ -8,6 +8,7 @@
 //! era o jeito mais fácil de quebrar o agente sem saber por quê.
 
 use crate::config::{ModelConfig, ProviderConfig};
+use crate::i18n::Text;
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -131,8 +132,10 @@ const CODEX_EFFORTS:[&str;4]=["default","low","medium","high"];
 const COPILOT_ACCESS:[&str;3]=["read","edits","all"];
 pub const COPILOT_TOOLS:[&str;4]=["shell","write","shell(git push)","shell(rm)"];
 
+/// `field` é a chave do i18n do nome do campo, sem o prefixo
+/// `settings.field.`.
 fn one_of(field:&str,value:&str,allowed:&[&str])->Result<()> {
-    if allowed.contains(&value) { Ok(()) } else { bail!("valor inválido para {field}: `{value}`") }
+    if allowed.contains(&value) { Ok(()) } else { bail!(Text::new("settings.invalidValue").with("field",Text::new(&format!("settings.field.{field}"))).with("value",value)) }
 }
 fn tools_in(field:&str,tools:&[String],allowed:&[&str])->Result<Vec<String>> {
     let mut seen=Vec::new();
@@ -142,14 +145,14 @@ fn tools_in(field:&str,tools:&[String],allowed:&[&str])->Result<Vec<String>> {
 
 impl ClaudeOptions {
     fn checked(mut self,models:&HashSet<&str>)->Result<Self> {
-        one_of("o modo de permissão do Claude Code",&self.permission_mode,&CLAUDE_PERMISSIONS)?;
-        one_of("o esforço do Claude Code",&self.effort,&CLAUDE_EFFORTS)?;
+        one_of("claude.permissionMode",&self.permission_mode,&CLAUDE_PERMISSIONS)?;
+        one_of("claude.effort",&self.effort,&CLAUDE_EFFORTS)?;
         self.fallback_model=self.fallback_model.trim().to_string();
-        if !self.fallback_model.is_empty()&&!models.contains(self.fallback_model.as_str()) { bail!("o modelo reserva do Claude Code precisa ser um dos modelos cadastrados nele"); }
-        if let Some(budget)=self.max_budget_usd { if !(budget.is_finite()&&budget>0.0&&budget<=1_000.0) { bail!("o limite de gasto do Claude Code precisa ficar entre US$ 0,01 e US$ 1.000"); } }
-        self.blocked_tools=tools_in("as ferramentas bloqueadas do Claude Code",&self.blocked_tools,&CLAUDE_TOOLS)?;
+        if !self.fallback_model.is_empty()&&!models.contains(self.fallback_model.as_str()) { bail!(Text::new("settings.claude.fallback")); }
+        if let Some(budget)=self.max_budget_usd { if !(budget.is_finite()&&budget>0.0&&budget<=1_000.0) { bail!(Text::new("settings.claude.budget")); } }
+        self.blocked_tools=tools_in("claude.blockedTools",&self.blocked_tools,&CLAUDE_TOOLS)?;
         self.append_system_prompt=self.append_system_prompt.trim().to_string();
-        if self.append_system_prompt.chars().count()>4_000 { bail!("as instruções extras do Claude Code passam de 4.000 caracteres"); }
+        if self.append_system_prompt.chars().count()>4_000 { bail!(Text::new("settings.claude.instructions").with("max",4_000u32)); }
         Ok(self)
     }
     fn args(&self)->Vec<String> {
@@ -168,8 +171,8 @@ impl ClaudeOptions {
 
 impl CodexOptions {
     fn checked(mut self)->Result<Self> {
-        one_of("o sandbox do Codex",&self.sandbox,&CODEX_SANDBOXES)?;
-        one_of("o raciocínio do Codex",&self.reasoning_effort,&CODEX_EFFORTS)?;
+        one_of("codex.sandbox",&self.sandbox,&CODEX_SANDBOXES)?;
+        one_of("codex.reasoning",&self.reasoning_effort,&CODEX_EFFORTS)?;
         if self.sandbox!="workspace-write" { self.network_access=false; }
         Ok(self)
     }
@@ -186,8 +189,8 @@ impl CodexOptions {
 
 impl CopilotOptions {
     fn checked(mut self)->Result<Self> {
-        one_of("o acesso a ferramentas do Copilot",&self.tool_access,&COPILOT_ACCESS)?;
-        self.blocked_tools=tools_in("as ferramentas bloqueadas do Copilot",&self.blocked_tools,&COPILOT_TOOLS)?;
+        one_of("copilot.toolAccess",&self.tool_access,&COPILOT_ACCESS)?;
+        self.blocked_tools=tools_in("copilot.blockedTools",&self.blocked_tools,&COPILOT_TOOLS)?;
         Ok(self)
     }
     fn args(&self)->Vec<String> {
@@ -204,7 +207,7 @@ fn strings(items:&[&str])->Vec<String> { items.iter().map(|item|item.to_string()
 
 fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
     if options.is_null() { return Ok(T::default()); }
-    serde_json::from_value(options.clone()).map_err(|error|anyhow!("opções inválidas: {error}"))
+    serde_json::from_value(options.clone()).map_err(|error|anyhow::Error::new(Text::new("settings.invalidOptions").with("reason",error.to_string())))
 }
 
 impl AgentSettings {
@@ -339,30 +342,30 @@ pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
     for id in AgentId::ALL {
         let agent=settings.agents.iter().find(|agent|agent.id==id).cloned().unwrap_or_else(||AgentSettings::fresh(id));
         let command=agent.command.trim().to_string();
-        if command.is_empty() { bail!("informe o comando do {}",label(id)); }
-        if command.chars().any(char::is_whitespace) { bail!("o comando do {} é só o nome ou o caminho do executável, sem argumentos",label(id)); }
-        if !(TIMEOUT_RANGE.0..=TIMEOUT_RANGE.1).contains(&agent.timeout) { bail!("o tempo de silêncio do {} precisa ficar entre {} e {} segundos",label(id),TIMEOUT_RANGE.0,TIMEOUT_RANGE.1); }
+        if command.is_empty() { bail!(Text::new("settings.commandRequired").with("agent",label(id))); }
+        if command.chars().any(char::is_whitespace) { bail!(Text::new("settings.commandArgs").with("agent",label(id))); }
+        if !(TIMEOUT_RANGE.0..=TIMEOUT_RANGE.1).contains(&agent.timeout) { bail!(Text::new("settings.timeout").with("agent",label(id)).with("min",TIMEOUT_RANGE.0).with("max",TIMEOUT_RANGE.1)); }
         let own:HashSet<&str>=settings.models.iter().filter(|model|model.agent==id).map(|model|model.model.trim()).collect();
-        let options=agent.checked(&own).map_err(|error|anyhow!("{error}"))?;
-        if agent.enabled && !settings.models.iter().any(|model|model.agent==id&&model.enabled) { bail!("o {} está ligado mas não tem nenhum modelo ativo",label(id)); }
+        let options=agent.checked(&own)?;
+        if agent.enabled && !settings.models.iter().any(|model|model.agent==id&&model.enabled) { bail!(Text::new("settings.noActiveModel").with("agent",label(id))); }
         agents.push(AgentSettings{id,enabled:agent.enabled,command,timeout:agent.timeout,options});
     }
     let mut seen=HashSet::new();
     let mut models=Vec::new();
     for model in &settings.models {
         let name=model.model.trim().to_string();
-        if name.is_empty() { bail!("há um modelo sem identificador no {}",label(model.agent)); }
-        if !name.chars().all(|char|char.is_ascii_alphanumeric()||"._-:/@".contains(char)) { bail!("o identificador `{name}` tem caracteres que nenhum agente aceita"); }
-        if !seen.insert((model.agent,name.clone())) { bail!("o modelo `{name}` aparece duas vezes no {}",label(model.agent)); }
+        if name.is_empty() { bail!(Text::new("settings.modelNoId").with("agent",label(model.agent))); }
+        if !name.chars().all(|char|char.is_ascii_alphanumeric()||"._-:/@".contains(char)) { bail!(Text::new("settings.modelBadId").with("name",&name)); }
+        if !seen.insert((model.agent,name.clone())) { bail!(Text::new("settings.modelDuplicate").with("name",&name).with("agent",label(model.agent))); }
         let mut capabilities=Vec::new();
-        for capability in &model.capabilities { one_of("a capacidade",capability,&CAPABILITIES)?; if !capabilities.contains(capability) { capabilities.push(capability.clone()); } }
-        if capabilities.is_empty() { bail!("o modelo `{name}` precisa de ao menos uma capacidade"); }
-        one_of("o custo",&model.cost_class,&COSTS)?;
-        one_of("a velocidade",&model.speed,&SPEEDS)?;
-        if !(CONTEXT_RANGE.0..=CONTEXT_RANGE.1).contains(&model.context_window) { bail!("a janela de contexto de `{name}` precisa ficar entre {} e {} tokens",CONTEXT_RANGE.0,CONTEXT_RANGE.1); }
+        for capability in &model.capabilities { one_of("model.capability",capability,&CAPABILITIES)?; if !capabilities.contains(capability) { capabilities.push(capability.clone()); } }
+        if capabilities.is_empty() { bail!(Text::new("settings.modelNoCapability").with("name",&name)); }
+        one_of("model.cost",&model.cost_class,&COSTS)?;
+        one_of("model.speed",&model.speed,&SPEEDS)?;
+        if !(CONTEXT_RANGE.0..=CONTEXT_RANGE.1).contains(&model.context_window) { bail!(Text::new("settings.contextWindow").with("name",&name).with("min",CONTEXT_RANGE.0).with("max",CONTEXT_RANGE.1)); }
         models.push(AgentModel{model:name,capabilities,..model.clone()});
     }
-    if !agents.iter().any(|agent|agent.enabled) { bail!("ligue ao menos um agente"); }
+    if !agents.iter().any(|agent|agent.enabled) { bail!(Text::new("settings.noAgent")); }
     Ok(LlmSettings{agents,models})
 }
 
@@ -443,19 +446,89 @@ fn extensions()->Vec<String> {
 #[cfg(not(windows))]
 fn extensions()->Vec<String> { Vec::new() }
 
-/// As pastas dos instaladores: o nativo do Claude Code (`~/.local/bin`), o npm
-/// global, o bun e, no macOS, o Homebrew.
-fn install_dirs()->Vec<PathBuf> {
+/// As pastas dos instaladores: o script nativo (`~/.local/bin`, ou
+/// `/usr/local/bin` como root), o npm global — com o `prefix` do usuário e o
+/// Node de cada gerenciador de versões —, o bun e o Homebrew do macOS e do
+/// Linux.
+pub(crate) fn install_dirs()->Vec<PathBuf> {
     let mut dirs=Vec::new();
+    if let Some(prefix)=npm_prefix() { dirs.push(if cfg!(windows){prefix}else{prefix.join("bin")}); }
     if let Some(home)=dirs::home_dir() {
-        dirs.extend([home.join(".local").join("bin"),home.join(".npm-global").join("bin"),home.join(".bun").join("bin"),home.join(".claude").join("local")]);
+        dirs.extend([home.join(".local").join("bin"),home.join(".npm-global").join("bin"),home.join(".bun").join("bin"),home.join(".claude").join("local"),home.join(".volta").join("bin")]);
+        // nvm e fnm guardam um Node por versão; a mais nova vem primeiro.
+        dirs.extend(versions(&home.join(".nvm").join("versions").join("node"),&["bin"]));
+        let fnm=env::var_os("FNM_DIR").map(PathBuf::from).unwrap_or_else(||dirs::data_dir().unwrap_or_else(||home.join(".local").join("share")).join("fnm"));
+        dirs.extend(versions(&fnm.join("node-versions"),&["installation","bin"]));
+        #[cfg(not(windows))] dirs.push(home.join(".linuxbrew").join("bin"));
     }
     #[cfg(windows)] {
         if let Some(appdata)=env::var_os("APPDATA") { dirs.push(PathBuf::from(appdata).join("npm")); }
         if let Some(local)=dirs::data_local_dir() { dirs.push(local.join("Programs").join("claude")); dirs.push(local.join("Microsoft").join("WinGet").join("Links")); }
     }
-    #[cfg(not(windows))] { dirs.extend([PathBuf::from("/opt/homebrew/bin"),PathBuf::from("/usr/local/bin")]); }
+    #[cfg(not(windows))] { dirs.extend([PathBuf::from("/opt/homebrew/bin"),PathBuf::from("/usr/local/bin"),PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),PathBuf::from("/usr/bin")]); }
     dirs
+}
+
+/// As pastas `bin` de cada versão instalada por um gerenciador de Node, da
+/// versão mais nova para a mais antiga.
+fn versions(root:&Path,inner:&[&str])->Vec<PathBuf> {
+    let Ok(entries)=std::fs::read_dir(root) else {return Vec::new()};
+    let number=|name:&str|name.trim_start_matches('v').split('.').map(|part|part.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    let mut found:Vec<(Vec<u32>,PathBuf)>=entries.filter_map(Result::ok).map(|entry|{
+        let name=entry.file_name().to_string_lossy().to_string();
+        (number(&name),inner.iter().fold(entry.path(),|path,part|path.join(part)))
+    }).filter(|(_,path)|path.is_dir()).collect();
+    found.sort_by(|a,b|b.0.cmp(&a.0));
+    found.into_iter().map(|(_,path)|path).collect()
+}
+
+/// O `prefix` do npm global, quando o usuário o mudou: pela variável de
+/// ambiente ou pelo `~/.npmrc`.
+fn npm_prefix()->Option<PathBuf> {
+    if let Some(prefix)=env::var_os("NPM_CONFIG_PREFIX").or_else(||env::var_os("npm_config_prefix")) { return Some(PathBuf::from(prefix)); }
+    let home=dirs::home_dir()?;
+    let npmrc=std::fs::read_to_string(home.join(".npmrc")).ok()?;
+    let value=npmrc.lines().find_map(|line|line.trim().strip_prefix("prefix").map(str::trim).and_then(|rest|rest.strip_prefix('=')).map(str::trim))?;
+    let value=value.trim_matches('"');
+    Some(match value.strip_prefix("~/") { Some(rest)=>home.join(rest), None=>PathBuf::from(value) })
+}
+
+/// Como abrir o executável achado. Quase sempre é ele mesmo; o atalho `.cmd`
+/// que o npm cria no Windows vira o Node rodando o script do pacote, porque o
+/// Windows não deixa um `.cmd` receber argumento com quebra de linha — e o
+/// Copilot recebe o pedido inteiro no `-p`.
+pub fn launcher(program:&Path)->(PathBuf,Vec<String>) {
+    let shim=program.extension().is_some_and(|extension|extension.eq_ignore_ascii_case("cmd")||extension.eq_ignore_ascii_case("bat"));
+    if shim {
+        if let Some(launch)=std::fs::read_to_string(program).ok().and_then(|text|npm_shim(program,&text)) { return launch; }
+    }
+    (program.to_path_buf(),Vec::new())
+}
+
+/// O alvo de um atalho do `cmd-shim` do npm: `"%dp0%\node_modules\…\x.js" %*`.
+fn npm_shim(program:&Path,text:&str)->Option<(PathBuf,Vec<String>)> {
+    let dir=program.parent()?;
+    let start=text.rfind("\"%dp0%\\")?;
+    let rest=&text[start+7..];
+    let end=rest.find('"')?;
+    let target=rest[..end].split(['\\','/']).fold(dir.to_path_buf(),|path,part|path.join(part));
+    if !target.is_file() { return None; }
+    let script=target.extension().is_some_and(|extension|["js","cjs","mjs"].iter().any(|known|extension.eq_ignore_ascii_case(known)));
+    if !script { return Some((target,Vec::new())); }
+    let node=[dir.join("node.exe"),dir.join("node")].into_iter().find(|path|path.is_file()).or_else(||locate("node"))?;
+    Some((node,vec![target.display().to_string()]))
+}
+
+/// O PATH do agente: a pasta dele primeiro, depois as dos instaladores e, por
+/// fim, o PATH do app. Um agente do npm é um script `#!/usr/bin/env node`, e o
+/// app aberto pelo menu não enxerga o Node do nvm.
+pub fn agent_path(program:&Path)->Option<std::ffi::OsString> {
+    let mut dirs:Vec<PathBuf>=program.parent().map(Path::to_path_buf).into_iter().collect();
+    dirs.extend(install_dirs());
+    dirs.extend(env::var_os("PATH").map(|path|env::split_paths(&path).collect::<Vec<_>>()).unwrap_or_default());
+    let mut seen=HashSet::new();
+    dirs.retain(|dir|seen.insert(dir.clone()));
+    env::join_paths(dirs).ok()
 }
 
 #[cfg(unix)] fn executable(path:&Path)->bool { use std::os::unix::fs::PermissionsExt; path.metadata().is_ok_and(|meta|meta.permissions().mode()&0o111!=0) }
@@ -469,7 +542,11 @@ pub struct Probe { pub path:Option<String>, pub version:Option<String> }
 
 pub async fn probe(command:&str)->Probe {
     let Some(path)=locate(command) else { return Probe{path:None,version:None} };
-    let run=crate::providers::quiet(&mut tokio::process::Command::new(&path)).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
+    // O mesmo arranque do pedido: se a versão responde aqui, o pedido também abre.
+    let (program,lead)=launcher(&path);
+    let mut command=tokio::process::Command::new(&program);
+    if let Some(search)=agent_path(&path) { command.env("PATH",search); }
+    let run=crate::providers::quiet(&mut command).args(lead).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
     let version=match tokio::time::timeout(Duration::from_secs(10),run).await {
         Ok(Ok(output))=>{
             let text=if output.stdout.is_empty(){output.stderr}else{output.stdout};
@@ -589,5 +666,35 @@ mod tests {
         assert_eq!(providers.len(),3);
         assert!(providers.values().all(|provider|provider.kind=="cli"&&provider.local.is_none()));
         assert_eq!(models["claude/sonnet"].provider,"claude");
+    }
+
+    /// O atalho `.cmd` do npm não recebe quebra de linha no Windows; o pedido
+    /// do Copilot vai inteiro no `-p`. O Node roda o script do pacote direto.
+    #[test] fn o_atalho_do_npm_vira_node_com_o_script_do_pacote() {
+        let dir=tempfile::tempdir().expect("pasta");
+        let package=dir.path().join("node_modules").join("@github").join("copilot");
+        std::fs::create_dir_all(&package).expect("pacote");
+        std::fs::write(package.join("npm-loader.js"),"").expect("script");
+        std::fs::write(dir.path().join("node.exe"),"").expect("node");
+        let shim=dir.path().join("copilot.cmd");
+        std::fs::write(&shim,"@ECHO off\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@github\\copilot\\npm-loader.js\" %*\r\n").expect("atalho");
+        let (program,lead)=launcher(&shim);
+        assert_eq!(program,dir.path().join("node.exe"));
+        assert_eq!(lead,vec![package.join("npm-loader.js").display().to_string()]);
+        let native=dir.path().join("copilot.exe");
+        assert_eq!(launcher(&native),(native.clone(),vec![]),"binário nativo abre como está");
+    }
+
+    #[test] fn o_node_mais_novo_do_nvm_vem_primeiro() {
+        let root=tempfile::tempdir().expect("nvm");
+        for version in ["v18.20.0","v24.2.0","v22.11.0"] { std::fs::create_dir_all(root.path().join(version).join("bin")).expect("versão"); }
+        let found=versions(root.path(),&["bin"]);
+        assert_eq!(found.first(),Some(&root.path().join("v24.2.0").join("bin")));
+        assert_eq!(found.len(),3);
+    }
+
+    #[test] fn o_path_do_agente_comeca_pela_pasta_dele() {
+        let path=agent_path(Path::new("/opt/tools/bin/copilot")).expect("path");
+        assert_eq!(env::split_paths(&path).next(),Some(PathBuf::from("/opt/tools/bin")));
     }
 }

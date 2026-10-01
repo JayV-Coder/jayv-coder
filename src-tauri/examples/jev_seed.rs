@@ -1,7 +1,7 @@
 //! Imprime o seed de `jev_questions` e `jev_parameters` a partir das perguntas
 //! que o Rust faz hoje:
 //!
-//!   cargo run --example jev_seed > ../supabase/migrations/20260930120200_seed_jev.sql
+//!   cargo run --example jev_seed > ../supabase/migrations/20261001120100_seed_jev_en.sql
 
 use jayv_lib::{asking, gatekeeper, jev};
 use serde_json::Value;

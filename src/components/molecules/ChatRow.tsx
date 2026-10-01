@@ -1,5 +1,6 @@
 import type { Chat } from "@/modules/core";
 import { useT } from "@/modules/i18n";
+import { chatTitle } from "@/modules/workspace";
 import { cn } from "@/lib/utils";
 import { ConfirmAction } from "./ConfirmAction";
 
@@ -12,7 +13,7 @@ export function ChatRow({ chat, open, onOpen, onDelete }: { chat: Chat; open: bo
       <button
         type="button"
         aria-current={open ? "true" : undefined}
-        title={open ? `${chat.title} · ${t("chat.openNow")}` : chat.title}
+        title={open ? `${chatTitle(chat)} · ${t("chat.openNow")}` : chatTitle(chat)}
         onClick={onOpen}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 rounded-[7px] py-2 pe-1.5 ps-[15px] text-start text-xs text-[#737d75] hover:bg-[#171c18] hover:text-[#dde5df]",
@@ -20,13 +21,13 @@ export function ChatRow({ chat, open, onOpen, onDelete }: { chat: Chat; open: bo
         )}
       >
         <span className={cn("w-2.5 flex-none text-center leading-none", open && "text-[9px] text-primary")}>{open ? "●" : "◌"}</span>
-        <span className={cn("flex-1 truncate", open && "font-semibold")}>{chat.title}</span>
+        <span className={cn("flex-1 truncate", open && "font-semibold")}>{chatTitle(chat)}</span>
       </button>
-      <ConfirmAction title={t("chat.delete.title")} description={t("chat.delete.description", { title: chat.title })} onConfirm={onDelete}>
+      <ConfirmAction title={t("chat.delete.title")} description={t("chat.delete.description", { title: chatTitle(chat) })} onConfirm={onDelete}>
         <button
           type="button"
           title={t("chat.delete.title")}
-          aria-label={t("chat.delete.aria", { title: chat.title })}
+          aria-label={t("chat.delete.aria", { title: chatTitle(chat) })}
           className="flex-[0_0_27px] p-1.5 text-base leading-none text-[#849087] opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100"
         >
           ×

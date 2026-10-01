@@ -16,13 +16,13 @@ pub struct Identity {
 
 #[derive(Debug,thiserror::Error)]
 pub enum SessionError {
-    #[error("sessão expirada")]
+    #[error("session expired")]
     Expired,
     /// O token foi assinado por uma chave que o JWKS guardado não tem: quem
     /// chama baixa o JWKS de novo antes de recusar.
-    #[error("chave de assinatura desconhecida")]
+    #[error("unknown signing key")]
     UnknownKey,
-    #[error("sessão inválida: {0}")]
+    #[error("invalid session: {0}")]
     Invalid(String),
 }
 
@@ -59,8 +59,8 @@ pub fn validate_offline(token:&str,keys:&JwkSet,last_user:Option<&str>,now:i64)-
 
 fn verify(token:&str,keys:&JwkSet)->Result<Identity,SessionError> {
     let header=decode_header(token).map_err(|error|SessionError::Invalid(error.to_string()))?;
-    if header.alg!=Algorithm::ES256 {return Err(SessionError::Invalid(format!("algoritmo {:?} não aceito",header.alg)));}
-    let kid=header.kid.ok_or_else(||SessionError::Invalid("token sem kid".into()))?;
+    if header.alg!=Algorithm::ES256 {return Err(SessionError::Invalid(format!("algorithm {:?} is not accepted",header.alg)));}
+    let kid=header.kid.ok_or_else(||SessionError::Invalid("token without kid".into()))?;
     let jwk=keys.find(&kid).ok_or(SessionError::UnknownKey)?;
     let key=DecodingKey::from_jwk(jwk).map_err(|error|SessionError::Invalid(error.to_string()))?;
     let mut validation=Validation::new(Algorithm::ES256);
@@ -76,8 +76,8 @@ fn verify(token:&str,keys:&JwkSet)->Result<Identity,SessionError> {
 
 pub async fn fetch_jwks(http:&reqwest::Client)->anyhow::Result<JwkSet> {
     let url=format!("{PROJECT_URL}/auth/v1/.well-known/jwks.json");
-    let response=http.get(&url).send().await.with_context(||format!("não foi possível baixar {url}"))?.error_for_status()?;
-    response.json().await.context("o JWKS do projeto veio em formato inesperado")
+    let response=http.get(&url).send().await.with_context(||format!("could not download {url}"))?.error_for_status()?;
+    response.json().await.context("the project JWKS has an unexpected format")
 }
 
 #[cfg(test)]
@@ -118,7 +118,7 @@ mod tests {
     #[test] fn o_token_vencido_e_recusado() {
         let error=validate(&token(KEY_A,"test-key",claims(NOW-1)),&keys(),NOW).unwrap_err();
         assert!(matches!(error,SessionError::Expired));
-        assert_eq!(error.to_string(),"sessão expirada");
+        assert_eq!(error.to_string(),"session expired");
     }
 
     #[test] fn outro_emissor_e_recusado() {

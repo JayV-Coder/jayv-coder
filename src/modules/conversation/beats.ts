@@ -1,5 +1,6 @@
 import type { Activity, Aspect, EntryVerdict, ExitVerdict, TurnStatus } from "@/modules/core";
 import { t, type Key } from "@/modules/i18n";
+import { shownText, sourceLabel } from "./notice";
 
 const GATE_WORDS: Record<string, Key> = { pass: "beat.gate.pass", ask: "beat.gate.ask", block: "beat.gate.block" };
 
@@ -12,13 +13,13 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
       const word = GATE_WORDS[String(d.verdict)];
       return t("beat.gate", { verdict: word ? t(word) : String(d.verdict), score: d.score ?? "", demand: d.demand ?? "" });
     }
-    case "read": return t("beat.read", { intent: d.intent ?? "", complexity: d.complexity ?? "", source: d.source ?? "" });
+    case "read": return t("beat.read", { intent: d.intent ?? "", complexity: d.complexity ?? "", source: sourceLabel(String(d.source ?? "")) });
     case "context": return t("beat.context", { count: d.files ?? 0, tokens: d.tokens ?? 0 });
     case "route": return `${t("beat.route", { provider: d.provider ?? "", model: d.model ?? "" })}${d.reason ? ` — ${d.reason}` : ""}`;
     case "running": return t("beat.running");
     case "agent": return String(d.line ?? "");
     case "done": return t("beat.done", { latency: d.latencyMs ?? 0, input: d.inputTokens ?? 0, output: d.outputTokens ?? 0 });
-    case "failed": return t("beat.failed", { error: d.error ?? "" });
+    case "failed": return t("beat.failed", { error: shownText(String(d.error ?? "")) });
     case "dismissed": return t("beat.dismissed", { prompt: d.prompt ?? "" });
     default: return null;
   }

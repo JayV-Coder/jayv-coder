@@ -3,7 +3,7 @@
 //! confere cada comando ou arquivo que o modelo pediu para mexer contra as
 //! regras da casa declaradas em `config.yaml`.
 
-use crate::{config::Config, firewall::ContextFirewall, jev::{self, Evaluation, Question}, turns::Turn};
+use crate::{config::Config, firewall::ContextFirewall, i18n::{self, Text}, jev::{self, Evaluation, Question}, turns::Turn};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -21,8 +21,6 @@ pub fn scope_level_of(scope:&str)->usize {
     match scope {"small change"|"ajuste pequeno"=>0,"feature"|"funcionalidade"=>1,_=>2}
 }
 
-/// O nome do nível na resposta em português que a portaria dá ao barrar.
-fn scope_label_pt(scope:&str)->&'static str { ["ajuste pequeno","funcionalidade","sistema inteiro"][scope_level_of(scope)] }
 /// Quanto de clareza cada tamanho de pedido exige para atravessar o portão.
 pub const SCOPE_DEMAND:[f64;3]=[0.35,0.55,0.70];
 /// Abaixo da exigência o portão pergunta; abaixo dela com esta folga, barra.
@@ -50,7 +48,7 @@ const SHELL_LANGUAGES:[&str;7]=["bash","sh","shell","zsh","console","terminal","
 pub enum EntryVerdict{Pass,Ask,Block}
 impl EntryVerdict {
     pub fn as_str(&self)->&'static str{match self{Self::Pass=>"pass",Self::Ask=>"ask",Self::Block=>"block"}}
-    pub fn parse(value:&str)->Result<Self>{Ok(match value{"pass"=>Self::Pass,"ask"=>Self::Ask,"block"=>Self::Block,other=>return Err(anyhow!("veredito de entrada desconhecido: `{other}`"))})}
+    pub fn parse(value:&str)->Result<Self>{Ok(match value{"pass"=>Self::Pass,"ask"=>Self::Ask,"block"=>Self::Block,other=>return Err(anyhow!("unknown entry verdict: `{other}`"))})}
     pub fn lets_through(&self)->bool{!matches!(self,Self::Block)}
 }
 
@@ -86,21 +84,23 @@ pub struct EntryCheck {
 impl EntryCheck {
     /// Os critérios que ficaram fora da faixa tolerada, na ordem em que pesam.
     pub fn failing(&self)->Vec<&Criterion>{self.criteria.iter().filter(|criterion|!criterion.within_band()).collect()}
-    /// A resposta que a portaria devolve quando barra o pedido.
+    /// A resposta que a portaria devolve quando barra o pedido, gravada como
+    /// aviso: cada um a lê no seu idioma.
     pub fn reply(&self)->String {
-        let missing=self.failing().iter().map(|criterion|format!("- {}: {}",criterion.label.to_lowercase(),criterion.reading)).collect::<Vec<_>>();
-        let asks=match scope_level_of(&self.scope){
-            0=>"Diga o que deve mudar e como você confirma que mudou.",
-            1=>"Diga o objetivo, onde mexer e como você confirma que ficou pronto.",
-            _=>"Um pedido desse tamanho precisa do objetivo, dos arquivos ou módulos envolvidos e do critério de pronto. Se der, quebre em partes.",
-        };
-        format!("A portaria barrou este pedido com {} de 100 (o mínimo para um {} é {}).\n\nO que está faltando:\n{}\n\n{}",self.score,scope_label_pt(&self.scope),self.demand,missing.join("\n"),asks)
+        let level=scope_level_of(&self.scope);
+        let mut lines=vec![
+            Text::new("gate.blocked").with("score",self.score).with("demand",self.demand).with("scope",Text::new(&format!("scope.{level}"))),
+            Text::new("gate.missing"),
+        ];
+        lines.extend(self.failing().iter().map(|criterion|Text::new("gate.missing.item").with("criterion",Text::new(&format!("criterion.{}",criterion.id))).with("reading",Text::new(&format!("criterion.{}.out",criterion.id)))));
+        lines.push(Text::new(&format!("gate.asks.{level}")));
+        i18n::notice(&lines)
     }
     /// A instrução que acompanha um pedido liberado com ressalva.
     pub fn clarifying_note(&self)->Option<String> {
         if self.verdict!=EntryVerdict::Ask {return None;}
-        let gaps=self.failing().iter().map(|criterion|criterion.label.to_lowercase()).collect::<Vec<_>>().join(", ");
-        Some(format!("A portaria liberou este pedido com ressalva: {gaps}. Faça uma única pergunta objetiva sobre o ponto mais crítico antes de começar o trabalho, e não presuma uma abordagem enquanto ela não for respondida."))
+        let gaps=self.failing().iter().map(|criterion|criterion.id.replace('_'," ")).collect::<Vec<_>>().join(", ");
+        Some(format!("The JayV entry gate let this request through with reservations ({gaps}). Before starting the work, ask the developer one objective question about the most critical point, and do not assume an approach until it is answered."))
     }
     /// O pedido liberado, reescrito para o modelo com o que a portaria leu nele.
     /// O texto do desenvolvedor vai intacto no topo; embaixo, a leitura de cada
@@ -144,10 +144,10 @@ impl EntryReading {
         }.clamp(0.0,1.0)).sum()
     }
     pub fn from_evaluation(evaluation:&Evaluation)->Result<Self> {
-        let noul=|id:&str|->Result<f64>{let answer=evaluation.answer(id).ok_or_else(||anyhow!("o Jev não devolveu a resposta `{id}`"))?;answer.as_noul().ok_or_else(||anyhow!("o Jev devolveu `{id}` como {} em vez de `noul`",answer.kind()))};
-        let scope=evaluation.answer("scope").ok_or_else(||anyhow!("o Jev não devolveu a resposta `scope`"))?;
+        let noul=|id:&str|->Result<f64>{let answer=evaluation.answer(id).ok_or_else(||anyhow!("the Jev did not return the `{id}` answer"))?;answer.as_noul().ok_or_else(||anyhow!("the Jev returned `{id}` as {} instead of `noul`",answer.kind()))};
+        let scope=evaluation.answer("scope").ok_or_else(||anyhow!("the Jev did not return the `scope` answer"))?;
         Ok(Self{
-            scope_score:scope.as_score().ok_or_else(||anyhow!("o Jev devolveu `scope` como {} em vez de `score`",scope.kind()))?,
+            scope_score:scope.as_score().ok_or_else(||anyhow!("the Jev returned `scope` as {} instead of `score`",scope.kind()))?,
             goal_is_clear:noul("goal_is_clear")?,
             says_where:noul("says_where")?,
             says_when_done:noul("says_when_done")?,
@@ -158,11 +158,11 @@ impl EntryReading {
 
 fn percent(value:f64)->u8{(value.clamp(0.0,1.0)*100.0).round() as u8}
 
-fn criterion(id:&str,label:&str,value:f64,demand:f64,inverted:bool,reading:(&str,&str))->Criterion {
+fn criterion(id:&str,value:f64,demand:f64,inverted:bool)->Criterion {
     let band=if inverted{[0,percent(1.0-demand)]}else{[percent(demand),100]};
     let reached=percent(value);
     let within=(band[0]..=band[1]).contains(&reached);
-    Criterion{id:id.into(),label:label.into(),percent:reached,band:Some(band),reading:if within{reading.0.into()}else{reading.1.into()},inverted}
+    Criterion{id:id.into(),label:format!("criterion.{id}"),percent:reached,band:Some(band),reading:format!("criterion.{id}.{}",if within{"in"}else{"out"}),inverted}
 }
 
 /// Passa, pergunta ou bloqueia: a clareza contra a exigência do tamanho, com
@@ -182,17 +182,15 @@ pub fn judge(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str)->EntryChe
     let verdict=verdict_with(reading,&parameters);
     let scope=parameters.scope_levels[level].as_str();
     let criteria=vec![
-        Criterion{id:"scope".into(),label:"Tamanho do pedido".into(),percent:percent(reading.scope_score/2.0),band:None,reading:scope.into(),inverted:false},
-        criterion("goal_is_clear","Objetivo claro",reading.goal_is_clear,demand,false,("o pedido diz o que quer","não dá para saber o que você quer ao final")),
-        criterion("says_where","Diz onde mexer",reading.says_where,demand,false,("aponta arquivos, módulos ou telas","não aponta nenhum arquivo, módulo ou tela")),
-        criterion("says_when_done","Diz como saber que ficou pronto",reading.says_when_done,demand,false,("traz um critério de pronto","não traz como conferir que ficou pronto")),
-        criterion("bundles_requests","Vários pedidos juntos",reading.bundles_requests,demand,true,("é um pedido só","junta assuntos que renderiam pedidos separados")),
+        Criterion{id:"scope".into(),label:"criterion.scope".into(),percent:percent(reading.scope_score/2.0),band:None,reading:scope.into(),inverted:false},
+        criterion("goal_is_clear",reading.goal_is_clear,demand,false),
+        criterion("says_where",reading.says_where,demand,false),
+        criterion("says_when_done",reading.says_when_done,demand,false),
+        criterion("bundles_requests",reading.bundles_requests,demand,true),
     ];
-    let note=match verdict {
-        EntryVerdict::Pass=>format!("Liberado: {scope} com o que precisa estar dito."),
-        EntryVerdict::Ask=>"Liberado com ressalva: o modelo vai perguntar antes de começar.".into(),
-        EntryVerdict::Block=>format!("Barrado: {scope} sem o mínimo de clareza exigido."),
-    };
+    // Nome, leitura e nota vão como chaves do i18n: a tela os diz no idioma de
+    // quem lê.
+    let note=format!("entry.note.{}",verdict.as_str());
     EntryCheck{id:turn.id.clone(),at:Utc::now(),chat_id:turn.chat_id.clone(),turn:turn.code.clone(),prompt:preview(prompt),score:percent(clarity),demand:percent(demand),verdict,scope:scope.into(),criteria,source:source.into(),note}
 }
 
@@ -220,18 +218,18 @@ pub fn entry_questions()->BTreeMap<String,Question> {
         ("goal_is_clear".to_string(),Question::noul_with(
             json!({"question":"Does `user_request` state what the developer wants to be true once the work is finished?","guidance":"Look for the intended outcome, not for politeness or detail. A request can be short and still name its outcome exactly."}),
             json!({"when":"The outcome is stated: the request names the behaviour, artefact or answer it expects to exist afterwards.","examples":["asks for a named capability, file or fix","states the problem to be gone and what working looks like","asks a question whose answer would settle a decision"]}),
-            json!({"when":"The outcome has to be guessed.","examples":["\"arruma isso\", \"melhora aqui\", \"deixa mais rápido\" with nothing to anchor them","names a topic without saying what should change about it","several possible goals with no sign of which one is meant"]}))),
+            json!({"when":"The outcome has to be guessed.","examples":["\"fix this\", \"improve it here\", \"make it faster\" with nothing to anchor them","names a topic without saying what should change about it","several possible goals with no sign of which one is meant"]}))),
         ("says_where".to_string(),Question::noul_with(
             json!({"question":"Does `user_request` say where in the project the work belongs?","guidance":"A location can be a path, a file, a module, a function, a screen, a layer or a named subsystem. Judge whether someone who knows this project could open the right place without guessing."}),
             json!({"when":"The request points at a place: a path or filename, a named symbol, a module, a screen, a route, or a layer of the system."}),
-            json!({"when":"No place is given and the request is not self-locating.","examples":["a change described only by its effect, in a project with many plausible homes for it","\"no sistema\", \"no código\", \"em algum lugar do backend\""],"not_a_defect":["a general question that does not touch this project at all"]}))),
+            json!({"when":"No place is given and the request is not self-locating.","examples":["a change described only by its effect, in a project with many plausible homes for it","\"in the system\", \"in the code\", \"somewhere in the backend\""],"not_a_defect":["a general question that does not touch this project at all"]}))),
         ("says_when_done".to_string(),Question::noul_with(
             json!({"question":"Does `user_request` say how the developer will confirm the work is done?","guidance":"Look for something checkable: a test that should pass, a command whose output is stated, an input and its expected output, an acceptance condition, or a described end state precise enough to compare against."}),
             json!({"when":"A check is stated or clearly implied by a precise end state.","examples":["names a test, a command or an output that must appear","gives an input and the expected result","describes the finished behaviour precisely enough to verify"]}),
-            json!({"when":"There is no way to tell the work apart from unfinished work.","examples":["only an adjective as the target: \"melhor\", \"mais limpo\", \"mais rápido\", with no measure","asks for a change with no stated effect to look for"]}))),
+            json!({"when":"There is no way to tell the work apart from unfinished work.","examples":["only an adjective as the target: \"better\", \"cleaner\", \"faster\", with no measure","asks for a change with no stated effect to look for"]}))),
         ("bundles_requests".to_string(),Question::noul_with(
             json!({"question":"Does `user_request` bundle work that would be better asked for separately?","guidance":"Judge whether the parts share one outcome. Several files, several steps or a long description of one coherent job is a single request. Separate goals that merely arrived in the same message are a bundle."}),
-            json!({"when":"Two or more independent goals are asked for at once, each of which could be delivered, reviewed and verified on its own.","examples":["a refactor plus an unrelated new feature plus a dependency upgrade","\"e já que você está aí, também...\"","a list of unrelated defects"]}),
+            json!({"when":"Two or more independent goals are asked for at once, each of which could be delivered, reviewed and verified on its own.","examples":["a refactor plus an unrelated new feature plus a dependency upgrade","\"and while you are at it, also...\"","a list of unrelated defects"]}),
             json!({"when":"Everything asked for serves one outcome, however many files or steps that takes.","also":"Necessary supporting work — the test for the feature, the migration the change needs — belongs to the same request."}))),
     ])
 }
@@ -281,7 +279,7 @@ pub fn heuristic_entry(prompt:&str)->EntryReading {
 pub enum ExitVerdict{Cleared,Held}
 impl ExitVerdict {
     pub fn as_str(&self)->&'static str{match self{Self::Cleared=>"cleared",Self::Held=>"held"}}
-    pub fn parse(value:&str)->Result<Self>{Ok(match value{"cleared"=>Self::Cleared,"held"=>Self::Held,other=>return Err(anyhow!("veredito de saída desconhecido: `{other}`"))})}
+    pub fn parse(value:&str)->Result<Self>{Ok(match value{"cleared"=>Self::Cleared,"held"=>Self::Held,other=>return Err(anyhow!("unknown exit verdict: `{other}`"))})}
 }
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
@@ -293,7 +291,8 @@ pub struct ExitCheck {
     pub turn_id:String,
     /// O pedido que originou esta saída, como o desenvolvedor o lê.
     pub turn:String,
-    /// `comando` ou `arquivo`, como a coluna mostra.
+    /// `command` ou `file`; a tela traduz. Checks antigos guardam `comando` e
+    /// `arquivo`, e a tela também os reconhece.
     pub kind:String,
     pub target:String,
     pub rule:Option<String>,
@@ -316,14 +315,20 @@ pub fn command_rule(config:&Config,line:&str)->Option<String> {
     }
 }
 
+/// O que a resposta faz com um arquivo: entregar o conteúdo dele é escrever;
+/// citar o caminho é só ler.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum Access{Read,Write}
+
 /// A regra que segura um arquivo, se alguma segurar.
-pub fn file_rule(config:&Config,firewall:&ContextFirewall,root:&Path,path:&str)->Option<String> {
+pub fn file_rule(config:&Config,firewall:&ContextFirewall,root:&Path,path:&str,access:Access)->Option<String> {
     let info=firewall.check_file(path);
     if let Some(rule)=info.matched_rule {return Some(rule);}
-    if escapes_root(root,path){return Some("workspace.root · fora do projeto".into());}
-    match config.permissions.write.as_str() {
+    if escapes_root(root,path){return Some("workspace.root · outside".into());}
+    let (name,permission)=match access {Access::Read=>("read",&config.permissions.read),Access::Write=>("write",&config.permissions.write)};
+    match permission.as_str() {
         "allow"=>None,
-        other=>Some(format!("permissions.write · {other}")),
+        other=>Some(format!("permissions.{name} · {other}")),
     }
 }
 
@@ -341,12 +346,19 @@ pub fn scan_answer(turn:&Turn,answer:&str,config:&Config,firewall:&ContextFirewa
     for line in shell_lines(answer) {
         if seen.contains(&line){continue;}
         seen.push(line.clone());
-        checks.push(ExitCheck::new(turn,"comando",&line,command_rule(config,&line)));
+        checks.push(ExitCheck::new(turn,"command",&line,command_rule(config,&line)));
     }
-    for path in mentioned_paths(answer) {
+    for path in written_paths(answer) {
         if seen.contains(&path){continue;}
         seen.push(path.clone());
-        checks.push(ExitCheck::new(turn,"arquivo",&path,file_rule(config,firewall,root,&path)));
+        checks.push(ExitCheck::new(turn,"file",&path,file_rule(config,firewall,root,&path,Access::Write)));
+    }
+    // Um caminho só citado não sai do projeto: entra no feed apenas quando
+    // bate numa regra — um `.env` lembrado na resposta continua segurado.
+    for path in cited_paths(answer) {
+        if seen.contains(&path){continue;}
+        seen.push(path.clone());
+        if let Some(rule)=file_rule(config,firewall,root,&path,Access::Read) {checks.push(ExitCheck::new(turn,"file",&path,Some(rule)));}
     }
     checks
 }
@@ -370,18 +382,27 @@ pub fn shell_lines(answer:&str)->Vec<String> {
     lines
 }
 
-/// Os caminhos de arquivo que a resposta cita em `código`, em `FILE:` ou como
-/// rótulo de um bloco de código.
-pub fn mentioned_paths(answer:&str)->Vec<String> {
-    static PATHS:OnceLock<(Regex,Regex)>=OnceLock::new();
-    let (inline,marker)=PATHS.get_or_init(||(
-        Regex::new(r"`([^`\n]{1,160})`").unwrap(),
-        Regex::new(r"(?im)^\s*(?:FILE:|```[a-z]*\s+)([\w./-]+)\s*$").unwrap(),
-    ));
-    let mut paths=Vec::new();
-    let mut push=|candidate:&str|{let candidate=candidate.trim().trim_start_matches("./");if looks_like_path(candidate)&&!paths.iter().any(|kept|kept==candidate){paths.push(candidate.to_string());}};
-    for capture in marker.captures_iter(answer){push(&capture[1]);}
-    for capture in inline.captures_iter(answer){push(&capture[1]);}
+/// Os arquivos cujo conteúdo a resposta entrega, em `FILE:` ou como rótulo de
+/// um bloco de código: é o que o modelo pede para escrever.
+pub fn written_paths(answer:&str)->Vec<String> {
+    static MARKER:OnceLock<Regex>=OnceLock::new();
+    let marker=MARKER.get_or_init(||Regex::new(r"(?im)^\s*(?:FILE:\s*|```[a-z]*\s+)([\w./-]+)\s*$").unwrap());
+    collect_paths(marker.captures_iter(answer).map(|capture|capture.get(1).map_or("",|path|path.as_str())))
+}
+
+/// Os caminhos que a resposta só cita em `código`.
+pub fn cited_paths(answer:&str)->Vec<String> {
+    static INLINE:OnceLock<Regex>=OnceLock::new();
+    let inline=INLINE.get_or_init(||Regex::new(r"`([^`\n]{1,160})`").unwrap());
+    collect_paths(inline.captures_iter(answer).map(|capture|capture.get(1).map_or("",|path|path.as_str())))
+}
+
+fn collect_paths<'a>(candidates:impl Iterator<Item=&'a str>)->Vec<String> {
+    let mut paths:Vec<String>=Vec::new();
+    for candidate in candidates {
+        let candidate=candidate.trim().trim_start_matches("./");
+        if looks_like_path(candidate)&&!paths.iter().any(|kept|kept==candidate){paths.push(candidate.to_string());}
+    }
     paths
 }
 
@@ -500,12 +521,17 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         let blocked=judge(&turn_at("chat"),"arruma tudo ai",&reading(1.9,0.2,0.1,0.05,0.6),"heuristica");
         assert_eq!(blocked.verdict,EntryVerdict::Block);
         let reply=blocked.reply();
-        assert!(reply.contains("sistema inteiro") && reply.contains("70") && reply.contains("onde mexer"),"{reply}");
+        let lines=i18n::read_notice(&reply).expect("o barrado vai como aviso traduzível");
+        assert_eq!(lines.first().map(|line|line.key.as_str()),Some("gate.blocked"));
+        assert!(lines.iter().any(|line|line.key=="gate.missing.item"),"{lines:?}");
+        assert_eq!(lines.last().map(|line|line.key.as_str()),Some("gate.asks.2"));
+        let english=i18n::for_model(&reply);
+        assert!(english.contains("whole system") && english.contains("70") && english.contains("says where"),"{english}");
         assert!(blocked.clarifying_note().is_none());
         let asked=judge(&turn_at("chat"),"Adicione paginação na listagem",&reading(1.0,0.7,0.4,0.05,0.05),"jev");
         assert_eq!(asked.verdict,EntryVerdict::Ask);
         let note=asked.clarifying_note().expect("ressalva");
-        assert!(note.contains("uma única pergunta") && note.contains("pronto"),"{note}");
+        assert!(note.contains("one objective question") && note.contains("says when done"),"{note}");
         assert!(judge(&turn_at("chat"),"x",&reading(0.2,0.95,0.95,0.95,0.0),"jev").clarifying_note().is_none());
     }
 
@@ -543,29 +569,47 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
 
     #[test]
     fn the_exit_gate_names_the_rule_each_command_and_file_hit() {
-        let answer="Rode isto:\n\n```bash\n$ cargo test --lib\nrm -rf target\n```\n\nDepois edite `src/router.rs` e nunca toque em `.env`.";
+        let answer="Rode isto:\n\n```bash\n$ cargo test --lib\nrm -rf target\n```\n\nDepois troque o roteador:\n\n```rust src/router.rs\npub fn select_model() {}\n```\n\nVeja também `src/lib.rs` e nunca toque em `.env`.";
         let ask=config("ask","ask");
         let checks=scan_answer(&turn_at("chat"),answer,&ask,&firewall(),Path::new("/projeto"));
-        let commands=checks.iter().filter(|check|check.kind=="comando").collect::<Vec<_>>();
+        let commands=checks.iter().filter(|check|check.kind=="command").collect::<Vec<_>>();
         assert_eq!(commands.len(),2);
         assert_eq!(commands[0].target,"cargo test --lib");
         assert!(commands.iter().all(|check|check.verdict==ExitVerdict::Held && check.rule.as_deref()==Some("permissions.shell · ask")));
-        let files=checks.iter().filter(|check|check.kind=="arquivo").collect::<Vec<_>>();
+        let files=checks.iter().filter(|check|check.kind=="file").collect::<Vec<_>>();
         assert_eq!(files.iter().map(|check|check.target.as_str()).collect::<Vec<_>>(),vec!["src/router.rs",".env"]);
-        assert_eq!(files[1].rule.as_deref(),Some("privacy.deny · .env"));
         assert_eq!(files[0].rule.as_deref(),Some("permissions.write · ask"));
+        assert_eq!(files[1].rule.as_deref(),Some("privacy.deny · .env"));
         let open=config("allow","allow");
         let relaxed=scan_answer(&turn_at("chat"),answer,&open,&firewall(),Path::new("/projeto"));
         assert!(relaxed.iter().filter(|check|check.target=="cargo test --lib").all(|check|check.verdict==ExitVerdict::Cleared));
         assert_eq!(relaxed.iter().find(|check|check.target==".env").expect("env").verdict,ExitVerdict::Held);
     }
 
+    /// Pedir só uma análise já pôs dez arquivos na coluna de saída como
+    /// `permissions.write · ask`: a resposta apenas citava os caminhos. Citar
+    /// é ler; só escreve quem entrega o conteúdo do arquivo.
+    #[test]
+    fn citing_a_file_in_an_analysis_is_not_asking_to_write_it() {
+        let answer="## Arquivos envolvidos\n\n- `src/app/Main.tsx` (ponto de entrada)\n- `lib/service.py` ou módulo equivalente\n- `helpers.go`";
+        let ask=config("ask","ask");
+        assert!(scan_answer(&turn_at("chat"),answer,&ask,&firewall(),Path::new("/projeto")).is_empty());
+        let mut closed=config("ask","ask");
+        closed.permissions.read="ask".into();
+        let held=scan_answer(&turn_at("chat"),answer,&closed,&firewall(),Path::new("/projeto"));
+        assert_eq!(held.len(),3);
+        assert!(held.iter().all(|check|check.rule.as_deref()==Some("permissions.read · ask")));
+        let leaving=scan_answer(&turn_at("chat"),"compare com `../outro/lib.rs`",&ask,&firewall(),Path::new("/projeto"));
+        assert_eq!(leaving[0].rule.as_deref(),Some("workspace.root · outside"));
+    }
+
     #[test]
     fn only_real_commands_and_real_paths_reach_the_feed() {
         assert_eq!(shell_lines("```bash\n# comenta\n\n$ npm run build\n```\ntexto `npm test` solto\n```rust\nlet x=1;\n```"),vec!["npm run build"]);
-        let paths=mentioned_paths("veja `src/lib.rs`, a função `Config::load`, o valor `42`, `handler()`, `config.yaml` e `.env`");
+        let paths=cited_paths("veja `src/lib.rs`, a função `Config::load`, o valor `42`, `handler()`, `config.yaml` e `.env`");
         assert_eq!(paths,vec!["src/lib.rs","config.yaml",".env"]);
-        assert!(mentioned_paths("nada aqui").is_empty());
+        assert!(cited_paths("nada aqui").is_empty());
+        assert_eq!(written_paths("FILE: src/a.rs\nfn a(){}\n\n```ts src/b.ts\nexport {}\n```\ne `src/c.rs` só citado"),vec!["src/a.rs","src/b.ts"]);
         assert!(!looks_like_path("src/") && !looks_like_path("a b.rs") && looks_like_path("src-tauri/src/jev.rs"));
     }
 
@@ -573,9 +617,9 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     fn a_path_leaving_the_project_is_held_by_the_workspace_rule() {
         let open=config("allow","allow");
         let root=Path::new("/projeto");
-        assert_eq!(file_rule(&open,&firewall(),root,"../outro/lib.rs").as_deref(),Some("workspace.root · fora do projeto"));
-        assert_eq!(file_rule(&open,&firewall(),root,"/etc/hosts.md").as_deref(),Some("workspace.root · fora do projeto"));
-        assert_eq!(file_rule(&open,&firewall(),root,"src/lib.rs"),None);
+        assert_eq!(file_rule(&open,&firewall(),root,"../outro/lib.rs",Access::Write).as_deref(),Some("workspace.root · outside"));
+        assert_eq!(file_rule(&open,&firewall(),root,"/etc/hosts.md",Access::Read).as_deref(),Some("workspace.root · outside"));
+        assert_eq!(file_rule(&open,&firewall(),root,"src/lib.rs",Access::Write),None);
         assert_eq!(command_rule(&open,""),None);
     }
 

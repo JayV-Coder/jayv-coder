@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Chat, Project } from "@/modules/core";
 import { sendPrompt, useConversation } from "@/modules/conversation";
-import { openTurns } from "@/modules/workspace";
+import { openFile, openTurns } from "@/modules/workspace";
 import { MessageBubble } from "./MessageBubble";
 import { PendingBubble } from "./PendingBubble";
 import { Welcome } from "./Welcome";
@@ -36,6 +36,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
                 content={message.content}
                 turn={turn}
                 onRetry={turn ? () => retry(turn.id) : undefined}
+                onOpenFile={project?.rootPath ? (path) => void openFile(chat.id, path) : undefined}
               />
             );
           })}

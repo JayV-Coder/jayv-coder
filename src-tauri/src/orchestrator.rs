@@ -104,7 +104,7 @@ impl Orchestrator {
     /// semântico é chaveado pela raiz, então trocar de projeto não reaproveita
     /// resposta de outro repositório.
     pub fn focus_on(&mut self,root:&Path)->Result<()> {
-        anyhow::ensure!(root.is_dir(),"a pasta do projeto não existe mais: {}",root.display());
+        anyhow::ensure!(root.is_dir(),crate::i18n::Text::new("project.folderMissing").with("path",root.display().to_string()));
         self.workdir.focus(root.to_path_buf());
         self.rag.focus_on(root.to_path_buf(),&self.firewall)
     }
@@ -153,9 +153,9 @@ impl Orchestrator {
         let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&capabilities,&context,&selection,session_id,pulse).await;
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
-            Err(error)=>pulse.beat(Beat::Failed{error:error.to_string()}),
+            Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
         }
-        let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(error.to_string()),false) };
+        let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(crate::i18n::notice(&[crate::i18n::failure(error)])),false) };
         self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now() });
         let _=self.performance.save(&self.performance_path);
         self.last_decision=Some(decision.clone());
@@ -190,10 +190,10 @@ impl Orchestrator {
         let confident=decision.is_confident(threshold);
         let scores=decision.intent_probabilities.iter().map(|(name,probability)|(name.clone(),(probability*100.0).round().clamp(0.0,100.0) as usize)).collect();
         let notice=(!confident).then(||{
-            let mut actions=vec![format!("mantive a intenção `{}`",decision.intent)];
-            if let Some(before)=&widened { actions.push(format!("ampliei o orçamento de `{before}` para `{complexity}`")); }
-            actions.push("pedi ao modelo que faça uma pergunta de esclarecimento antes de supor".into());
-            format!("O Jev roteou com confiança baixa (intenção {:.0}%, complexidade {:.0}%): {}.",decision.intent_confidence*100.0,decision.complexity_confidence*100.0,actions.join(", "))
+            let mut actions=vec![format!("kept the intent `{}`",decision.intent)];
+            if let Some(before)=&widened { actions.push(format!("widened the budget from `{before}` to `{complexity}`")); }
+            actions.push("asked the model for a clarifying question before assuming".into());
+            format!("The Jev routed with low confidence (intent {:.0}%, complexity {:.0}%): {}.",decision.intent_confidence*100.0,decision.complexity_confidence*100.0,actions.join(", "))
         });
         let signals=RoutingSignals{source:SOURCE_JEV.into(),intent_confidence:decision.intent_confidence,complexity_confidence:decision.complexity_confidence,confident,needs_repository_context:Some(decision.needs_repository_context),needs_tools:Some(decision.needs_tools),is_destructive:Some(decision.is_destructive),complexity_before_widening:widened,jev_model:Some(decision.model.clone()),jev_input_tokens:decision.usage.input_tokens,jev_output_tokens:decision.usage.output_tokens,notice};
         (IntentAnalysis{intent:decision.intent.clone(),scores,confidence:decision.intent_confidence},complexity,signals)
@@ -329,7 +329,7 @@ pub fn plan_context(intent:&str,complexity:&str)->Vec<String>{let mut p=match in
 pub fn select_strategy(intent:&str,complexity:&str)->String { if complexity=="complex"{"execution_graph"}else if matches!(intent,"code"|"refactor"|"test"|"security"){"rag_first"}else{"single_model"}.into() }
 pub fn local_routing(input:&str,error:Option<String>)->(IntentAnalysis,String,RoutingSignals) {
     let intent=analyze_intent(input); let complexity=analyze_complexity(input,&intent);
-    let signals=RoutingSignals{source:if error.is_some(){SOURCE_FALLBACK}else{SOURCE_LOCAL}.into(),intent_confidence:intent.confidence,notice:error.map(|error|format!("O Jev não pôde rotear esta solicitação e as heurísticas locais assumiram: {error}")),..Default::default()};
+    let signals=RoutingSignals{source:if error.is_some(){SOURCE_FALLBACK}else{SOURCE_LOCAL}.into(),intent_confidence:intent.confidence,notice:error.map(|error|format!("The Jev could not route this request and the local heuristics took over: {error}")),..Default::default()};
     (intent,complexity,signals)
 }
 fn widen_complexity(decision:&jev::RoutingDecision)->String {
@@ -471,8 +471,8 @@ mod tests {
         assert_eq!(complexity,"medium");
         assert!(!signals.confident);
         assert!(routing_notes(&signals).contains(CLARIFY_NOTE));
-        let notice=signals.notice.expect("aviso em pt-BR");
-        assert!(notice.contains("confiança baixa") && notice.contains("refactor"),"{notice}");
+        let notice=signals.notice.expect("aviso de confiança baixa");
+        assert!(notice.contains("low confidence") && notice.contains("refactor"),"{notice}");
     }
 
     #[test]
@@ -559,7 +559,7 @@ mod tests {
         assert!(result.routing.needs_repository_context.is_none());
         assert!(result.error.is_none());
         let notice=result.routing.notice.expect("aviso de fallback");
-        assert!(notice.contains("heurísticas locais") && notice.contains("429"),"{notice}");
+        assert!(notice.contains("local heuristics") && notice.contains("429"),"{notice}");
         assert!(!result.context.system_instructions.contains(CLARIFY_NOTE));
     }
 

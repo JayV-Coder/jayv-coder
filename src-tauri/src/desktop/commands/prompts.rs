@@ -2,6 +2,7 @@
 //! Nenhum destes comandos chama modelo — eles escrevem no banco e tocam o sino
 //! da fila.
 
+use crate::i18n::{failure, Text};
 use crate::desktop::events::*;
 use crate::desktop::{QueueBell, SharedWorkspace};
 use crate::turns::{self, Turn};
@@ -27,14 +28,14 @@ pub struct ProcessRequest {
 /// por cima não atropela nada: o segundo pedido entra na fila atrás do
 /// primeiro, com o seu próprio número, e espera a vez.
 #[tauri::command]
-pub(crate) async fn enqueue_prompt(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,request:ProcessRequest)->Result<Turn,String>{crate::desktop::require_session()?;
-    let chat_id=request.session_id.as_deref().ok_or_else(||"selecione um chat antes de enviar".to_string())?;
+pub(crate) async fn enqueue_prompt(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,request:ProcessRequest)->Result<Turn,Text>{crate::desktop::require_session()?;
+    let chat_id=request.session_id.as_deref().ok_or_else(||Text::new("prompt.noChat"))?;
     let input=request.input.trim();
-    if input.is_empty(){return Err("não há o que enviar".into());}
+    if input.is_empty(){return Err(Text::new("prompt.empty"));}
     let turn={
         let mut workspace=workspace.lock().await;
-        if !workspace.contains_chat(chat_id).map_err(|error|error.to_string())?{return Err("chat não encontrado".into());}
-        workspace.enqueue_prompt(chat_id,input,request.turn_id.as_deref()).map_err(|error|error.to_string())?
+        if !workspace.contains_chat(chat_id).map_err(failure)?{return Err(Text::new("chat.notFound"));}
+        workspace.enqueue_prompt(chat_id,input,request.turn_id.as_deref()).map_err(failure)?
     };
     let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:chat_id.to_string()});
     bell.notify_one();
@@ -59,16 +60,16 @@ pub struct AnswerInput {
 ///
 /// O pedido entra na fila como qualquer outro. Nenhum caminho dispensa o portão.
 #[tauri::command]
-pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Turn,String>{crate::desktop::require_session()?;
+pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Turn,Text>{crate::desktop::require_session()?;
     let mut store=workspace.lock().await;
-    let question=store.question_of(&answer.question_turn_id).map_err(|error|error.to_string())?.ok_or_else(||"essa pergunta não existe mais".to_string())?;
-    if question.status!=turns::QUESTION_PENDING {return Err("essa pergunta já foi encerrada".into());}
-    let kind=asking::Shape::parse(&question.kind).map_err(|error|error.to_string())?;
-    let composed=asking::compose(&question.prompt,kind,&question.options,&answer.picked,answer.text.as_deref()).map_err(|error|error.to_string())?;
-    let chat_id=store.chat_of_turn(&question.turn_id).map_err(|error|error.to_string())?.ok_or_else(||"o pedido dessa pergunta não existe mais".to_string())?;
-    let turn=store.enqueue_prompt(&chat_id,&composed,None).map_err(|error|error.to_string())?;
+    let question=store.question_of(&answer.question_turn_id).map_err(failure)?.ok_or_else(||Text::new("question.gone"))?;
+    if question.status!=turns::QUESTION_PENDING {return Err(Text::new("question.closed"));}
+    let kind=asking::Shape::parse(&question.kind).map_err(failure)?;
+    let composed=asking::compose(&question.prompt,kind,&question.options,&answer.picked,answer.text.as_deref()).map_err(failure)?;
+    let chat_id=store.chat_of_turn(&question.turn_id).map_err(failure)?.ok_or_else(||Text::new("question.originGone"))?;
+    let turn=store.enqueue_prompt(&chat_id,&composed,None).map_err(failure)?;
     // O vínculo é o que faz a Portaria julgar a resposta em par com a pergunta.
-    if !store.settle_question(&question.turn_id,turns::QUESTION_ANSWERED,Some(&turn.id)).map_err(|error|error.to_string())? {
+    if !store.settle_question(&question.turn_id,turns::QUESTION_ANSWERED,Some(&turn.id)).map_err(failure)? {
         eprintln!("pergunta: `{}` foi encerrada por outro caminho enquanto era respondida",question.turn_id);
     }
     drop(store);
@@ -81,14 +82,14 @@ pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorks
 /// registrada: a linha em `questions` guarda que foi ignorada e quando, e a
 /// narração do turno ganha o evento. Ignorar é uma escolha, e escolha não some.
 #[tauri::command]
-pub(crate) async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,question_turn_id:String)->Result<(),String>{crate::desktop::require_session()?;
+pub(crate) async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,question_turn_id:String)->Result<(),Text>{crate::desktop::require_session()?;
     let mut store=workspace.lock().await;
-    let question=store.question_of(&question_turn_id).map_err(|error|error.to_string())?.ok_or_else(||"essa pergunta não existe mais".to_string())?;
-    if !store.settle_question(&question_turn_id,turns::QUESTION_DISMISSED,None).map_err(|error|error.to_string())? {
-        return Err("essa pergunta já foi encerrada".into());
+    let question=store.question_of(&question_turn_id).map_err(failure)?.ok_or_else(||Text::new("question.gone"))?;
+    if !store.settle_question(&question_turn_id,turns::QUESTION_DISMISSED,None).map_err(failure)? {
+        return Err(Text::new("question.closed"));
     }
     let _=store.record_beat(&question_turn_id,"dismissed",&serde_json::json!({"prompt":question.prompt}));
-    let chat_id=store.chat_of_turn(&question_turn_id).map_err(|error|error.to_string())?.unwrap_or_default();
+    let chat_id=store.chat_of_turn(&question_turn_id).map_err(failure)?.unwrap_or_default();
     drop(store);
     let _=app.emit(TURN_EVENT,TurnEvent{chat_id,turn_id:question_turn_id});
     Ok(())

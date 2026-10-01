@@ -40,8 +40,8 @@ impl Question {
     pub fn levels(&self)->usize{match self{Self::Score{criteria,..}=>criteria.len(),_=>0}}
     pub fn validate(&self)->Result<()>{match self{
         Self::Noul{..}=>Ok(()),
-        Self::Choice{criteria,..}=>if criteria.is_empty(){Err(anyhow!("uma pergunta `choice` precisa de pelo menos uma opção em `criteria`"))}else if criteria.len()>MAX_CHOICE_OPTIONS{Err(anyhow!("uma pergunta `choice` aceita no máximo {MAX_CHOICE_OPTIONS} opções, e esta tem {}",criteria.len()))}else{Ok(())},
-        Self::Score{criteria,..}=>if (MIN_SCORE_LEVELS..=MAX_SCORE_LEVELS).contains(&criteria.len()){Ok(())}else{Err(anyhow!("uma pergunta `score` precisa de {MIN_SCORE_LEVELS} a {MAX_SCORE_LEVELS} níveis em `criteria`, e esta tem {}",criteria.len()))},
+        Self::Choice{criteria,..}=>if criteria.is_empty(){Err(anyhow!("a `choice` question needs at least one option in `criteria`"))}else if criteria.len()>MAX_CHOICE_OPTIONS{Err(anyhow!("a `choice` question accepts at most {MAX_CHOICE_OPTIONS} options, and this one has {}",criteria.len()))}else{Ok(())},
+        Self::Score{criteria,..}=>if (MIN_SCORE_LEVELS..=MAX_SCORE_LEVELS).contains(&criteria.len()){Ok(())}else{Err(anyhow!("a `score` question needs {MIN_SCORE_LEVELS} to {MAX_SCORE_LEVELS} levels in `criteria`, and this one has {}",criteria.len()))},
     }}
 }
 
@@ -69,8 +69,8 @@ pub struct Request{pub state:Value,pub model:String,pub questions:BTreeMap<Strin
 impl Request {
     pub fn new(state:impl Into<Value>,model:impl Into<String>,questions:BTreeMap<String,Question>)->Self{Self{state:state.into(),model:model.into(),questions}}
     pub fn validate(&self)->Result<()>{
-        if self.questions.is_empty(){return Err(anyhow!("a requisição para o Jev precisa de ao menos uma pergunta"));}
-        for (id,question) in &self.questions {question.validate().with_context(||format!("a pergunta `{id}` é inválida"))?;}
+        if self.questions.is_empty(){return Err(anyhow!("a Jev request needs at least one question"));}
+        for (id,question) in &self.questions {question.validate().with_context(||format!("question `{id}` is invalid"))?;}
         Ok(())
     }
 }
@@ -87,7 +87,7 @@ impl Evaluation {
     pub fn score(&self,id:&str)->Option<f64>{self.answer(id).and_then(Answer::as_score)}
     pub fn confidence(&self,id:&str)->Option<f64>{self.answer(id).and_then(Answer::confidence)}
     pub fn probabilities(&self,id:&str)->HashMap<String,f64>{self.answer(id).and_then(Answer::probabilities).cloned().unwrap_or_default()}
-    fn require(&self,id:&str)->Result<&Answer>{self.answer(id).ok_or_else(||anyhow!("o Jev não devolveu a resposta `{id}`"))}
+    fn require(&self,id:&str)->Result<&Answer>{self.answer(id).ok_or_else(||anyhow!("the Jev did not return the `{id}` answer"))}
 }
 
 pub fn retryable_status(status:u16)->bool{matches!(status,429|529|500|502|503|504)}
@@ -97,17 +97,17 @@ fn retry_policy(attempts:u32)->RetryPolicy{RetryPolicy{attempts:attempts.max(1),
 fn error_detail(body:&str)->String {
     let parsed=serde_json::from_str::<Value>(body).ok();
     parsed.as_ref().and_then(|value|["/error/message","/detail","/message","/error"].iter().find_map(|pointer|value.pointer(pointer)).map(|found|found.as_str().map(str::to_string).unwrap_or_else(||found.to_string())))
-        .unwrap_or_else(||{let trimmed=body.trim();if trimmed.is_empty(){"sem detalhes".into()}else{trimmed.chars().take(400).collect()}})
+        .unwrap_or_else(||{let trimmed=body.trim();if trimmed.is_empty(){"no details".into()}else{trimmed.chars().take(400).collect()}})
 }
 fn status_error(status:u16,body:&str)->anyhow::Error {
     let detail=error_detail(body);
     match status {
-        401=>anyhow!("sessão expirada (401): entre de novo para falar com o Jev — até lá a portaria segue com as heurísticas locais"),
-        429 if is_daily_limit(body)=>anyhow!("limite diário do Jev atingido: a portaria segue com as heurísticas locais até amanhã"),
-        422=>anyhow!("a TypeSafe rejeitou a requisição (422): {detail}"),
-        429=>anyhow!("a TypeSafe aplicou limite de requisições (429) e as tentativas se esgotaram: {detail}"),
-        529=>anyhow!("o serviço da TypeSafe está sobrecarregado (529) e as tentativas se esgotaram: {detail}"),
-        _=>anyhow!("a TypeSafe retornou {status}: {detail}"),
+        401=>anyhow!("session expired (401): sign in again to reach the Jev; until then the gate uses the local heuristics"),
+        429 if is_daily_limit(body)=>anyhow!("daily Jev limit reached: the gate uses the local heuristics until tomorrow"),
+        422=>anyhow!("TypeSafe rejected the request (422): {detail}"),
+        429=>anyhow!("TypeSafe rate-limited the request (429) and the retries ran out: {detail}"),
+        529=>anyhow!("TypeSafe is overloaded (529) and the retries ran out: {detail}"),
+        _=>anyhow!("TypeSafe returned {status}: {detail}"),
     }
 }
 /// A função `jev` responde 429 com `code: daily_limit` quando o usuário gastou
@@ -115,9 +115,9 @@ fn status_error(status:u16,body:&str)->anyhow::Error {
 fn is_daily_limit(body:&str)->bool { serde_json::from_str::<Value>(body).ok().and_then(|value|value.get("code").and_then(Value::as_str).map(|code|code=="daily_limit")).unwrap_or(false) }
 fn worth_retrying(status:u16,body:&str)->bool { retryable_status(status) && !is_daily_limit(body) }
 fn transport_error(error:reqwest::Error)->anyhow::Error {
-    if error.is_timeout(){anyhow!("o Jev excedeu o tempo limite; verifique a conexão de rede")}
-    else if error.is_connect(){anyhow!("não foi possível conectar ao Jev; verifique a conexão de rede")}
-    else{anyhow!("falha ao enviar a solicitação ao Jev: {}",error.without_url())}
+    if error.is_timeout(){anyhow!("the Jev timed out; check the network connection")}
+    else if error.is_connect(){anyhow!("could not connect to the Jev; check the network connection")}
+    else{anyhow!("failed to send the request to the Jev: {}",error.without_url())}
 }
 
 /// O corpo da chamada à função: o conjunto de perguntas, o estado e, quando
@@ -131,13 +131,13 @@ pub fn call_body(set:&str,state:Value,include:Option<&[&str]>)->Value {
 pub struct Client{http:reqwest::Client,token:String,attempts:u32}
 impl Client {
     pub fn from_session()->Result<Self> {
-        let token=crate::cloud::session::current().ok_or_else(||anyhow!("sem sessão: entre na sua conta para o Jev avaliar os pedidos"))?;
+        let token=crate::cloud::session::current().ok_or_else(||anyhow!("no session: sign in for the Jev to evaluate requests"))?;
         Self::for_session(token)
     }
     pub fn for_session(token:impl Into<String>)->Result<Self> {
         let token=token.into().trim().to_string();
-        if token.is_empty(){return Err(anyhow!("sem sessão para falar com o Jev"));}
-        let http=reqwest::Client::builder().timeout(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("não foi possível criar o cliente HTTP do Jev")?;
+        if token.is_empty(){return Err(anyhow!("no session to reach the Jev"));}
+        let http=reqwest::Client::builder().timeout(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("could not build the Jev HTTP client")?;
         Ok(Self{http,token,attempts:DEFAULT_ATTEMPTS})
     }
     pub fn with_attempts(mut self,attempts:u32)->Self{self.attempts=attempts.max(1);self}
@@ -168,7 +168,7 @@ impl Client {
             let status=response.status().as_u16();
             let pause=retry_after(response.headers());
             let body=response.text().await.unwrap_or_default();
-            if (200..300).contains(&status){return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("o Jev devolveu uma resposta em formato inesperado: {}",error_detail(&body)))));}
+            if (200..300).contains(&status){return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("the Jev returned an unexpected response: {}",error_detail(&body)))));}
             let failure=status_error(status,&body);
             Err(if worth_retrying(status,&body){RetryError::retryable(failure,pause)}else{RetryError::fatal(failure)})
         }).await
@@ -232,41 +232,41 @@ fn intent_question()->Question {
             "question":"Classify what the developer in `user_request` is asking the assistant to do, so that the right kind of model and the right context can be selected for the work.",
             "focus":"Judge the goal of the request, not the vocabulary used to phrase it. A word such as \"test\", \"review\" or \"security\" appearing in passing does not by itself decide the category.",
             "tie_break":"If the request mixes several goals, pick the one that the bulk of the resulting work serves.",
-            "background":"`project` describes the repository and its languages and `candidate_files` lists files a keyword search matched; both are background only. The developer may write in English or Brazilian Portuguese — treat the two identically."
+            "background":"`project` describes the repository and its languages and `candidate_files` lists files a keyword search matched; both are background only. The developer may write in any language — judge the meaning the same way whatever the language."
         }),
         [
             ("analysis",json!({
                 "what":"Understand or explain something that already exists: how a piece of code works, why a behaviour or a failure happens, what a dependency does, or how the project is laid out.",
                 "not_for":"Judging whether the code is good, which is `review`; or changing the code, which is `code` or `refactor`.",
-                "examples":["Explique como o roteamento de modelos funciona aqui","Why does this endpoint return 401 only in production?","Trace where this value is set before it reaches the database"]})),
+                "examples":["Explain how model routing works here","Why does this endpoint return 401 only in production?","Trace where this value is set before it reaches the database"]})),
             ("code",json!({
                 "what":"Produce working code that does not exist yet, or repair code that is behaving incorrectly: a new feature, a new function, endpoint or script, a bug fix, or an integration with an external system.",
                 "not_for":"Restructuring code that already behaves correctly, which is `refactor`; writing tests, which is `test`; user-interface work, which is `frontend`.",
-                "examples":["Implemente um cliente HTTP para a API de pagamentos","Fix the panic that happens when the config file is missing","Add a --json flag to the CLI"]})),
+                "examples":["Implement an HTTP client for the payments API","Fix the panic that happens when the config file is missing","Add a --json flag to the CLI"]})),
             ("frontend",json!({
                 "what":"Work whose subject is the user interface: components, markup, styling, layout, client-side state, accessibility, or browser behaviour, in React, Vue, HTML, CSS or an equivalent.",
                 "not_for":"Server-side or library code that merely happens to feed a UI, which is `code`.",
-                "examples":["Crie um componente de tabela paginada em React","The sidebar collapses incorrectly on mobile","Adjust the theme tokens so dark mode passes contrast checks"]})),
+                "examples":["Create a paginated table component in React","The sidebar collapses incorrectly on mobile","Adjust the theme tokens so dark mode passes contrast checks"]})),
             ("general",json!({
                 "what":"Anything none of the other options describe: greetings and small talk, questions about the assistant itself, process or planning questions, open-ended advice, or a request too vague to place. This is the deliberate no-match outcome.",
                 "not_for":"Requests that clearly belong to another option even when phrased casually or briefly.",
-                "examples":["Oi, tudo bem?","What should I work on next?","Você consegue me ajudar com uma coisa?"]})),
+                "examples":["Hi, how are you?","What should I work on next?","Can you help me with something?"]})),
             ("refactor",json!({
                 "what":"Change the internal structure of code that already works, without changing what it does: renaming, extracting, de-duplicating, simplifying, reorganising modules, improving performance, or migrating to a different API or idiom.",
                 "not_for":"Fixing behaviour that is wrong, which is `code`; or pointing out problems without changing anything, which is `review`.",
-                "examples":["Extraia essa lógica duplicada para um helper","Split this 800-line file into modules","Make this loop allocate less memory"]})),
+                "examples":["Extract this duplicated logic into a helper","Split this 800-line file into modules","Make this loop allocate less memory"]})),
             ("review",json!({
                 "what":"Evaluate code, a diff or a design that already exists and report a judgement on it: correctness risks, quality, style, maintainability, or whether a change should be approved.",
                 "not_for":"Explaining how something works without judging it, which is `analysis`; applying the improvements, which is `refactor`. If the judgement asked for is specifically about attacks, credentials or data exposure, prefer `security`.",
-                "examples":["Revise este pull request","Audit this module for bugs before I merge it","Is this the right approach for the cache layer?"]})),
+                "examples":["Review this pull request","Audit this module for bugs before I merge it","Is this the right approach for the cache layer?"]})),
             ("security",json!({
                 "what":"Work whose subject is security: vulnerabilities, authentication and authorisation, secrets and credentials, injection, cryptography, dependency advisories, hardening, or meeting a security requirement.",
                 "not_for":"General quality review with no security angle, which is `review`; ordinary bug fixing, which is `code`.",
-                "examples":["Esta query está vulnerável a SQL injection?","Stop leaking the API key into the logs and rotate it","Harden the file upload endpoint"]})),
+                "examples":["Is this query vulnerable to SQL injection?","Stop leaking the API key into the logs and rotate it","Harden the file upload endpoint"]})),
             ("test",json!({
                 "what":"Work whose subject is automated tests: writing or fixing unit, integration or end-to-end tests, fixtures, mocks or coverage, or diagnosing a failing or flaky test suite.",
                 "not_for":"Fixing the production code that a failing test exposes as broken, which is `code`. Choose this only when the tests themselves are the deliverable.",
-                "examples":["Escreva testes para o parser de configuração","Why is this test flaky in CI?","Raise coverage on the router module"]})),
+                "examples":["Write tests for the configuration parser","Why is this test flaky in CI?","Raise coverage on the router module"]})),
         ],
     )
 }
@@ -279,7 +279,7 @@ fn complexity_question()->Question {
             "background":"`project` describes the repository and its languages and `candidate_files` lists files a keyword search matched. Use them to gauge how much of the system the work reaches into."
         }),
         [
-            json!({"what":"Answerable straight away from general knowledge or a single obvious line: a factual question, a command or syntax lookup, a rename, a typo, a greeting. Nothing has to be read first to be confident the answer is right.","examples":["How do I list branches in git?","Fix this typo in the log message","Oi, tudo bem?"]}),
+            json!({"what":"Answerable straight away from general knowledge or a single obvious line: a factual question, a command or syntax lookup, a rename, a typo, a greeting. Nothing has to be read first to be confident the answer is right.","examples":["How do I list branches in git?","Fix this typo in the log message","Hi, how are you?"]}),
             json!({"what":"A self-contained change or explanation confined to one file or one function, where the right approach is obvious as soon as that code is in view. No design decision and no coordination between separate parts of the system.","examples":["Add a null check to this parser function","Explain what this single function does","Write a unit test for this pure helper"]}),
             json!({"what":"Several related files must be read and held together to get it right: a feature that touches a handful of call sites, a defect whose cause is somewhere other than where the symptom appears, or a change that must keep an existing interface or callers working.","examples":["Add a new provider adapter alongside the existing ones","Find why the cache returns stale results after a config reload","Thread a new option through the CLI, config and router"]}),
             json!({"what":"A design decision with consequences across the codebase is required first: a cross-cutting refactor or migration, work spanning several subsystems or layers, requirements ambiguous enough that they must be settled before coding, reasoning about concurrency, data integrity or security, or a change whose blast radius cannot be established without exploring the repository.","examples":["Migrate the whole persistence layer from JSON files to SQLite","Redesign how sessions and memory interact so multiple windows stay consistent","Make the orchestrator resilient to a provider failing mid-stream"]}),
@@ -310,11 +310,11 @@ pub struct RoutingDecision {
 impl RoutingDecision {
     pub fn from_evaluation(evaluation:&Evaluation)->Result<Self> {
         let intent_answer=evaluation.require("intent")?;
-        let intent=intent_answer.as_choice().ok_or_else(||anyhow!("o Jev devolveu `intent` como {} em vez de `choice`",intent_answer.kind()))?;
+        let intent=intent_answer.as_choice().ok_or_else(||anyhow!("the Jev returned `intent` as {} instead of `choice`",intent_answer.kind()))?;
         let intent=if INTENTS.contains(&intent){intent.to_string()}else{"general".to_string()};
         let complexity_answer=evaluation.require("complexity")?;
-        let complexity_score=complexity_answer.as_score().ok_or_else(||anyhow!("o Jev devolveu `complexity` como {} em vez de `score`",complexity_answer.kind()))?;
-        let noul=|id:&str|->Result<f64>{let answer=evaluation.require(id)?;answer.as_noul().ok_or_else(||anyhow!("o Jev devolveu `{id}` como {} em vez de `noul`",answer.kind()))};
+        let complexity_score=complexity_answer.as_score().ok_or_else(||anyhow!("the Jev returned `complexity` as {} instead of `score`",complexity_answer.kind()))?;
+        let noul=|id:&str|->Result<f64>{let answer=evaluation.require(id)?;answer.as_noul().ok_or_else(||anyhow!("the Jev returned `{id}` as {} instead of `noul`",answer.kind()))};
         Ok(Self{
             intent,
             intent_confidence:intent_answer.confidence().unwrap_or(0.0),
@@ -359,7 +359,7 @@ pub fn verification_questions()->BTreeMap<String,Question> {
             json!({"when":"At least one statement about this repository is stated as fact and the blocks neither show it nor imply it.","examples":["names a file, module, symbol or setting that appears in no block","states a signature, default value or return type that differs from the one shown","describes existing behaviour that the code shown contradicts","attributes to this project a dependency, convention or layout that no block shows"]}),
             json!({"when":"Every statement about this repository can be traced to the blocks, allowing for paraphrase and summary.","also":"An answer that makes no factual claim about this repository belongs here too: general knowledge, restating the developer's own words, or code it openly offers as new rather than describing as already present.","not_a_defect":["saying that something is absent from the supplied context","declining to guess about code it was not shown"]}))),
         ("addresses_request".to_string(),Question::noul_with(
-            json!({"question":"Does `assistant_answer` respond to what `user_request` actually asked for?","guidance":"Judge the fit between the request and the reply, not whether the reply is correct, grounded or thorough. The developer may write in English or Brazilian Portuguese — treat the two identically."}),
+            json!({"question":"Does `assistant_answer` respond to what `user_request` actually asked for?","guidance":"Judge the fit between the request and the reply, not whether the reply is correct, grounded or thorough. The developer may write in any language — judge the meaning the same way whatever the language."}),
             json!({"when":"The reply delivers the kind of thing that was asked for — the explanation, the code, the review, the plan or the decision — even if it is partial or imperfect.","also":"Directly refusing the request, or asking for one detail genuinely needed to proceed, still counts as addressing it."}),
             json!({"when":"The reply is about something other than the request, or says nothing usable at all.","examples":["solves a different problem or answers a question that was not asked","generic filler, an apology or a restatement with no substance","empty, cut off before it says anything, or just a transport or provider error message"]}))),
         ("verifiable_claims".to_string(),Question::noul_with(
@@ -389,7 +389,7 @@ pub struct VerificationVerdict {
 
 impl VerificationVerdict {
     pub fn from_evaluation(evaluation:&Evaluation)->Result<Self> {
-        let noul=|id:&str|->Result<f64>{let answer=evaluation.require(id)?;answer.as_noul().ok_or_else(||anyhow!("o Jev devolveu `{id}` como {} em vez de `noul`",answer.kind()))};
+        let noul=|id:&str|->Result<f64>{let answer=evaluation.require(id)?;answer.as_noul().ok_or_else(||anyhow!("the Jev returned `{id}` as {} instead of `noul`",answer.kind()))};
         Ok(Self{
             unsupported_claims:noul("unsupported_claims")?,
             addresses_request:noul("addresses_request")?,
@@ -431,7 +431,7 @@ impl VerificationVerdict {
     /// ser gerado de novo deixaria o Supabase perguntando a versão antiga.
     #[test]
     fn o_seed_do_jev_e_o_que_o_rust_pergunta_hoje() {
-        let rows=seed_rows(include_str!("../../supabase/migrations/20260930120200_seed_jev.sql"));
+        let rows=seed_rows(include_str!("../../supabase/migrations/20261001120100_seed_jev_en.sql"));
         let mut sets:BTreeMap<String,BTreeMap<String,Question>>=BTreeMap::new();
         let mut parameters:BTreeMap<String,Value>=BTreeMap::new();
         for (fields,value) in rows {
@@ -553,7 +553,7 @@ impl VerificationVerdict {
         let invalid=status_error(422,r#"{"detail":"questions.complexity.criteria: must contain at least 2 items"}"#).to_string();
         assert!(invalid.contains("422") && invalid.contains("questions.complexity.criteria"),"{invalid}");
         let unauthorized=status_error(401,r#"{"error":"sessão inválida ou expirada","code":"session"}"#).to_string();
-        assert!(unauthorized.contains("sessão expirada") && unauthorized.contains("heurísticas locais"),"{unauthorized}");
+        assert!(unauthorized.contains("session expired") && unauthorized.contains("local heuristics"),"{unauthorized}");
         assert_eq!(error_detail("boom"),"boom");
     }
 
@@ -562,7 +562,7 @@ impl VerificationVerdict {
     #[test]
     fn o_limite_diario_nao_e_tentado_de_novo() {
         let body=r#"{"error":"limite diário do Jev atingido","code":"daily_limit"}"#;
-        assert!(status_error(429,body).to_string().contains("limite diário do Jev"));
+        assert!(status_error(429,body).to_string().contains("daily Jev limit"));
         assert!(!worth_retrying(429,body));
         assert!(worth_retrying(429,r#"{"error":{"message":"rate limited"}}"#));
         assert!(worth_retrying(503,""));

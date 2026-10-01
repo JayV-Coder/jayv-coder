@@ -160,6 +160,9 @@
   .prose-answer a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
   .prose-answer :not(pre) > code { padding: 2px 6px; border: 1px solid #333c35; border-radius: 5px; background: #0d110e; color: #bff4c4; font: 12px var(--font-mono); }
   .prose-answer blockquote { margin: 14px 0; padding: 8px 14px; border-left: 3px solid #72b67a; color: #aab4ac; background: #101411; white-space: pre-wrap; }
+  .prose-answer .file-ref { display: inline; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+  .prose-answer .file-ref code { text-decoration: underline dotted #72b67a; text-underline-offset: 3px; }
+  .prose-answer .file-ref:hover code, .prose-answer .file-ref:focus-visible code { border-color: #72b67a; background: #142017; }
   .prose-answer hr { border: 0; border-top: 1px solid #303730; margin: 18px 0; }
 }
 

@@ -13,7 +13,7 @@ use crate::orchestrator::Orchestrator;
 use crate::sync::Connectivity;
 use crate::workspace::WorkspaceStore;
 use commands::session::{SessionState, SharedSession};
-use commands::{gate, prompts, session, settings, system, workspace as projects};
+use commands::{files, gate, prompts, session, settings, system, workspace as projects};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::sync::{Mutex, Notify};
@@ -47,8 +47,8 @@ pub struct SyncBell(pub Arc<Notify>);
 
 /// Os comandos que escrevem só valem com alguém logado: sem sessão o banco é
 /// o de memória, e o que se escrevesse nele sumiria no fechamento.
-pub(crate) fn require_session()->Result<(),String> {
-    crate::cloud::session::current().map(drop).ok_or_else(||"faça login para continuar".to_string())
+pub(crate) fn require_session()->Result<(),crate::i18n::Text> {
+    crate::cloud::session::current().map(drop).ok_or_else(||crate::i18n::Text::new("session.required"))
 }
 
 /// Quem precisa dos dois cadeados pega sempre nesta ordem — orquestrador,
@@ -132,6 +132,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             settings::get_settings,settings::save_settings,settings::check_agent,
             system::system_status,
             gate::gate_feed,
+            files::open_file,
         ])
         .run(tauri::generate_context!()).map_err(Into::into)
 }

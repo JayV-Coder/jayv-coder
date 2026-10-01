@@ -7,6 +7,7 @@
 //! localmente, e oferecidos a ele como candidatos; ele diz se aquilo é pergunta,
 //! de que tipo, e se a lista extraída é de verdade.
 
+use crate::i18n::{self, Param, Text};
 use crate::jev::{self, Question, MAX_CHOICE_OPTIONS};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -16,7 +17,7 @@ use std::collections::BTreeMap;
 pub const KIND_QUESTION:&str="kind";
 pub const OPTIONS_QUESTION:&str="options_are_real";
 pub const JEV_SOURCE:&str="jev";
-pub const LOCAL_SOURCE:&str="heurística local";
+pub const LOCAL_SOURCE:&str="local";
 /// Meio a meio é indeciso, e indeciso não habilita nada.
 pub const NOUL_LINE:f64=0.5;
 
@@ -30,7 +31,7 @@ impl Shape {
     pub fn as_str(&self)->&'static str { match self { Self::Noul=>"noul", Self::Single=>"single", Self::Multiple=>"multiple" } }
     pub fn parse(value:&str)->Result<Self> { Ok(match value {
         "noul"=>Self::Noul, "single"=>Self::Single, "multiple"=>Self::Multiple,
-        other=>return Err(anyhow!("tipo de pergunta desconhecido: `{other}`")),
+        other=>return Err(anyhow!("unknown question kind: `{other}`")),
     }) }
     pub fn wants_options(&self)->bool { !matches!(self,Self::Noul) }
 }
@@ -106,16 +107,16 @@ pub async fn classify(answer:&str)->Option<Pending> {
 pub fn questions()->BTreeMap<String,Question> {
     BTreeMap::from([
         (KIND_QUESTION.to_string(),Question::choice(
-            "A resposta do assistente termina perguntando algo ao desenvolvedor, de modo que o trabalho depende do que ele responder?",
+            "Does the assistant's answer end by asking the developer something, so that the work depends on what they reply?",
             [
-                ("none","não há pergunta a responder: a resposta é informação, ou a pergunta é retórica"),
-                ("noul","a pergunta se responde com sim ou não"),
-                ("single","a pergunta oferece alternativas e espera uma só"),
-                ("multiple","a pergunta oferece alternativas e aceita quantas o desenvolvedor quiser"),
+                ("none","there is no question to answer: the answer is information, or the question is rhetorical"),
+                ("noul","the question is answered with yes or no"),
+                ("single","the question offers options and expects exactly one"),
+                ("multiple","the question offers options and accepts as many as the developer wants"),
             ])),
         (OPTIONS_QUESTION.to_string(),Question::noul_with(
-            "A lista em `options` é exatamente o conjunto de alternativas que a pergunta em `question` oferece?",
-            "são as alternativas da pergunta","é outra coisa: passos, exemplos, itens de um relatório")),
+            "Is the list in `options` exactly the set of alternatives that the question in `question` offers?",
+            "they are the question's alternatives","something else: steps, examples, items of a report")),
     ])
 }
 
@@ -123,7 +124,7 @@ async fn consult(answer:&str,candidate:&Candidate)->Result<Option<Pending>> {
     let include:&[&str]=if candidate.options.is_empty() {&[KIND_QUESTION]} else {&[KIND_QUESTION,OPTIONS_QUESTION]};
     let state=json!({"answer":answer,"question":candidate.prompt,"options":candidate.options});
     let evaluation=jev::evaluate("asking",state,Some(include)).await?;
-    let kind=evaluation.choice(KIND_QUESTION).ok_or_else(||anyhow!("o Jev não devolveu a resposta `{KIND_QUESTION}`"))?;
+    let kind=evaluation.choice(KIND_QUESTION).ok_or_else(||anyhow!("the Jev did not return the `{KIND_QUESTION}` answer"))?;
     let real=match evaluation.noul(OPTIONS_QUESTION) { Some(noul)=>noul>=crate::local::global::current_parameters().noul_line, None=>candidate.options.is_empty() };
     Ok(shape(kind,candidate,real).map(|kind|enable(kind,candidate,JEV_SOURCE)))
 }
@@ -166,22 +167,24 @@ pub fn compose(question:&str,kind:Shape,options:&[String],picked:&[String],text:
     if let Some(text)=text.map(str::trim).filter(|text|!text.is_empty()) { return Ok(answer_line(question,text)); }
     match kind {
         Shape::Noul=>match picked.first().map(String::as_str) {
-            Some(YES)=>Ok(answer_line(question,"SIM")),
-            Some(NO)=>Ok(answer_line(question,"NÃO")),
-            _=>Err(anyhow!("responda `{YES}` ou `{NO}`, ou escreva a resposta")),
+            Some(YES)=>Ok(answer_line(question,Text::new("ask.yes"))),
+            Some(NO)=>Ok(answer_line(question,Text::new("ask.no"))),
+            _=>Err(Text::new("answer.noul").into()),
         },
         Shape::Single|Shape::Multiple=>{
-            if picked.is_empty() { return Err(anyhow!("escolha ao menos uma alternativa, ou escreva a resposta")); }
-            if kind==Shape::Single&&picked.len()>1 { return Err(anyhow!("esta pergunta aceita uma alternativa só")); }
+            if picked.is_empty() { return Err(Text::new("answer.pickOne").into()); }
+            if kind==Shape::Single&&picked.len()>1 { return Err(Text::new("answer.single").into()); }
             if let Some(stranger)=picked.iter().find(|choice|!options.contains(choice)) {
-                return Err(anyhow!("`{stranger}` não é uma das alternativas oferecidas"));
+                return Err(Text::new("answer.unknown").with("option",stranger).into());
             }
             Ok(answer_line(question,&picked.join(", ")))
         }
     }
 }
 
-fn answer_line(question:&str,answer:&str)->String { format!("Resposta à pergunta «{question}»: {answer}") }
+/// A linha fica no chat como aviso, para cada um a ler no seu idioma; o
+/// modelo e a Portaria a recebem em inglês (`i18n::for_model`).
+fn answer_line(question:&str,answer:impl Into<Param>)->String { i18n::notice(&[Text::new("ask.answer").with("question",question).with("answer",answer)]) }
 
 /// O par que a Portaria pontua e o modelo recebe. Um `SIM` sozinho não diz
 /// objetivo, não aponta arquivo e não traz critério de pronto: os critérios de
@@ -268,13 +271,13 @@ mod tests {
 
     #[test] fn a_escolha_clicada_vira_sempre_a_mesma_linha() {
         let options=vec!["Vite".to_string(),"esbuild".to_string()];
-        assert_eq!(compose("Sigo?",Shape::Noul,&[],&[YES.into()],None).expect("sim"),"Resposta à pergunta «Sigo?»: SIM");
-        assert_eq!(compose("Sigo?",Shape::Noul,&[],&[NO.into()],None).expect("não"),"Resposta à pergunta «Sigo?»: NÃO");
-        assert_eq!(compose("Qual?",Shape::Single,&options,&["Vite".into()],None).expect("única"),"Resposta à pergunta «Qual?»: Vite");
-        assert_eq!(compose("Quais?",Shape::Multiple,&options,&["Vite".into(),"esbuild".into()],None).expect("múltipla"),"Resposta à pergunta «Quais?»: Vite, esbuild");
+        assert_eq!(i18n::for_model(&compose("Sigo?",Shape::Noul,&[],&[YES.into()],None).expect("sim")),"Answer to the question «Sigo?»: YES");
+        assert_eq!(i18n::for_model(&compose("Sigo?",Shape::Noul,&[],&[NO.into()],None).expect("não")),"Answer to the question «Sigo?»: NO");
+        assert_eq!(i18n::for_model(&compose("Qual?",Shape::Single,&options,&["Vite".into()],None).expect("única")),"Answer to the question «Qual?»: Vite");
+        assert_eq!(i18n::for_model(&compose("Quais?",Shape::Multiple,&options,&["Vite".into(),"esbuild".into()],None).expect("múltipla")),"Answer to the question «Quais?»: Vite, esbuild");
         // RESPONDER vale para qualquer tipo: ele existe para quando nenhuma
         // alternativa serve.
-        assert_eq!(compose("Qual?",Shape::Single,&options,&[],Some(" só no build ")).expect("texto"),"Resposta à pergunta «Qual?»: só no build");
+        assert_eq!(i18n::for_model(&compose("Qual?",Shape::Single,&options,&[],Some(" só no build ")).expect("texto")),"Answer to the question «Qual?»: só no build");
     }
 
     #[test] fn a_escolha_que_a_pergunta_nao_ofereceu_e_recusada() {
@@ -289,11 +292,11 @@ mod tests {
     /// suprido. Quem voltar a pontuar a resposta sozinha faz a portaria barrar o
     /// próprio fluxo que ela mandou o modelo abrir.
     #[test] fn o_par_carrega_o_pedido_que_fez_a_pergunta_nascer() {
-        let par=pair("Regenere o índice do RAG em src-tauri/src/rag.rs e diga quantos arquivos entraram.","Resposta à pergunta «Sigo?»: SIM");
+        let par=pair("Regenere o índice do RAG em src-tauri/src/rag.rs e diga quantos arquivos entraram.","Answer to the question «Sigo?»: YES");
         assert!(par.starts_with("Regenere o índice"),"o pedido original abre o par: {par}");
-        assert!(par.ends_with("SIM"),"a resposta fecha o par: {par}");
+        assert!(par.ends_with("YES"),"a resposta fecha o par: {par}");
         assert!(par.contains("«Sigo?»"),"a pergunta viaja dentro da linha da resposta: {par}");
-        assert_eq!(pair("   ","Resposta: SIM"),"Resposta: SIM","sem pedido de origem, o par é a resposta");
+        assert_eq!(pair("   ","Answer: YES"),"Answer: YES","sem pedido de origem, o par é a resposta");
     }
 
     /// A prova do par contra a portaria de verdade: a mesma resposta, pontuada
@@ -302,7 +305,7 @@ mod tests {
     #[test] fn a_portaria_pontua_melhor_a_resposta_em_par_do_que_o_sim_sozinho() {
         use crate::{gatekeeper::{self,EntryVerdict},turns::{Turn,TurnStatus}};
         let turn=Turn{id:"t1".into(),chat_id:"c1".into(),code:"XY4T9B·02".into(),ordinal:2,status:TurnStatus::Flying,created_at:chrono::Utc::now()};
-        let judge=|text:&str|gatekeeper::judge(&turn,text,&gatekeeper::heuristic_entry(text),"heurística local");
+        let judge=|text:&str|gatekeeper::judge(&turn,text,&gatekeeper::heuristic_entry(text),"local");
 
         let sozinho=compose("Regenero o índice agora?",Shape::Noul,&[],&[YES.into()],None).expect("resposta");
         let par=pair("Regenere o índice do RAG em src-tauri/src/rag.rs; pronto quando cargo test passar.",&sozinho);

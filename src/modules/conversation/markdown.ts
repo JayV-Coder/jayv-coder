@@ -5,6 +5,7 @@ export type Inline =
   | { type: "text"; text: string }
   | { type: "strong"; text: string }
   | { type: "code"; text: string }
+  | { type: "file"; text: string; path: string }
   | { type: "link"; text: string; href: string };
 
 export type Block =
@@ -16,6 +17,34 @@ export type Block =
   | { type: "table"; head: Inline[][]; rows: Inline[][][] }
   | { type: "code"; language: string; code: string };
 
+const FILE_EXTENSIONS = new Set([
+  // código e configuração
+  "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "vue", "svelte", "css", "scss", "sass", "less", "html", "htm",
+  "json", "jsonc", "yaml", "yml", "toml", "ini", "cfg", "conf", "xml", "env", "lock", "gradle", "properties",
+  "py", "rb", "go", "java", "kt", "kts", "swift", "c", "h", "cpp", "hpp", "cc", "cs", "php", "lua", "dart", "scala",
+  "ex", "exs", "sql", "prisma", "graphql", "gql", "proto", "sh", "bash", "zsh", "fish", "ps1", "bat", "pem", "key",
+  // texto e documentos
+  "md", "mdx", "rst", "txt", "log", "csv", "tsv", "pdf", "doc", "docx", "odt", "rtf", "xls", "xlsx", "ods", "ppt", "pptx", "odp",
+  // imagens, áudio e vídeo
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "icns", "tif", "tiff", "avif", "heic",
+  "mp3", "wav", "ogg", "flac", "m4a", "mp4", "mov", "webm", "mkv", "avi",
+  // pacotes
+  "zip", "tar", "gz", "tgz", "7z", "rar",
+]);
+const FILE_NAMES = new Set(["Dockerfile", "Makefile", "Procfile", "Gemfile", "Rakefile", "Justfile", "LICENSE", "README"]);
+
+/** O caminho de arquivo que um trecho em `código` cita, sem o `:linha` do
+ * fim — ou nada, quando o trecho é um símbolo, um valor ou um comando. */
+export function filePath(text: string): string | null {
+  const path = text.trim().replace(/^\.\//, "").replace(/(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$/, "");
+  if (!path || path.length > 160 || /[\s*?<>|"(){}]|::|:\/\//.test(path) || path.endsWith("/")) return null;
+  const name = path.split("/").pop() ?? path;
+  if (FILE_NAMES.has(name)) return path;
+  if (/^\.[^.]+$/.test(name)) return path;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && FILE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase()) ? path : null;
+}
+
 export function parseInline(text: string): Inline[] {
   const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
   const out: Inline[] = [];
@@ -25,7 +54,11 @@ export function parseInline(text: string): Inline[] {
     if (match.index > cursor) out.push({ type: "text", text: text.slice(cursor, match.index) });
     const token = match[0];
     if (token.startsWith("**")) out.push({ type: "strong", text: token.slice(2, -2) });
-    else if (token.startsWith("`")) out.push({ type: "code", text: token.slice(1, -1) });
+    else if (token.startsWith("`")) {
+      const code = token.slice(1, -1);
+      const path = filePath(code);
+      out.push(path ? { type: "file", text: code, path } : { type: "code", text: code });
+    }
     else {
       const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
       if (link) out.push({ type: "link", text: link[1], href: link[2] });
@@ -84,7 +117,7 @@ export function parseMarkdown(content: string): Block[] {
   let match: RegExpExecArray | null;
   while ((match = fence.exec(content)) !== null) {
     parseText(content.slice(cursor, match.index), blocks);
-    blocks.push({ type: "code", language: match[1].trim() || "código", code: match[2].replace(/\n$/, "") });
+    blocks.push({ type: "code", language: match[1].trim(), code: match[2].replace(/\n$/, "") });
     cursor = fence.lastIndex;
   }
   parseText(content.slice(cursor), blocks);

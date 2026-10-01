@@ -98,6 +98,16 @@ export async function createProject(name: string, rootPath: string | null) {
   navigate("chat");
 }
 
+/** Abre, no programa que o sistema usa para o tipo, um arquivo que a resposta
+ * citou. O núcleo procura o caminho dentro da pasta do projeto do chat. */
+export async function openFile(chatId: string, path: string) {
+  try {
+    await commands.openFile(chatId, path);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 export async function deleteChat(chatId: string) {
   try {
     await commands.deleteChat(chatId);

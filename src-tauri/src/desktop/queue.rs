@@ -7,6 +7,7 @@ use crate::sync::{Connectivity, Link};
 use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck};
 use crate::progress::{Beat, Debounce, Pulse};
 use crate::turns::{Turn, TurnStatus};
+use crate::i18n::{self, Text};
 use crate::{asking, jev, model};
 use std::{path::Path, time::Instant};
 use tauri::{AppHandle, Emitter};
@@ -99,6 +100,10 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
 /// saísse em aberto travaria a fila inteira atrás dele.
 async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,turn:&Turn,prompt:&str,pulse:&Pulse) {
     let chat_id=turn.chat_id.as_str();
+    // O que está gravado pode ser um aviso para a tela (a resposta a uma
+    // pergunta); a portaria e o modelo o leem em inglês.
+    let prompt=i18n::for_model(prompt);
+    let prompt=prompt.as_str();
     let mut state=desk.lock().await;
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
 
@@ -106,6 +111,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // atendimento morre aqui — mas com a mensagem já escrita, o turno dado por
     // falho e o motivo no chat, em vez de sumir da conversa.
     if let Err(error)=focus_on_chat_project(&mut state,workspace,chat_id).await {
+        let error=i18n::notice(&[error]);
         pulse.beat(Beat::Failed{error:error.clone()});
         fail_turn(workspace,chat_id,turn,error).await;
         return;
@@ -117,7 +123,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // já tinha suprido, e o modelo receberia uma palavra sem assunto. O que a
     // portaria pontua é exatamente o que chega ao modelo.
     let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or(None);
-    let paired=origin.map(|origin|asking::pair(&origin,prompt));
+    let paired=origin.map(|origin|asking::pair(&i18n::for_model(&origin),prompt));
     let request=paired.as_deref().unwrap_or(prompt);
     let entry=entry_check(&project,turn,request).await;
     {
@@ -133,7 +139,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         pulse.beat(Beat::Chunk{text:reply.clone()});
         pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
         state.orchestrator.memory.add_message(chat_id,"user",prompt.trim().to_string());
-        state.orchestrator.memory.add_message(chat_id,"assistant",reply.clone());
+        state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&reply));
         let mut workspace=workspace.lock().await;
         let _=workspace.append_answer(chat_id,&turn.id,&reply);
         let _=workspace.set_turn_status(&turn.id,TurnStatus::Blocked);
@@ -148,9 +154,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     if let Err(error)=forget_pending_prompt(&mut state,workspace,chat_id).await {eprintln!("fila: histórico da sessão desalinhado ({error})");}
 
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
-    let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||"A execução terminou sem resposta.".into());
-    if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",assistant.clone());}
-    let exits=exit_checks(&state,turn,&assistant);
+    let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||i18n::notice(&[Text::new("turn.noAnswer")]));
+    if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&assistant));}
+    // Só a resposta do modelo passa pelo portão de saída; um aviso de falha
+    // não pede para rodar nem mexer em nada.
+    let exits=if result.result.is_some(){exit_checks(&state,turn,&assistant)}else{vec![]};
     {
         let mut workspace=workspace.lock().await;
         let _=workspace.append_answer(chat_id,&turn.id,&assistant);
@@ -207,9 +215,9 @@ async fn fail_turn(workspace:&SharedWorkspace,chat_id:&str,turn:&Turn,error:Stri
 /// O chat mora num projeto, e o pedido tem de ser lido dentro da pasta desse
 /// projeto: é dela que saem os arquivos do contexto, o nome no prompt da
 /// portaria e a varredura da saída. Projeto sem pasta cai na raiz de partida.
-async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->Result<(),String> {
-    let root=workspace.lock().await.chat_root(chat_id).map_err(|error|error.to_string())?.unwrap_or_else(||state.home_root.clone());
-    state.orchestrator.focus_on(&root).map_err(|error|error.to_string())
+async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->Result<(),Text> {
+    let root=workspace.lock().await.chat_root(chat_id).map_err(i18n::failure)?.unwrap_or_else(||state.home_root.clone());
+    state.orchestrator.focus_on(&root).map_err(i18n::failure)
 }
 
 /// O pedido está gravado desde o envio, e o `process` torna a anotá-lo na
@@ -235,7 +243,7 @@ async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str)->EntryCh
             Err(error)=>eprintln!("portaria: o Jev não respondeu, usando heurísticas locais ({error})"),
         }
     }
-    gatekeeper::judge(turn,input,&gatekeeper::heuristic_entry(input),"heurística local")
+    gatekeeper::judge(turn,input,&gatekeeper::heuristic_entry(input),asking::LOCAL_SOURCE)
 }
 
 fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {

@@ -2,6 +2,7 @@
 //! React entrega, o banco do usuário que ela abre, o estado da conexão e o
 //! conteúdo global (idiomas, traduções, parâmetros do Jev).
 
+use crate::i18n::{failure, Text};
 use crate::cloud::{remote::Remote, session::{self, fetch_jwks, validate_offline, Identity, SessionError}};
 use crate::desktop::events::{LinkEvent, LINK_EVENT, TRANSLATIONS_EVENT};
 use crate::desktop::{both, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
@@ -35,19 +36,19 @@ impl SessionState {
     /// Valida contra o JWKS guardado e só o baixa de novo quando não há
     /// nenhum ou quando o token foi assinado por uma chave que ele não tem —
     /// a rotação de chaves do projeto.
-    async fn validate(&mut self,token:&str)->Result<Identity,String> {
+    async fn validate(&mut self,token:&str)->Result<Identity,Text> {
         let now=chrono::Utc::now().timestamp();
-        let last=self.cache.last_user().map_err(|error|error.to_string())?;
-        let keys=match self.cache.jwks().map_err(|error|error.to_string())? {
+        let last=self.cache.last_user().map_err(failure)?;
+        let keys=match self.cache.jwks().map_err(failure)? {
             Some(keys)=>keys,
-            None=>self.refresh_jwks().await.map_err(|error|format!("não foi possível conferir a sessão sem rede no primeiro acesso: {error:#}"))?,
+            None=>self.refresh_jwks().await.map_err(|error|Text::new("session.offlineFirst").with("reason",format!("{error:#}")))?,
         };
         match validate_offline(token,&keys,last.as_deref(),now) {
             Err(SessionError::UnknownKey)=>{
-                let keys=self.refresh_jwks().await.map_err(|error|format!("chave de sessão desconhecida e sem rede para buscá-la: {error:#}"))?;
-                validate_offline(token,&keys,last.as_deref(),now).map_err(|error|error.to_string())
+                let keys=self.refresh_jwks().await.map_err(|error|Text::new("session.keyOffline").with("reason",format!("{error:#}")))?;
+                validate_offline(token,&keys,last.as_deref(),now).map_err(Text::from)
             }
-            other=>other.map_err(|error|error.to_string()),
+            other=>other.map_err(Text::from),
         }
     }
 }
@@ -78,19 +79,19 @@ async fn adopt(desk:&SharedDesktopState,workspace:&SharedWorkspace,store:Workspa
 /// volta ao app. Trocar de usuário troca o banco; o mesmo usuário com token
 /// novo só destrava a sincronização.
 #[tauri::command]
-pub(crate) async fn set_session(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,token:String)->Result<SessionView,String> {
+pub(crate) async fn set_session(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,token:String)->Result<SessionView,Text> {
     let (identity,changed,dir)={
         let mut state=session.lock().await;
         let identity=state.validate(&token).await?;
         let changed=state.identity.as_ref().map(|current|current.user_id.as_str())!=Some(identity.user_id.as_str());
-        state.cache.set_last_user(Some(&identity.user_id)).map_err(|error|error.to_string())?;
+        state.cache.set_last_user(Some(&identity.user_id)).map_err(failure)?;
         state.identity=Some(identity.clone());
         (identity,changed,state.data_dir.clone())
     };
     session::set_current(Some(token));
     if changed {
-        let store=WorkspaceStore::for_user(&dir,&identity.user_id).map_err(|error|format!("{error:#}"))?;
-        adopt(&desk,&workspace,store).await.map_err(|error|format!("{error:#}"))?;
+        let store=WorkspaceStore::for_user(&dir,&identity.user_id).map_err(failure)?;
+        adopt(&desk,&workspace,store).await.map_err(failure)?;
     }
     sync.0.notify_one();
     queue.notify_one();
@@ -100,14 +101,14 @@ pub(crate) async fn set_session(desk:State<'_,SharedDesktopState>,workspace:Stat
 
 /// Logout: o banco do usuário fecha e o app volta ao banco em memória.
 #[tauri::command]
-pub(crate) async fn clear_session(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>)->Result<(),String> {
+pub(crate) async fn clear_session(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>)->Result<(),Text> {
     session::set_current(None);
     {
         let mut state=session.lock().await;
         state.identity=None;
-        state.cache.set_last_user(None).map_err(|error|error.to_string())?;
+        state.cache.set_last_user(None).map_err(failure)?;
     }
-    adopt(&desk,&workspace,WorkspaceStore::in_memory().map_err(|error|error.to_string())?).await.map_err(|error|format!("{error:#}"))?;
+    adopt(&desk,&workspace,WorkspaceStore::in_memory().map_err(failure)?).await.map_err(failure)?;
     sync.0.notify_one();
     Ok(())
 }
@@ -117,26 +118,26 @@ pub(crate) async fn clear_session(desk:State<'_,SharedDesktopState>,workspace:St
 pub struct ConnectionStatus { pub link:Link, pub pending:i64, pub failed:i64 }
 
 #[tauri::command]
-pub(crate) async fn connection_status(workspace:State<'_,SharedWorkspace>,connectivity:State<'_,Connectivity>)->Result<ConnectionStatus,String> {
+pub(crate) async fn connection_status(workspace:State<'_,SharedWorkspace>,connectivity:State<'_,Connectivity>)->Result<ConnectionStatus,Text> {
     let workspace=workspace.lock().await;
     let (pending,failed)=workspace.connection().query_row(
         "SELECT COUNT(*) FILTER (WHERE status='pending'),COUNT(*) FILTER (WHERE status='failed') FROM outbox",[],|row|Ok((row.get(0)?,row.get(1)?)),
-    ).map_err(|error|error.to_string())?;
+    ).map_err(failure)?;
     Ok(ConnectionStatus{link:connectivity.get(),pending,failed})
 }
 
 /// Os idiomas do cache, na hora; a lista nova chega depois pelo evento
 /// `translations-updated`, se mudou.
 #[tauri::command]
-pub(crate) async fn get_locales(app:AppHandle,session:State<'_,SharedSession>)->Result<Vec<LocaleRow>,String> {
-    let locales=session.lock().await.cache.locales().map_err(|error|error.to_string())?;
+pub(crate) async fn get_locales(app:AppHandle,session:State<'_,SharedSession>)->Result<Vec<LocaleRow>,Text> {
+    let locales=session.lock().await.cache.locales().map_err(failure)?;
     tauri::async_runtime::spawn(refresh_locales(app,session.inner().clone()));
     Ok(locales)
 }
 
 #[tauri::command]
-pub(crate) async fn get_translations(app:AppHandle,session:State<'_,SharedSession>,locale:String)->Result<BTreeMap<String,Value>,String> {
-    let messages=session.lock().await.cache.translations(&locale).map_err(|error|error.to_string())?;
+pub(crate) async fn get_translations(app:AppHandle,session:State<'_,SharedSession>,locale:String)->Result<BTreeMap<String,Value>,Text> {
+    let messages=session.lock().await.cache.translations(&locale).map_err(failure)?;
     tauri::async_runtime::spawn(refresh_translations(app,session.inner().clone(),locale));
     Ok(messages)
 }

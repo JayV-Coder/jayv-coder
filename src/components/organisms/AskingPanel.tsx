@@ -1,6 +1,6 @@
 import type { Chat, Question } from "@/modules/core";
 import { useT } from "@/modules/i18n";
-import { answerQuestion, answeringFor, dismissQuestion, pick, setDraft, setWriting, useConversation } from "@/modules/conversation";
+import { answerQuestion, answeringFor, dismissQuestion, pick, setDraft, setWriting, useConversation, sourceLabel } from "@/modules/conversation";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -39,7 +39,7 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
           {multiple && <small className="text-[11px] text-muted-foreground">{t("ask.multiple")}</small>}
         </div>
       )}
-      <small className="block font-mono text-[11px] text-[#6e7870]">{t("ask.from", { source: question.source })}</small>
+      <small className="block font-mono text-[11px] text-[#6e7870]">{t("ask.from", { source: sourceLabel(question.source) })}</small>
       <div className="mt-3 flex flex-wrap gap-2">
         {answering.writing ? (
           <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}>{t("ask.back")}</Button>

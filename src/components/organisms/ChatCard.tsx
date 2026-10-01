@@ -1,7 +1,9 @@
 import { Trash2Icon } from "lucide-react";
 import { shorten, type Chat } from "@/modules/core";
+import { shownText } from "@/modules/conversation";
 import { lastGatePass, useGate } from "@/modules/gate";
 import { formatSince, useT } from "@/modules/i18n";
+import { chatTitle } from "@/modules/workspace";
 import { ConfirmAction, GatePass } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,7 +14,8 @@ import { YardCard } from "./YardCard";
 export function ChatCard({ chat, onOpen, onDelete }: { chat: Chat; onOpen: () => void; onDelete: () => void }) {
   const t = useT();
   const feed = useGate((state) => state.feed);
-  const said = [...chat.messages].reverse().find((message) => message.role === "user")?.content;
+  const last = [...chat.messages].reverse().find((message) => message.role === "user")?.content;
+  const said = last === undefined ? undefined : shownText(last);
   return (
     <YardCard
       onOpen={onOpen}
@@ -25,7 +28,7 @@ export function ChatCard({ chat, onOpen, onDelete }: { chat: Chat; onOpen: () =>
         </ConfirmAction>
       )}
     >
-      <span className="text-lg font-bold tracking-[-0.01em] break-words">{chat.title}</span>
+      <span className="text-lg font-bold tracking-[-0.01em] break-words">{chatTitle(chat)}</span>
       <span className="text-xs text-muted-foreground">{t("chat.createdAt", { date: formatSince(chat.createdAt) })}</span>
       <GatePass pass={lastGatePass(feed, chat.id)} />
       <span className={cn("text-[13px] leading-relaxed text-[#aab4ac]", !said && "text-[#5b655d] italic")}>

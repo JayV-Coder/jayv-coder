@@ -14,17 +14,17 @@ use std::collections::BTreeMap;
 #[derive(Debug,Clone,PartialEq,thiserror::Error)]
 pub enum RemoteError {
     /// Sem rede, DNS, tempo esgotado: a fila espera e tenta de novo.
-    #[error("sem conexão com o Supabase: {0}")]
+    #[error("no connection to Supabase: {0}")]
     Offline(String),
-    #[error("sessão expirada")]
+    #[error("session expired")]
     Unauthorized,
     /// Chave repetida (23505) ou referência a uma linha que não existe (23503).
-    #[error("conflito no Supabase ({code}): {detail}")]
+    #[error("conflict in Supabase ({code}): {detail}")]
     Conflict{code:String,detail:String},
     /// O servidor recusou e reenviar não resolve.
-    #[error("o Supabase recusou ({status}): {detail}")]
+    #[error("Supabase refused ({status}): {detail}")]
     Rejected{status:u16,detail:String},
-    #[error("o Supabase respondeu {0}")]
+    #[error("Supabase answered {0}")]
     Server(u16),
 }
 
