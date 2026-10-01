@@ -231,7 +231,12 @@ impl Orchestrator {
 
     fn build_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize)->Context {
         let mut context=self.retrieve_context(input,plan);
+        let before=context.snippets.iter().map(snippet_tokens).sum::<usize>();
         let pruned=prune_to_budget(&mut context,budget.saturating_sub(reserved));
+        // O que o corte do orçamento deixou de mandar ao modelo. É estimativa:
+        // a conta é a mesma caracteres ÷ 4 do orçamento.
+        let after=context.snippets.iter().map(snippet_tokens).sum::<usize>();
+        if pruned && before>after { crate::usage::mark(crate::usage::JevMark::saved("context",(before-after) as u64)); }
         context.estimated_tokens=reserved+context.snippets.iter().map(snippet_tokens).sum::<usize>();
         if pruned||context.snippets.iter().any(|snippet|snippet.content.contains("_REDACTED]")) { note_removal(&mut context); }
         context
@@ -239,12 +244,14 @@ impl Orchestrator {
 
     fn retrieve_context(&mut self,input:&str,plan:&[String])->Context {
         let hashes=self.rag.file_hashes(); let key=SemanticCache::request_key(input,&self.rag.project_info().root);
-        if let Some(context)=self.cache.get_valid(&key,&hashes){return context;}
+        if let Some(context)=self.cache.get_valid(&key,&hashes){crate::usage::mark(crate::usage::JevMark::count("cache_hit",1));return context;}
+        crate::usage::mark(crate::usage::JevMark::count("cache_miss",1));
         let snippets=self.rag.search(input,if plan.contains(&"full_repository".to_string()){8}else{4});
         let files=snippets.iter().map(|s|s.path.clone()).collect::<Vec<_>>();
         let retrieved=snippets.len();
         let context=Context { system_instructions:SYSTEM_INSTRUCTIONS.into(), project:self.rag.project_info(), relevant_files:files, estimated_tokens:snippets.iter().map(snippet_tokens).sum(), snippets, repository_context_skipped:false };
         let mut context=self.firewall.filter_context(&context,false);
+        mark_firewall(retrieved,&context);
         if context.snippets.len()<retrieved { note_removal(&mut context); }
         self.cache.insert_tracked(key,context.clone(),&hashes); context
     }
@@ -285,6 +292,8 @@ impl Orchestrator {
         let mut filtered=context.clone();
         filtered.relevant_files.retain(|path|!self.firewall.check_file(path).local_only);
         filtered.snippets.retain(|snippet|filtered.relevant_files.contains(&snippet.path));
+        let withheld=context.snippets.len()-filtered.snippets.len();
+        if withheld>0 { crate::usage::mark(crate::usage::JevMark::count("file_withheld",withheld as u64)); }
         if filtered.snippets.len()<context.snippets.len() { filtered.estimated_tokens=filtered.estimated_tokens.saturating_sub(context.snippets.iter().filter(|s|!filtered.snippets.iter().any(|kept|kept.path==s.path)).map(snippet_tokens).sum()); note_removal(&mut filtered); }
         filtered
     }
@@ -313,6 +322,21 @@ impl Orchestrator {
         let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
         ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
     }
+}
+
+/// O que o firewall fez num contexto recém-lido: arquivos retidos e valores
+/// trocados por `[…_REDACTED]`. Só na leitura nova — o contexto que sai do
+/// cache já foi contado quando entrou nele.
+fn mark_firewall(retrieved:usize,filtered:&Context) {
+    let withheld=retrieved.saturating_sub(filtered.snippets.len());
+    if withheld>0 { crate::usage::mark(crate::usage::JevMark::count("file_withheld",withheld as u64)); }
+    let redacted=redactions(filtered);
+    if redacted>0 { crate::usage::mark(crate::usage::JevMark::count("secret_redacted",redacted as u64)); }
+}
+
+/// Quantos valores o firewall trocou por marcador no contexto.
+fn redactions(context:&Context)->usize {
+    context.snippets.iter().map(|snippet|snippet.content.matches("_REDACTED]").count()).sum()
 }
 
 /// A língua das respostas: a que o desenvolvedor escolheu no app ou, sem
@@ -439,6 +463,23 @@ mod tests {
     }
     fn signals_of(orchestrator:&Orchestrator,decision:&jev::RoutingDecision)->RoutingSignals { orchestrator.jev_routing(decision).2 }
     fn repository_root()->PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().expect("repository root").to_path_buf() }
+
+    /// O Jev conta o que fez no contexto: a leitura nova, o acerto do cache
+    /// na segunda vez e os segredos trocados por marcador.
+    #[tokio::test] async fn the_context_work_is_counted() {
+        let dir=repository(&[("util.py",format!("def connect():\n    api_key = \"sk-live-01234567890abcdef\"\n{}",filler("connect",200)))]);
+        let mut orchestrator=orchestrator(&dir);
+        let (sink,mut entries)=tokio::sync::mpsc::unbounded_channel();
+        crate::usage::within_sink(crate::usage::Scope::default(),sink,async {
+            orchestrator.retrieve_context("connect api key",&["full_repository".into()]);
+            orchestrator.retrieve_context("connect api key",&["full_repository".into()]);
+        }).await;
+        let mut kinds=vec![];
+        while let Ok(crate::usage::Entry::Jev(_,mark))=entries.try_recv() { kinds.push((mark.kind,mark.amount)); }
+        assert!(kinds.contains(&("cache_miss".into(),1.0)),"{kinds:?}");
+        assert!(kinds.contains(&("cache_hit".into(),1.0)),"{kinds:?}");
+        assert!(kinds.iter().any(|(kind,amount)|kind=="secret_redacted"&&*amount>=1.0),"{kinds:?}");
+    }
 
     #[test]
     fn the_title_survives_the_decoration_the_model_puts_around_it() {

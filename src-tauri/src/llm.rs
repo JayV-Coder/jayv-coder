@@ -177,7 +177,9 @@ impl CodexOptions {
         Ok(self)
     }
     fn args(&self)->Vec<String> {
-        let mut args=strings(&["exec","--model","{model}","--sandbox",&self.sandbox]);
+        // `--json` narra em eventos: a fala do agente, os passos e a conta
+        // dos tokens chegam separados, e é dela que sai o uso informado.
+        let mut args=strings(&["exec","--json","--model","{model}","--sandbox",&self.sandbox]);
         if self.skip_git_repo_check { args.push("--skip-git-repo-check".into()); }
         if self.reasoning_effort!="default" { args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",self.reasoning_effort)]); }
         if self.network_access { args.extend(strings(&["-c","sandbox_workspace_write.network_access=true"])); }
@@ -199,6 +201,9 @@ impl CopilotOptions {
         match self.tool_access.as_str() { "edits"=>args.extend(strings(&["--allow-tool","write"])), "all"=>args.push("--allow-all-tools".into()), _=>{} }
         for tool in &self.blocked_tools { args.extend(["--deny-tool".to_string(),tool.clone()]); }
         if self.silent { args.push("--silent".into()); }
+        // A conta do fim vai para um arquivo, que o provedor lê e apaga: o
+        // `--silent` esconde o resumo da saída, e a saída é a resposta.
+        args.extend(strings(&["--usage-output-file","{usage_file}"]));
         args
     }
 }

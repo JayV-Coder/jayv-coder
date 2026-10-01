@@ -149,6 +149,7 @@ impl WorkspaceStore {
         ensure_turn_partial(&connection)?;
         ensure_turn_local(&connection)?;
         ensure_message_uid(&connection)?;
+        crate::usage::store::ensure(&connection)?;
         crate::local::outbox::install(&connection)?;
         turns::requeue_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
@@ -329,6 +330,13 @@ impl WorkspaceStore {
     /// A pasta do projeto onde o chat foi criado, quando o projeto tem uma. É
     /// esse caminho que vai para o índice e para o prompt; projeto sem pasta
     /// devolve nada e quem chama decide o que usar no lugar.
+    /// O projeto de um chat, para dar dono ao que o turno gastar.
+    pub fn chat_project(&self, chat_id: &str) -> Result<Option<String>> {
+        Ok(self.connection.query_row("SELECT project_id FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).optional()?)
+    }
+
+    pub fn average_output(&self) -> Result<u64> {crate::usage::store::average_output(&self.connection)}
+
     pub fn chat_root(&self, chat_id: &str) -> Result<Option<PathBuf>> {
         let root:String=self.connection.query_row("SELECT projects.root_path FROM chats JOIN projects ON projects.id=chats.project_id WHERE chats.id=?1",[chat_id],|row|row.get(0)).context(Text::new("chat.notFound"))?;
         let root=root.trim();
@@ -389,6 +397,12 @@ impl WorkspaceStore {
 
     /// A conexão crua, para a fila de saída e a sincronização: é o único
     /// código de fora que fala SQL com o banco do usuário.
+    pub fn record_usage(&self, entry:&crate::usage::Entry) -> Result<bool> {crate::usage::store::write(&self.connection,entry)}
+
+    pub fn usage_report(&self, query:&crate::usage::store::Query) -> Result<crate::usage::store::Report> {crate::usage::store::report(&self.connection,query)}
+
+    pub fn chat_usage(&self, chat_id:&str) -> Result<Vec<crate::usage::store::TurnUsage>> {crate::usage::store::chat_turns(&self.connection,chat_id)}
+
     pub fn connection(&self) -> &Connection {&self.connection}
 
     pub fn connection_mut(&mut self) -> &mut Connection {&mut self.connection}

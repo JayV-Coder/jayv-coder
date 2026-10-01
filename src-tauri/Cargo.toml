@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.9.0"
+version = "0.10.0"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"

@@ -4,6 +4,7 @@ import { useT } from "@/modules/i18n";
 import { BrandMark, LogoIcon } from "@/components/atoms";
 import { ChatRow, ConnectionNote, LanguageSelect, NavItem, ProjectPlate } from "@/components/molecules";
 import { signOut, useAuth } from "@/modules/auth";
+import { openStats } from "@/modules/usage";
 
 /** A lateral. Sem projeto aberto, ela é o menu principal; com projeto, só mostra
  * a placa dele, a portaria e os chats recentes. */
@@ -31,6 +32,7 @@ export function Sidebar() {
       {!project ? (
         <nav className="grid gap-[5px] border-b border-[#202521] pb-5">
           <NavItem active={view === "projects"} mark="▦" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+          <NavItem active={view === "stats"} mark="▥" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
           <NavItem active={view === "status"} mark="◉" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
         </nav>
       ) : (
@@ -53,6 +55,7 @@ export function Sidebar() {
           >
             {t("nav.gate")}
           </NavItem>
+          <NavItem active={view === "stats"} mark="▥" onClick={() => openStats({ kind: "project", id: project.id })}>{t("nav.stats")}</NavItem>
           <div className="flex items-center justify-between px-[9px] pt-5 pb-[9px] text-[10px] font-bold tracking-[0.16em] text-[#657068] uppercase">
             {t("nav.recentChats")}
             <button type="button" title={t("common.newChat")} onClick={() => void createChat(project.id)} className="text-[19px] leading-none text-[#849087] hover:text-[#a4f4a9]">+</button>

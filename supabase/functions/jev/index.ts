@@ -52,9 +52,12 @@ Deno.serve(async (request) => {
   if (typeof input.state !== "object" || input.state === null) return refuse(400, "state", "falta o estado");
   const include = Array.isArray(input.include) ? input.include.map(String) : null;
 
-  const { data: allowed, error: counting } = await supabase.rpc("jev_take_call", { daily_limit: DAILY_LIMIT });
+  const { data: used, error: counting } = await supabase.rpc("jev_count_call");
   if (counting) return refuse(500, "usage", `não foi possível contar o uso: ${counting.message}`);
-  if (!allowed) return refuse(429, "daily_limit", "limite diário do Jev atingido");
+  // As chamadas do dia vão em toda resposta, inclusive na recusa: é delas que
+  // o app tira a cota diária das estatísticas.
+  const calls = { "X-Jev-Calls-Used": String(used), "X-Jev-Daily-Limit": String(DAILY_LIMIT) };
+  if (Number(used) > DAILY_LIMIT) return reply(429, { error: "limite diário do Jev atingido", code: "daily_limit" }, calls);
 
   const { data: rows, error: reading } = await supabase
     .from("jev_questions")
@@ -80,7 +83,7 @@ Deno.serve(async (request) => {
   }
   // A avaliação volta como veio, e o status também: 429, 529 e 5xx são o
   // sinal para o Rust tentar de novo.
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...calls };
   const retryAfter = upstream.headers.get("Retry-After");
   if (retryAfter) headers["Retry-After"] = retryAfter;
   return new Response(await upstream.text(), { status: upstream.status, headers: { "Content-Type": "application/json", ...headers } });

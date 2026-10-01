@@ -1,5 +1,5 @@
 import { findChat, findProject, useWorkspace } from "@/modules/workspace";
-import { Composer, Timeline } from "@/components/organisms";
+import { ChatUsageBar, Composer, Timeline } from "@/components/organisms";
 
 export function ChatPage() {
   const { data, activeProjectId, activeChatId } = useWorkspace();
@@ -8,6 +8,7 @@ export function ChatPage() {
   return (
     <>
       <Timeline chat={chat} project={project} />
+      {chat && <ChatUsageBar chatId={chat.id} />}
       <Composer chat={chat} />
     </>
   );

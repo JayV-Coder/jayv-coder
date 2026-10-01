@@ -5,3 +5,4 @@ export { GatePage } from "./GatePage";
 export { StatusPage } from "./StatusPage";
 export { SettingsPage } from "./SettingsPage";
 export { LoginPage } from "./LoginPage";
+export { StatsPage } from "./StatsPage";

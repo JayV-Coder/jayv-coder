@@ -5,6 +5,7 @@ import { formatSince, useT } from "@/modules/i18n";
 import { FolderIcon, PathText } from "@/components/atoms";
 import { ConfirmAction } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
+import { ProjectUsageLine } from "./ProjectUsageLine";
 import { YardCard } from "./YardCard";
 
 export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
@@ -48,6 +49,7 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
         <b className="font-normal text-foreground">{t("project.chats", { count })}</b>
         <i className="not-italic">{t("project.lastActivity", { date: formatSince(last) })}</i>
       </span>
+      <ProjectUsageLine projectId={project.id} />
       {refused > 0 && <span role="status" className="text-xs text-[#c9a86a]">{t("project.refused", { count: refused })}</span>}
     </YardCard>
   );

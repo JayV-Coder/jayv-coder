@@ -6,4 +6,5 @@ pub mod prompts;
 pub mod session;
 pub mod settings;
 pub mod system;
+pub mod usage;
 pub mod workspace;

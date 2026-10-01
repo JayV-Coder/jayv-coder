@@ -10,8 +10,9 @@ import { navigate, useNavigation } from "@/modules/navigation";
 import { connectSettings } from "@/modules/settings";
 import { connectSystem, loadStatus } from "@/modules/system";
 import { checkForUpdate } from "@/modules/updates";
+import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
-import { ChatPage, ChatsPage, GatePage, LoginPage, ProjectsPage, SettingsPage, StatusPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -22,6 +23,7 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   chat: ChatPage,
   gate: GatePage,
   status: StatusPage,
+  stats: StatsPage,
   settings: SettingsPage,
 };
 
@@ -34,7 +36,7 @@ export function App() {
   const userEmail = useAuth((state) => state.email);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings()];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage()];
     void checkForUpdate();
     return () => disconnect.forEach((off) => off());
   }, []);
@@ -45,6 +47,8 @@ export function App() {
     if (status !== "signedIn") return;
     navigate("projects");
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
+    // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.
+    void refreshQuotas();
   }, [status, userEmail]);
 
   const Page = PAGES[view];

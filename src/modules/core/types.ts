@@ -256,3 +256,43 @@ export interface AgentProbe {
   path: string | null;
   version: string | null;
 }
+
+/** De quem é a conta das estatísticas (ver `src-tauri/src/usage/store.rs`). */
+export type UsageScope = { kind: "global" } | { kind: "project"; id: string } | { kind: "chat"; id: string };
+/** De onde vem um número: a ferramenta informou, o app calculou, ou é de um
+ * turno antigo, de antes da contagem existir. */
+export type UsagePrecision = "reported" | "estimated" | "legacy";
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Só o que as ferramentas informaram; `null` quando nenhuma informou. */
+  costUsd: number | null;
+  /** Pedidos cobrados pelo plano (premium requests do Copilot). */
+  requests: number | null;
+  calls: number;
+  failures: number;
+  turns: number;
+  durationMs: number;
+  /** Tokens (entrada + saída) que não foram informados pela ferramenta. */
+  estimatedTokens: number;
+}
+
+export interface UsageBreakdown { key: string; label: string | null; parent: string | null; totals: UsageTotals }
+export interface UsageDay { day: string; source: string; inputTokens: number; outputTokens: number }
+export interface QuotaView { agent: string; window: string; usedPercent: number | null; resetsAt: string | null; plan: string | null; capturedAt: string }
+
+export interface UsageReport {
+  totals: UsageTotals;
+  daily: UsageDay[];
+  bySource: UsageBreakdown[];
+  byModel: UsageBreakdown[];
+  byProject: UsageBreakdown[];
+  byChat: UsageBreakdown[];
+  quotas: QuotaView[];
+  jev: { work: Record<string, number>; saved: Record<string, number> };
+}
+
+export interface TurnUsage { turnId: string; inputTokens: number; outputTokens: number; costUsd: number | null; durationMs: number; estimated: boolean }

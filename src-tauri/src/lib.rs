@@ -25,6 +25,7 @@ pub mod sandbox;
 pub mod sync;
 pub mod tools;
 pub mod turns;
+pub mod usage;
 pub mod workspace;
 
 pub use desktop::run_desktop;

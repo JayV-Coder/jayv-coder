@@ -23,7 +23,7 @@ pub struct SyncTable {
 }
 
 /// Em ordem de dependência: quem sobe primeiro é quem os outros apontam.
-pub const TABLES:[SyncTable;10]=[
+pub const TABLES:[SyncTable;13]=[
     SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at"]},
     SyncTable{name:"chats",key:&["id"],columns:&["id","code","project_id","title","named","created_at","updated_at"]},
     SyncTable{name:"turns",key:&["id"],columns:&["id","chat_id","ordinal","status","created_at"]},
@@ -34,6 +34,11 @@ pub const TABLES:[SyncTable;10]=[
     SyncTable{name:"questions",key:&["turn_id"],columns:&["turn_id","at","kind","prompt","options","source","status","answered_by","settled_at"]},
     SyncTable{name:"llm_agents",key:&["id"],columns:&["id","enabled","command","timeout","options","updated_at"]},
     SyncTable{name:"llm_models",key:&["agent","model"],columns:&["agent","model","enabled","capabilities","cost_class","speed","context_window","position"]},
+    // O uso não aponta para chat nem projeto com chave estrangeira: apagar um
+    // chat não apaga o que ele gastou.
+    SyncTable{name:"usage_records",key:&["id"],columns:&["id","project_id","chat_id","turn_id","source","model","input_tokens","output_tokens","cache_read_tokens","cache_write_tokens","cost_usd","requests","duration_ms","success","precision","machine_id","created_at"]},
+    SyncTable{name:"quota_snapshots",key:&["id"],columns:&["id","agent","span","used_percent","resets_at","plan","captured_at","machine_id"]},
+    SyncTable{name:"jev_records",key:&["id"],columns:&["id","project_id","chat_id","turn_id","kind","amount","precision","created_at"]},
 ];
 
 pub fn table(name:&str)->Option<&'static SyncTable> { TABLES.iter().find(|table|table.name==name) }

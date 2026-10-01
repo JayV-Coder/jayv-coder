@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, Project,
-  SettingsSnapshot, SystemStatus, Turn, WorkspaceData,
+  QuotaView, SettingsSnapshot, SystemStatus, Turn, TurnUsage, UsageReport, UsageScope, WorkspaceData,
 } from "./types";
+import type { Text } from "@/modules/i18n";
 
 /** Os comandos do núcleo, com nome e formato. É o único lugar da tela que
  * chama `invoke`: os módulos pedem por aqui, e a assinatura de cada comando
@@ -35,7 +36,16 @@ export const commands = {
   connectionStatus: () => invoke<ConnectionStatus>("connection_status"),
   getLocales: () => invoke<{ id: string; name: string; rtl: boolean; position: number }[]>("get_locales"),
   getTranslations: (locale: string) => invoke<Record<string, string | Record<string, string>>>("get_translations", { locale }),
+  usageReport: (query: UsageQuery) => invoke<UsageReport>("usage_report", { query }),
+  chatUsage: (chatId: string) => invoke<TurnUsage[]>("chat_usage", { chatId }),
+  refreshQuotas: () => invoke<QuotaStatus[]>("refresh_quotas"),
 };
+
+/** O pedido das estatísticas: o escopo, o intervalo em ISO (aberto onde vier
+ * vazio) e o fuso de quem lê, para que "hoje" seja o hoje dele. */
+export interface UsageQuery { scope: UsageScope; from: string | null; to: string | null; utcOffsetMinutes: number }
+/** O resultado de reler o limite de um agente: vazio quando leu. */
+export interface QuotaStatus { agent: string; problem: Text | null }
 
 /** A sessão que o núcleo aceitou. */
 export interface SessionView { userId: string; email: string | null; expiresAt: number }
@@ -59,6 +69,8 @@ export interface CoreEvents {
   "link-changed": { link: Link };
   "translations-updated": null;
   "models-updated": null;
+  "usage-recorded": { projectId: string | null; chatId: string | null };
+  "quota-changed": { quota: Omit<QuotaView, "capturedAt">; crossed: number | null };
 }
 
 export function onCore<K extends keyof CoreEvents>(event: K, handler: (payload: CoreEvents[K]) => void): Promise<UnlistenFn> {

@@ -8,7 +8,7 @@ use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck};
 use crate::progress::{Beat, Debounce, Pulse};
 use crate::turns::{Turn, TurnStatus};
 use crate::i18n::{self, Text};
-use crate::{asking, jev, model};
+use crate::{asking, jev, model, usage};
 use std::{path::Path, time::Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -46,7 +46,11 @@ pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,worksp
 async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,turn:&Turn,prompt:&str) {
     let (pulse,beats)=Pulse::channel();
     let narrator=tauri::async_runtime::spawn(narrate(app.clone(),workspace.clone(),turn.clone(),beats));
-    attend(app,desk,workspace,turn,prompt,&pulse).await;
+    // Tudo que o atendimento gastar — o Jev, o modelo, o batismo — é deste
+    // turno, deste chat e deste projeto.
+    let project_id=workspace.lock().await.chat_project(&turn.chat_id).unwrap_or(None);
+    let scope=usage::Scope{project_id,chat_id:Some(turn.chat_id.clone()),turn_id:Some(turn.id.clone())};
+    usage::within(scope,attend(app,desk,workspace,turn,prompt,&pulse)).await;
     drop(pulse);
     let _=narrator.await;
     let _=workspace.lock().await.clear_turn_partial(&turn.id);
@@ -74,7 +78,10 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
             }
             continue;
         }
-        let (kind,detail,settles)=(beat.kind().to_string(),beat.detail(),beat.settles());
+        let (kind,mut detail,settles)=(beat.kind().to_string(),beat.detail(),beat.settles());
+        // O fim de um turno medido leva a marca: a importação dos turnos
+        // antigos, numa máquina que atualizar depois, não o conta de novo.
+        if kind=="done" { detail["metered"]=serde_json::Value::Bool(true); }
         let seq={
             let mut workspace=workspace.lock().await;
             let seq=workspace.record_beat(&turn.id,&kind,&detail).unwrap_or_default();
@@ -130,9 +137,14 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         let mut workspace=workspace.lock().await;
         let _=workspace.record_entry_check(&entry);
     }
+    usage::mark(usage::JevMark::count(format!("entry:{}",entry.verdict.as_str()),1));
     let _=app.emit(ENTRY_EVENT,EntryEvent{check:entry.clone()});
     pulse.beat(Beat::Gate{verdict:entry.verdict.as_str().into(),score:entry.score,demand:entry.demand});
     if entry.verdict==EntryVerdict::Block {
+        // O que o pedido barrado teria custado: ele mesmo na ida e uma
+        // resposta média na volta. Estimativa, e marcada assim.
+        let typical=workspace.lock().await.average_output().unwrap_or(0);
+        usage::mark(usage::JevMark::saved("blocked",usage::estimate(request)+typical));
         let reply=entry.reply();
         // O barrado também é resposta, e a tela mostra o motivo crescendo como
         // mostraria qualquer outra.
@@ -165,6 +177,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         let _=workspace.record_exit_checks(turn,&exits);
         let _=workspace.set_turn_status(&turn.id,if result.result.is_some(){TurnStatus::Answered}else{TurnStatus::Failed});
     }
+    for exit in &exits { usage::mark(usage::JevMark::count(format!("exit:{}",exit.verdict.as_str()),1)); }
     if !exits.is_empty(){let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits});}
     drop(state);
     if result.result.is_some() {enable_question(app,workspace,turn,&assistant).await;}
@@ -195,12 +208,14 @@ async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,an
 /// próximo da fila tem direito ao orquestrador antes de qualquer enfeite. O
 /// batismo pega o cadeado quando ele estiver livre e avisa a interface.
 fn name_in_background(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,chat_id:String,prompt:String,reading:String) {
-    tauri::async_runtime::spawn(async move {
+    // O batismo roda noutro task: o escopo do turno vai junto, à mão.
+    let scope=usage::current_scope();
+    tauri::async_runtime::spawn(usage::within(scope,async move {
         let state=desk.lock().await;
         let Some(title)=state.orchestrator.name_chat(&prompt,&reading).await else {return};
         drop(state);
         if workspace.lock().await.rename_chat(&chat_id,&title).is_ok() {let _=app.emit(RENAME_EVENT,RenameEvent{chat_id,title});}
-    });
+    }));
 }
 
 /// O pedido que não sai do lugar: o turno é dado por falho e o motivo entra no

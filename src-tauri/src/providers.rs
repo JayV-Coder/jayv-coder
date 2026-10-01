@@ -233,6 +233,15 @@ impl HttpProvider {
     }
 
     fn wrap(&self,harvest:Harvest,model:&str,started:Instant)->ProviderResponse {
+        // O servidor que não contou os tokens fica com a estimativa, marcada
+        // como tal — zero "informado" seria mentira.
+        let reported=harvest.input_tokens>0||harvest.output_tokens>0;
+        crate::usage::spend(crate::usage::Spend{
+            input_tokens:if reported {harvest.input_tokens as u64} else {0},
+            output_tokens:if reported {harvest.output_tokens as u64} else {crate::usage::estimate(&harvest.text)},
+            duration_ms:started.elapsed().as_millis() as u64,
+            ..crate::usage::Spend::new(format!("http:{}",self.name),model,if reported {crate::usage::Precision::Reported} else {crate::usage::Precision::Estimated})
+        });
         ProviderResponse{response:harvest.text,input_tokens:harvest.input_tokens,output_tokens:harvest.output_tokens,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()}
     }
 
@@ -330,6 +339,8 @@ struct CliProvider { name:String, config:ProviderConfig, workdir:Workdir }
 
 /// O argumento que vira o texto do pedido.
 const PROMPT:&str="{prompt}";
+/// O argumento que vira o arquivo onde o agente grava a conta do fim.
+const USAGE_FILE:&str="{usage_file}";
 /// Até quantos caracteres o pedido vai no argumento; acima disso, pela entrada
 /// padrão. Bem abaixo do teto do Windows, que conta a linha de comando inteira.
 const INLINE_LIMIT:usize=8_000;
@@ -355,7 +366,7 @@ fn classify(line:&str)->Option<Beat> {
 /// aqui —, mas não é etapa nenhuma para quem espera, e enfileirá-las afogaria as
 /// que importam. O texto da resposta não se perde nisso: ele volta inteiro no
 /// evento do assistente, e é de lá que `said` o tira.
-const BOOKKEEPING:[&str;6]=["rate_limit_event","stream_event","thinking_tokens","hook_started","hook_progress","hook_response"];
+const BOOKKEEPING:[&str;9]=["rate_limit_event","stream_event","thinking_tokens","hook_started","hook_progress","hook_response","thread.started","turn.started","turn.completed"];
 fn bookkeeping(kind:&str,event:&Value)->bool {
     BOOKKEEPING.contains(&kind)||event.get("subtype").and_then(Value::as_str).is_some_and(|subtype|BOOKKEEPING.contains(&subtype))
 }
@@ -364,6 +375,7 @@ fn bookkeeping(kind:&str,event:&Value)->bool {
 /// termina em quebra de linha porque a próxima virá em outro evento; um pedaço
 /// de mensagem não, porque ele continua no pedaço seguinte.
 fn said(event:&Value)->Option<String> {
+    if let Some(text)=crate::usage::codex::said(event) { return Some(text); }
     if let Some(parts)=event.pointer("/message/content").and_then(Value::as_array) {
         let text=parts.iter().filter(|part|part.get("type").and_then(Value::as_str)==Some("text"))
             .filter_map(|part|part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("");
@@ -379,6 +391,7 @@ fn said(event:&Value)->Option<String> {
 /// como `CLI provider failed: ` e nada mais.
 fn refusal(line:&str)->Option<String> {
     let event=serde_json::from_str::<Value>(line.trim()).ok()?;
+    if let Some(reason)=crate::usage::codex::failure(&event) { return Some(reason); }
     if event.get("type").and_then(Value::as_str)!=Some("result")||event.get("is_error").and_then(Value::as_bool)!=Some(true) { return None; }
     let reason=event.get("result").and_then(Value::as_str).map(str::trim).filter(|reason|!reason.is_empty())
         .map(str::to_string)
@@ -402,6 +415,7 @@ fn tail(text:&str,limit:usize)->&str {
 fn reported(kind:&str,event:&Value)->String {
     let tool=event.pointer("/message/content").and_then(Value::as_array)
         .and_then(|parts|parts.iter().find_map(|part|part.get("name").and_then(Value::as_str)));
+    let tool=tool.or_else(||["/item/command","/item/type"].iter().find_map(|pointer|event.pointer(pointer).and_then(Value::as_str)));
     let detail=tool.or_else(||["name","command","tool","subtype","status"].iter().find_map(|field|event.get(field).and_then(Value::as_str)));
     match detail { Some(detail)=>format!("{kind}: {detail}"), None=>kind.to_string() }
 }
@@ -422,7 +436,7 @@ impl CliProvider {
     /// A linha de comando deste pedido. O modelo reserva igual ao modelo do
     /// pedido sai inteiro: o Claude recusa os dois iguais, e a reserva é por
     /// agente enquanto o modelo é por pedido.
-    fn args(&self,model:&str,prompt:&str)->Vec<String> {
+    fn args(&self,model:&str,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
         let inline=self.inline_for(prompt);
         let mut args=Vec::new();
         let mut given=self.config.args.iter().peekable();
@@ -433,14 +447,14 @@ impl CliProvider {
                 if let Some(reserve)=given.next().filter(|reserve|reserve.as_str()!=model) { args.extend([arg.clone(),reserve.clone()]); }
                 continue;
             }
-            args.push(if arg==PROMPT { prompt.to_string() } else { arg.replace("{model}",model) });
+            args.push(if arg==PROMPT { prompt.to_string() } else if arg==USAGE_FILE { usage_file.display().to_string() } else { arg.replace("{model}",model) });
         }
         args
     }
 
     /// O agente aberto, com as três pontas na mão. Um só arranque para as duas
     /// conversas: a que espera o fim e a que acompanha.
-    fn open(&self,model:&str,prompt:&str)->Result<tokio::process::Child> {
+    fn open(&self,model:&str,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
         // O caminho achado, com extensão: no Windows `claude` sozinho não
         // abre o `claude.cmd` do npm. Sem caminho nenhum, o agente não está
@@ -450,7 +464,7 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
-        process.args(lead).args(self.args(model,prompt)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        process.args(lead).args(self.args(model,prompt,usage_file)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
@@ -504,7 +518,9 @@ impl Provider for CliProvider {
     async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
         let prompt=Self::prompt(messages);
         let started=Instant::now();
-        let mut child=self.open(model,&prompt)?;
+        let usage_file=std::env::temp_dir().join(format!("jayv-usage-{}.json",uuid::Uuid::new_v4()));
+        let mut meter=crate::usage::Meter::new(&self.name,model,self.config.command.as_deref().unwrap_or(&self.name));
+        let mut child=self.open(model,&prompt,&usage_file)?;
         if let Some(mut stdin)=child.stdin.take() { stdin.write_all(prompt.as_bytes()).await?; }
         let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).lines();
         let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).lines();
@@ -519,7 +535,7 @@ impl Provider for CliProvider {
                 tokio::select! {
                     line=talk.next_line(),if talking=>match line.context("CLI provider returned non-UTF-8 output")? {
                         None=>talking=false,
-                        Some(line)=>if let Some(reason)=refusal(&line) { refused=Some(reason); } else if let Some(beat)=classify(&line) {
+                        Some(line)=>if let Some(reason)={ meter.read(&line); refusal(&line) } { refused=Some(reason); } else if let Some(beat)=classify(&line) {
                             if let Beat::Chunk{text}=&beat { response.push_str(text); }
                             pulse.beat(beat);
                         },
@@ -535,18 +551,36 @@ impl Provider for CliProvider {
                 }
                 Ok::<(),anyhow::Error>(())
             }).await;
-            match heard { Ok(read)=>read?, Err(_)=>{ let _=child.start_kill(); return Err(self.muteness()); } }
+            match heard {
+                Ok(Ok(()))=>{}
+                Ok(Err(error))=>{ settle_meter(meter,&prompt,&response,false,&usage_file); return Err(error); }
+                Err(_)=>{ let _=child.start_kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(self.muteness()); }
+            }
         }
         // As duas pontas fecharam: o que falta é o agente sair. Sem prazo aqui,
         // um processo que fechou a saída e não morreu seguraria o pedido para
         // sempre — e é por isso que este prazo não é o de trabalhar, é o de sair.
-        let status=timeout(silence,child.wait()).await.map_err(|_|self.muteness())??;
+        let status=match timeout(silence,child.wait()).await {
+            Ok(Ok(status))=>status,
+            Ok(Err(error))=>{ settle_meter(meter,&prompt,&response,false,&usage_file); return Err(error.into()); }
+            Err(_)=>{ settle_meter(meter,&prompt,&response,false,&usage_file); return Err(self.muteness()); }
+        };
         // Um `result` com `is_error` é falha mesmo quando o processo sai com
         // zero: a resposta que veio antes dele é o texto do erro, não a do
         // pedido.
-        if !status.success()||refused.is_some() { return Err(self.failure(Some(status),refused,&complaint,&response)); }
-        Ok(ProviderResponse{response,input_tokens:prompt.chars().count()/4,output_tokens:0,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
+        let failed=!status.success()||refused.is_some();
+        // A conta vai mesmo na falha: o agente que recusou no fim já gastou.
+        let (input,output)=settle_meter(meter,&prompt,&response,!failed,&usage_file);
+        if failed { return Err(self.failure(Some(status),refused,&complaint,&response)); }
+        Ok(ProviderResponse{response,input_tokens:input as usize,output_tokens:output as usize,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
     }
+}
+/// Fecha a conta da execução com o que o agente gravou no arquivo de uso, se
+/// gravou, e apaga o arquivo.
+fn settle_meter(meter:crate::usage::Meter,prompt:&str,response:&str,success:bool,usage_file:&std::path::Path)->(u64,u64) {
+    let file=std::fs::read_to_string(usage_file).ok().and_then(|text|serde_json::from_str::<Value>(&text).ok());
+    let _=std::fs::remove_file(usage_file);
+    meter.settle(prompt,response,success,file.as_ref())
 }
 fn provider_error(body:&Value)->String { body.pointer("/error/message").and_then(Value::as_str).or_else(||body.pointer("/error/type").and_then(Value::as_str)).unwrap_or("unknown error").to_string() }
 fn request_error(provider:&str,error:reqwest::Error)->anyhow::Error {
@@ -687,6 +721,16 @@ mod tests {
     /// O agente não avisa se a linha é resposta ou relato do trabalho dele, e a
     /// configuração também não: `claude --print` escreve o texto direto e
     /// `codex exec` narra. Quem voltar a decidir pelo provedor erra num dos dois.
+    /// O Codex com `--json`: a fala do agente vira resposta, os passos viram
+    /// relato e a conta dos tokens não aparece na tela.
+    #[test] fn codex_json_events_split_answer_steps_and_bookkeeping() {
+        assert_eq!(classify(r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"feito"}}"#),Some(Beat::Chunk{text:"feito\n".into()}));
+        assert_eq!(classify(r#"{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"ls"}}"#),Some(Beat::Agent{line:"item.started: ls".into()}));
+        assert_eq!(classify(r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#),None);
+        assert_eq!(classify(r#"{"type":"thread.started","thread_id":"x"}"#),None);
+        assert_eq!(refusal(r#"{"type":"turn.failed","error":{"message":"limite"}}"#).as_deref(),Some("limite"));
+    }
+
     #[test] fn an_agent_line_is_classified_by_its_content() {
         assert_eq!(classify("a resposta em texto puro"),Some(Beat::Chunk{text:"a resposta em texto puro\n".into()}));
         assert_eq!(classify("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"oi\"}]}}"),Some(Beat::Chunk{text:"oi\n".into()}));
@@ -785,7 +829,7 @@ mod tests {
     #[test] fn the_request_goes_as_an_argument_when_the_agent_asks() {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         assert!(provider.inline());
-        assert_eq!(provider.args("gpt-5","oi {model}"),["-p","oi {model}","--model","gpt-5"]);
+        assert_eq!(provider.args("gpt-5","oi {model}",std::path::Path::new("u.json")),["-p","oi {model}","--model","gpt-5"]);
     }
 
     /// Um pedido com histórico e contexto estoura a linha de comando: 32.767
@@ -795,7 +839,7 @@ mod tests {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         let long="x".repeat(INLINE_LIMIT+1);
         assert!(!provider.inline_for(&long));
-        assert_eq!(provider.args("gpt-5",&long),["--model","gpt-5"]);
+        assert_eq!(provider.args("gpt-5",&long,std::path::Path::new("u.json")),["--model","gpt-5"]);
         assert!(provider.inline_for("short"));
     }
 
@@ -811,7 +855,7 @@ mod tests {
     #[test] fn a_fallback_equal_to_the_model_is_dropped() {
         let provider=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--model".into(),"{model}".into(),"--fallback-model".into(),"haiku".into()],..config("cli")},workdir:Workdir::default()};
         assert!(!provider.inline());
-        assert_eq!(provider.args("haiku",""),["--model","haiku"]);
-        assert_eq!(provider.args("opus",""),["--model","opus","--fallback-model","haiku"]);
+        assert_eq!(provider.args("haiku","",std::path::Path::new("u.json")),["--model","haiku"]);
+        assert_eq!(provider.args("opus","",std::path::Path::new("u.json")),["--model","opus","--fallback-model","haiku"]);
     }
 }

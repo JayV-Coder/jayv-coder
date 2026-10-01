@@ -21,6 +21,10 @@ pub const LINK_EVENT:&str="link-changed";
 pub const TRANSLATIONS_EVENT:&str="translations-updated";
 /// Os modelos dos agentes foram trocados pela lista que os CLIs deram.
 pub const MODELS_EVENT:&str="models-updated";
+/// Entrou gasto novo no banco: a tela refaz a conta do escopo que mostra.
+pub const USAGE_EVENT:&str="usage-recorded";
+/// Chegou uma leitura nova do limite de um plano.
+pub const QUOTA_EVENT:&str="quota-changed";
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -54,3 +58,13 @@ pub struct BeatEvent{pub chat_id:String,pub turn_id:String,pub seq:u32,pub kind:
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct ChunkEvent{pub chat_id:String,pub turn_id:String,pub text:String}
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct UsageEvent{pub project_id:Option<String>,pub chat_id:Option<String>}
+
+/// `crossed` é o patamar (80, 95 ou 100) que a leitura acabou de passar,
+/// subindo; vazio quando não passou nenhum.
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct QuotaEvent{pub quota:crate::usage::Quota,pub crossed:Option<u8>}

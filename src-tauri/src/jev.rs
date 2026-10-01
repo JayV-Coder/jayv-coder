@@ -145,8 +145,14 @@ impl Client {
 
     /// Pede ao Jev a avaliação de `state` pelas perguntas do conjunto `set`,
     /// guardadas no Supabase.
+    ///
+    /// Cada chamada entra na conta do uso como `jev:<conjunto>`, com os tokens
+    /// que a função devolveu — e a que falhou entra como falha, sem tokens.
     pub async fn evaluate(&self,set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation> {
-        self.send(&call_body(set,state.into(),include)).await
+        let started=std::time::Instant::now();
+        let result=self.send(&call_body(set,state.into(),include)).await;
+        crate::usage::spend(spend_of(set,result.as_ref().ok(),started.elapsed().as_millis() as u64));
+        result
     }
 
     pub async fn route(&self,input:&RoutingInput)->Result<RoutingDecision> {
@@ -167,12 +173,34 @@ impl Client {
             let response=self.http.post(endpoint).header("apikey",crate::cloud::PUBLISHABLE_KEY).bearer_auth(&self.token).json(body).send().await.map_err(|error|RetryError::retryable(transport_error(error),None))?;
             let status=response.status().as_u16();
             let pause=retry_after(response.headers());
+            if let Some(quota)=daily_quota(response.headers(),chrono::Utc::now()) { crate::usage::quota(quota); }
             let body=response.text().await.unwrap_or_default();
             if (200..300).contains(&status){return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("the Jev returned an unexpected response: {}",error_detail(&body)))));}
             let failure=status_error(status,&body);
             Err(if worth_retrying(status,&body){RetryError::retryable(failure,pause)}else{RetryError::fatal(failure)})
         }).await
     }
+}
+
+/// O gasto de uma chamada ao Jev. Sem avaliação, a chamada falhou: conta
+/// como chamada, sem tokens.
+pub fn spend_of(set:&str,evaluation:Option<&Evaluation>,duration_ms:u64)->crate::usage::Spend {
+    use crate::usage::{Precision, Spend};
+    match evaluation {
+        Some(evaluation)=>Spend{input_tokens:evaluation.usage.input_tokens,output_tokens:evaluation.usage.output_tokens,duration_ms,..Spend::new(format!("jev:{set}"),evaluation.model.as_str(),Precision::Reported)},
+        None=>Spend{duration_ms,success:false,..Spend::new(format!("jev:{set}"),DEFAULT_MODEL,Precision::Estimated)},
+    }
+}
+
+/// As chamadas do dia, que a função `jev` conta e devolve nos cabeçalhos. O
+/// dia é o do servidor (UTC) e recomeça à meia-noite UTC. O `plan` leva
+/// `usadas/limite`, que é o que a tela mostra.
+pub fn daily_quota(headers:&reqwest::header::HeaderMap,now:chrono::DateTime<chrono::Utc>)->Option<crate::usage::Quota> {
+    let read=|name:&str|headers.get(name).and_then(|value|value.to_str().ok()).and_then(|value|value.trim().parse::<u64>().ok());
+    let (used,limit)=(read("x-jev-calls-used")?,read("x-jev-daily-limit")?);
+    if limit==0 { return None; }
+    let midnight=(now.date_naive()+chrono::Days::new(1)).and_hms_opt(0,0,0)?.and_utc();
+    Some(crate::usage::Quota{agent:"jev".into(),window:"day".into(),used_percent:Some((used as f64*100.0/limit as f64).min(100.0)),resets_at:Some(midnight.to_rfc3339_opts(chrono::SecondsFormat::Secs,true)),plan:Some(format!("{used}/{limit}"))})
 }
 
 pub async fn evaluate(set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation>{Client::from_session()?.evaluate(set,state,include).await}
@@ -429,6 +457,27 @@ impl VerificationVerdict {
 
     /// O seed sai destas mesmas funções. Uma pergunta que mude aqui sem o seed
     /// ser gerado de novo deixaria o Supabase perguntando a versão antiga.
+    #[test] fn a_jev_call_is_spent_under_its_set() {
+        let evaluation:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{},"usage":{"input_tokens":296,"output_tokens":20}}"#).unwrap();
+        let spend=spend_of("entry",Some(&evaluation),40);
+        assert_eq!((spend.source.as_str(),spend.model.as_str(),spend.input_tokens,spend.output_tokens,spend.duration_ms),("jev:entry","jev-1.13.0",296,20,40));
+        let failed=spend_of("asking",None,5);
+        assert!(!failed.success);
+        assert_eq!(failed.input_tokens,0);
+    }
+
+    #[test] fn the_daily_calls_come_from_the_headers() {
+        let mut headers=reqwest::header::HeaderMap::new();
+        let now=chrono::DateTime::parse_from_rfc3339("2026-10-01T15:00:00Z").unwrap().to_utc();
+        assert!(daily_quota(&headers,now).is_none());
+        headers.insert("x-jev-calls-used","125".parse().unwrap());
+        headers.insert("x-jev-daily-limit","500".parse().unwrap());
+        let quota=daily_quota(&headers,now).unwrap();
+        assert_eq!(quota.used_percent,Some(25.0));
+        assert_eq!(quota.plan.as_deref(),Some("125/500"));
+        assert_eq!(quota.resets_at.as_deref(),Some("2026-10-02T00:00:00Z"));
+    }
+
     #[test]
     fn the_jev_seed_is_what_rust_asks_today() {
         let rows=seed_rows(include_str!("../../supabase/migrations/20261001120100_seed_jev_en.sql"));

@@ -12,10 +12,10 @@ export function AppHeader() {
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const chat = findChat(data, activeChatId);
   const project = findProject(data, activeProjectId);
-  if (view !== "chat" && view !== "status" && view !== "settings") return null;
+  if (view !== "chat" && view !== "status" && view !== "stats" && view !== "settings") return null;
 
-  const eyebrow = view === "chat" ? t("header.project", { name: project?.name ?? "" }) : view === "status" ? t("header.observability") : t("header.preferences");
-  const title = view === "chat" ? chat ? chatTitle(chat) : t("header.selectChat") : view === "status" ? t("nav.system") : t("nav.settings");
+  const eyebrow = view === "chat" ? t("header.project", { name: project?.name ?? "" }) : view === "status" || view === "stats" ? t("header.observability") : t("header.preferences");
+  const title = view === "chat" ? chat ? chatTitle(chat) : t("header.selectChat") : view === "status" ? t("nav.system") : view === "stats" ? t("nav.stats") : t("nav.settings");
 
   return (
     <header className="flex h-[88px] flex-none items-center justify-between border-b border-[#252a26] bg-[#0c0f0d99] px-[38px] py-5 backdrop-blur-md">

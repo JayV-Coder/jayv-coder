@@ -3,6 +3,7 @@
 //! `commands` recebe o que a tela pede, `queue` atende os pedidos e `events`
 //! é o único caminho de volta para a tela.
 
+mod books;
 pub mod commands;
 pub mod events;
 mod queue;
@@ -13,7 +14,7 @@ use crate::orchestrator::Orchestrator;
 use crate::sync::Connectivity;
 use crate::workspace::WorkspaceStore;
 use commands::session::{SessionState, SharedSession};
-use commands::{files, gate, prompts, session, settings, system, workspace as projects};
+use commands::{files, gate, prompts, session, settings, system, usage, workspace as projects};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::sync::{Mutex, Notify};
@@ -122,6 +123,11 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             let backend=move ||crate::cloud::session::current().map(|token|Arc::new(Remote::new(http.clone(),Some(token))) as Arc<dyn Backend>);
             tauri::async_runtime::spawn(crate::sync::run(workspace.clone(),backend,connectivity.clone(),sync_bell,bell.clone()));
             tauri::async_runtime::spawn(session::announce_links(handle.clone(),connectivity.clone()));
+            // A pia do uso: tudo que o núcleo gastar daqui em diante cai no
+            // banco do usuário aberto no momento.
+            let (sink,entries)=tokio::sync::mpsc::unbounded_channel();
+            crate::usage::install(sink);
+            tauri::async_runtime::spawn(books::keep_the_books(handle.clone(),workspace.clone(),entries));
             tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity));
             Ok(())
         })
@@ -133,6 +139,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             system::system_status,
             gate::gate_feed,
             files::open_file,
+            usage::usage_report,usage::chat_usage,usage::refresh_quotas,
         ])
         .run(tauri::generate_context!()).map_err(Into::into)
 }

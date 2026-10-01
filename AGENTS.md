@@ -78,8 +78,19 @@ lugares, sempre juntos:
 - `src-tauri/tauri.conf.json`
 - `src-tauri/Cargo.toml` e a entrada `jayv` do `src-tauri/Cargo.lock`
 
-Semver: correção sobe o patch (`0.7.0` → `0.7.1`); funcionalidade nova sobe o
-minor (`0.7.1` → `0.8.0`).
+O número segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/)
+(`MAJOR.MINOR.PATCH`), escolhido pelo nível da modificação:
+
+- **PATCH** (`0.7.0` → `0.7.1`): correção de falha que não muda o que já
+  funcionava — bug, texto, tradução, ajuste visual.
+- **MINOR** (`0.7.1` → `0.8.0`): funcionalidade nova compatível com o que
+  existe — tela, comando, tabela ou coluna nova, opção nova. Zera o PATCH.
+- **MAJOR** (`0.8.0` → `1.0.0`): mudança incompatível — dado gravado que
+  deixa de ser lido, migração que exige ação, comando ou formato removido ou
+  trocado. Zera MINOR e PATCH.
+
+Um commit com mais de um nível sobe pelo maior. Enquanto o MAJOR for `0`, a
+mudança incompatível sobe o MINOR e vem explicada na mensagem do commit.
 
 O README do repositório público `jayv-coder-releases` é gerado pelo Actions
 (`releases-readme.yml`, chamado ao fim do `release.yml`): não o edite à mão.
