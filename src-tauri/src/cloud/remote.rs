@@ -69,7 +69,9 @@ impl Remote {
     pub fn push_request(&self,table:&SyncTable,rows:&[Value])->reqwest::Result<Request> {
         self.request(Method::POST,table.name)
             .query(&[("on_conflict",conflict_target(table))])
-            .header("Prefer","resolution=merge-duplicates,return=minimal")
+            // `missing=default`: o `user_id` não vem no corpo e tem de nascer
+            // de `auth.uid()`, não como NULL.
+            .header("Prefer","resolution=merge-duplicates,missing=default,return=minimal")
             .json(rows).build()
     }
 
@@ -172,7 +174,9 @@ mod tests {
         assert_eq!(request.method(),Method::POST);
         assert_eq!(request.url().path(),"/rest/v1/projects");
         assert_eq!(query(&request),[("on_conflict".to_string(),"id".to_string())]);
-        assert_eq!(request.headers()["Prefer"],"resolution=merge-duplicates,return=minimal");
+        // Sem `missing=default` o PostgREST grava NULL no `user_id`, que não
+        // vem no corpo: toda subida seria recusada pelo NOT NULL.
+        assert_eq!(request.headers()["Prefer"],"resolution=merge-duplicates,missing=default,return=minimal");
         assert_eq!(request.headers()["Authorization"],"Bearer jwt");
         assert_eq!(request.headers()["apikey"],PUBLISHABLE_KEY);
         assert_eq!(query(&remote().push_request(table("messages").unwrap(),&[]).unwrap())[0].1,"uid");
