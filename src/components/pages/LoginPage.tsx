@@ -51,7 +51,10 @@ export function LoginPage() {
           </FormField>
           {note && <p role="status" className="text-[12px] text-muted-foreground">{note}</p>}
           <Button type="submit" disabled={busy}>{mode === "signIn" ? t("auth.signIn") : t("auth.signUp")}</Button>
-          <Button type="button" variant="outline" disabled={busy || waiting} onClick={() => void github()}>
+          {/* Esperando o navegador, o botão segue ativo: se o retorno não vier
+              (Redirect URL fora da lista no Supabase, aba fechada), dá para
+              tentar de novo sem fechar o app. */}
+          <Button type="button" variant="outline" disabled={busy} onClick={() => void github()}>
             {waiting ? t("auth.waitingBrowser") : t("auth.github")}
           </Button>
           <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => { setMode(mode === "signIn" ? "signUp" : "signIn"); setNote(""); }}>
