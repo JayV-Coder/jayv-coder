@@ -30,8 +30,16 @@ Deno.serve(async (request) => {
     global: { headers: { Authorization: `Bearer ${token}` } },
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: claims, error: invalid } = await supabase.auth.getClaims(token);
-  if (invalid || !claims?.claims?.sub) return refuse(401, "session", "sessão inválida ou expirada");
+  // Um token que nem é JWT faz o `getClaims` lançar em vez de devolver erro:
+  // as duas formas são a mesma recusa.
+  let subject: string | undefined;
+  try {
+    const { data: claims, error: invalid } = await supabase.auth.getClaims(token);
+    if (!invalid) subject = claims?.claims?.sub;
+  } catch {
+    subject = undefined;
+  }
+  if (!subject) return refuse(401, "session", "sessão inválida ou expirada");
 
   let input: { set?: unknown; state?: unknown; include?: unknown };
   try {

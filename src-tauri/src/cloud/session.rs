@@ -102,6 +102,14 @@ mod tests {
     const KEY_A:&str=include_str!("testdata/es256_a.pem");
     const KEY_B:&str=include_str!("testdata/es256_b.pem");
 
+    /// O JWKS como o projeto o publica, com `ext` e `key_ops`: ler e achar a
+    /// chave pelo `kid` é o que a primeira abertura do app faz.
+    #[test] fn o_jwks_do_projeto_e_lido() {
+        let keys:JwkSet=serde_json::from_str(include_str!("testdata/project_jwks.json")).expect("o JWKS publicado tem de ser legível");
+        let jwk=keys.find("0a44491d-b641-4447-973b-32c13254f83c").expect("a chave do projeto");
+        DecodingKey::from_jwk(jwk).expect("a chave vira chave de verificação");
+    }
+
     #[test] fn o_token_valido_devolve_o_usuario() {
         let identity=validate(&token(KEY_A,"test-key",claims(NOW+60)),&keys(),NOW).expect("válido");
         assert_eq!(identity,Identity{user_id:USER.into(),email:Some("dev@teste.local".into()),expires_at:NOW+60});
