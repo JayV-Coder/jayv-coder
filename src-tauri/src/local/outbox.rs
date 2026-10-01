@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params_from_iter, types::Value as Sql, Connection, OptionalExtension};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// Uma tabela espelhada: o nome, a chave com que o Supabase a conhece e as
 /// colunas que sobem. O que fica de fora — `projects.root_path`,
@@ -140,6 +141,40 @@ pub fn settle(connection:&Connection,seq:i64,version:i64)->Result<()> {
 pub fn fail(connection:&Connection,seq:i64,error:&str)->Result<()> {
     connection.execute("UPDATE outbox SET status='failed',error=?2 WHERE seq=?1",rusqlite::params![seq,error])?;
     Ok(())
+}
+
+/// As entradas recusadas, contadas por dono: cada chat, cada projeto (o dele
+/// e as dos chats dele, somadas) e o resto — configurações dos agentes e
+/// exclusões, cuja linha já não existe para dizer de quem era.
+#[derive(Debug,Default,Clone,PartialEq,Eq,serde::Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct Refusals { pub by_chat:BTreeMap<String,i64>, pub by_project:BTreeMap<String,i64>, pub unplaced:i64 }
+
+pub fn refusals(connection:&Connection)->Result<Refusals> {
+    let mut statement=connection.prepare(
+        "WITH failed AS (SELECT tbl,json_extract(row_key,'$[0]') AS k FROM outbox WHERE status='failed'),
+         owned AS (
+           SELECT CASE tbl
+               WHEN 'chats' THEN (SELECT id FROM chats WHERE id=k)
+               WHEN 'turns' THEN (SELECT chat_id FROM turns WHERE id=k)
+               WHEN 'messages' THEN (SELECT chat_id FROM messages WHERE uid=k)
+               WHEN 'entry_checks' THEN (SELECT chat_id FROM turns WHERE id=k)
+               WHEN 'questions' THEN (SELECT chat_id FROM turns WHERE id=k)
+               WHEN 'exit_checks' THEN (SELECT t.chat_id FROM exit_checks e JOIN turns t ON t.id=e.turn_id WHERE e.id=k)
+               WHEN 'turn_events' THEN (SELECT t.chat_id FROM turn_events e JOIN turns t ON t.id=e.turn_id WHERE e.id=k)
+             END AS chat,
+             CASE WHEN tbl='projects' THEN (SELECT id FROM projects WHERE id=k) END AS project
+           FROM failed)
+         SELECT chat,COALESCE((SELECT project_id FROM chats WHERE id=chat),project),COUNT(*) FROM owned GROUP BY 1,2",
+    )?;
+    let rows=statement.query_map([],|row|Ok((row.get::<_,Option<String>>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,i64>(2)?)))?;
+    let mut found=Refusals::default();
+    for row in rows {
+        let (chat,project,count)=row?;
+        if let Some(chat)=chat { *found.by_chat.entry(chat).or_default()+=count; }
+        match project { Some(project)=>*found.by_project.entry(project).or_default()+=count, None=>found.unplaced+=count }
+    }
+    Ok(found)
 }
 
 /// Aplica as linhas baixadas sem acordar os gatilhos. A linha com escrita
@@ -283,6 +318,25 @@ mod tests {
         store.set_turn_partial(&turn.id,"meia resp").expect("rascunho");
         store.clear_turn_partial(&turn.id).expect("limpa");
         assert!(pending(store.connection(),100).expect("fila").is_empty());
+    }
+
+    /// A recusa de um turno é do chat dele e do projeto do chat; a de uma
+    /// configuração de agente não é de projeto nenhum.
+    #[test] fn refusals_are_counted_by_their_owner() {
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        let project=store.create_project("Loja",None).expect("projeto");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"oi",None).expect("turno");
+        let other=store.create_project("Outro",None).expect("outro");
+        store.connection().execute("INSERT INTO outbox(tbl,row_key,op,at,status) VALUES('llm_agents','[\"claude\"]','upsert','x','failed')",[]).expect("agente");
+        store.connection().execute("INSERT INTO outbox(tbl,row_key,op,at,status) VALUES('chats','[\"sumiu\"]','delete','x','failed')",[]).expect("excluído");
+        for (tbl,key) in [("turns",&turn.id),("projects",&other.id)] {
+            store.connection().execute("UPDATE outbox SET status='failed' WHERE tbl=?1 AND row_key=json_array(?2)",[tbl,key.as_str()]).expect("recusa");
+        }
+        let found=refusals(store.connection()).expect("contagem");
+        assert_eq!(found.by_chat,BTreeMap::from([(chat.id.clone(),1)]));
+        assert_eq!(found.by_project,BTreeMap::from([(project.id.clone(),1),(other.id.clone(),1)]));
+        assert_eq!(found.unplaced,2);
     }
 
     #[test] fn deleting_a_chat_also_deletes_its_children_remotely() {

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentProbe, Chat, CoreSettings, CoreSnapshot, EntryCheck, ExitCheck, GateFeed, LlmSettings, Project,
+  AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, Project,
   SettingsSnapshot, SystemStatus, Turn, WorkspaceData,
 } from "./types";
 
@@ -29,6 +29,7 @@ export const commands = {
   saveCoreSettings: (settings: CoreSettings) => invoke<CoreSnapshot>("save_core_settings", { settings }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
   checkAgent: (command: string) => invoke<AgentProbe>("check_agent", { command }),
+  refreshModels: (agent: AgentId) => invoke<ModelsRefresh>("refresh_models", { agent }),
   setSession: (token: string) => invoke<SessionView>("set_session", { token }),
   clearSession: () => invoke<void>("clear_session"),
   connectionStatus: () => invoke<ConnectionStatus>("connection_status"),
@@ -41,7 +42,10 @@ export interface SessionView { userId: string; email: string | null; expiresAt: 
 
 /** A conexão com o Supabase, como o motor de sincronização a vê. */
 export type Link = "signedOut" | "offline" | "online" | "expired";
-export interface ConnectionStatus { link: Link; pending: number; failed: number }
+/** O que o servidor recusou, por dono: cada chat, cada projeto (com os chats
+ * dele somados) e o que não é de projeto nenhum. */
+export interface Refusals { byChat: Record<string, number>; byProject: Record<string, number>; unplaced: number }
+export interface ConnectionStatus { link: Link; pending: number; refusals: Refusals }
 
 /** Os avisos que o núcleo manda (ver `src-tauri/src/desktop/events.rs`). */
 export interface CoreEvents {
@@ -54,6 +58,7 @@ export interface CoreEvents {
   "gate-exit": { checks: ExitCheck[] };
   "link-changed": { link: Link };
   "translations-updated": null;
+  "models-updated": null;
 }
 
 export function onCore<K extends keyof CoreEvents>(event: K, handler: (payload: CoreEvents[K]) => void): Promise<UnlistenFn> {

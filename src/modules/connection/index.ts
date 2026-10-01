@@ -1,7 +1,11 @@
 import { create } from "zustand";
 import { commands, onCore, type ConnectionStatus } from "@/modules/core/bridge";
 
-export const useConnection = create<ConnectionStatus>(() => ({ link: "signedOut", pending: 0, failed: 0 }));
+export const useConnection = create<ConnectionStatus>(() => ({ link: "signedOut", pending: 0, refusals: { byChat: {}, byProject: {}, unplaced: 0 } }));
+
+/** Quantas escritas deste chat ou projeto o servidor recusou. */
+export const useChatRefusals = (chatId: string) => useConnection((state) => state.refusals.byChat[chatId] ?? 0);
+export const useProjectRefusals = (projectId: string) => useConnection((state) => state.refusals.byProject[projectId] ?? 0);
 
 async function refresh() {
   const status = await commands.connectionStatus().catch(() => null);

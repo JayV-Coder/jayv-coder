@@ -1,5 +1,6 @@
 import { Trash2Icon } from "lucide-react";
 import type { Chat, Project } from "@/modules/core";
+import { useProjectRefusals } from "@/modules/connection";
 import { formatSince, useT } from "@/modules/i18n";
 import { FolderIcon, PathText } from "@/components/atoms";
 import { ConfirmAction } from "@/components/molecules";
@@ -16,6 +17,7 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
   const t = useT();
   const last = chats[0]?.updatedAt ?? project.createdAt;
   const count = chats.length;
+  const refused = useProjectRefusals(project.id);
   return (
     <YardCard
       onOpen={onOpen}
@@ -46,6 +48,7 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
         <b className="font-normal text-foreground">{t("project.chats", { count })}</b>
         <i className="not-italic">{t("project.lastActivity", { date: formatSince(last) })}</i>
       </span>
+      {refused > 0 && <span role="status" className="text-xs text-[#c9a86a]">{t("project.refused", { count: refused })}</span>}
     </YardCard>
   );
 }

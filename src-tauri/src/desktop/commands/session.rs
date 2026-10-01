@@ -4,7 +4,7 @@
 
 use crate::i18n::{failure, Text};
 use crate::cloud::{remote::Remote, session::{self, fetch_jwks, validate_offline, Identity, SessionError}};
-use crate::desktop::events::{LinkEvent, LINK_EVENT, TRANSLATIONS_EVENT};
+use crate::desktop::events::{LinkEvent, LINK_EVENT, MODELS_EVENT, TRANSLATIONS_EVENT};
 use crate::desktop::{both, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
 use crate::local::global::{self, GlobalCache, LocaleRow};
 use crate::memory::MemoryManager;
@@ -81,7 +81,7 @@ async fn adopt(desk:&SharedDesktopState,workspace:&SharedWorkspace,store:Workspa
 /// volta ao app. Trocar de usuário troca o banco; o mesmo usuário com token
 /// novo só destrava a sincronização.
 #[tauri::command]
-pub(crate) async fn set_session(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,token:String)->Result<SessionView,Text> {
+pub(crate) async fn set_session(app:AppHandle,desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,token:String)->Result<SessionView,Text> {
     let (identity,changed,dir)={
         let mut state=session.lock().await;
         let identity=state.validate(&token).await?;
@@ -94,6 +94,7 @@ pub(crate) async fn set_session(desk:State<'_,SharedDesktopState>,workspace:Stat
     if changed {
         let store=WorkspaceStore::for_user(&dir,&identity.user_id).map_err(failure)?;
         adopt(&desk,&workspace,store).await.map_err(failure)?;
+        tauri::async_runtime::spawn(refresh_models(app.clone(),desk.inner().clone(),workspace.inner().clone()));
     }
     sync.0.notify_one();
     queue.notify_one();
@@ -115,17 +116,18 @@ pub(crate) async fn clear_session(desk:State<'_,SharedDesktopState>,workspace:St
     Ok(())
 }
 
+/// `refusals` são as entradas que o servidor recusou, por dono: a tela mostra
+/// cada uma no chat ou no projeto dela, e só o resto fica no rodapé.
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct ConnectionStatus { pub link:Link, pub pending:i64, pub failed:i64 }
+pub struct ConnectionStatus { pub link:Link, pub pending:i64, pub refusals:crate::local::outbox::Refusals }
 
 #[tauri::command]
 pub(crate) async fn connection_status(workspace:State<'_,SharedWorkspace>,connectivity:State<'_,Connectivity>)->Result<ConnectionStatus,Text> {
     let workspace=workspace.lock().await;
-    let (pending,failed)=workspace.connection().query_row(
-        "SELECT COUNT(*) FILTER (WHERE status='pending'),COUNT(*) FILTER (WHERE status='failed') FROM outbox",[],|row|Ok((row.get(0)?,row.get(1)?)),
-    ).map_err(failure)?;
-    Ok(ConnectionStatus{link:connectivity.get(),pending,failed})
+    let pending=workspace.connection().query_row("SELECT COUNT(*) FROM outbox WHERE status='pending'",[],|row|row.get(0)).map_err(failure)?;
+    let refusals=crate::local::outbox::refusals(workspace.connection()).map_err(failure)?;
+    Ok(ConnectionStatus{link:connectivity.get(),pending,refusals})
 }
 
 /// Os idiomas do cache, na hora; a lista nova chega depois pelo evento
@@ -162,6 +164,15 @@ async fn refresh_translations(app:AppHandle,session:SharedSession,locale:String)
     let mut state=session.lock().await;
     if state.cache.translations(&locale).ok().as_ref()==Some(&fresh) || fresh.is_empty() {return;}
     if state.cache.save_translations(&locale,&fresh).is_ok() {let _=app.emit(TRANSLATIONS_EVENT,());}
+}
+
+/// Ao abrir o banco de um usuário, a lista de modelos de cada agente vem do
+/// `/model` do CLI dele, e o que é novo nasce ligado para o Jev escolher.
+async fn refresh_models(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace) {
+    match super::settings::rediscover(&desk,&workspace,&crate::llm::AgentId::ALL).await {
+        Ok(_)=>{let _=app.emit(MODELS_EVENT,());}
+        Err(error)=>eprintln!("[llm] model discovery not saved: {error:#}"),
+    }
 }
 
 async fn refresh_jev_parameters(session:SharedSession) {

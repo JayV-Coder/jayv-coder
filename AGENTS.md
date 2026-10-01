@@ -83,3 +83,11 @@ minor (`0.7.1` → `0.8.0`).
 
 O README do repositório público `jayv-coder-releases` é gerado pelo Actions
 (`releases-readme.yml`, chamado ao fim do `release.yml`): não o edite à mão.
+
+## Mensagem de commit: detalha cada alteração
+
+A mensagem de todo commit no `main` começa por `vX.Y.Z: resumo` (a versão
+nova) e, no corpo, detalha cada alteração em seções por assunto: o que mudou,
+por quê e onde (arquivo ou módulo). Inclua as decisões que mudam o
+comportamento para o usuário, as migrações novas e o que ficou de fora de
+propósito. Ninguém deve precisar ler o diff para saber o que o commit faz.

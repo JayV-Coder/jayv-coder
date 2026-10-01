@@ -1,6 +1,6 @@
 import type { AgentId, AgentSettings } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { addModel, checkAgent, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
+import { AGENT_LABELS, addModel, checkAgent, isAgentsDirty, refreshModels, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
 import { AgentIcon, EmptyText } from "@/components/atoms";
 import { AgentProbeLine, FormField, OptionSelect, SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { CodexOptionsForm } from "./CodexOptionsForm";
 import { CopilotOptionsForm } from "./CopilotOptionsForm";
 import { ModelRow } from "./ModelRow";
 
-export const AGENT_NAMES: Record<AgentId, string> = { claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot" };
+export const AGENT_NAMES: Record<AgentId, string> = AGENT_LABELS;
 const TIMEOUTS = [60, 120, 300, 600, 900, 1800, 3600];
 
 /** Tudo de um agente numa aba: se ele está ligado, como é chamado, o que pode
@@ -21,6 +21,8 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
   const probe = useSettings((state) => state.probes[agent.id]);
   const catalog = useSettings((state) => state.catalog[agent.id]);
   const [min, max] = useSettings((state) => state.timeoutRange);
+  const refreshing = useSettings((state) => state.refreshing);
+  const dirty = useSettings(isAgentsDirty);
   const taken = new Set(models.map((model) => model.model));
   const timeouts = [...new Set([...TIMEOUTS, agent.timeout])].filter((value) => value >= min && value <= max).sort((a, b) => a - b);
   const duration = (seconds: number) => (seconds % 60 === 0 ? t("agent.timeout.minutes", { count: seconds / 60 }) : t("agent.timeout.seconds", { count: seconds }));
@@ -75,7 +77,20 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
       <SettingsSection
         title={t("agent.section.models")}
         description={t("agent.section.models.description")}
-        action={<Button variant="outline" size="sm" onClick={() => addModel(agent.id)}>{t("model.add")}</Button>}
+        action={(
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={refreshing !== null || dirty}
+              title={dirty ? t("model.refresh.dirty") : t("model.refresh.hint")}
+              onClick={() => void refreshModels(agent.id)}
+            >
+              {refreshing === agent.id ? t("model.refresh.running") : t("model.refresh")}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => addModel(agent.id)}>{t("model.add")}</Button>
+          </div>
+        )}
       >
         {problems.models && <p role="alert" className="text-[11.5px] text-destructive">{t(problems.models)}</p>}
         {models.length === 0

@@ -19,6 +19,8 @@ pub const CHUNK_EVENT:&str="turn-chunk";
 pub const LINK_EVENT:&str="link-changed";
 /// Chegaram idiomas ou traduções novos no cache.
 pub const TRANSLATIONS_EVENT:&str="translations-updated";
+/// Os modelos dos agentes foram trocados pela lista que os CLIs deram.
+pub const MODELS_EVENT:&str="models-updated";
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]

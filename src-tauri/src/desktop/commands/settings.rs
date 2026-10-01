@@ -22,7 +22,44 @@ pub struct SettingsSnapshot {
 }
 
 fn snapshot(settings:LlmSettings)->SettingsSnapshot {
-    SettingsSnapshot{settings,catalog:AgentId::ALL.into_iter().map(|agent|(agent,llm::catalog(agent))).collect(),timeout_range:llm::TIMEOUT_RANGE,context_range:llm::CONTEXT_RANGE}
+    let catalog=AgentId::ALL.into_iter().map(|agent|(agent,llm::catalog(agent,&settings))).collect();
+    SettingsSnapshot{settings,catalog,timeout_range:llm::TIMEOUT_RANGE,context_range:llm::CONTEXT_RANGE}
+}
+
+/// Pergunta a cada agente quais modelos o `/model` dele oferece e grava a
+/// lista. Os CLIs respondem sem cadeado nenhum preso; só a gravação pega os
+/// dois. Devolve o que ficou gravado e os agentes que não responderam.
+pub(crate) async fn rediscover(desk:&SharedDesktopState,workspace:&SharedWorkspace,agents:&[AgentId])->anyhow::Result<(LlmSettings,Vec<AgentId>)> {
+    let current=workspace.lock().await.llm_settings()?;
+    let mut asked=tokio::task::JoinSet::new();
+    for agent in current.agents.iter().filter(|agent|agents.contains(&agent.id)) {
+        let (id,command)=(agent.id,agent.command.clone());
+        asked.spawn(async move {(id,llm::discover(id,&command).await)});
+    }
+    let answers=asked.join_all().await;
+    let (mut desk,mut workspace)=crate::desktop::both(desk,workspace).await;
+    let before=workspace.llm_settings()?;
+    let mut settings=before.clone();
+    let mut silent=Vec::new();
+    for (agent,found) in answers {
+        match found { Some(found)=>settings=llm::adopt_listing(&settings,agent,&found), None=>silent.push(agent) }
+    }
+    // Gravar enfileira a sincronização de todos os modelos: só quando mudou.
+    if serde_json::to_value(&settings)?==serde_json::to_value(&before)? { return Ok((before,silent)); }
+    let saved=workspace.save_llm_settings(&settings)?;
+    desk.orchestrator.use_llm(&saved);
+    Ok((saved,silent))
+}
+
+/// A lista de modelos de um agente, lida de novo do CLI.
+#[derive(Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct ModelsRefresh { pub snapshot:SettingsSnapshot, pub listed:bool }
+
+#[tauri::command]
+pub(crate) async fn refresh_models(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,agent:AgentId)->Result<ModelsRefresh,Text>{crate::desktop::require_session()?;
+    let (saved,silent)=rediscover(&desk,&workspace,&[agent]).await.map_err(failure)?;
+    Ok(ModelsRefresh{snapshot:snapshot(saved),listed:silent.is_empty()})
 }
 
 #[tauri::command]

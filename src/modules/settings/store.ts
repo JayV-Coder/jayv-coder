@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import {
-  bus, commands, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type KnownModel,
+  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type KnownModel,
   type CoreSettings, type CoreSnapshot, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { t, type Key } from "@/modules/i18n";
 
 export const AGENTS: AgentId[] = ["claude", "codex", "copilot"];
+export const AGENT_LABELS: Record<AgentId, string> = { claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot" };
 
 /** O modelo como está na aba: `uid` segura a linha enquanto o identificador
  * muda. */
@@ -26,6 +27,8 @@ interface SettingsState {
   /** O que foi gravado por último, para saber se há alteração pendente. */
   saved: string;
   saving: boolean;
+  /** O agente cuja lista de modelos está sendo lida do CLI. */
+  refreshing: AgentId | null;
   /** As abas do Jev e do app: o rascunho, o que está gravado e o resto do
    * retrato (padrões, limites, números da portaria). */
   core: CoreSettings | null;
@@ -39,7 +42,7 @@ const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null
 
 export const useSettings = create<SettingsState>(() => ({
   loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [] }, timeoutRange: [30, 3600],
-  contextRange: [8000, 2000000], probes: noProbes(), saved: "", saving: false,
+  contextRange: [8000, 2000000], probes: noProbes(), saved: "", saving: false, refreshing: null,
   core: null, coreSnapshot: null, savedCore: "",
 }));
 
@@ -82,6 +85,24 @@ export async function loadSettings() {
     for (const agent of AGENTS) void checkAgent(agent);
   } catch (error) {
     reportError(error);
+  }
+}
+
+/** Lê de novo a lista do `/model` do agente. O núcleo grava na hora, então
+ * só roda sem alteração pendente: aplicar o retrato novo a descartaria. */
+export async function refreshModels(agent: AgentId) {
+  if (isAgentsDirty(useSettings.getState())) return;
+  useSettings.setState({ refreshing: agent });
+  try {
+    const { snapshot, listed } = await commands.refreshModels(agent);
+    apply(snapshot);
+    const name = AGENT_LABELS[agent];
+    if (listed) notify(t("model.refresh.done", { count: snapshot.settings.models.filter((model) => model.agent === agent).length, agent: name }));
+    else notify(t("model.refresh.silent", { agent: name }), true);
+  } catch (error) {
+    reportError(error);
+  } finally {
+    useSettings.setState({ refreshing: null });
   }
 }
 
@@ -171,7 +192,7 @@ export function watchAgents() {
   };
 }
 
-export const MODEL_PATTERN = /^[A-Za-z0-9._:/@-]+$/;
+export const MODEL_PATTERN = /^[A-Za-z0-9._:/@[\]-]+$/;
 
 /** Os mesmos erros que o núcleo recusaria, mostrados antes de salvar. As
  * chaves são por campo: `command`, `timeout`, `models`, `budget` e o `uid` de
@@ -229,5 +250,11 @@ export function connectSettings() {
     void loadSettings();
     stop = watchAgents();
   });
-  return () => { stop?.(); off(); };
+  // A descoberta de fundo trocou os modelos: a aba aberta e sem alteração
+  // pendente mostra a lista nova.
+  const models = onCore("models-updated", () => {
+    const state = useSettings.getState();
+    if (state.loaded && !isAgentsDirty(state)) void commands.getSettings().then(apply).catch(reportError);
+  });
+  return () => { stop?.(); off(); void models.then((unlisten) => unlisten()); };
 }

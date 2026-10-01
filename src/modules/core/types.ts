@@ -248,6 +248,10 @@ export interface SettingsSnapshot {
   contextRange: [number, number];
 }
 
+/** A lista de um agente lida de novo do `/model` do CLI. `listed` é falso
+ * quando o CLI não respondeu e nada mudou. */
+export interface ModelsRefresh { snapshot: SettingsSnapshot; listed: boolean }
+
 export interface AgentProbe {
   path: string | null;
   version: string | null;

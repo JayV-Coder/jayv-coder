@@ -234,70 +234,152 @@ impl AgentSettings {
     }
 }
 
-/// Um modelo conhecido de um agente, com os números que a tela preenche
-/// sozinha ao escolhê-lo.
-#[derive(Debug,Clone,Serialize)]
+/// Um modelo que o agente oferece, com os números que a tela preenche sozinha
+/// ao escolhê-lo.
+#[derive(Debug,Clone,Serialize,PartialEq)]
 #[serde(rename_all="camelCase")]
-pub struct KnownModel { pub id:&'static str, pub label:&'static str, pub context_window:usize, pub cost_class:&'static str, pub speed:&'static str }
+pub struct KnownModel { pub id:String, pub label:String, pub context_window:usize, pub cost_class:String, pub speed:String }
 
-const fn known(id:&'static str,label:&'static str,context_window:usize,cost_class:&'static str,speed:&'static str)->KnownModel { KnownModel{id,label,context_window,cost_class,speed} }
-
-/// O catálogo de cada agente. Os apelidos do Claude Code apontam sempre para a
-/// versão mais nova da família; os nomes completos fixam uma versão.
-pub fn catalog(agent:AgentId)->Vec<KnownModel> {
-    match agent {
-        AgentId::Claude=>vec![
-            known("sonnet","Sonnet (mais recente)",200_000,"medium","medium"),
-            known("opus","Opus (mais recente)",200_000,"high","slow"),
-            known("haiku","Haiku (mais recente)",200_000,"low","fast"),
-            known("fable","Fable (mais recente)",200_000,"high","medium"),
-            known("claude-opus-5-5","Claude Opus 5.5",200_000,"high","slow"),
-            known("claude-sonnet-5","Claude Sonnet 5",200_000,"medium","medium"),
-            known("claude-fable-5-1","Claude Fable 5.1",200_000,"high","medium"),
-            known("claude-haiku-4-5-20251001","Claude Haiku 4.5",200_000,"low","fast"),
-        ],
-        AgentId::Codex=>vec![
-            known("gpt-5-codex","GPT-5 Codex",272_000,"high","medium"),
-            known("gpt-5.1-codex","GPT-5.1 Codex",272_000,"high","medium"),
-            known("gpt-5.1-codex-max","GPT-5.1 Codex Max",272_000,"high","slow"),
-            known("gpt-5.1-codex-mini","GPT-5.1 Codex Mini",272_000,"low","fast"),
-            known("gpt-5.2-codex","GPT-5.2 Codex",272_000,"high","medium"),
-            known("gpt-5","GPT-5",272_000,"high","medium"),
-        ],
-        AgentId::Copilot=>vec![
-            known("claude-sonnet-4.5","Claude Sonnet 4.5",128_000,"medium","medium"),
-            known("claude-opus-4.5","Claude Opus 4.5",128_000,"high","slow"),
-            known("claude-haiku-4.5","Claude Haiku 4.5",128_000,"low","fast"),
-            known("gpt-5","GPT-5",128_000,"high","medium"),
-            known("gpt-5.1","GPT-5.1",128_000,"high","medium"),
-            known("gpt-5.1-codex","GPT-5.1 Codex",128_000,"high","medium"),
-            known("gpt-5-mini","GPT-5 mini",128_000,"low","fast"),
-            known("gemini-3-pro-preview","Gemini 3 Pro (preview)",128_000,"medium","medium"),
-        ],
+impl KnownModel {
+    /// Custo e velocidade saem do nome: o CLI não os diz. A família pequena é
+    /// barata e rápida; a grande, cara e lenta; o resto fica no meio.
+    fn named(agent:AgentId,id:&str,label:Option<String>,context_window:Option<usize>)->Self {
+        let lower=id.to_ascii_lowercase();
+        let has=|words:&[&str]|words.iter().any(|word|lower.contains(word));
+        let (cost_class,mut speed)=if has(&["haiku","mini","flash","luna","nano","lite"]) {("low","fast")}
+            else if has(&["opus","max","astra","best","-pro"]) {("high","slow")}
+            else if has(&["fable"]) {("high","medium")}
+            else {("medium","medium")};
+        if lower.ends_with("-fast") { speed="fast"; }
+        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000 }});
+        Self{id:id.into(),label:label.unwrap_or_else(||id.into()),context_window:context.clamp(CONTEXT_RANGE.0,CONTEXT_RANGE.1),cost_class:cost_class.into(),speed:speed.into()}
     }
 }
 
-/// Os modelos mais recentes de cada agente, com que ele nasce. Os apelidos do
-/// Claude Code já seguem a versão nova de cada família; no Codex são a
-/// geração mais nova e as variantes max e mini mais novas.
-const LATEST_CLAUDE:[&str;4]=["sonnet","opus","haiku","fable"];
-const LATEST_CODEX:[&str;3]=["gpt-5.2-codex","gpt-5.1-codex-max","gpt-5.1-codex-mini"];
+/// Os modelos que vêm de fábrica, para a máquina em que o agente ainda não
+/// respondeu à descoberta. Os apelidos do Claude Code seguem sozinhos a
+/// versão mais nova de cada família.
+fn starter_ids(agent:AgentId)->&'static [&'static str] {
+    match agent {
+        AgentId::Claude=>&["sonnet","opus","haiku","fable"],
+        AgentId::Codex=>&["gpt-5.5"],
+        AgentId::Copilot=>&["claude-sonnet-4.5"],
+    }
+}
 
 fn starter_models(agent:AgentId)->Vec<AgentModel> {
-    let known=catalog(agent);
-    let wanted:Vec<&str>=match agent {
-        AgentId::Claude=>LATEST_CLAUDE.to_vec(),
-        AgentId::Codex=>LATEST_CODEX.to_vec(),
-        AgentId::Copilot=>vec![known[0].id],
-    };
-    wanted.into_iter().filter_map(|id|known.iter().find(|model|model.id==id)).map(|model|AgentModel{
-        agent,model:model.id.into(),enabled:true,capabilities:strings(&CAPABILITIES),cost_class:model.cost_class.into(),speed:model.speed.into(),context_window:model.context_window,
+    starter_ids(agent).iter().map(|id|fresh_model(agent,&KnownModel::named(agent,id,None,None))).collect()
+}
+
+fn fresh_model(agent:AgentId,known:&KnownModel)->AgentModel {
+    AgentModel{agent,model:known.id.clone(),enabled:true,capabilities:strings(&CAPABILITIES),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
+}
+
+/// O que o último `/model` de cada agente devolveu nesta execução do app.
+static DISCOVERED:std::sync::LazyLock<std::sync::Mutex<HashMap<AgentId,Vec<KnownModel>>>>=std::sync::LazyLock::new(Default::default);
+
+/// O catálogo que a tela oferece: o que o CLI listou e, enquanto ele não
+/// respondeu, os modelos já gravados do agente.
+pub fn catalog(agent:AgentId,settings:&LlmSettings)->Vec<KnownModel> {
+    if let Some(found)=DISCOVERED.lock().ok().and_then(|cache|cache.get(&agent).cloned()) { return found; }
+    settings.models.iter().filter(|model|model.agent==agent).map(|model|KnownModel{
+        id:model.model.clone(),label:model.model.clone(),context_window:model.context_window,cost_class:model.cost_class.clone(),speed:model.speed.clone(),
     }).collect()
 }
 
+/// Os argumentos que fazem o agente listar, sem gastar crédito, os modelos
+/// do `/model`. O Claude Code responde ao `/model` no `--print` sem chamar o
+/// modelo; o Codex tem o catálogo no `debug models`; o Copilot lista os
+/// valores aceitos de `model` na ajuda de configuração.
+fn listing_args(agent:AgentId)->&'static [&'static str] {
+    match agent {
+        AgentId::Claude=>&["--print","/model","--output-format","json","--no-session-persistence"],
+        AgentId::Codex=>&["debug","models"],
+        AgentId::Copilot=>&["help","config"],
+    }
+}
+
+/// Pergunta ao CLI quais modelos ele oferece. `None` quando ele não está
+/// instalado, não respondeu ou respondeu algo que esta versão não lê.
+pub async fn discover(agent:AgentId,command:&str)->Option<Vec<KnownModel>> {
+    let path=locate(command)?;
+    let (program,lead)=launcher(&path);
+    let mut process=tokio::process::Command::new(&program);
+    if let Some(search)=agent_path(&path) { process.env("PATH",search); }
+    let run=crate::providers::quiet(&mut process).args(lead).args(listing_args(agent)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).output();
+    let output=tokio::time::timeout(Duration::from_secs(60),run).await.ok()?.ok()?;
+    let text=String::from_utf8_lossy(&output.stdout);
+    let found=match agent {
+        AgentId::Claude=>parse_claude_listing(&text),
+        AgentId::Codex=>parse_codex_listing(&text),
+        AgentId::Copilot=>parse_copilot_listing(&text),
+    };
+    if found.is_empty() { eprintln!("[llm] {} listed no models",agent.key()); return None; }
+    if let Ok(mut cache)=DISCOVERED.lock() { cache.insert(agent,found.clone()); }
+    Some(found)
+}
+
+/// `Available: sonnet, opus, …, default, or a full model ID.` — `default` é
+/// "o que a conta escolher", não um modelo.
+fn parse_claude_listing(text:&str)->Vec<KnownModel> {
+    let result=serde_json::from_str::<Value>(text).ok().and_then(|value|value["result"].as_str().map(str::to_string)).unwrap_or_else(||text.to_string());
+    let Some(rest)=result.split("Available:").nth(1) else { return vec![] };
+    let list=rest.split(" or a full model ID").next().unwrap_or(rest);
+    let ids=list.split(',').map(|item|item.trim().trim_end_matches('.').trim()).filter(|id|!id.is_empty()&&*id!="default"&&valid_id(id));
+    unique(ids.map(|id|KnownModel::named(AgentId::Claude,id,None,None)))
+}
+
+/// O catálogo do Codex, só com os que o `/model` mostra (`visibility: list`).
+fn parse_codex_listing(text:&str)->Vec<KnownModel> {
+    let Ok(value)=serde_json::from_str::<Value>(text) else { return vec![] };
+    let mut models:Vec<&Value>=value["models"].as_array().map(|models|models.iter().filter(|model|model["visibility"].as_str()==Some("list")).collect()).unwrap_or_default();
+    models.sort_by_key(|model|model["priority"].as_i64().unwrap_or(i64::MAX));
+    unique(models.into_iter().filter_map(|model|{
+        let id=model["slug"].as_str().filter(|id|valid_id(id))?;
+        Some(KnownModel::named(AgentId::Codex,id,model["display_name"].as_str().map(str::to_string),model["context_window"].as_u64().map(|window|window as usize)))
+    }))
+}
+
+/// Os valores da chave `model` na ajuda de configuração: uma linha
+/// `- "id"` por modelo, até a linha em branco.
+fn parse_copilot_listing(text:&str)->Vec<KnownModel> {
+    let mut lines=text.lines().skip_while(|line|!line.trim_start().starts_with("`model`"));
+    lines.next();
+    let ids=lines.map(str::trim).take_while(|line|!line.is_empty()).filter_map(|line|line.strip_prefix("- \"").and_then(|rest|rest.strip_suffix('"'))).filter(|id|valid_id(id));
+    unique(ids.map(|id|KnownModel::named(AgentId::Copilot,id,None,None)))
+}
+
+fn unique(models:impl Iterator<Item=KnownModel>)->Vec<KnownModel> {
+    let mut seen=HashSet::new();
+    models.filter(|model|seen.insert(model.id.clone())).collect()
+}
+
+fn valid_id(id:&str)->bool { !id.is_empty()&&id.chars().all(|char|char.is_ascii_alphanumeric()||"._-:/@[]".contains(char)) }
+
+/// Troca os modelos do agente pela lista do CLI, na ordem dele. O que já
+/// estava gravado guarda o que o usuário mudou (ligado, custo, capacidades);
+/// o que é novo nasce ligado, para o Jev poder escolhê-lo; o que o CLI deixou
+/// de oferecer sai — e sai também do modelo reserva do Claude.
+pub fn adopt_listing(settings:&LlmSettings,agent:AgentId,found:&[KnownModel])->LlmSettings {
+    let mut models:Vec<AgentModel>=settings.models.iter().filter(|model|model.agent!=agent).cloned().collect();
+    models.extend(found.iter().map(|known|settings.models.iter().find(|model|model.agent==agent&&model.model==known.id).cloned().unwrap_or_else(||fresh_model(agent,known))));
+    let mut agents=settings.agents.clone();
+    if agent==AgentId::Claude {
+        for entry in agents.iter_mut().filter(|entry|entry.id==AgentId::Claude) {
+            let mut options=parse::<ClaudeOptions>(&entry.options).unwrap_or_default();
+            if !options.fallback_model.is_empty()&&!found.iter().any(|known|known.id==options.fallback_model) {
+                options.fallback_model.clear();
+                entry.options=serde_json::to_value(options).unwrap_or(Value::Null);
+            }
+        }
+    }
+    LlmSettings{agents,models}
+}
+
 /// Cria as tabelas e, na primeira vez, cadastra os três agentes com os modelos
-/// mais recentes de cada um. Um agente cujo binário não está no PATH nasce desligado: ligado, ele
-/// seria escolhido pelo roteador e falharia no primeiro pedido.
+/// de fábrica — a descoberta troca-os pela lista do CLI assim que ele
+/// responde. Um agente cujo binário não está no PATH nasce desligado: ligado,
+/// ele seria escolhido pelo roteador e falharia no primeiro pedido.
 pub fn ensure(connection:&Connection)->Result<()> {
     connection.execute_batch(SCHEMA)?;
     let known:i64=connection.query_row("SELECT COUNT(*) FROM llm_agents",[],|row|row.get(0))?;
@@ -355,7 +437,7 @@ pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
     for model in &settings.models {
         let name=model.model.trim().to_string();
         if name.is_empty() { bail!(Text::new("settings.modelNoId").with("agent",label(model.agent))); }
-        if !name.chars().all(|char|char.is_ascii_alphanumeric()||"._-:/@".contains(char)) { bail!(Text::new("settings.modelBadId").with("name",&name)); }
+        if !valid_id(&name) { bail!(Text::new("settings.modelBadId").with("name",&name)); }
         if !seen.insert((model.agent,name.clone())) { bail!(Text::new("settings.modelDuplicate").with("name",&name).with("agent",label(model.agent))); }
         let mut capabilities=Vec::new();
         for capability in &model.capabilities { one_of("model.capability",capability,&CAPABILITIES)?; if !capabilities.contains(capability) { capabilities.push(capability.clone()); } }
@@ -568,16 +650,61 @@ mod tests {
     fn agent(id:AgentId,options:Value)->AgentSettings { AgentSettings{id,enabled:true,command:id.binary().into(),timeout:300,options} }
     fn settings(agents:Vec<AgentSettings>)->LlmSettings { LlmSettings{agents,models:AgentId::ALL.into_iter().flat_map(starter_models).collect()} }
 
-    /// Claude e Codex nascem com todos os modelos mais recentes ligados — os
-    /// apelidos do Claude seguem a versão nova sozinhos; o Copilot, com um.
-    #[test] fn the_database_starts_with_the_latest_models() {
+    /// Antes de o CLI responder, cada agente tem os modelos de fábrica, todos
+    /// ligados — os apelidos do Claude seguem a versão nova sozinhos.
+    #[test] fn the_database_starts_with_the_starter_models() {
         let loaded=load(&memory()).expect("leitura");
         assert_eq!(loaded.agents.iter().map(|agent|agent.id).collect::<Vec<_>>(),AgentId::ALL);
         let of=|id:AgentId|loaded.models.iter().filter(|model|model.agent==id).map(|model|model.model.as_str()).collect::<Vec<_>>();
         assert_eq!(of(AgentId::Claude),["sonnet","opus","haiku","fable"]);
-        assert_eq!(of(AgentId::Codex),["gpt-5.2-codex","gpt-5.1-codex-max","gpt-5.1-codex-mini"]);
+        assert_eq!(of(AgentId::Codex).len(),1);
         assert_eq!(of(AgentId::Copilot).len(),1);
         assert!(loaded.models.iter().all(|model|model.enabled));
+    }
+
+    #[test] fn claude_lists_its_models_through_the_model_command() {
+        let output=json!({"type":"result","result":"Current model: `Opus`\nUsage: /model <name>. Available: sonnet, opus, haiku, best, sonnet[1m], opusplan, default, or a full model ID."}).to_string();
+        let found=parse_claude_listing(&output);
+        assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["sonnet","opus","haiku","best","sonnet[1m]","opusplan"],"`default` não é um modelo");
+        assert_eq!(found[4].context_window,1_000_000);
+        assert_eq!((found[2].cost_class.as_str(),found[2].speed.as_str()),("low","fast"));
+    }
+
+    #[test] fn codex_lists_only_what_its_model_picker_shows() {
+        let output=json!({"models":[
+            {"slug":"model-b","display_name":"Model B","visibility":"list","priority":2,"context_window":400_000},
+            {"slug":"internal","display_name":"Internal","visibility":"hide","priority":0},
+            {"slug":"model-a-mini","display_name":"Model A mini","visibility":"list","priority":1},
+        ]}).to_string();
+        let found=parse_codex_listing(&output);
+        assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["model-a-mini","model-b"]);
+        assert_eq!(found[1].label,"Model B");
+        assert_eq!(found[1].context_window,400_000);
+        assert!(parse_codex_listing("not json").is_empty());
+    }
+
+    #[test] fn copilot_lists_the_values_of_its_model_setting() {
+        let help="`logLevel`: log level.\n\n`model`: AI model to use; change it with /model.\n  - \"model-one\"\n  - \"model-two-fast\"\n\n`contextTier`: tier.\n  - \"default\"\n";
+        let found=parse_copilot_listing(help);
+        assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["model-one","model-two-fast"]);
+        assert_eq!(found[1].speed,"fast");
+    }
+
+    /// A lista do CLI manda: o novo nasce ligado, o gravado guarda o que o
+    /// usuário mudou, e o que sumiu sai — inclusive do modelo reserva.
+    #[test] fn the_cli_listing_replaces_the_agent_models() {
+        let mut current=settings(vec![agent(AgentId::Claude,json!({"fallbackModel":"haiku"})),agent(AgentId::Codex,Value::Null),agent(AgentId::Copilot,Value::Null)]);
+        current.models.iter_mut().filter(|model|model.model=="opus").for_each(|model|model.enabled=false);
+        let listing=[KnownModel::named(AgentId::Claude,"opus",None,None),KnownModel::named(AgentId::Claude,"sonnet[1m]",None,None)];
+        let adopted=adopt_listing(&current,AgentId::Claude,&listing);
+        let claude:Vec<&AgentModel>=adopted.models.iter().filter(|model|model.agent==AgentId::Claude).collect();
+        assert_eq!(claude.iter().map(|model|model.model.as_str()).collect::<Vec<_>>(),["opus","sonnet[1m]"]);
+        assert!(!claude[0].enabled,"a escolha do usuário fica");
+        assert!(claude[1].enabled,"o modelo novo nasce ligado");
+        assert_eq!(adopted.models.iter().filter(|model|model.agent!=AgentId::Claude).count(),current.models.iter().filter(|model|model.agent!=AgentId::Claude).count());
+        let options:ClaudeOptions=serde_json::from_value(adopted.agents[0].options.clone()).expect("opções");
+        assert_eq!(options.fallback_model,"");
+        assert!(validate(&adopted).is_ok());
     }
 
     use std::fs;
