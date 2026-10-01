@@ -154,12 +154,18 @@ pub fn apply_remote(connection:&mut Connection,table:&SyncTable,rows:&[Value])->
         let waiting:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE tbl=?1 AND row_key=json(?2) AND status='pending')",[table.name,&key.to_string()],|row|row.get(0))?;
         if waiting {continue;}
         let deleted=remote.get("row_deleted_at").is_some_and(|value|!value.is_null());
-        if deleted {
-            transaction.execute(&format!("DELETE FROM {} WHERE {}",table.name,matching(table)),params_from_iter(key_values(table,&key)?))?;
+        let written=if deleted {
+            transaction.execute(&format!("DELETE FROM {} WHERE {}",table.name,matching(table)),params_from_iter(key_values(table,&key)?))
         } else {
-            transaction.execute(&upsert(table),params_from_iter(table.columns.iter().map(|column|to_sql(remote.get(*column).unwrap_or(&Value::Null)))))?;
+            transaction.execute(&upsert(table),params_from_iter(table.columns.iter().map(|column|to_sql(remote.get(*column).unwrap_or(&Value::Null)))))
+        };
+        // No SQLite a restrição desfaz só o comando, não a transação: a linha
+        // órfã fica de fora e as outras seguem.
+        match written {
+            Ok(_)=>applied+=1,
+            Err(rusqlite::Error::SqliteFailure(failure,_)) if failure.code==rusqlite::ErrorCode::ConstraintViolation=>{}
+            Err(error)=>return Err(error.into()),
         }
-        applied+=1;
     }
     transaction.execute("UPDATE sync_flag SET applying=0",[])?;
     transaction.commit()?;
@@ -379,6 +385,21 @@ mod tests {
         ]).expect("mensagens");
         let contents:Vec<String>=store.conversation(&chat).expect("conversa").into_iter().map(|message|message.content).collect();
         assert_eq!(contents,["pedido","resposta"]);
+    }
+
+    /// O pai foi apagado aqui e a exclusão ainda não subiu: o filho que chega
+    /// do remoto não tem onde se pendurar. Ele fica de fora, e o resto da
+    /// página entra — uma linha órfã não pode travar a sincronização inteira.
+    #[test] fn a_linha_sem_pai_aqui_fica_de_fora_e_o_resto_entra() {
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        let (chat,_)=remote_chat(&mut store);
+        let applied=apply_remote(store.connection_mut(),table("turns").unwrap(),&[
+            json!({"id":"orfao","chat_id":"chat-que-nao-existe","ordinal":1,"status":"answered","created_at":"2026-09-30T12:00:00+00:00"}),
+            json!({"id":"t9","chat_id":chat,"ordinal":9,"status":"answered","created_at":"2026-09-30T12:00:00+00:00"}),
+        ]).expect("a página entra mesmo com um órfão");
+        assert_eq!(applied,1);
+        assert!(store.turn("t9").expect("turno").is_some());
+        assert!(store.turn("orfao").expect("turno").is_none());
     }
 
     #[test] fn o_cursor_de_cada_tabela_fica_guardado() {

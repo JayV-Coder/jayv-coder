@@ -20,6 +20,7 @@ pub mod providers;
 pub mod rag;
 pub mod router;
 pub mod sandbox;
+pub mod sync;
 pub mod tools;
 pub mod turns;
 pub mod workspace;
