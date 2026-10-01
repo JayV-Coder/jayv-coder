@@ -28,6 +28,7 @@ dirs = "7"
 dotenvy = "0.15"
 globset = "0.4"
 hex = "0.4"
+jsonwebtoken = "9"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

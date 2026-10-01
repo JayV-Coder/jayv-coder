@@ -2,3 +2,4 @@
 //! fila do que ainda não subiu.
 
 pub mod outbox;
+pub mod global;
