@@ -1,6 +1,7 @@
 //! O único módulo que conhece o Supabase: o endereço do projeto, a chave
 //! pública e o que se fala com ele.
 
+pub mod remote;
 pub mod session;
 
 pub const PROJECT_URL:&str="https://exvsozyemolrjbjetqww.supabase.co";

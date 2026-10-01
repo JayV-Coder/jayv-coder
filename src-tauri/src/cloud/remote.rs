@@ -1,0 +1,220 @@
+//! O PostgREST do projeto, do tamanho do que o JayV usa: subir linhas por
+//! upsert, marcar exclusão, baixar o que mudou depois de um cursor, e ler o
+//! conteúdo global. Cada requisição leva o JWT do usuário, e é o RLS que
+//! decide o que ele vê.
+
+use super::{PROJECT_URL, PUBLISHABLE_KEY};
+use crate::local::{global::LocaleRow, outbox::SyncTable};
+use async_trait::async_trait;
+use reqwest::{Method, Request};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+
+#[derive(Debug,Clone,PartialEq,thiserror::Error)]
+pub enum RemoteError {
+    /// Sem rede, DNS, tempo esgotado: a fila espera e tenta de novo.
+    #[error("sem conexão com o Supabase: {0}")]
+    Offline(String),
+    #[error("sessão expirada")]
+    Unauthorized,
+    /// Chave repetida (23505) ou referência a uma linha que não existe (23503).
+    #[error("conflito no Supabase ({code}): {detail}")]
+    Conflict{code:String,detail:String},
+    /// O servidor recusou e reenviar não resolve.
+    #[error("o Supabase recusou ({status}): {detail}")]
+    Rejected{status:u16,detail:String},
+    #[error("o Supabase respondeu {0}")]
+    Server(u16),
+}
+
+#[async_trait]
+pub trait Backend:Send+Sync {
+    async fn push(&self,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError>;
+    async fn soft_delete(&self,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError>;
+    /// As linhas com `synced_at >= since`, em ordem de `synced_at`. `since`
+    /// vazio é a tabela inteira.
+    async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError>;
+}
+
+pub struct Remote {
+    http:reqwest::Client,
+    base:String,
+    key:String,
+    token:Option<String>,
+}
+
+/// A chave de conflito no Supabase. As tabelas de LLM são por usuário — dois
+/// usuários têm cada um o seu agente `claude` —, então o `user_id` entra na
+/// chave; nas outras o id já é único.
+pub fn conflict_target(table:&SyncTable)->String {
+    match table.name {
+        "llm_agents"|"llm_models"=>format!("user_id,{}",table.key.join(",")),
+        _=>table.key.join(","),
+    }
+}
+
+impl Remote {
+    pub fn new(http:reqwest::Client,token:Option<String>)->Self { Self::with_base(http,PROJECT_URL,PUBLISHABLE_KEY,token) }
+
+    pub fn with_base(http:reqwest::Client,base:&str,key:&str,token:Option<String>)->Self {
+        Self{http,base:base.trim_end_matches('/').to_string(),key:key.to_string(),token}
+    }
+
+    fn request(&self,method:Method,path:&str)->reqwest::RequestBuilder {
+        let bearer=self.token.as_deref().unwrap_or(&self.key);
+        self.http.request(method,format!("{}/rest/v1/{path}",self.base)).header("apikey",&self.key).bearer_auth(bearer)
+    }
+
+    pub fn push_request(&self,table:&SyncTable,rows:&[Value])->reqwest::Result<Request> {
+        self.request(Method::POST,table.name)
+            .query(&[("on_conflict",conflict_target(table))])
+            .header("Prefer","resolution=merge-duplicates,return=minimal")
+            .json(rows).build()
+    }
+
+    /// Uma requisição por chave: o filtro de chave composta em lote é um `or`
+    /// que o PostgREST aceita, mas que se escreve mal e se lê pior.
+    pub fn soft_delete_request(&self,table:&SyncTable,key:&Value,at:&str)->reqwest::Result<Request> {
+        let parts=key.as_array().cloned().unwrap_or_default();
+        let filters:Vec<(String,String)>=table.key.iter().zip(parts.iter()).map(|(column,value)|((*column).to_string(),format!("eq.{}",plain(value)))).collect();
+        self.request(Method::PATCH,table.name).query(&filters)
+            .header("Prefer","return=minimal")
+            .json(&json!({"row_deleted_at":at,"row_updated_at":at})).build()
+    }
+
+    pub fn pull_request(&self,table:&SyncTable,since:&str,limit:usize)->reqwest::Result<Request> {
+        let mut query=vec![("select".to_string(),"*".to_string()),("order".to_string(),"synced_at.asc".to_string()),("limit".to_string(),limit.to_string())];
+        if !since.is_empty() {query.push(("synced_at".into(),format!("gte.{since}")));}
+        self.request(Method::GET,table.name).query(&query).build()
+    }
+
+    async fn send(&self,request:reqwest::Result<Request>)->Result<String,RemoteError> {
+        let request=request.map_err(|error|RemoteError::Rejected{status:0,detail:error.to_string()})?;
+        let response=self.http.execute(request).await.map_err(|error|RemoteError::Offline(error.to_string()))?;
+        let status=response.status().as_u16();
+        let body=response.text().await.map_err(|error|RemoteError::Offline(error.to_string()))?;
+        if (200..300).contains(&status) {Ok(body)} else {Err(classify(status,&body))}
+    }
+
+    async fn get<T:for<'de> Deserialize<'de>>(&self,request:reqwest::Result<Request>)->Result<T,RemoteError> {
+        let body=self.send(request).await?;
+        serde_json::from_str(&body).map_err(|error|RemoteError::Rejected{status:200,detail:format!("resposta em formato inesperado: {error}")})
+    }
+
+    pub async fn locales(&self)->Result<Vec<LocaleRow>,RemoteError> {
+        self.get(self.request(Method::GET,"locales").query(&[("select","id,name,rtl,position"),("order","position.asc")]).build()).await
+    }
+
+    pub async fn translations(&self,locale:&str)->Result<BTreeMap<String,Value>,RemoteError> {
+        #[derive(Deserialize)] struct Row{key:String,value:Value}
+        let rows:Vec<Row>=self.get(self.request(Method::GET,"translations").query(&[("select","key,value"),("locale",&format!("eq.{locale}"))]).build()).await?;
+        Ok(rows.into_iter().map(|row|(row.key,row.value)).collect())
+    }
+
+    pub async fn jev_parameters(&self)->Result<BTreeMap<String,Value>,RemoteError> {
+        #[derive(Deserialize)] struct Row{key:String,value:Value}
+        let rows:Vec<Row>=self.get(self.request(Method::GET,"jev_parameters").query(&[("select","key,value")]).build()).await?;
+        Ok(rows.into_iter().map(|row|(row.key,row.value)).collect())
+    }
+}
+
+#[async_trait]
+impl Backend for Remote {
+    async fn push(&self,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError> {
+        if rows.is_empty() {return Ok(());}
+        self.send(self.push_request(table,&rows)).await.map(drop)
+    }
+
+    async fn soft_delete(&self,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError> {
+        for key in keys {self.send(self.soft_delete_request(table,key,at)).await?;}
+        Ok(())
+    }
+
+    async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError> {
+        self.get(self.pull_request(table,since,limit)).await
+    }
+}
+
+/// O valor como vai no filtro `eq.`: texto sem aspas, número como número.
+fn plain(value:&Value)->String {
+    match value {Value::String(text)=>text.clone(),other=>other.to_string()}
+}
+
+/// O que o status e o corpo do PostgREST querem dizer para a fila.
+pub fn classify(status:u16,body:&str)->RemoteError {
+    #[derive(Deserialize,Default)] struct Problem{#[serde(default)] code:String,#[serde(default)] message:String,#[serde(default)] details:Option<String>}
+    let problem:Problem=serde_json::from_str(body).unwrap_or_default();
+    let detail=match (&problem.message,&problem.details) {
+        (message,Some(details)) if !message.is_empty()=>format!("{message} — {details}"),
+        (message,_) if !message.is_empty()=>message.clone(),
+        _=>body.chars().take(300).collect(),
+    };
+    match status {
+        401=>RemoteError::Unauthorized,
+        409=>RemoteError::Conflict{code:problem.code,detail},
+        500..=599=>RemoteError::Server(status),
+        _=>RemoteError::Rejected{status,detail},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::local::outbox::table;
+
+    fn remote()->Remote { Remote::with_base(reqwest::Client::new(),"https://exemplo.supabase.co/",PUBLISHABLE_KEY,Some("jwt".into())) }
+
+    fn query(request:&Request)->Vec<(String,String)> { request.url().query_pairs().map(|(key,value)|(key.into_owned(),value.into_owned())).collect() }
+
+    #[test] fn o_upsert_usa_a_chave_de_cada_tabela() {
+        let request=remote().push_request(table("projects").unwrap(),&[json!({"id":"p1"})]).expect("request");
+        assert_eq!(request.method(),Method::POST);
+        assert_eq!(request.url().path(),"/rest/v1/projects");
+        assert_eq!(query(&request),[("on_conflict".to_string(),"id".to_string())]);
+        assert_eq!(request.headers()["Prefer"],"resolution=merge-duplicates,return=minimal");
+        assert_eq!(request.headers()["Authorization"],"Bearer jwt");
+        assert_eq!(request.headers()["apikey"],PUBLISHABLE_KEY);
+        assert_eq!(query(&remote().push_request(table("messages").unwrap(),&[]).unwrap())[0].1,"uid");
+        assert_eq!(query(&remote().push_request(table("llm_agents").unwrap(),&[]).unwrap())[0].1,"user_id,id");
+        assert_eq!(query(&remote().push_request(table("llm_models").unwrap(),&[]).unwrap())[0].1,"user_id,agent,model");
+    }
+
+    #[test] fn sem_sessao_o_token_e_a_chave_publicavel() {
+        let anonymous=Remote::with_base(reqwest::Client::new(),"https://exemplo.supabase.co",PUBLISHABLE_KEY,None);
+        let request=anonymous.pull_request(table("projects").unwrap(),"",10).unwrap();
+        assert_eq!(request.headers()["Authorization"],format!("Bearer {PUBLISHABLE_KEY}"));
+    }
+
+    #[test] fn o_download_pede_o_que_mudou_desde_o_cursor() {
+        let request=remote().pull_request(table("chats").unwrap(),"2026-09-30T12:00:00Z",1000).unwrap();
+        assert_eq!(request.method(),Method::GET);
+        let pairs=query(&request);
+        for expected in [("select","*"),("order","synced_at.asc"),("limit","1000"),("synced_at","gte.2026-09-30T12:00:00Z")] {
+            assert!(pairs.contains(&(expected.0.to_string(),expected.1.to_string())),"{pairs:?}");
+        }
+        assert!(!query(&remote().pull_request(table("chats").unwrap(),"",1000).unwrap()).iter().any(|(key,_)|key=="synced_at"),"sem cursor baixa tudo");
+    }
+
+    #[test] fn excluir_marca_a_linha_pela_chave() {
+        let request=remote().soft_delete_request(table("llm_models").unwrap(),&json!(["claude","opus, \"novo\""]),"2026-09-30T12:00:00Z").unwrap();
+        assert_eq!(request.method(),Method::PATCH);
+        assert_eq!(query(&request),[("agent".to_string(),"eq.claude".to_string()),("model".to_string(),"eq.opus, \"novo\"".to_string())]);
+        let body:Value=serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body,json!({"row_deleted_at":"2026-09-30T12:00:00Z","row_updated_at":"2026-09-30T12:00:00Z"}));
+    }
+
+    #[test] fn cada_status_vira_o_erro_que_a_fila_entende() {
+        assert_eq!(classify(401,r#"{"code":"PGRST301","message":"JWT expired"}"#),RemoteError::Unauthorized);
+        assert_eq!(classify(409,r#"{"code":"23505","message":"duplicate key","details":"Key (chat_id, ordinal)=(c, 2) already exists."}"#),
+            RemoteError::Conflict{code:"23505".into(),detail:"duplicate key — Key (chat_id, ordinal)=(c, 2) already exists.".into()});
+        assert!(matches!(classify(409,r#"{"code":"23503","message":"fk"}"#),RemoteError::Conflict{code,..} if code=="23503"));
+        assert_eq!(classify(503,"down"),RemoteError::Server(503));
+        assert_eq!(classify(400,r#"{"code":"PGRST204","message":"coluna desconhecida"}"#),RemoteError::Rejected{status:400,detail:"coluna desconhecida".into()});
+    }
+
+    #[tokio::test] async fn sem_rede_o_erro_e_offline() {
+        let unreachable=Remote::with_base(reqwest::Client::new(),"http://127.0.0.1:9",PUBLISHABLE_KEY,Some("jwt".into()));
+        assert!(matches!(unreachable.pull(table("projects").unwrap(),"",1).await,Err(RemoteError::Offline(_))));
+    }
+}
