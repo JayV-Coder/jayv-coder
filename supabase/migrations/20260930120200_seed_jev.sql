@@ -22,6 +22,6 @@ insert into public.jev_parameters (key, value) values
   ('block_margin', $json$0.2$json$::jsonb),
   ('noul_line', $json$0.5$json$::jsonb),
   ('scope_demand', $json$[0.35,0.55,0.7]$json$::jsonb),
-  ('scope_levels', $json$["ajuste pequeno","funcionalidade","sistema inteiro"]$json$::jsonb),
+  ('scope_levels', $json$["small change","feature","whole system"]$json$::jsonb),
   ('weights', $json${"bundles_requests":0.15,"goal_is_clear":0.4,"says_when_done":0.2,"says_where":0.25}$json$::jsonb)
 on conflict (key) do update set value = excluded.value;

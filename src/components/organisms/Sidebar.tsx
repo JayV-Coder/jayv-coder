@@ -57,7 +57,7 @@ export function Sidebar() {
             {t("nav.recentChats")}
             <button type="button" title={t("common.newChat")} onClick={() => void createChat(project.id)} className="text-[19px] leading-none text-[#849087] hover:text-[#a4f4a9]">+</button>
           </div>
-          <div className="grid min-h-0 gap-0.5 overflow-auto pe-[3px]">
+          <div className="grid min-h-0 grid-cols-[minmax(0,1fr)] gap-0.5 overflow-x-hidden overflow-y-auto pe-[3px]">
             {chats.length === 0
               ? <p className="mx-[15px] my-[5px] text-[11px] text-[#555e57]">{t("nav.noChats")}</p>
               : chats.map((chat) => (

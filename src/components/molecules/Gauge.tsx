@@ -3,12 +3,14 @@ import { useT, type Key } from "@/modules/i18n";
 import { cn } from "@/lib/utils";
 
 /** A escala do tamanho, na ordem e na grafia em que o núcleo a devolve. */
-export const SCALE = ["ajuste pequeno", "funcionalidade", "sistema inteiro"];
+export const SCALE = ["small change", "feature", "whole system"];
+/** A grafia dos checks gravados antes da escala passar a ser em inglês. */
+const LEGACY_SCALE = ["ajuste pequeno", "funcionalidade", "sistema inteiro"];
 const SCALE_KEYS: Key[] = ["scope.0", "scope.1", "scope.2"];
 
-/** O tamanho do pedido no idioma de quem lê. O núcleo o devolve em português. */
+/** O tamanho do pedido no idioma de quem lê. O núcleo o devolve em inglês. */
 export function scopeKey(scope: string): Key | null {
-  const at = SCALE.indexOf(scope);
+  const at = SCALE.includes(scope) ? SCALE.indexOf(scope) : LEGACY_SCALE.indexOf(scope);
   return at < 0 ? null : SCALE_KEYS[at];
 }
 

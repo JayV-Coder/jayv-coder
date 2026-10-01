@@ -1,3 +1,8 @@
+// No Windows o executável é um app de janela: sem isto, abrir o JayV pelo menu
+// abria junto um terminal vazio. Os subcomandos da CLI se prendem ao console
+// de quem os chamou (`attach_parent_console`).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use anyhow::{Context,Result};
 use clap::{Parser,Subcommand};
 use jayv_lib::{config::Config,orchestrator::Orchestrator,run_desktop,workspace::{database_location,startup_log_location,WorkspaceStore}};
@@ -34,7 +39,21 @@ fn parse<I,T>(args:I)->Result<Cli,clap::Error> where I:IntoIterator<Item=T>,T:In
     Cli::try_parse_from(args.into_iter().map(Into::into).filter(|arg:&std::ffi::OsString|!arg.to_string_lossy().starts_with("jayv://")))
 }
 
+/// Devolve à CLI o console do terminal que a chamou, para `jayv status` e
+/// companhia continuarem escrevendo onde o desenvolvedor lê.
+#[cfg(windows)]
+fn attach_parent_console() {
+    #[link(name="kernel32")]
+    unsafe extern "system" { fn AttachConsole(process:u32)->i32; }
+    const ATTACH_PARENT_PROCESS:u32=u32::MAX;
+    // SAFETY: chamada do Win32 sem ponteiros; falhar só significa que não há
+    // console pai.
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS); }
+}
+
 fn main()->Result<()> {
+    #[cfg(windows)]
+    if std::env::args_os().skip(1).any(|arg|!arg.to_string_lossy().starts_with("jayv://")) { attach_parent_console(); }
     let cli=parse(std::env::args_os()).unwrap_or_else(|error|error.exit());
     let desktop=cli.command.is_none();
     let result=run(cli);

@@ -274,20 +274,33 @@ pub fn catalog(agent:AgentId)->Vec<KnownModel> {
     }
 }
 
-fn starter_model(agent:AgentId)->AgentModel {
-    let first=catalog(agent).remove(0);
-    AgentModel{agent,model:first.id.into(),enabled:true,capabilities:strings(&CAPABILITIES),cost_class:first.cost_class.into(),speed:first.speed.into(),context_window:first.context_window}
+/// Os modelos mais recentes de cada agente, com que ele nasce. Os apelidos do
+/// Claude Code já seguem a versão nova de cada família; no Codex são a
+/// geração mais nova e as variantes max e mini mais novas.
+const LATEST_CLAUDE:[&str;4]=["sonnet","opus","haiku","fable"];
+const LATEST_CODEX:[&str;3]=["gpt-5.2-codex","gpt-5.1-codex-max","gpt-5.1-codex-mini"];
+
+fn starter_models(agent:AgentId)->Vec<AgentModel> {
+    let known=catalog(agent);
+    let wanted:Vec<&str>=match agent {
+        AgentId::Claude=>LATEST_CLAUDE.to_vec(),
+        AgentId::Codex=>LATEST_CODEX.to_vec(),
+        AgentId::Copilot=>vec![known[0].id],
+    };
+    wanted.into_iter().filter_map(|id|known.iter().find(|model|model.id==id)).map(|model|AgentModel{
+        agent,model:model.id.into(),enabled:true,capabilities:strings(&CAPABILITIES),cost_class:model.cost_class.into(),speed:model.speed.into(),context_window:model.context_window,
+    }).collect()
 }
 
-/// Cria as tabelas e, na primeira vez, cadastra os três agentes com um modelo
-/// cada. Um agente cujo binário não está no PATH nasce desligado: ligado, ele
+/// Cria as tabelas e, na primeira vez, cadastra os três agentes com os modelos
+/// mais recentes de cada um. Um agente cujo binário não está no PATH nasce desligado: ligado, ele
 /// seria escolhido pelo roteador e falharia no primeiro pedido.
 pub fn ensure(connection:&Connection)->Result<()> {
     connection.execute_batch(SCHEMA)?;
     let known:i64=connection.query_row("SELECT COUNT(*) FROM llm_agents",[],|row|row.get(0))?;
     if known==0 {
         let agents=AgentId::ALL.into_iter().map(AgentSettings::fresh).collect();
-        let models=AgentId::ALL.into_iter().map(starter_model).collect();
+        let models=AgentId::ALL.into_iter().flat_map(starter_models).collect();
         write(connection,&LlmSettings{agents,models})?;
     }
     Ok(())
@@ -397,14 +410,52 @@ pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap
 
 fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude Code", AgentId::Codex=>"Codex", AgentId::Copilot=>"Copilot" } }
 
-/// Onde o executável está, procurando no PATH como o shell faria. Caminho com
-/// barra é conferido como está.
+/// Onde o executável está, procurando como o shell faria: no PATH e, depois,
+/// nas pastas onde os instaladores dos agentes os põem — o app aberto pelo menu
+/// não herda o PATH do terminal. No Windows, com as extensões do `PATHEXT`.
 pub fn locate(command:&str)->Option<PathBuf> {
+    let mut dirs:Vec<PathBuf>=env::var_os("PATH").map(|path|env::split_paths(&path).collect()).unwrap_or_default();
+    dirs.extend(install_dirs());
+    search(command,&dirs,&extensions())
+}
+
+/// A busca em si, sem ler o ambiente. Quem já escreveu a extensão, ou um
+/// caminho com pasta, é conferido como está e também com cada extensão.
+fn search(command:&str,dirs:&[PathBuf],extensions:&[String])->Option<PathBuf> {
     let command=command.trim();
     if command.is_empty() { return None; }
     let runnable=|path:&Path|path.is_file()&&executable(path);
-    if command.contains(std::path::MAIN_SEPARATOR) { let path=PathBuf::from(command); return runnable(&path).then_some(path); }
-    env::split_paths(&env::var_os("PATH")?).map(|directory|directory.join(command)).find(|path|runnable(path))
+    let variants=|base:PathBuf|->Vec<PathBuf> {
+        let mut found=vec![base.clone()];
+        let has_extension=base.extension().is_some_and(|extension|extensions.iter().any(|known|known.trim_start_matches('.').eq_ignore_ascii_case(&extension.to_string_lossy())));
+        if !has_extension { found.extend(extensions.iter().filter(|extension|!extension.is_empty()).map(|extension|PathBuf::from(format!("{}{extension}",base.display())))); }
+        found
+    };
+    if command.contains('/')||command.contains('\\') { return variants(PathBuf::from(command)).into_iter().find(|path|runnable(path)); }
+    dirs.iter().flat_map(|directory|variants(directory.join(command))).find(|path|runnable(path))
+}
+
+#[cfg(windows)]
+fn extensions()->Vec<String> {
+    let pathext=env::var("PATHEXT").unwrap_or_else(|_|".COM;.EXE;.BAT;.CMD".into());
+    pathext.split(';').map(str::trim).filter(|extension|!extension.is_empty()).map(str::to_lowercase).collect()
+}
+#[cfg(not(windows))]
+fn extensions()->Vec<String> { Vec::new() }
+
+/// As pastas dos instaladores: o nativo do Claude Code (`~/.local/bin`), o npm
+/// global, o bun e, no macOS, o Homebrew.
+fn install_dirs()->Vec<PathBuf> {
+    let mut dirs=Vec::new();
+    if let Some(home)=dirs::home_dir() {
+        dirs.extend([home.join(".local").join("bin"),home.join(".npm-global").join("bin"),home.join(".bun").join("bin"),home.join(".claude").join("local")]);
+    }
+    #[cfg(windows)] {
+        if let Some(appdata)=env::var_os("APPDATA") { dirs.push(PathBuf::from(appdata).join("npm")); }
+        if let Some(local)=dirs::data_local_dir() { dirs.push(local.join("Programs").join("claude")); dirs.push(local.join("Microsoft").join("WinGet").join("Links")); }
+    }
+    #[cfg(not(windows))] { dirs.extend([PathBuf::from("/opt/homebrew/bin"),PathBuf::from("/usr/local/bin")]); }
+    dirs
 }
 
 #[cfg(unix)] fn executable(path:&Path)->bool { use std::os::unix::fs::PermissionsExt; path.metadata().is_ok_and(|meta|meta.permissions().mode()&0o111!=0) }
@@ -418,7 +469,7 @@ pub struct Probe { pub path:Option<String>, pub version:Option<String> }
 
 pub async fn probe(command:&str)->Probe {
     let Some(path)=locate(command) else { return Probe{path:None,version:None} };
-    let run=tokio::process::Command::new(&path).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
+    let run=crate::providers::quiet(&mut tokio::process::Command::new(&path)).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
     let version=match tokio::time::timeout(Duration::from_secs(10),run).await {
         Ok(Ok(output))=>{
             let text=if output.stdout.is_empty(){output.stderr}else{output.stdout};
@@ -436,12 +487,43 @@ mod tests {
 
     fn memory()->Connection { let connection=Connection::open_in_memory().expect("banco"); ensure(&connection).expect("tabelas"); connection }
     fn agent(id:AgentId,options:Value)->AgentSettings { AgentSettings{id,enabled:true,command:id.binary().into(),timeout:300,options} }
-    fn settings(agents:Vec<AgentSettings>)->LlmSettings { LlmSettings{agents,models:AgentId::ALL.into_iter().map(starter_model).collect()} }
+    fn settings(agents:Vec<AgentSettings>)->LlmSettings { LlmSettings{agents,models:AgentId::ALL.into_iter().flat_map(starter_models).collect()} }
 
-    #[test] fn o_banco_nasce_com_os_tres_agentes_e_um_modelo_cada() {
+    /// Claude e Codex nascem com todos os modelos mais recentes ligados — os
+    /// apelidos do Claude seguem a versão nova sozinhos; o Copilot, com um.
+    #[test] fn o_banco_nasce_com_os_modelos_mais_recentes() {
         let loaded=load(&memory()).expect("leitura");
         assert_eq!(loaded.agents.iter().map(|agent|agent.id).collect::<Vec<_>>(),AgentId::ALL);
-        for id in AgentId::ALL { assert_eq!(loaded.models.iter().filter(|model|model.agent==id).count(),1); }
+        let of=|id:AgentId|loaded.models.iter().filter(|model|model.agent==id).map(|model|model.model.as_str()).collect::<Vec<_>>();
+        assert_eq!(of(AgentId::Claude),["sonnet","opus","haiku","fable"]);
+        assert_eq!(of(AgentId::Codex),["gpt-5.2-codex","gpt-5.1-codex-max","gpt-5.1-codex-mini"]);
+        assert_eq!(of(AgentId::Copilot).len(),1);
+        assert!(loaded.models.iter().all(|model|model.enabled));
+    }
+
+    use std::fs;
+
+    fn runnable_file(path:&Path) {
+        fs::write(path,"").expect("arquivo");
+        #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; fs::set_permissions(path,fs::Permissions::from_mode(0o755)).expect("permissão"); }
+    }
+
+    /// No Windows o npm instala `claude.cmd` e o instalador nativo põe
+    /// `claude.exe` em `~/.local/bin`, que o app aberto pelo menu nem sempre
+    /// tem no PATH. Procurar só `claude`, só no PATH, dava "não encontrado".
+    #[test] fn acha_o_agente_pela_extensao_e_nas_pastas_de_instalacao() {
+        let path_dir=tempfile::tempdir().expect("PATH");
+        let install_dir=tempfile::tempdir().expect("instalação");
+        runnable_file(&path_dir.path().join("codex.cmd"));
+        runnable_file(&install_dir.path().join("claude.exe"));
+        let dirs=vec![path_dir.path().to_path_buf(),install_dir.path().to_path_buf()];
+        let windows=[".exe".to_string(),".cmd".to_string()];
+        assert_eq!(search("codex",&dirs,&windows),Some(path_dir.path().join("codex.cmd")));
+        assert_eq!(search("claude",&dirs,&windows),Some(install_dir.path().join("claude.exe")));
+        assert_eq!(search("copilot",&dirs,&windows),None);
+        assert_eq!(search("codex.cmd",&dirs,&windows),Some(path_dir.path().join("codex.cmd")),"quem já escreveu a extensão não ganha outra");
+        let full=install_dir.path().join("claude");
+        assert_eq!(search(&full.display().to_string(),&[],&windows),Some(install_dir.path().join("claude.exe")),"caminho completo sem extensão também vale");
     }
 
     #[test] fn salvar_e_ler_devolve_o_mesmo() {

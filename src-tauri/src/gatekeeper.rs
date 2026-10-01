@@ -13,7 +13,16 @@ use std::{collections::BTreeMap, path::Path, sync::OnceLock};
 use uuid::Uuid;
 
 pub const ENTRY_QUESTION_IDS:[&str;5]=["bundles_requests","goal_is_clear","says_when_done","says_where","scope"];
-pub const SCOPE_LEVELS:[&str;3]=["ajuste pequeno","funcionalidade","sistema inteiro"];
+pub const SCOPE_LEVELS:[&str;3]=["small change","feature","whole system"];
+
+/// O nível de escopo, aceito também na grafia antiga em português — os checks
+/// gravados antes da troca continuam com ela.
+pub fn scope_level_of(scope:&str)->usize {
+    match scope {"small change"|"ajuste pequeno"=>0,"feature"|"funcionalidade"=>1,_=>2}
+}
+
+/// O nome do nível na resposta em português que a portaria dá ao barrar.
+fn scope_label_pt(scope:&str)->&'static str { ["ajuste pequeno","funcionalidade","sistema inteiro"][scope_level_of(scope)] }
 /// Quanto de clareza cada tamanho de pedido exige para atravessar o portão.
 pub const SCOPE_DEMAND:[f64;3]=[0.35,0.55,0.70];
 /// Abaixo da exigência o portão pergunta; abaixo dela com esta folga, barra.
@@ -80,12 +89,12 @@ impl EntryCheck {
     /// A resposta que a portaria devolve quando barra o pedido.
     pub fn reply(&self)->String {
         let missing=self.failing().iter().map(|criterion|format!("- {}: {}",criterion.label.to_lowercase(),criterion.reading)).collect::<Vec<_>>();
-        let asks=match self.scope.as_str(){
-            "ajuste pequeno"=>"Diga o que deve mudar e como você confirma que mudou.",
-            "funcionalidade"=>"Diga o objetivo, onde mexer e como você confirma que ficou pronto.",
+        let asks=match scope_level_of(&self.scope){
+            0=>"Diga o que deve mudar e como você confirma que mudou.",
+            1=>"Diga o objetivo, onde mexer e como você confirma que ficou pronto.",
             _=>"Um pedido desse tamanho precisa do objetivo, dos arquivos ou módulos envolvidos e do critério de pronto. Se der, quebre em partes.",
         };
-        format!("A portaria barrou este pedido com {} de 100 (o mínimo para um {} é {}).\n\nO que está faltando:\n{}\n\n{}",self.score,self.scope,self.demand,missing.join("\n"),asks)
+        format!("A portaria barrou este pedido com {} de 100 (o mínimo para um {} é {}).\n\nO que está faltando:\n{}\n\n{}",self.score,scope_label_pt(&self.scope),self.demand,missing.join("\n"),asks)
     }
     /// A instrução que acompanha um pedido liberado com ressalva.
     pub fn clarifying_note(&self)->Option<String> {
@@ -101,9 +110,9 @@ impl EntryCheck {
     pub fn refined_prompt(&self,request:&str)->Option<String> {
         if !self.verdict.lets_through() {return None;}
         let met=|id:&str|self.criteria.iter().find(|criterion|criterion.id==id).is_some_and(Criterion::within_band);
-        let mut steps=vec![match self.scope.as_str(){
-            "ajuste pequeno"=>"This is a small adjustment: make the smallest change that satisfies it and leave everything else untouched.",
-            "funcionalidade"=>"This is one capability delivered end to end: plan the few files it needs, implement them, and keep unrelated code as it is.",
+        let mut steps=vec![match scope_level_of(&self.scope){
+            0=>"This is a small adjustment: make the smallest change that satisfies it and leave everything else untouched.",
+            1=>"This is one capability delivered end to end: plan the few files it needs, implement them, and keep unrelated code as it is.",
             _=>"This is system-wide work: outline the plan and the parts it touches before changing anything, then deliver it in reviewable steps.",
         }.to_string()];
         steps.push(if met("goal_is_clear"){"Treat the outcome the request states as the goal; do not widen it."}else{"The goal is not explicit: state in one sentence the outcome you are going to deliver before you start."}.into());
@@ -398,6 +407,16 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
 #[cfg(test)] mod tests {
     use super::*;
 
+    /// Os níveis são identificadores em inglês; os checks antigos, gravados em
+    /// português, continuam lidos no nível certo.
+    #[test]
+    fn o_escopo_e_em_ingles_e_aceita_a_grafia_antiga() {
+        assert_eq!(SCOPE_LEVELS,["small change","feature","whole system"]);
+        for (level,(english,portuguese)) in SCOPE_LEVELS.iter().zip(["ajuste pequeno","funcionalidade","sistema inteiro"]).enumerate() {
+            assert_eq!((scope_level_of(english),scope_level_of(portuguese)),(level,level));
+        }
+    }
+
     /// Os números do painel valem: uma margem maior bloqueia o que a padrão
     /// só deixaria passar com ressalva.
     #[test]
@@ -467,7 +486,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         assert_eq!(ids,vec!["scope","goal_is_clear","says_where","says_when_done","bundles_requests"]);
         assert!(check.criteria.iter().all(|criterion|criterion.percent<=100 && !criterion.label.is_empty() && !criterion.reading.is_empty()));
         let scope=&check.criteria[0];
-        assert_eq!((scope.band,scope.reading.as_str()),(None,"funcionalidade"));
+        assert_eq!((scope.band,scope.reading.as_str()),(None,"feature"));
         let bundles=check.criteria.last().expect("bundles");
         assert!(bundles.inverted && bundles.band==Some([0,45]));
         let says_where=&check.criteria[2];
@@ -574,7 +593,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         // Objetivo claríssimo, mas num sistema inteiro sem dizer onde nem como
         // conferir: a portaria libera e manda perguntar antes de começar.
         let check=judge(&turn_at("chat"),"Migre a persistência",&entry,"jev");
-        assert_eq!((check.verdict,check.scope.as_str(),check.demand),(EntryVerdict::Ask,"sistema inteiro",70));
+        assert_eq!((check.verdict,check.scope.as_str(),check.demand),(EntryVerdict::Ask,"whole system",70));
         assert_eq!(check.failing().iter().map(|criterion|criterion.id.as_str()).collect::<Vec<_>>(),vec!["says_where","says_when_done","bundles_requests"]);
         let partial:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{"goal_is_clear":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1,"output_tokens":1}}"#).unwrap();
         assert!(EntryReading::from_evaluation(&partial).unwrap_err().to_string().contains("scope"));
