@@ -31,7 +31,7 @@ pub(crate) async fn get_settings(workspace:State<'_,SharedWorkspace>)->Result<Se
 /// Grava primeiro e só então troca o orquestrador: uma configuração recusada
 /// não deixa o orquestrador pela metade.
 #[tauri::command]
-pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:LlmSettings)->Result<SettingsSnapshot,String>{
+pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:LlmSettings)->Result<SettingsSnapshot,String>{crate::desktop::require_session()?;
     let saved={
         let mut workspace=workspace.lock().await;
         workspace.save_llm_settings(&settings).map_err(|error|error.to_string())?

@@ -8,7 +8,7 @@ import { ConfirmAction } from "./ConfirmAction";
 export function ChatRow({ chat, open, onOpen, onDelete }: { chat: Chat; open: boolean; onOpen: () => void; onDelete: () => void }) {
   const t = useT();
   return (
-    <div className="group flex items-center rounded-[7px]">
+    <div className="group flex min-w-0 items-center rounded-[7px]">
       <button
         type="button"
         aria-current={open ? "true" : undefined}

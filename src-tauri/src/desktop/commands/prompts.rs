@@ -27,7 +27,7 @@ pub struct ProcessRequest {
 /// por cima não atropela nada: o segundo pedido entra na fila atrás do
 /// primeiro, com o seu próprio número, e espera a vez.
 #[tauri::command]
-pub(crate) async fn enqueue_prompt(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,request:ProcessRequest)->Result<Turn,String>{
+pub(crate) async fn enqueue_prompt(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,request:ProcessRequest)->Result<Turn,String>{crate::desktop::require_session()?;
     let chat_id=request.session_id.as_deref().ok_or_else(||"selecione um chat antes de enviar".to_string())?;
     let input=request.input.trim();
     if input.is_empty(){return Err("não há o que enviar".into());}
@@ -59,7 +59,7 @@ pub struct AnswerInput {
 ///
 /// O pedido entra na fila como qualquer outro. Nenhum caminho dispensa o portão.
 #[tauri::command]
-pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Turn,String>{
+pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Turn,String>{crate::desktop::require_session()?;
     let mut store=workspace.lock().await;
     let question=store.question_of(&answer.question_turn_id).map_err(|error|error.to_string())?.ok_or_else(||"essa pergunta não existe mais".to_string())?;
     if question.status!=turns::QUESTION_PENDING {return Err("essa pergunta já foi encerrada".into());}
@@ -81,7 +81,7 @@ pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorks
 /// registrada: a linha em `questions` guarda que foi ignorada e quando, e a
 /// narração do turno ganha o evento. Ignorar é uma escolha, e escolha não some.
 #[tauri::command]
-pub(crate) async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,question_turn_id:String)->Result<(),String>{
+pub(crate) async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,question_turn_id:String)->Result<(),String>{crate::desktop::require_session()?;
     let mut store=workspace.lock().await;
     let question=store.question_of(&question_turn_id).map_err(|error|error.to_string())?.ok_or_else(||"essa pergunta não existe mais".to_string())?;
     if !store.settle_question(&question_turn_id,turns::QUESTION_DISMISSED,None).map_err(|error|error.to_string())? {

@@ -3,6 +3,7 @@
 
 use super::events::*;
 use super::{DesktopState, QueueBell, SharedDesktopState, SharedWorkspace};
+use crate::sync::{Connectivity, Link};
 use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck};
 use crate::progress::{Beat, Debounce, Pulse};
 use crate::turns::{Turn, TurnStatus};
@@ -16,9 +17,11 @@ use tokio::sync::mpsc;
 /// aplicativo, e é por isso que dois envios seguidos nunca disputam o
 /// orquestrador: o segundo não é uma chamada esperando na porta, é uma linha no
 /// banco esperando a vez.
-pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell) {
+pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity) {
     loop {
-        loop {
+        // O Jev mora no Supabase: sem conexão e sessão válida os pedidos
+        // esperam na fila, e o sino da volta da rede os chama em ordem.
+        while connectivity.get()==Link::Online {
             let claimed=workspace.lock().await.claim_next_turn();
             let next=match claimed {
                 Ok(Some(next))=>next,

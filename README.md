@@ -50,7 +50,7 @@ Environment placeholders in existing YAML files remain supported for CLI compati
 
 In this project, the Jev model is intended to power the local control plane specified by [`JEV_V1.md`](JEV_V1.md) and [`JEV_V2.md`](JEV_V2.md): Jev classifies and scores structured routing decisions, while OpenAI, Anthropic, local models, and CLI agents execute the selected work.
 
-The current Rust runtime loads `TYPESAFE_API_KEY`, but the System One HTTP client is not implemented yet. Until the runtime calls `POST https://api.typesafe.ai/v1/systemone`, routing continues to use the local keyword heuristics in `orchestrator.rs`.
+The app calls Jev through the `jev` Edge Function of the Supabase project (`POST /functions/v1/jev`), signed in as the current user; the TypeSafe key lives only in that function's secrets. The questions and gate parameters live in the `jev_questions` and `jev_parameters` tables. Without a session, routing and the entry gate use the local heuristics.
 
 ## Architecture
 

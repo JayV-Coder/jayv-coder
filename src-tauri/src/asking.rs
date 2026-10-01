@@ -101,25 +101,30 @@ pub async fn classify(answer:&str)->Option<Pending> {
     }
 }
 
-async fn consult(answer:&str,candidate:&Candidate)->Result<Option<Pending>> {
-    let mut questions=BTreeMap::new();
-    questions.insert(KIND_QUESTION.to_string(),Question::choice(
-        "A resposta do assistente termina perguntando algo ao desenvolvedor, de modo que o trabalho depende do que ele responder?",
-        [
-            ("none","não há pergunta a responder: a resposta é informação, ou a pergunta é retórica"),
-            ("noul","a pergunta se responde com sim ou não"),
-            ("single","a pergunta oferece alternativas e espera uma só"),
-            ("multiple","a pergunta oferece alternativas e aceita quantas o desenvolvedor quiser"),
-        ]));
-    if !candidate.options.is_empty() {
-        questions.insert(OPTIONS_QUESTION.to_string(),Question::noul_with(
+/// As duas perguntas deste módulo, como vão para o seed de `jev_questions`. A
+/// segunda só vai quando o pedido trouxe opções.
+pub fn questions()->BTreeMap<String,Question> {
+    BTreeMap::from([
+        (KIND_QUESTION.to_string(),Question::choice(
+            "A resposta do assistente termina perguntando algo ao desenvolvedor, de modo que o trabalho depende do que ele responder?",
+            [
+                ("none","não há pergunta a responder: a resposta é informação, ou a pergunta é retórica"),
+                ("noul","a pergunta se responde com sim ou não"),
+                ("single","a pergunta oferece alternativas e espera uma só"),
+                ("multiple","a pergunta oferece alternativas e aceita quantas o desenvolvedor quiser"),
+            ])),
+        (OPTIONS_QUESTION.to_string(),Question::noul_with(
             "A lista em `options` é exatamente o conjunto de alternativas que a pergunta em `question` oferece?",
-            "são as alternativas da pergunta","é outra coisa: passos, exemplos, itens de um relatório"));
-    }
+            "são as alternativas da pergunta","é outra coisa: passos, exemplos, itens de um relatório")),
+    ])
+}
+
+async fn consult(answer:&str,candidate:&Candidate)->Result<Option<Pending>> {
+    let include:&[&str]=if candidate.options.is_empty() {&[KIND_QUESTION]} else {&[KIND_QUESTION,OPTIONS_QUESTION]};
     let state=json!({"answer":answer,"question":candidate.prompt,"options":candidate.options});
-    let evaluation=jev::evaluate(state,questions).await?;
+    let evaluation=jev::evaluate("asking",state,Some(include)).await?;
     let kind=evaluation.choice(KIND_QUESTION).ok_or_else(||anyhow!("o Jev não devolveu a resposta `{KIND_QUESTION}`"))?;
-    let real=match evaluation.noul(OPTIONS_QUESTION) { Some(noul)=>noul>=NOUL_LINE, None=>candidate.options.is_empty() };
+    let real=match evaluation.noul(OPTIONS_QUESTION) { Some(noul)=>noul>=crate::local::global::current_parameters().noul_line, None=>candidate.options.is_empty() };
     Ok(shape(kind,candidate,real).map(|kind|enable(kind,candidate,JEV_SOURCE)))
 }
 

@@ -102,6 +102,13 @@ impl RetryError {
     pub fn into_error(self)->anyhow::Error { match self { Self::Retryable{error,..}|Self::Fatal(error)=>error } }
 }
 
+/// Sem janela de console para o processo filho. No Windows, um app de janela
+/// que abre um programa de console ganha um terminal piscando a cada pedido.
+pub fn quiet(process:&mut Command)->&mut Command {
+    #[cfg(windows)] { const CREATE_NO_WINDOW:u32=0x0800_0000; process.creation_flags(CREATE_NO_WINDOW); }
+    process
+}
+
 pub fn is_retryable_status(status:u16)->bool { matches!(status,429|500|502|503|504|529) }
 pub fn is_retryable_transport(error:&reqwest::Error)->bool { error.is_timeout()||error.is_connect() }
 pub fn retry_after(headers:&HeaderMap)->Option<Duration> {
@@ -423,7 +430,11 @@ impl CliProvider {
     /// conversas: a que espera o fim e a que acompanha.
     fn open(&self,model:&str,prompt:&str)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
-        let mut process=Command::new(command);
+        // O caminho achado, com extensão: no Windows `claude` sozinho não
+        // abre o `claude.cmd` do npm.
+        let program=crate::llm::locate(command).unwrap_or_else(||command.into());
+        let mut process=Command::new(&program);
+        quiet(&mut process);
         process.args(self.args(model,prompt)).stdin(if self.inline(){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.

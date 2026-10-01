@@ -1,6 +1,9 @@
-import type { Messages } from "../types";
+import type { Message } from "../types";
 
-export const en: Messages = {
+/** O dicionário embutido. As chaves nascem aqui, e é este texto que aparece
+ * enquanto o idioma escolhido não chegou do Supabase — inclusive na tela de
+ * login do primeiro uso, sem rede. */
+export const en = {
   "brand.tagline": "AI orchestrator",
   "common.cancel": "Cancel",
   "common.delete": "Delete",
@@ -323,4 +326,23 @@ export const en: Messages = {
   "update.install": "Update",
   "update.downloading": "Downloading JayV {version}…",
   "update.failed": "Could not update: {error}",
-};
+
+  "auth.title": "Sign in to JayV",
+  "auth.subtitle": "Your projects, chats and agents follow you to any machine.",
+  "auth.email": "Email",
+  "auth.password": "Password",
+  "auth.signIn": "Sign in",
+  "auth.signUp": "Create account",
+  "auth.github": "Continue with GitHub",
+  "auth.toSignUp": "No account yet? Create one",
+  "auth.toSignIn": "Already have an account? Sign in",
+  "auth.checkEmail": "Check your email to confirm the account, then sign in.",
+  "auth.waitingBrowser": "Finish signing in in your browser…",
+  "auth.signOut": "Sign out",
+  "auth.loading": "Opening your session…",
+
+  "connection.offline": "Offline — changes wait to sync",
+  "connection.expired": "Session expired — renewing…",
+  "connection.pending": { one: "{count} change not synced", other: "{count} changes not synced" },
+  "connection.failed": { one: "{count} change refused by the server", other: "{count} changes refused by the server" },
+} satisfies Record<string, Message>;

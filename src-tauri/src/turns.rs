@@ -53,7 +53,8 @@ pub const SCHEMA:&str=
        ordinal INTEGER NOT NULL,
        status TEXT NOT NULL,
        created_at TEXT NOT NULL,
-       partial TEXT
+       partial TEXT,
+       local INTEGER NOT NULL DEFAULT 1
      );
      CREATE UNIQUE INDEX IF NOT EXISTS turns_chat_ordinal ON turns(chat_id,ordinal);
      CREATE TABLE IF NOT EXISTS entry_checks (
@@ -162,25 +163,27 @@ pub fn reopen_turn(connection:&Connection,turn_id:&str)->Result<Turn> {
 /// um pedido que o aplicativo aceitou, e é exatamente o que a fila existe para
 /// impedir. Quem retoma é o atendente, na ordem de sempre.
 pub fn requeue_interrupted_turns(connection:&Connection)->Result<usize> {
-    Ok(connection.execute("UPDATE turns SET status=?1 WHERE status=?2",params![TurnStatus::Queued.as_str(),TurnStatus::Flying.as_str()])?)
+    Ok(connection.execute("UPDATE turns SET status=?1 WHERE status=?2 AND local=1",params![TurnStatus::Queued.as_str(),TurnStatus::Flying.as_str()])?)
 }
 
 /// De quem é a vez: o mais antigo dos que esperam. Ordenar por `created_at` e
 /// desempatar pelo número do turno mantém a ordem estável quando dois pedidos
-/// caem no mesmo instante do relógio.
+/// caem no mesmo instante do relógio. Só entram os turnos desta máquina: o
+/// pedido que outro computador do mesmo usuário enfileirou é atendido lá.
 pub fn next_queued(connection:&Connection)->Result<Option<Turn>> {
     connection.query_row(
         "SELECT t.id,t.chat_id,c.code,t.ordinal,t.status,t.created_at FROM turns t JOIN chats c ON c.id=t.chat_id
-         WHERE t.status=?1 ORDER BY t.created_at,t.ordinal LIMIT 1",
+         WHERE t.status=?1 AND t.local=1 ORDER BY t.created_at,t.ordinal LIMIT 1",
         [TurnStatus::Queued.as_str()],read_turn,
     ).optional()?.transpose()
 }
 
-/// Se há um pedido no ar agora. Enquanto houver, a fila não chama o seguinte:
+/// Se há um pedido desta máquina no ar agora — o de outro computador não
+/// segura a fila daqui. Enquanto houver, a fila não chama o seguinte:
 /// um pedido de cada vez é o que mantém o histórico do chat numa ordem que o
 /// desenvolvedor consegue ler.
 pub fn is_flying(connection:&Connection)->Result<bool> {
-    Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE status=?1)",[TurnStatus::Flying.as_str()],|row|row.get(0))?)
+    Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE status=?1 AND local=1)",[TurnStatus::Flying.as_str()],|row|row.get(0))?)
 }
 
 /// Quantos pedidos deste chat ainda não foram atendidos, contando o que está
@@ -419,7 +422,7 @@ pub fn chat_of(connection:&Connection,turn_id:&str)->Result<Option<String>> {
 /// de sempre intacto.
 pub fn question_origin(connection:&Connection,turn_id:&str)->Result<Option<String>> {
     Ok(connection.query_row(
-        "SELECT (SELECT m.content FROM messages m WHERE m.turn_id=q.turn_id AND m.role='user' ORDER BY m.id LIMIT 1)
+        "SELECT (SELECT m.content FROM messages m WHERE m.turn_id=q.turn_id AND m.role='user' ORDER BY m.created_at,m.id LIMIT 1)
          FROM questions q WHERE q.answered_by=?1",
         [turn_id],|row|row.get::<_,Option<String>>(0),
     ).optional()?.flatten())

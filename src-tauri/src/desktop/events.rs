@@ -15,6 +15,14 @@ pub const BEAT_EVENT:&str="turn-beat";
 /// Um pedaço da resposta. Vai para a tela a cada chegada e para o disco com
 /// folga: são dois ritmos diferentes de propósito.
 pub const CHUNK_EVENT:&str="turn-chunk";
+/// A conexão com o Supabase mudou: online, offline, sessão vencida, sem login.
+pub const LINK_EVENT:&str="link-changed";
+/// Chegaram idiomas ou traduções novos no cache.
+pub const TRANSLATIONS_EVENT:&str="translations-updated";
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct LinkEvent{pub link:crate::sync::Link}
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]

@@ -69,6 +69,10 @@ pub fn database_location(config_path:&Path,root:&Path)->PathBuf { database_locat
 
 const APP_IDENTIFIER:&str="ai.jayv.desktop";
 
+/// Onde fica o motivo de o aplicativo não ter aberto. Aberto pelo menu não há
+/// terminal, e sem este arquivo o erro some junto com a janela.
+pub fn startup_log_location()->Option<PathBuf> { dirs::data_dir().map(|data_dir|data_dir.join(APP_IDENTIFIER).join("startup-error.log")) }
+
 fn database_location_in(config_path:&Path,root:&Path,data_dir:Option<PathBuf>)->PathBuf {
     match data_dir {
         Some(data_dir) if !config_path.is_file()=>data_dir.join(APP_IDENTIFIER).join("workspace.sqlite3"),
@@ -82,10 +86,32 @@ pub struct WorkspaceStore {
 }
 
 impl WorkspaceStore {
-    pub fn open(path: PathBuf, legacy_json: Option<&Path>) -> Result<Self> {
+    pub fn open(path: PathBuf) -> Result<Self> {
         if let Some(parent)=path.parent(){fs::create_dir_all(parent).with_context(||format!("could not create {}",parent.display()))?;}
         let connection=Connection::open(&path).with_context(||format!("could not open {}",path.display()))?;
         connection.busy_timeout(Duration::from_secs(5))?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path,fs::Permissions::from_mode(0o600))?;
+        }
+        Self::prepare(connection,path)
+    }
+
+    /// O banco de antes do login: nada do que se escreve nele sobrevive ao
+    /// fechamento, e nada dele sobe — não há de quem seja.
+    pub fn in_memory() -> Result<Self> {
+        Self::prepare(Connection::open_in_memory()?,PathBuf::from(":memory:"))
+    }
+
+    /// O banco de um usuário, um arquivo por conta na pasta de dados. O id vem
+    /// de um token já validado, mas ainda assim só entra no nome do arquivo
+    /// se for um UUID: é caminho de disco.
+    pub fn for_user(dir: &Path, user_id: &str) -> Result<Self> {
+        let user=Uuid::parse_str(user_id).with_context(||format!("usuário inválido: `{user_id}`"))?;
+        Self::open(dir.join(format!("workspace-{}.sqlite3",user.hyphenated())))
+    }
+
+    fn prepare(connection: Connection, path: PathBuf) -> Result<Self> {
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
              CREATE TABLE IF NOT EXISTS projects (
@@ -105,6 +131,7 @@ impl WorkspaceStore {
              );
              CREATE TABLE IF NOT EXISTS messages (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
+               uid TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
                chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
                turn_id TEXT,
                role TEXT NOT NULL,
@@ -112,7 +139,7 @@ impl WorkspaceStore {
                created_at TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS chats_project_updated ON chats(project_id, updated_at DESC);
-             CREATE INDEX IF NOT EXISTS messages_chat_order ON messages(chat_id, id);
+             CREATE INDEX IF NOT EXISTS messages_chat_order ON messages(chat_id, created_at, id);
              CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         )?;
         connection.execute_batch(turns::SCHEMA)?;
@@ -120,14 +147,11 @@ impl WorkspaceStore {
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
         ensure_turn_partial(&connection)?;
+        ensure_turn_local(&connection)?;
+        ensure_message_uid(&connection)?;
+        crate::local::outbox::install(&connection)?;
         turns::requeue_interrupted_turns(&connection)?;
-        #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path,fs::Permissions::from_mode(0o600))?;
-        }
         let mut store=Self{connection,path};
-        store.ensure_chat_codes()?;
-        if let Some(legacy)=legacy_json {store.migrate_legacy_json(legacy)?;}
         store.ensure_chat_codes()?;
         Ok(store)
     }
@@ -220,7 +244,7 @@ impl WorkspaceStore {
         if turns::is_flying(&self.connection)? {return Ok(None);}
         let Some(turn)=turns::next_queued(&self.connection)? else {return Ok(None)};
         let prompt:String=self.connection.query_row(
-            "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY id LIMIT 1",[&turn.id],|row|row.get(0),
+            "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY created_at,id LIMIT 1",[&turn.id],|row|row.get(0),
         ).with_context(||format!("o turno `{}` está na fila sem pedido escrito",turn.id))?;
         turns::set_status(&self.connection,&turn.id,TurnStatus::Flying)?;
         Ok(Some((Turn{status:TurnStatus::Flying,..turn},prompt)))
@@ -358,6 +382,12 @@ impl WorkspaceStore {
 
     pub fn database_path(&self) -> &Path {&self.path}
 
+    /// A conexão crua, para a fila de saída e a sincronização: é o único
+    /// código de fora que fala SQL com o banco do usuário.
+    pub fn connection(&self) -> &Connection {&self.connection}
+
+    pub fn connection_mut(&mut self) -> &mut Connection {&mut self.connection}
+
     /// O nome do arquivo do banco, sem o caminho até ele.
     pub fn database_name(&self) -> String { self.path.file_name().map(|name|name.to_string_lossy().into_owned()).unwrap_or_else(||self.path.display().to_string()) }
 
@@ -412,23 +442,10 @@ impl WorkspaceStore {
 
     fn messages(&self,chat_id:&str)->Result<Vec<WorkspaceMessage>>{
         let rows={
-            let mut statement=self.connection.prepare("SELECT role,content,created_at,turn_id FROM messages WHERE chat_id=?1 ORDER BY id")?;
+            let mut statement=self.connection.prepare("SELECT role,content,created_at,turn_id FROM messages WHERE chat_id=?1 ORDER BY created_at,id")?;
             statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,Option<String>>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
         rows.into_iter().map(|(role,content,created_at,turn_id)|Ok(WorkspaceMessage{role,content,created_at:parse_time(&created_at)?,turn_id})).collect()
-    }
-
-    fn migrate_legacy_json(&mut self,path:&Path)->Result<()> {
-        let migrated=self.connection.query_row("SELECT value FROM app_metadata WHERE key='legacy_json_migrated'",[],|row|row.get::<_,String>(0)).optional()?.is_some();
-        if migrated || !path.is_file(){return Ok(());}
-        let raw=fs::read_to_string(path).with_context(||format!("could not read {}",path.display()))?;
-        let legacy:WorkspaceData=serde_json::from_str(&raw).with_context(||format!("invalid legacy workspace in {}",path.display()))?;
-        let skip_generated=legacy.projects.len()==1 && legacy.projects[0].name=="src-tauri" && legacy.chats.iter().all(|chat|chat.messages.is_empty());
-        let transaction=self.connection.transaction()?;
-        if !skip_generated {import_legacy(&transaction,&legacy)?;}
-        transaction.execute("INSERT OR REPLACE INTO app_metadata(key,value) VALUES('legacy_json_migrated','1')",[])?;
-        transaction.commit()?;
-        Ok(())
     }
 }
 
@@ -452,6 +469,29 @@ fn ensure_turn_partial(connection:&Connection)->Result<()> {
     Ok(())
 }
 
+/// Os turnos baixados de outra máquina entram com `local = 0`; os que já
+/// estavam aqui nasceram aqui.
+fn ensure_turn_local(connection:&Connection)->Result<()> {
+    if !connection.prepare("SELECT 1 FROM pragma_table_info('turns') WHERE name='local'")?.exists([])? {
+        connection.execute_batch("ALTER TABLE turns ADD COLUMN local INTEGER NOT NULL DEFAULT 1")?;
+    }
+    Ok(())
+}
+
+/// O id com que a mensagem é conhecida no Supabase. O `ALTER` não aceita
+/// padrão calculado, então os bancos antigos ganham a coluna vazia, preenchida
+/// em seguida, e só então única.
+fn ensure_message_uid(connection:&Connection)->Result<()> {
+    if !connection.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name='uid'")?.exists([])? {
+        connection.execute_batch("ALTER TABLE messages ADD COLUMN uid TEXT")?;
+    }
+    connection.execute_batch(
+        "UPDATE messages SET uid=lower(hex(randomblob(16))) WHERE uid IS NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS messages_uid ON messages(uid);",
+    )?;
+    Ok(())
+}
+
 /// Quem batizou o chat: o resumo local do primeiro pedido, ou o modelo. Sem
 /// esta marca a única pista era "o chat não tem mensagem nenhuma" — e desde que
 /// o pedido passa a ser gravado antes de sair, essa pista deixa de existir.
@@ -463,16 +503,6 @@ fn ensure_chat_named(connection:&Connection)->Result<()> {
     Ok(())
 }
 
-fn import_legacy(transaction:&Transaction<'_>,legacy:&WorkspaceData)->Result<()> {
-    for project in &legacy.projects {transaction.execute("INSERT OR IGNORE INTO projects(id,name,root_path,created_at) VALUES(?1,?2,?3,?4)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339()])?;}
-    for chat in &legacy.chats {
-        transaction.execute("INSERT OR IGNORE INTO chats(id,code,project_id,title,named,created_at,updated_at) VALUES(?1,?2,?3,?4,1,?5,?6)",params![chat.id,"",chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
-        let existing:i64=transaction.query_row("SELECT COUNT(*) FROM messages WHERE chat_id=?1",[&chat.id],|row|row.get(0))?;
-        if existing==0 {for message in &chat.messages {insert_message(transaction,&chat.id,None,&message.role,&message.content,message.created_at)?;}}
-    }
-    Ok(())
-}
-
 /// Se o pedido deste turno já está escrito. É o que separa o reenvio de um
 /// turno que falhou — o texto já está lá — de um pedido novo que por acaso
 /// repete a frase anterior.
@@ -480,8 +510,10 @@ fn written(connection:&Connection,turn_id:&str)->Result<bool> {
     Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE turn_id=?1 AND role='user')",[turn_id],|row|row.get(0))?)
 }
 
+/// O `uid` sai daqui e não do padrão da coluna: nos bancos antigos a coluna
+/// entrou por `ALTER`, que não aceita padrão calculado.
 fn insert_message(transaction:&Transaction<'_>,chat_id:&str,turn_id:Option<&str>,role:&str,content:&str,created_at:DateTime<Utc>)->Result<()> {
-    transaction.execute("INSERT INTO messages(chat_id,turn_id,role,content,created_at) VALUES(?1,?2,?3,?4,?5)",params![chat_id,turn_id,role,content,created_at.to_rfc3339()])?;
+    transaction.execute("INSERT INTO messages(uid,chat_id,turn_id,role,content,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![Uuid::new_v4().simple().to_string(),chat_id,turn_id,role,content,created_at.to_rfc3339()])?;
     Ok(())
 }
 
@@ -504,7 +536,7 @@ fn compact_title(input: &str) -> String {
 mod tests {
     use super::*;
 
-    fn store(root:&tempfile::TempDir)->WorkspaceStore{WorkspaceStore::open(root.path().join("workspace.sqlite3"),None).expect("workspace")}
+    fn store(root:&tempfile::TempDir)->WorkspaceStore{WorkspaceStore::open(root.path().join("workspace.sqlite3")).expect("workspace")}
 
     #[test]
     fn o_banco_fica_ao_lado_da_configuracao_que_existe() {
@@ -600,7 +632,7 @@ mod tests {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
         let chat_id={
-            let mut store=WorkspaceStore::open(path.clone(),None).expect("workspace");
+            let mut store=WorkspaceStore::open(path.clone()).expect("workspace");
             let project=store.create_project("Produto",None).expect("project");
             let chat=store.create_chat(&project.id,None).expect("chat");
             store.enqueue_prompt(&chat.id,"não me perca",None).expect("fila");
@@ -608,7 +640,7 @@ mod tests {
             chat.id
         };
 
-        let mut store=WorkspaceStore::open(path,None).expect("reabre");
+        let mut store=WorkspaceStore::open(path).expect("reabre");
         let (turn,prompt)=store.claim_next_turn().expect("consulta").expect("o pedido interrompido voltou para a fila");
 
         assert_eq!(prompt,"não me perca");
@@ -681,7 +713,7 @@ mod tests {
             ).expect("esquema anterior à marca");
         }
 
-        let store=WorkspaceStore::open(path,None).expect("workspace");
+        let store=WorkspaceStore::open(path).expect("workspace");
 
         assert!(!store.chat_is_unnamed("usado").expect("chat com histórico"),"quem já tem conversa fica com o título que tem");
         assert!(store.chat_is_unnamed("vazio").expect("chat vazio"),"o chat que nunca foi usado ainda tem direito a um nome");
@@ -750,7 +782,7 @@ mod tests {
                  INSERT INTO chats VALUES('c2','p','Dois','2024-01-02T00:00:00Z','2024-01-02T00:00:00Z');"
             ).expect("esquema antigo");
         }
-        let store=WorkspaceStore::open(path,None).expect("workspace");
+        let store=WorkspaceStore::open(path).expect("workspace");
         let chats=store.snapshot().expect("snapshot").chats;
         assert_eq!(chats.len(),2);
         assert!(chats.iter().all(|chat|chat.code.len()==6),"quem já existia também ganha um código");
@@ -807,7 +839,7 @@ mod tests {
                  INSERT INTO messages(chat_id,role,content,created_at) VALUES('c1','user','oi','2024-01-01T00:00:00Z');"
             ).expect("esquema antigo");
         }
-        let store=WorkspaceStore::open(path,None).expect("workspace");
+        let store=WorkspaceStore::open(path).expect("workspace");
         let chats=store.snapshot().expect("snapshot").chats;
         assert_eq!(chats[0].messages.len(),1,"o que já estava escrito não some");
         assert_eq!(chats[0].messages[0].turn_id,None,"conversa de antes dos turnos não ganha semáforo");
@@ -833,7 +865,7 @@ mod tests {
     fn counts_every_table_of_the_database_by_name() {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
-        let mut store=WorkspaceStore::open(path,None).expect("workspace");
+        let mut store=WorkspaceStore::open(path).expect("workspace");
         let project=store.create_project("Produto",None).expect("project");
         let chat=store.create_chat(&project.id,None).expect("chat");
         let turn=store.open_turn(&chat.id).expect("turno");
@@ -854,14 +886,14 @@ mod tests {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
         let chat_id={
-            let mut store=WorkspaceStore::open(path.clone(),None).expect("workspace");
+            let mut store=WorkspaceStore::open(path.clone()).expect("workspace");
             let project=store.create_project("Produto",None).expect("project");
             let chat=store.create_chat(&project.id,None).expect("chat");
             let turn=store.open_turn(&chat.id).expect("turno");
             store.append_exchange(&chat.id,&turn.id,"Implemente o painel agora","Pronto").expect("exchange");
             chat.id
         };
-        let reloaded=WorkspaceStore::open(path,None).expect("reloaded");
+        let reloaded=WorkspaceStore::open(path).expect("reloaded");
         let data=reloaded.snapshot().expect("snapshot");
         let persisted=data.chats.iter().find(|item|item.id==chat_id).expect("persisted chat");
         assert_eq!(persisted.title,"Implemente o painel agora");
@@ -896,16 +928,6 @@ mod tests {
         assert_eq!(data.chats[0].id,second.id);
     }
 
-    #[test]
-    fn ignores_the_generated_empty_src_tauri_legacy_project() {
-        let root=tempfile::tempdir().expect("root");
-        let legacy_path=root.path().join("workspace.json");
-        let now=Utc::now();
-        let legacy=WorkspaceData{projects:vec![ProjectRecord{id:"project".into(),name:"src-tauri".into(),root_path:"/tmp/src-tauri".into(),created_at:now}],chats:vec![ChatRecord{id:"chat".into(),code:String::new(),project_id:"project".into(),title:"Novo chat".into(),messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now}]};
-        fs::write(&legacy_path,serde_json::to_vec(&legacy).expect("json")).expect("legacy fixture");
-        let store=WorkspaceStore::open(root.path().join("workspace.sqlite3"),Some(&legacy_path)).expect("workspace");
-        assert!(store.snapshot().expect("snapshot").projects.is_empty());
-    }
 
     /// O chat é a porta do projeto: quem manda uma mensagem nele tem de ser
     /// lido dentro da pasta que o projeto aponta, nunca na de onde o
@@ -960,18 +982,4 @@ mod tests {
         assert_eq!(saved.chats[0].id,newer.id,"o chat mais recente continua no topo");
     }
 
-    #[test]
-    fn imports_real_legacy_history_once() {
-        let root=tempfile::tempdir().expect("root");
-        let legacy_path=root.path().join("workspace.json");
-        let now=Utc::now();
-        let legacy=WorkspaceData{projects:vec![ProjectRecord{id:"project".into(),name:"Produto".into(),root_path:"".into(),created_at:now}],chats:vec![ChatRecord{id:"chat".into(),code:String::new(),project_id:"project".into(),title:"Discussão".into(),messages:vec![WorkspaceMessage{role:"user".into(),content:"Olá".into(),created_at:now,turn_id:None}],turns:vec![],question:None,created_at:now,updated_at:now}]};
-        fs::write(&legacy_path,serde_json::to_vec(&legacy).expect("json")).expect("legacy fixture");
-        let database_path=root.path().join("workspace.sqlite3");
-        let first=WorkspaceStore::open(database_path.clone(),Some(&legacy_path)).expect("first migration");
-        assert_eq!(first.snapshot().expect("first snapshot").chats[0].messages.len(),1);
-        drop(first);
-        let second=WorkspaceStore::open(database_path,Some(&legacy_path)).expect("second open");
-        assert_eq!(second.snapshot().expect("second snapshot").chats[0].messages.len(),1);
-    }
 }

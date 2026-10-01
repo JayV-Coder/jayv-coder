@@ -4,9 +4,9 @@
 export type Plural = { zero?: string; one?: string; two?: string; few?: string; many?: string; other: string };
 export type Message = string | Plural;
 
-import type { ptBR } from "./messages/pt-BR";
+import type { en } from "./messages/en";
 
-export type Key = keyof typeof ptBR;
-/** Todo idioma traduz todas as chaves: faltar uma é erro de tipo, não texto
- * em português aparecendo no meio de outra língua. */
-export type Messages = Record<Key, Message>;
+export type Key = keyof typeof en;
+/** O que chega do Supabase para um idioma: pode faltar chave — a nova, que
+ * ainda não foi traduzida —, e aí vale o inglês. */
+export type Messages = Partial<Record<Key, Message>>;

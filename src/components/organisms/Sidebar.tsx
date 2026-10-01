@@ -2,12 +2,14 @@ import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { BrandMark, LogoIcon } from "@/components/atoms";
-import { ChatRow, LanguageSelect, NavItem, ProjectPlate } from "@/components/molecules";
+import { ChatRow, ConnectionNote, LanguageSelect, NavItem, ProjectPlate } from "@/components/molecules";
+import { signOut, useAuth } from "@/modules/auth";
 
 /** A lateral. Sem projeto aberto, ela é o menu principal; com projeto, só mostra
  * a placa dele, a portaria e os chats recentes. */
 export function Sidebar() {
   const t = useT();
+  const email = useAuth((state) => state.email);
   const view = useNavigation((state) => state.view);
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const project = findProject(data, activeProjectId);
@@ -55,7 +57,7 @@ export function Sidebar() {
             {t("nav.recentChats")}
             <button type="button" title={t("common.newChat")} onClick={() => void createChat(project.id)} className="text-[19px] leading-none text-[#849087] hover:text-[#a4f4a9]">+</button>
           </div>
-          <div className="grid min-h-0 gap-0.5 overflow-auto pe-[3px]">
+          <div className="grid min-h-0 grid-cols-[minmax(0,1fr)] gap-0.5 overflow-x-hidden overflow-y-auto pe-[3px]">
             {chats.length === 0
               ? <p className="mx-[15px] my-[5px] text-[11px] text-[#555e57]">{t("nav.noChats")}</p>
               : chats.map((chat) => (
@@ -68,6 +70,10 @@ export function Sidebar() {
       <div className="mt-auto grid gap-2 border-t border-[#222723] pt-3">
         <NavItem active={view === "settings"} mark="⚙" onClick={() => navigate("settings")}>{t("nav.settings")}</NavItem>
         <LanguageSelect />
+        <ConnectionNote />
+        <button type="button" onClick={() => void signOut()} title={email ?? undefined} className="truncate px-1 text-start text-[11px] text-[#555e57] hover:text-[#c9d1cb]">
+          {t("auth.signOut")}{email ? ` · ${email}` : ""}
+        </button>
       </div>
     </aside>
   );

@@ -1,84 +1,96 @@
 import { useCallback } from "react";
 import { create } from "zustand";
+import { commands, onCore } from "@/modules/core/bridge";
 import type { Key, Message, Messages } from "./types";
-import { ptBR } from "./messages/pt-BR";
 import { en } from "./messages/en";
-import { es } from "./messages/es";
-import { zhCN } from "./messages/zh-CN";
-import { hi } from "./messages/hi";
-import { ar } from "./messages/ar";
-import { fr } from "./messages/fr";
-import { ru } from "./messages/ru";
-import { ja } from "./messages/ja";
-import { de } from "./messages/de";
 
 export type { Key, Message, Messages, Plural } from "./types";
 
-/** Os idiomas mais falados, cada um com o nome que o próprio falante reconhece
- * no seletor. */
-export const LOCALES = [
-  { id: "pt-BR", name: "Português (Brasil)", messages: ptBR as Messages },
-  { id: "en", name: "English", messages: en },
-  { id: "es", name: "Español", messages: es },
-  { id: "zh-CN", name: "简体中文", messages: zhCN },
-  { id: "hi", name: "हिन्दी", messages: hi },
-  { id: "ar", name: "العربية", messages: ar, rtl: true },
-  { id: "fr", name: "Français", messages: fr },
-  { id: "ru", name: "Русский", messages: ru },
-  { id: "ja", name: "日本語", messages: ja },
-  { id: "de", name: "Deutsch", messages: de },
-] as const;
+export type Locale = string;
+export interface LocaleOption { id: Locale; name: string; rtl?: boolean }
 
-export type Locale = (typeof LOCALES)[number]["id"];
-export type Params = Record<string, string | number>;
-
+/** O inglês vem no build; os outros idiomas chegam do Supabase pelo Rust. */
+const BUILT_IN: LocaleOption[] = [{ id: "en", name: "English" }];
 const LOCALE_KEY = "jayv.locale";
 const FALLBACK: Locale = "en";
 
-function known(id: string | null): Locale | null {
-  return LOCALES.find((locale) => locale.id === id)?.id ?? null;
+interface I18nState {
+  locale: Locale;
+  locales: LocaleOption[];
+  /** As mensagens do idioma atual; o que faltar sai de `en`. */
+  messages: Messages;
 }
 
 /** O idioma salvo, ou o primeiro que o sistema pede e o JayV sabe falar —
  * `pt-PT` cai em `pt-BR`, `zh-TW` em `zh-CN` —, ou inglês. */
-function detect(): Locale {
-  const saved = known(localStorage.getItem(LOCALE_KEY));
-  if (saved) return saved;
+function detect(locales: LocaleOption[]): Locale {
+  const saved = localStorage.getItem(LOCALE_KEY);
+  if (saved && locales.some((locale) => locale.id === saved)) return saved;
   for (const wanted of navigator.languages ?? [navigator.language]) {
-    const exact = LOCALES.find((locale) => locale.id.toLowerCase() === wanted.toLowerCase());
+    const exact = locales.find((locale) => locale.id.toLowerCase() === wanted.toLowerCase());
     if (exact) return exact.id;
     const language = wanted.split("-")[0].toLowerCase();
-    const near = LOCALES.find((locale) => locale.id.split("-")[0].toLowerCase() === language);
+    const near = locales.find((locale) => locale.id.split("-")[0].toLowerCase() === language);
     if (near) return near.id;
   }
   return FALLBACK;
 }
 
-function apply(locale: Locale) {
-  const entry = LOCALES.find((known) => known.id === locale)!;
+function apply(locale: Locale, locales: LocaleOption[]) {
   document.documentElement.lang = locale;
-  document.documentElement.dir = "rtl" in entry && entry.rtl ? "rtl" : "ltr";
+  document.documentElement.dir = locales.find((known) => known.id === locale)?.rtl ? "rtl" : "ltr";
 }
 
-interface I18nState {
-  locale: Locale;
+/** Antes da lista chegar, vale o idioma salvo: sem isso a tela piscaria em
+ * inglês a cada abertura de quem escolheu outro. */
+export const useI18n = create<I18nState>(() => ({
+  locale: localStorage.getItem(LOCALE_KEY) ?? FALLBACK,
+  locales: BUILT_IN,
+  messages: {},
+}));
+
+async function loadMessages(locale: Locale) {
+  const messages = locale === FALLBACK ? {} : await commands.getTranslations(locale).catch(() => ({}));
+  if (useI18n.getState().locale === locale) useI18n.setState({ messages: messages as Messages });
 }
 
-export const useI18n = create<I18nState>(() => ({ locale: detect() }));
-apply(useI18n.getState().locale);
+async function loadLocales() {
+  const fetched = await commands.getLocales().catch(() => []);
+  const locales = fetched.length ? fetched : BUILT_IN;
+  const locale = detect(locales);
+  useI18n.setState({ locales, locale });
+  apply(locale, locales);
+  await loadMessages(locale);
+}
+
+/** Pede ao núcleo os idiomas e as traduções, e pede de novo quando o cache
+ * dele recebe novidades do Supabase. */
+export function connectI18n() {
+  void loadLocales();
+  const off = onCore("translations-updated", () => void loadLocales());
+  return () => void off.then((unlisten) => unlisten());
+}
 
 export function setLocale(locale: Locale) {
   localStorage.setItem(LOCALE_KEY, locale);
-  apply(locale);
-  useI18n.setState({ locale });
+  apply(locale, useI18n.getState().locales);
+  useI18n.setState({ locale, messages: {} });
+  void loadMessages(locale);
 }
 
-export function translate(locale: Locale, key: Key, params?: Params): string {
-  const message: Message = LOCALES.find((known) => known.id === locale)?.messages[key] ?? ptBR[key];
+export type Params = Record<string, string | number>;
+
+function render(locale: Locale, messages: Messages, key: Key, params?: Params): string {
+  const message: Message = messages[key] ?? en[key];
   const text = typeof message === "string"
     ? message
     : message[new Intl.PluralRules(locale).select(Number(params?.count ?? 0))] ?? message.other;
   return text.replace(/\{(\w+)\}/g, (mark, name: string) => (params && name in params ? String(params[name]) : mark));
+}
+
+export function translate(locale: Locale, key: Key, params?: Params): string {
+  const state = useI18n.getState();
+  return render(locale, state.locale === locale ? state.messages : {}, key, params);
 }
 
 /** O texto no idioma atual, para quem não é componente: avisos e estados que
@@ -87,15 +99,20 @@ export function t(key: Key, params?: Params) {
   return translate(useI18n.getState().locale, key, params);
 }
 
-/** O texto no idioma atual, para componentes: trocar de idioma redesenha quem
- * usa. */
+/** O texto no idioma atual, para componentes: trocar de idioma — ou chegarem
+ * as traduções dele — redesenha quem usa. */
 export function useT() {
   const locale = useI18n((state) => state.locale);
-  return useCallback((key: Key, params?: Params) => translate(locale, key, params), [locale]);
+  const messages = useI18n((state) => state.messages);
+  return useCallback((key: Key, params?: Params) => render(locale, messages, key, params), [locale, messages]);
 }
 
 export function useLocale() {
   return useI18n((state) => state.locale);
+}
+
+export function useLocales() {
+  return useI18n((state) => state.locales);
 }
 
 export function formatSince(iso: string, locale = useI18n.getState().locale) {
