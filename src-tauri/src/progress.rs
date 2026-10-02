@@ -21,7 +21,9 @@ pub enum Beat {
     Gate{verdict:String,score:u8,demand:u8},
     Read{intent:String,complexity:String,source:String},
     Context{files:usize,tokens:usize},
-    Route{provider:String,model:String,reason:String},
+    /// Quem atende: o agente (CLI), o modelo dele, o modo — `plan` ou
+    /// `build` — e o papel que o Jev deu ao agente.
+    Route{provider:String,model:String,reason:String,mode:String,agent:Option<String>},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -141,10 +143,12 @@ mod tests {
     /// Cada etapa se descreve sozinha no JSON: a tela desenha a linha sem um
     /// formato por tipo de evento.
     #[test] fn the_detail_carries_its_own_kind() {
-        let beat=Beat::Route{provider:"claude".into(),model:"claude-sonnet-4-5".into(),reason:"melhor pontuação".into()};
+        let beat=Beat::Route{provider:"claude".into(),model:"claude-sonnet-4-5".into(),reason:"melhor pontuação".into(),mode:"plan".into(),agent:Some("reviewer".into())};
         let detail=beat.detail();
         assert_eq!(detail["kind"],"route");
         assert_eq!(detail["model"],"claude-sonnet-4-5");
+        assert_eq!(detail["mode"],"plan");
+        assert_eq!(detail["agent"],"reviewer");
         assert_eq!(beat.kind(),"route");
     }
 
