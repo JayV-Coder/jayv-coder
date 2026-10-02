@@ -26,3 +26,16 @@ describe("newClones", () => {
     expect(newClones(found, projects).map((clone) => clone.key)).toEqual(["github.com/acme/api"]);
   });
 });
+
+describe("organization folder", () => {
+  it("is forgotten without touching other organizations", async () => {
+    const store = new Map<string, string>();
+    globalThis.localStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) } as Storage;
+    const { forgetOrganizationFolder, organizationFolder, rememberOrganizationFolder } = await import("./checkout");
+    rememberOrganizationFolder("a", "/code/a");
+    rememberOrganizationFolder("b", "/code/b");
+    forgetOrganizationFolder("a");
+    expect(organizationFolder("a")).toBeNull();
+    expect(organizationFolder("b")).toBe("/code/b");
+  });
+});
