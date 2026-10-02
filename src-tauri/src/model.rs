@@ -63,6 +63,11 @@ pub struct ModelSelection {
     pub estimated_tokens: usize,
     pub score: f64,
     pub reason: String,
+    /// `plan` (o agente só lê e devolve um plano) ou `build` (o agente faz a
+    /// mudança). Vazio quando nenhum agente foi chamado.
+    #[serde(default)] pub mode: String,
+    /// O papel que o Jev deu ao agente (`developer`, `reviewer`…), se algum.
+    #[serde(default)] pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
