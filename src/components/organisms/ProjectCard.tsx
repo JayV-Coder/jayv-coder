@@ -41,11 +41,10 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
         </>
       )}
     >
+      {/* De quem é o projeto diz o bloco em que o cartão está; aqui fica só o
+          aviso da política. */}
       <span className="flex flex-wrap items-baseline gap-2">
         <span className="text-lg font-semibold tracking-tight break-words">{project.name}</span>
-        {organization && (
-          <span title={t("org.project.badge", { name: organization.name })} className="rounded-md border border-border px-1.5 font-mono text-caption text-success">@{organization.slug}</span>
-        )}
         {organization && policed && (
           <span title={t("policy.badge.hint", { slug: organization.slug })} className="rounded-md border border-border px-1.5 text-caption text-muted-foreground">{t("policy.badge")}</span>
         )}
