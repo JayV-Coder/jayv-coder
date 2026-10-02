@@ -56,9 +56,16 @@ pub struct ProviderConfig {
     #[serde(default)] pub command: Option<String>,
     #[serde(default = "default_timeout")] pub timeout: u64,
     #[serde(default)] pub args: Vec<String>,
+    /// A linha de comando do modo planejamento: a mesma do agente, presa em
+    /// somente leitura. Vazia, o agente roda igual nos dois modos.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub plan_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")] pub local: Option<bool>,
 }
-impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], local:None } } }
+impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None } } }
+impl ProviderConfig {
+    /// O mesmo agente, no modo planejamento.
+    pub fn for_planning(&self)->Self { if self.plan_args.is_empty() { self.clone() } else { Self{args:self.plan_args.clone(),..self.clone()} } }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
