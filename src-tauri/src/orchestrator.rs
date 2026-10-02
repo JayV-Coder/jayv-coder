@@ -27,8 +27,11 @@ const REQUEST_LANGUAGE_NOTE:&str="Reply to the developer in the language their r
 const NO_REPOSITORY_NOTE:&str="No repository files were supplied: this request does not depend on them. Answer from general knowledge and never guess this codebase's contents.";
 const TOOLS_NOTE:&str="This asks for commands to run or files to change, which this orchestrator cannot execute. Hand back the exact commands or edits for the developer to apply.";
 const DESTRUCTIVE_NOTE:&str="This would overwrite or remove existing work. State the exact effect and how to undo it before giving the change.";
-const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Investigate what is needed and answer with a concrete step-by-step plan (files, changes, how to verify). Do not claim that any file was changed.";
+const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Answer with a concrete step-by-step plan (files, changes, how to verify) in the reply, not in a file. Do not claim that any file was changed.";
 const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it.";
+/// Os agentes saem explorando o repositório e replanejando por conta própria;
+/// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
+const FOCUS_NOTE:&str="Be brief: REPOSITORY CONTEXT is current, never reread it; read only what the task needs; do not re-plan.";
 pub const MODE_PLAN:&str="plan";
 pub const MODE_BUILD:&str="build";
 const REPOSITORY_CONTEXT_THRESHOLD:f64=0.5;
@@ -185,7 +188,7 @@ impl Orchestrator {
         pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone()});
         pulse.beat(Beat::Running);
         let started=Instant::now();
-        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await;
+        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&complexity,&context,&selection,session_id,pulse).await;
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
             Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
@@ -288,10 +291,10 @@ impl Orchestrator {
             ChatMessage{role:"system".into(),content:format!("{TITLE_INSTRUCTIONS}\n{}",language_note())},
             ChatMessage{role:"user".into(),content:format!("Intent read by Jev: {intent}\n\nRequest:\n{request}")},
         ];
-        clean_title(&provider.chat(&messages,&model.model).await.ok()?.response)
+        clean_title(&provider.chat_with_effort(&messages,&model.model,Some(effort_for("trivial")),&Pulse::silent()).await.ok()?.response)
     }
 
-    async fn execute(&self,input:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
+    async fn execute(&self,input:&str,complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
         let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
@@ -303,7 +306,7 @@ impl Orchestrator {
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).rev().cloned());
         messages.push(ChatMessage{role:"user".into(),content:user});
-        provider.chat_stream(&messages,&selection.model_name,pulse).await
+        provider.chat_with_effort(&messages,&selection.model_name,Some(effort_for(complexity)),pulse).await
     }
 
     fn without_local_only(&self,context:&Context)->Context {
@@ -397,6 +400,10 @@ pub fn analyze_intent(input:&str)->IntentAnalysis {
 }
 pub fn analyze_complexity(input:&str,intent:&IntentAnalysis)->String { let words=input.split_whitespace().count(); let matched=intent.scores.values().sum::<usize>(); if words<8&&matched<=1{"trivial"}else if words<30&&matched<=3{"simple"}else if words<100{"medium"}else{"complex"}.into() }
 pub fn plan_context(intent:&str,complexity:&str)->Vec<String>{let mut p=match intent{"code"|"refactor"|"test"=>vec!["code_files".into(),"dependencies".into(),"tests".into()],"security"=>vec!["code_files".into(),"configuration".into(),"dependencies".into()],"frontend"=>vec!["frontend_files".into(),"styles".into()],_=>vec!["documentation".into()]};if complexity=="complex"{p.push("full_repository".into());}p}
+/// Quanto o agente pode pensar, pelo tamanho do pedido que o Jev leu. Os
+/// agentes pensam o máximo do plano deles quando ninguém diz nada, e é isso
+/// que consumia a sessão até em pedido pequeno.
+pub fn effort_for(complexity:&str)->&'static str { match complexity { "trivial"|"simple"=>"low", "complex"=>"high", _=>"medium" } }
 pub fn select_strategy(intent:&str,complexity:&str)->String { if complexity=="complex"{"execution_graph"}else if matches!(intent,"code"|"refactor"|"test"|"security"){"rag_first"}else{"single_model"}.into() }
 pub fn local_routing(input:&str,error:Option<String>)->(IntentAnalysis,String,RoutingSignals) {
     let intent=analyze_intent(input); let complexity=analyze_complexity(input,&intent);
@@ -444,7 +451,7 @@ pub fn select_mode(intent:&str,complexity:&str,signals:&RoutingSignals,gate_pass
 pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
     let notes=routing_notes(signals);
     let notes=if mode==MODE_BUILD { notes.replace(&format!("\n{TOOLS_NOTE}"),"") } else { notes };
-    format!("{notes}\n{}",if mode==MODE_BUILD {BUILD_NOTE} else {PLAN_NOTE})
+    format!("{notes}\n{}\n{FOCUS_NOTE}",if mode==MODE_BUILD {BUILD_NOTE} else {PLAN_NOTE})
 }
 fn build_planners(configs:&HashMap<String,crate::config::ProviderConfig>,workdir:&Workdir)->HashMap<String,Box<dyn Provider>> {
     build_providers(&configs.iter().map(|(name,config)|(name.clone(),config.for_planning())).collect(),workdir)
@@ -741,7 +748,7 @@ mod tests {
         // Sem o Jev, o prompt é o de sempre mais a linha do projeto — ela não vem
         // do roteador, vem de onde o pedido está sendo atendido, e vai sempre —
         // e a linha do modo, que todo pedido leva.
-        assert_eq!(result.context.system_instructions,format!("{SYSTEM_INSTRUCTIONS}\nPROJECT: {} at {}\n{PLAN_NOTE}",result.context.project.name,result.context.project.root));
+        assert_eq!(result.context.system_instructions,format!("{SYSTEM_INSTRUCTIONS}\nPROJECT: {} at {}\n{PLAN_NOTE}\n{FOCUS_NOTE}",result.context.project.name,result.context.project.root));
         assert!(!result.context.repository_context_skipped);
         assert!(routing_notes(&result.routing).is_empty());
     }
@@ -758,7 +765,8 @@ mod tests {
         assert!(notes.contains(CLARIFY_NOTE) && notes.contains(NO_REPOSITORY_NOTE) && notes.contains(TOOLS_NOTE) && notes.contains(DESTRUCTIVE_NOTE));
         assert!(estimate_tokens(&notes)<=140,"worst-case routing instructions cost {} tokens",estimate_tokens(&notes));
         let with_mode=mode_notes(&signals,MODE_PLAN);
-        assert!(estimate_tokens(&with_mode)<=200,"worst-case routing and mode instructions cost {} tokens",estimate_tokens(&with_mode));
+        // O teto inclui o FOCUS_NOTE: poucos tokens que evitam o agente reler o contexto.
+        assert!(estimate_tokens(&with_mode)<=210,"worst-case routing and mode instructions cost {} tokens",estimate_tokens(&with_mode));
         let mut context=Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),..Default::default()};
         note_routing(&mut context,&signals,MODE_PLAN); let once=context.system_instructions.clone();
         note_routing(&mut context,&signals,MODE_PLAN);

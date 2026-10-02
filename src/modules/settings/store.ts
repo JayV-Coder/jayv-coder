@@ -120,14 +120,6 @@ export function updateModel(uid: string, patch: Partial<AgentModel>) {
   useSettings.setState((state) => ({ models: state.models.map((model) => (model.uid === uid ? { ...model, ...patch } : model)) }));
 }
 
-/** Escolher um modelo do catálogo traz junto os números dele: quem escolhe
- * não precisa saber a janela de contexto de cor. */
-export function pickModel(uid: string, id: string) {
-  const draft = useSettings.getState().models.find((model) => model.uid === uid);
-  const known = draft && useSettings.getState().catalog[draft.agent].find((model) => model.id === id);
-  updateModel(uid, known ? { model: id, contextWindow: known.contextWindow, costClass: known.costClass, speed: known.speed } : { model: id });
-}
-
 export function removeModel(uid: string) {
   const state = useSettings.getState();
   const removed = state.models.find((model) => model.uid === uid);

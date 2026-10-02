@@ -160,7 +160,7 @@ export type Capability = "chat" | "code" | "reasoning" | "tools";
  * de comando a partir delas. */
 export interface ClaudeOptions {
   permissionMode: "default" | "plan" | "acceptEdits" | "auto" | "bypassPermissions";
-  effort: "default" | "low" | "medium" | "high" | "xhigh" | "max";
+  effort: "auto" | "low" | "medium" | "high" | "xhigh" | "max";
   fallbackModel: string;
   maxBudgetUsd: number | null;
   blockedTools: string[];
@@ -171,7 +171,7 @@ export interface ClaudeOptions {
 
 export interface CodexOptions {
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
-  reasoningEffort: "default" | "low" | "medium" | "high";
+  reasoningEffort: "auto" | "low" | "medium" | "high";
   networkAccess: boolean;
   skipGitRepoCheck: boolean;
 }

@@ -21,11 +21,9 @@ const TIMEOUTS = [60, 120, 300, 600, 900, 1800, 3600];
 export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; models: ModelDraft[]; problems: Record<string, Key> }) {
   const t = useT();
   const probe = useSettings((state) => state.probes[agent.id]);
-  const catalog = useSettings((state) => state.catalog[agent.id]);
   const [min, max] = useSettings((state) => state.timeoutRange);
   const refreshing = useSettings((state) => state.refreshing);
   const dirty = useSettings(isAgentsDirty);
-  const taken = new Set(models.map((model) => model.model));
   // Catálogos grandes travam a tela se todas as linhas forem montadas de uma vez.
   const [pageSize, setPageSize] = useState(10);
   const [wanted, setPage] = useState(0);
@@ -114,7 +112,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
           ? <EmptyText>{t("model.empty")}</EmptyText>
           : (
             <div className="grid gap-3">
-              {shown.map((model) => <ModelRow key={model.uid} model={model} catalog={catalog} taken={taken} problem={problems[model.uid]} />)}
+              {shown.map((model) => <ModelRow key={model.uid} model={model} problem={problems[model.uid]} />)}
               {models.length > PAGE_SIZES[0] && (
                 <Pager
                   id={`${agent.id}-page-size`}

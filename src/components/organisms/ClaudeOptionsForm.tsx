@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
 const PERMISSIONS: ClaudeOptions["permissionMode"][] = ["default", "plan", "acceptEdits", "auto", "bypassPermissions"];
-const EFFORTS: ClaudeOptions["effort"][] = ["default", "low", "medium", "high", "xhigh", "max"];
+const EFFORTS: ClaudeOptions["effort"][] = ["auto", "low", "medium", "high", "xhigh", "max"];
 const TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
 const NONE = "__none__";
 
@@ -23,7 +23,7 @@ export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSet
         <OptionSelect id="claude-permission" value={options.permissionMode} onChange={(permissionMode) => set({ permissionMode })}
           options={PERMISSIONS.map((value) => ({ value, label: t(`claude.permission.${value}`) }))} />
       </FormField>
-      <FormField label={t("agent.effort")} htmlFor="claude-effort" hint={t("agent.effort.hint")}>
+      <FormField label={t("agent.effort")} htmlFor="claude-effort" hint={t("agent.effort.hint.auto")}>
         <OptionSelect id="claude-effort" value={options.effort} onChange={(effort) => set({ effort })}
           options={EFFORTS.map((value) => ({ value, label: t(`effort.${value}`) }))} />
       </FormField>

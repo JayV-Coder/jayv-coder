@@ -22,6 +22,13 @@ pub trait Provider: Send + Sync {
         pulse.beat(Beat::Chunk{text:response.response.clone()});
         Ok(response)
     }
+
+    /// A conversa com o esforço de raciocínio que o Jev escolheu para o
+    /// pedido. Só o agente de linha de comando sabe o que fazer com ele; os
+    /// outros conversam como sempre.
+    async fn chat_with_effort(&self, messages:&[ChatMessage], model:&str, _effort:Option<&str>, pulse:&Pulse) -> Result<ProviderResponse> {
+        self.chat_stream(messages,model,pulse).await
+    }
 }
 
 /// A pasta que os agentes de linha de comando enxergam. Eles leem o
@@ -444,7 +451,10 @@ impl CliProvider {
     /// A linha de comando deste pedido. O modelo reserva igual ao modelo do
     /// pedido sai inteiro: o Claude recusa os dois iguais, e a reserva é por
     /// agente enquanto o modelo é por pedido.
-    fn args(&self,model:&str,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
+    ///
+    /// O esforço que o Jev escolheu entra no lugar de `{effort}`; sem ele, o
+    /// argumento sai junto da flag que o anuncia e o agente usa o seu padrão.
+    fn args(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
         let inline=self.inline_for(prompt);
         let mut args=Vec::new();
         let mut given=self.config.args.iter().peekable();
@@ -455,6 +465,10 @@ impl CliProvider {
                 if let Some(reserve)=given.next().filter(|reserve|reserve.as_str()!=model) { args.extend([arg.clone(),reserve.clone()]); }
                 continue;
             }
+            if arg.contains(crate::llm::EFFORT) {
+                match effort { Some(effort)=>args.push(arg.replace(crate::llm::EFFORT,effort)), None=>{ if args.last().is_some_and(|flag:&String|flag.starts_with('-')) { args.pop(); } } }
+                continue;
+            }
             args.push(if arg==PROMPT { prompt.to_string() } else if arg==USAGE_FILE { usage_file.display().to_string() } else { arg.replace("{model}",model) });
         }
         args
@@ -462,7 +476,7 @@ impl CliProvider {
 
     /// O agente aberto, com as três pontas na mão. Um só arranque para as duas
     /// conversas: a que espera o fim e a que acompanha.
-    fn open(&self,model:&str,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
+    fn open(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
         // O caminho achado, com extensão: no Windows `claude` sozinho não
         // abre o `claude.cmd` do npm. Sem caminho nenhum, o agente não está
@@ -472,7 +486,7 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
-        process.args(lead).args(self.args(model,prompt,usage_file)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        process.args(lead).args(self.args(model,effort,prompt,usage_file)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
@@ -524,11 +538,15 @@ impl Provider for CliProvider {
     /// enche o cano e para de trabalhar se ninguém estiver lendo dos dois lados.
     /// O prazo é de cada linha, não do conjunto — ver `silence`.
     async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        self.chat_with_effort(messages,model,None,pulse).await
+    }
+
+    async fn chat_with_effort(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
         let prompt=Self::prompt(messages);
         let started=Instant::now();
         let usage_file=std::env::temp_dir().join(format!("jayv-usage-{}.json",uuid::Uuid::new_v4()));
         let mut meter=crate::usage::Meter::new(&self.name,model,self.config.command.as_deref().unwrap_or(&self.name));
-        let mut child=self.open(model,&prompt,&usage_file)?;
+        let mut child=self.open(model,effort,&prompt,&usage_file)?;
         if let Some(mut stdin)=child.stdin.take() { stdin.write_all(prompt.as_bytes()).await?; }
         let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).lines();
         let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).lines();
@@ -847,7 +865,7 @@ mod tests {
     #[test] fn the_request_goes_as_an_argument_when_the_agent_asks() {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         assert!(provider.inline());
-        assert_eq!(provider.args("gpt-5","oi {model}",std::path::Path::new("u.json")),["-p","oi {model}","--model","gpt-5"]);
+        assert_eq!(provider.args("gpt-5",None,"oi {model}",std::path::Path::new("u.json")),["-p","oi {model}","--model","gpt-5"]);
     }
 
     /// Um pedido com histórico e contexto estoura a linha de comando: 32.767
@@ -857,7 +875,7 @@ mod tests {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         let long="x".repeat(INLINE_LIMIT+1);
         assert!(!provider.inline_for(&long));
-        assert_eq!(provider.args("gpt-5",&long,std::path::Path::new("u.json")),["--model","gpt-5"]);
+        assert_eq!(provider.args("gpt-5",None,&long,std::path::Path::new("u.json")),["--model","gpt-5"]);
         assert!(provider.inline_for("short"));
     }
 
@@ -873,7 +891,15 @@ mod tests {
     #[test] fn a_fallback_equal_to_the_model_is_dropped() {
         let provider=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--model".into(),"{model}".into(),"--fallback-model".into(),"haiku".into()],..config("cli")},workdir:Workdir::default()};
         assert!(!provider.inline());
-        assert_eq!(provider.args("haiku","",std::path::Path::new("u.json")),["--model","haiku"]);
-        assert_eq!(provider.args("opus","",std::path::Path::new("u.json")),["--model","opus","--fallback-model","haiku"]);
+        assert_eq!(provider.args("haiku",None,"",std::path::Path::new("u.json")),["--model","haiku"]);
+        assert_eq!(provider.args("opus",None,"",std::path::Path::new("u.json")),["--model","opus","--fallback-model","haiku"]);
+    }
+
+    /// O esforço escolhido pelo Jev entra no lugar dele; sem escolha, a flag
+    /// some junto e o agente usa o seu padrão.
+    #[test] fn the_effort_jev_picked_reaches_the_command_line() {
+        let provider=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["--model".into(),"{model}".into(),"-c".into(),"model_reasoning_effort=\"{effort}\"".into(),"-".into()],..config("cli")},workdir:Workdir::default()};
+        assert_eq!(provider.args("gpt-5",Some("low"),"",std::path::Path::new("u.json")),["--model","gpt-5","-c","model_reasoning_effort=\"low\"","-"]);
+        assert_eq!(provider.args("gpt-5",None,"",std::path::Path::new("u.json")),["--model","gpt-5","-"]);
     }
 }

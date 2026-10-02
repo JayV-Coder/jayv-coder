@@ -341,10 +341,25 @@ fn escapes_root(root:&Path,path:&str)->bool {
     candidate.is_absolute() && !candidate.starts_with(root)
 }
 
+/// As pastas onde cada agente guarda o próprio estado, na home do usuário.
+const AGENT_HOMES:[&str;6]=[".claude",".codex",".cursor",".copilot",".agent",".agents"];
+
+/// Um arquivo que o próprio agente grava para si — o plano do modo
+/// planejamento do Claude em `~/.claude/plans/`, a sessão do Codex em
+/// `~/.codex/` — e cita na resposta. Não é mudança no projeto nem pedido ao
+/// desenvolvedor: segurá-lo como "fora do projeto" só enchia a portaria. O
+/// `.claude/` de dentro do projeto continua sob as regras da casa.
+fn agent_state(path:&str,home:Option<&Path>)->bool {
+    let inside=path.strip_prefix("~/").map(Path::new)
+        .or_else(||home.and_then(|home|Path::new(path).strip_prefix(home).ok()));
+    inside.and_then(|inside|inside.components().next()).is_some_and(|first|AGENT_HOMES.iter().any(|name|first.as_os_str()==*name))
+}
+
 /// Lê a resposta do modelo e devolve tudo que ele pediu para rodar ou mexer,
 /// já confrontado com as regras da casa.
 pub fn scan_answer(turn:&Turn,answer:&str,config:&Config,firewall:&ContextFirewall,root:&Path)->Vec<ExitCheck> {
     let mut checks=Vec::new();
+    let home=dirs::home_dir();
     let mut seen=Vec::new();
     for line in shell_lines(answer) {
         if seen.contains(&line){continue;}
@@ -352,14 +367,14 @@ pub fn scan_answer(turn:&Turn,answer:&str,config:&Config,firewall:&ContextFirewa
         checks.push(ExitCheck::new(turn,"command",&line,command_rule(config,&line)));
     }
     for path in written_paths(answer) {
-        if seen.contains(&path){continue;}
+        if seen.contains(&path)||agent_state(&path,home.as_deref()){continue;}
         seen.push(path.clone());
         checks.push(ExitCheck::new(turn,"file",&path,file_rule(config,firewall,root,&path,Access::Write)));
     }
     // Um caminho só citado não sai do projeto: entra no feed apenas quando
     // bate numa regra — um `.env` lembrado na resposta continua segurado.
     for path in cited_paths(answer) {
-        if seen.contains(&path){continue;}
+        if seen.contains(&path)||agent_state(&path,home.as_deref()){continue;}
         seen.push(path.clone());
         if let Some(rule)=file_rule(config,firewall,root,&path,Access::Read) {checks.push(ExitCheck::new(turn,"file",&path,Some(rule)));}
     }
@@ -614,6 +629,16 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         assert!(cited_paths("nada aqui").is_empty());
         assert_eq!(written_paths("FILE: src/a.rs\nfn a(){}\n\n```ts src/b.ts\nexport {}\n```\ne `src/c.rs` só citado"),vec!["src/a.rs","src/b.ts"]);
         assert!(!looks_like_path("src/") && !looks_like_path("a b.rs") && looks_like_path("src-tauri/src/jev.rs"));
+    }
+
+    #[test]
+    fn the_agents_own_state_files_are_not_held() {
+        let home=Path::new("/home/dev");
+        assert!(agent_state("/home/dev/.claude/plans/plano.md",Some(home)));
+        assert!(agent_state("~/.codex/sessions/s.json",Some(home)));
+        assert!(!agent_state(".claude/settings.json",Some(home)),"o .claude do projeto segue as regras");
+        assert!(!agent_state("/home/dev/.ssh/id.key",Some(home)));
+        assert!(!agent_state("/etc/.claude/x.md",Some(home)));
     }
 
     #[test]

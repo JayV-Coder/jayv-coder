@@ -91,7 +91,8 @@ pub struct LlmSettings { pub agents:Vec<AgentSettings>, pub models:Vec<AgentMode
 pub struct ClaudeOptions {
     /// `default`, `plan`, `acceptEdits`, `auto` ou `bypassPermissions`.
     pub permission_mode:String,
-    /// `default`, `low`, `medium`, `high`, `xhigh` ou `max`.
+    /// `auto` (o Jev escolhe por pedido), `low`, `medium`, `high`, `xhigh`
+    /// ou `max`.
     pub effort:String,
     /// Um modelo do catálogo do Claude, ou vazio.
     pub fallback_model:String,
@@ -101,20 +102,20 @@ pub struct ClaudeOptions {
     pub persist_sessions:bool,
     pub safe_mode:bool,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:"default".into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
 pub struct CodexOptions {
     /// `read-only`, `workspace-write` ou `danger-full-access`.
     pub sandbox:String,
-    /// `default`, `low`, `medium` ou `high`.
+    /// `auto` (o Jev escolhe por pedido), `low`, `medium` ou `high`.
     pub reasoning_effort:String,
     /// Só vale com `workspace-write`: nos outros dois a rede já está decidida.
     pub network_access:bool,
     pub skip_git_repo_check:bool,
 }
-impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:"default".into(),network_access:false,skip_git_repo_check:true} } }
+impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -139,10 +140,18 @@ pub struct CursorOptions {
 impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false} } }
 
 const CLAUDE_PERMISSIONS:[&str;5]=["default","plan","acceptEdits","auto","bypassPermissions"];
-const CLAUDE_EFFORTS:[&str;6]=["default","low","medium","high","xhigh","max"];
+/// O esforço que o Jev escolhe a cada pedido, pelo tamanho do que foi pedido.
+pub const AUTO_EFFORT:&str="auto";
+/// O argumento que vira o esforço escolhido pelo Jev.
+pub const EFFORT:&str="{effort}";
+const CLAUDE_EFFORTS:[&str;6]=["auto","low","medium","high","xhigh","max"];
 pub const CLAUDE_TOOLS:[&str;6]=["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"];
 const CODEX_SANDBOXES:[&str;3]=["read-only","workspace-write","danger-full-access"];
-const CODEX_EFFORTS:[&str;4]=["default","low","medium","high"];
+const CODEX_EFFORTS:[&str;4]=["auto","low","medium","high"];
+
+/// `default` era o nome antigo do `auto`: o esforço deixava a cargo do agente,
+/// que pensava o máximo que o plano dele permitia em todo pedido.
+fn effort_of(stored:&str)->String { if stored=="default" { AUTO_EFFORT.into() } else { stored.into() } }
 const COPILOT_ACCESS:[&str;3]=["read","edits","all"];
 pub const COPILOT_TOOLS:[&str;4]=["shell","write","shell(git push)","shell(rm)"];
 const CURSOR_SANDBOXES:[&str;3]=["default","enabled","disabled"];
@@ -161,6 +170,7 @@ fn tools_in(field:&str,tools:&[String],allowed:&[&str])->Result<Vec<String>> {
 impl ClaudeOptions {
     fn checked(mut self,models:&HashSet<&str>)->Result<Self> {
         one_of("claude.permissionMode",&self.permission_mode,&CLAUDE_PERMISSIONS)?;
+        self.effort=effort_of(&self.effort);
         one_of("claude.effort",&self.effort,&CLAUDE_EFFORTS)?;
         self.fallback_model=self.fallback_model.trim().to_string();
         if !self.fallback_model.is_empty()&&!models.contains(self.fallback_model.as_str()) { bail!(Text::new("settings.claude.fallback")); }
@@ -173,7 +183,8 @@ impl ClaudeOptions {
     fn args(&self)->Vec<String> {
         let mut args=strings(&["--print","--output-format","stream-json","--verbose","--include-partial-messages","--model","{model}"]);
         if self.permission_mode!="default" { args.extend(strings(&["--permission-mode",&self.permission_mode])); }
-        if self.effort!="default" { args.extend(strings(&["--effort",&self.effort])); }
+        let effort=effort_of(&self.effort);
+        args.extend(strings(&["--effort",if effort==AUTO_EFFORT {EFFORT} else {&effort}]));
         if !self.fallback_model.is_empty() { args.extend(strings(&["--fallback-model",&self.fallback_model])); }
         if let Some(budget)=self.max_budget_usd { args.extend(["--max-budget-usd".to_string(),format!("{budget:.2}")]); }
         if !self.blocked_tools.is_empty() { args.extend(["--disallowed-tools".to_string(),self.blocked_tools.join(",")]); }
@@ -187,6 +198,7 @@ impl ClaudeOptions {
 impl CodexOptions {
     fn checked(mut self)->Result<Self> {
         one_of("codex.sandbox",&self.sandbox,&CODEX_SANDBOXES)?;
+        self.reasoning_effort=effort_of(&self.reasoning_effort);
         one_of("codex.reasoning",&self.reasoning_effort,&CODEX_EFFORTS)?;
         if self.sandbox!="workspace-write" { self.network_access=false; }
         Ok(self)
@@ -196,7 +208,8 @@ impl CodexOptions {
         // dos tokens chegam separados, e é dela que sai o uso informado.
         let mut args=strings(&["exec","--json","--model","{model}","--sandbox",&self.sandbox]);
         if self.skip_git_repo_check { args.push("--skip-git-repo-check".into()); }
-        if self.reasoning_effort!="default" { args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",self.reasoning_effort)]); }
+        let effort=effort_of(&self.reasoning_effort);
+        args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",if effort==AUTO_EFFORT {EFFORT} else {&effort})]);
         if self.network_access { args.extend(strings(&["-c","sandbox_workspace_write.network_access=true"])); }
         // O pedido chega pela entrada padrão.
         args.push("-".into());
@@ -474,6 +487,13 @@ pub fn ensure(connection:&Connection)->Result<()> {
     Ok(())
 }
 
+/// O esforço gravado como `default` é lido como `auto`, para a tela mostrar a
+/// escolha certa.
+fn legacy_effort(mut options:Value)->Value {
+    for key in ["effort","reasoningEffort"] { if options.get(key).and_then(Value::as_str)==Some("default") { options[key]=Value::from(AUTO_EFFORT); } }
+    options
+}
+
 pub fn load(connection:&Connection)->Result<LlmSettings> {
     let mut agents=Vec::new();
     {
@@ -482,7 +502,7 @@ pub fn load(connection:&Connection)->Result<LlmSettings> {
         for row in rows {
             let (id,enabled,command,timeout,options)=row?;
             let Ok(id)=AgentId::parse(&id) else { continue };
-            agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:serde_json::from_str(&options).unwrap_or(Value::Null)});
+            agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:legacy_effort(serde_json::from_str(&options).unwrap_or(Value::Null))});
         }
     }
     // Um agente que falte no banco volta com o padrão: a tela sempre tem uma
@@ -919,6 +939,17 @@ mod tests {
 
     /// O modo planejamento só tira a escrita: o resto do que foi configurado
     /// segue igual, e o que já era somente leitura continua somente leitura.
+    /// Sem esforço escolhido, quem decide é o Jev a cada pedido; o `default`
+    /// antigo vale como `auto`.
+    #[test] fn an_automatic_effort_leaves_the_choice_to_jev() {
+        for options in [Value::Null,json!({"effort":"default"})] {
+            assert!(agent(AgentId::Claude,options).args().windows(2).any(|pair|pair==["--effort",EFFORT]));
+        }
+        assert!(agent(AgentId::Codex,json!({"reasoningEffort":"default"})).args().iter().any(|arg|arg=="model_reasoning_effort=\"{effort}\""));
+        assert!(agent(AgentId::Claude,json!({"effort":"high"})).args().windows(2).any(|pair|pair==["--effort","high"]));
+        assert_eq!(legacy_effort(json!({"effort":"default"}))["effort"],AUTO_EFFORT);
+    }
+
     #[test] fn planning_runs_every_agent_read_only() {
         let claude=agent(AgentId::Claude,json!({"permissionMode":"bypassPermissions","effort":"high"})).plan_args();
         assert!(claude.windows(2).any(|pair|pair==["--permission-mode","plan"]));

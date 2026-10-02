@@ -4,7 +4,7 @@ import { updateOptions } from "@/modules/settings";
 import { FormField, OptionSelect, ToggleRow } from "@/components/molecules";
 
 const SANDBOXES: CodexOptions["sandbox"][] = ["read-only", "workspace-write", "danger-full-access"];
-const EFFORTS: CodexOptions["reasoningEffort"][] = ["default", "low", "medium", "high"];
+const EFFORTS: CodexOptions["reasoningEffort"][] = ["auto", "low", "medium", "high"];
 
 /** Onde o Codex pode mexer e quanto ele pensa. */
 export function CodexOptionsForm({ agent }: { agent: AgentSettings<"codex"> }) {
@@ -19,7 +19,7 @@ export function CodexOptionsForm({ agent }: { agent: AgentSettings<"codex"> }) {
         <OptionSelect id="codex-sandbox" value={options.sandbox} onChange={(sandbox) => set({ sandbox, networkAccess: sandbox === "workspace-write" && options.networkAccess })}
           options={SANDBOXES.map((value) => ({ value, label: t(`codex.sandbox.${value}`) }))} />
       </FormField>
-      <FormField label={t("agent.effort")} htmlFor="codex-effort" hint={t("agent.effort.hint")} wide>
+      <FormField label={t("agent.effort")} htmlFor="codex-effort" hint={t("agent.effort.hint.auto")} wide>
         <OptionSelect id="codex-effort" value={options.reasoningEffort} onChange={(reasoningEffort) => set({ reasoningEffort })}
           options={EFFORTS.map((value) => ({ value, label: t(`effort.${value}`) }))} />
       </FormField>

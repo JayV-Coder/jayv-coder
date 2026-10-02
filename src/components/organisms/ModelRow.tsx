@@ -1,72 +1,47 @@
 import { useState } from "react";
-import type { Capability, CostClass, KnownModel, Speed } from "@/modules/core";
+import type { Capability, CostClass, Speed } from "@/modules/core";
 import { useLocale, useT, type Key } from "@/modules/i18n";
-import { MODEL_PATTERN, pickModel, removeModel, updateModel, type ModelDraft } from "@/modules/settings";
+import { MODEL_PATTERN, removeModel, updateModel, type ModelDraft } from "@/modules/settings";
 import { CheckList, FormField, OptionSelect } from "@/components/molecules";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
-const CUSTOM = "__custom__";
 const CAPABILITIES: Capability[] = ["chat", "code", "reasoning", "tools"];
 const COSTS: CostClass[] = ["free", "low", "medium", "high"];
 const SPEEDS: Speed[] = ["fast", "medium", "slow"];
 const WINDOWS = [32000, 64000, 128000, 200000, 272000, 400000, 1000000];
 
-/** Um modelo do agente. O identificador vem do catálogo sempre que possível;
- * digitar é a exceção, e o campo avisa na hora quando o texto não serve. */
-export function ModelRow({ model, catalog, taken, problem }: { model: ModelDraft; catalog: KnownModel[]; taken: Set<string>; problem?: Key }) {
+/** Um modelo do agente. O identificador vem do catálogo e não se edita; só o
+ * modelo recém-adicionado sem ID (o catálogo já estava todo na lista) abre o
+ * campo para digitar, e ele avisa na hora quando o texto não serve. */
+export function ModelRow({ model, problem }: { model: ModelDraft; problem?: Key }) {
   const t = useT();
   const locale = useLocale();
   const id = (field: string) => `${model.uid}-${field}`;
-  const known = catalog.some((item) => item.id === model.model);
-  // O modo "digitar" é escolha de quem edita, não consequência do texto: um ID
-  // digitado que coincide com o catálogo não pode sumir com o campo no meio.
-  const [custom, setCustom] = useState(!known);
+  // Decidido na montagem: o campo não pode travar no meio da digitação.
+  const [editable] = useState(model.model === "");
   const compact = new Intl.NumberFormat(locale, { notation: "compact" });
   const windows = [...new Set([...WINDOWS, model.contextWindow])].sort((a, b) => a - b);
   const typed = model.model.trim();
-  const typing = custom && typed !== "" && !MODEL_PATTERN.test(typed);
-  const choose = (value: string) => {
-    if (value === CUSTOM) {
-      setCustom(true);
-      updateModel(model.uid, { model: "" });
-    } else {
-      setCustom(false);
-      pickModel(model.uid, value);
-    }
-  };
+  const typing = editable && typed !== "" && !MODEL_PATTERN.test(typed);
 
   return (
     <div className={cn("grid gap-4 rounded-lg border px-4 py-4", problem ? "border-destructive/50" : "border-border/60", !model.enabled && "opacity-70")}>
       <div className="flex items-start gap-3">
         <Switch checked={model.enabled} onCheckedChange={(enabled) => updateModel(model.uid, { enabled })} aria-label={t("model.enabled")} title={t("model.enabled")} className="mt-7" />
         <FormField label={t("model.id")} htmlFor={id("model")} className="min-w-0 flex-1">
-          <OptionSelect
+          <Input
             id={id("model")}
-            value={custom ? CUSTOM : model.model}
-            onChange={choose}
-            options={[
-              ...catalog.map((item) => {
-                const used = item.id !== model.model && taken.has(item.id);
-                return { value: item.id, label: item.label, hint: used ? `${item.id} · ${t("model.taken")}` : item.id, disabled: used };
-              }),
-              { value: CUSTOM, label: t("model.custom"), hint: t("model.custom.hint") },
-            ]}
+            value={model.model}
+            disabled={!editable}
+            autoFocus={editable}
+            spellCheck={false}
+            placeholder={editable ? t("model.custom.placeholder") : undefined}
+            aria-invalid={typing || problem === "model.invalid" || undefined}
+            onChange={(event) => updateModel(model.uid, { model: event.target.value.trim() })}
+            className="font-mono"
           />
-          {custom && (
-            <Input
-              id={id("custom")}
-              value={model.model}
-              autoFocus={model.model === ""}
-              spellCheck={false}
-              aria-label={t("model.custom.label")}
-              placeholder={t("model.custom.placeholder")}
-              aria-invalid={typing || problem === "model.invalid" || undefined}
-              onChange={(event) => updateModel(model.uid, { model: event.target.value.trim() })}
-              className="font-mono"
-            />
-          )}
         </FormField>
         <button type="button" title={t("model.remove")} aria-label={t("model.remove")} onClick={() => removeModel(model.uid)} className="mt-6 px-2 text-xl leading-none text-muted-foreground hover:text-destructive">×</button>
       </div>
