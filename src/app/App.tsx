@@ -13,6 +13,7 @@ import { checkForUpdate } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { ChatPage, ChatsPage, GatePage, LoginPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { UpdateDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -59,6 +60,7 @@ export function App() {
         : status === "loading"
           ? <p className="grid min-h-screen place-items-center text-sm text-muted-foreground">{t("auth.loading")}</p>
           : <LoginPage />}
+      <UpdateDialog />
       <Toaster position="bottom-right" />
     </TooltipProvider>
   );
