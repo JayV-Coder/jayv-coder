@@ -2,7 +2,8 @@ import { clearChat } from "@/modules/conversation";
 import { useT } from "@/modules/i18n";
 import { useNavigation } from "@/modules/navigation";
 import { chatTitle, findChat, findProject, useWorkspace } from "@/modules/workspace";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, EraserIcon } from "lucide-react";
+import { ConfirmAction } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 
 /** O cabeçalho das vistas de conversa, sistema, configuração e perfil: a
@@ -26,7 +27,18 @@ export function AppHeader() {
         <h1 aria-current="page" className="truncate text-sm font-semibold tracking-tight">{title}</h1>
       </nav>
       {view === "chat" && chat && (
-        <Button variant="outline" size="sm" onClick={() => void clearChat(chat.id)}>{t("header.clearChat")}</Button>
+        // Limpar apaga o histórico inteiro e não se desfaz: pede confirmação.
+        <ConfirmAction
+          title={t("chat.clear.title")}
+          description={t("chat.clear.description", { title: chatTitle(chat) })}
+          confirm={t("header.clearChat")}
+          onConfirm={() => void clearChat(chat.id)}
+        >
+          <Button variant="ghost" size="sm" className="text-muted-foreground">
+            <EraserIcon aria-hidden="true" />
+            {t("header.clearChat")}
+          </Button>
+        </ConfirmAction>
       )}
     </header>
   );

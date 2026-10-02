@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { useT } from "@/modules/i18n";
 
 /** Um bloco de código da resposta, com o botão de copiar. */
@@ -12,9 +13,10 @@ export function CodeBlock({ language, code }: { language: string; code: string }
   };
   return (
     <section className="my-3.5 overflow-hidden rounded-lg border border-border bg-card">
-      <div className="flex items-center justify-between border-b border-border px-3.5 py-1.5 text-caption text-muted-foreground">
-        <span>{language || t("code.language")}</span>
-        <button type="button" onClick={copy} className="rounded-md px-2 py-0.5 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground">
+      <div className="flex items-center justify-between border-b border-border bg-muted px-3.5 py-1.5 text-caption text-muted-foreground">
+        <span className="font-mono">{language || t("code.language")}</span>
+        <button type="button" onClick={copy} className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&_svg]:size-3">
+          {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
           {copied ? t("code.copied") : t("code.copy")}
         </button>
       </div>

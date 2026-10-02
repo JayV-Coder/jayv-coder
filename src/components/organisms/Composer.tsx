@@ -1,4 +1,5 @@
 import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { ArrowUpIcon } from "lucide-react";
 import type { Chat } from "@/modules/core";
 import { answerQuestion, answeringFor, sendPrompt, setDraft, useConversation } from "@/modules/conversation";
 import { useT } from "@/modules/i18n";
@@ -12,7 +13,8 @@ import { PendingBanner } from "./PendingBanner";
  *
  * O botão só cai quando não há chat. Desligá-lo enquanto um pedido roda era o
  * que empurrava o desenvolvedor a mandar por cima e ver o texto sumir; com
- * fila, mandar em cima da espera é o comportamento normal. */
+ * fila, mandar em cima da espera é o comportamento normal. Ele só fica
+ * apagado enquanto não há o que mandar. */
 export function Composer({ chat }: { chat: Chat | null }) {
   const t = useT();
   const input = useRef<HTMLTextAreaElement>(null);
@@ -26,7 +28,7 @@ export function Composer({ chat }: { chat: Chat | null }) {
     const element = input.current;
     if (!element) return;
     element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
+    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
   }, [draft]);
 
   useEffect(() => {
@@ -53,7 +55,7 @@ export function Composer({ chat }: { chat: Chat | null }) {
   };
 
   return (
-    <form onSubmit={submit} className="mx-[max(40px,calc((100%-880px)/2))] mb-6 overflow-hidden rounded-lg border border-border bg-card shadow-sm transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+    <form onSubmit={submit} className="overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
       <PendingBanner chat={chat} />
       {chat && question && <AskingPanel chat={chat} question={question} />}
       <textarea
@@ -64,11 +66,15 @@ export function Composer({ chat }: { chat: Chat | null }) {
         onChange={(event) => chat && setDraft(chat.id, event.target.value)}
         onKeyDown={onKeyDown}
         placeholder={t(!question ? "composer.placeholder.open" : writing ? "composer.placeholder.writing" : "composer.placeholder.locked")}
-        className="block max-h-[180px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+        className="block max-h-[220px] min-h-12 w-full resize-none bg-transparent px-4 pt-3.5 pb-1 leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
       />
-      <div className="flex items-center justify-between border-t border-border py-2 pe-2 ps-4">
-        <small className="text-caption text-muted-foreground">{t(!question ? "composer.hint.open" : writing ? "composer.hint.writing" : "composer.hint.locked")}</small>
-        {(!question || writing) && <Button type="submit" size="sm" disabled={!chat}>{t("composer.send")}</Button>}
+      <div className="flex items-center gap-3 py-2 pe-2 ps-4">
+        <small className="me-auto text-caption text-muted-foreground">{t(!question ? "composer.hint.open" : writing ? "composer.hint.writing" : "composer.hint.locked")}</small>
+        {(!question || writing) && (
+          <Button type="submit" size="icon-sm" disabled={!chat || !draft.trim()} aria-label={t("composer.send")} title={t("composer.send")} className="rounded-lg">
+            <ArrowUpIcon aria-hidden="true" />
+          </Button>
+        )}
       </div>
     </form>
   );

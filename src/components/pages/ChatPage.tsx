@@ -1,6 +1,9 @@
 import { findChat, findProject, useWorkspace } from "@/modules/workspace";
 import { ChatUsageBar, Composer, Timeline } from "@/components/organisms";
 
+/** A conversa numa coluna só, de leitura confortável: as mensagens rolam em
+ * cima e a caixa de escrita fica presa embaixo, com o gasto do chat logo
+ * abaixo dela. */
 export function ChatPage() {
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const chat = findChat(data, activeChatId);
@@ -8,8 +11,10 @@ export function ChatPage() {
   return (
     <>
       <Timeline chat={chat} project={project} />
-      {chat && <ChatUsageBar chatId={chat.id} />}
-      <Composer chat={chat} />
+      <div className="mx-auto w-full max-w-3xl flex-none px-6 pb-4">
+        <Composer chat={chat} />
+        {chat && <ChatUsageBar chatId={chat.id} />}
+      </div>
     </>
   );
 }
