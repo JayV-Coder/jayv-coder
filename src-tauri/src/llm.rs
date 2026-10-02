@@ -311,6 +311,39 @@ impl AgentSettings {
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
         }
     }
+
+    /// O mesmo agente sem os modos sem trava, para a política de LLM com
+    /// `safe_agents`: o Claude sai do `bypassPermissions`, o Codex do
+    /// `danger-full-access` (para `workspace-write`, sem rede), o Copilot do
+    /// `all` (para `edits`) e o Cursor perde `--force`, `--approve-mcps` e o
+    /// sandbox desligado. O que já tinha trava fica como está.
+    pub fn without_unsafe_modes(&self)->Self {
+        let options=match self.id {
+            AgentId::Claude=>{
+                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
+                if options.permission_mode=="bypassPermissions" { options.permission_mode="default".into(); }
+                serde_json::to_value(options)
+            }
+            AgentId::Codex=>{
+                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
+                if options.sandbox=="danger-full-access" { options.sandbox="workspace-write".into(); options.network_access=false; }
+                serde_json::to_value(options)
+            }
+            AgentId::Copilot=>{
+                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
+                if options.tool_access=="all" { options.tool_access="edits".into(); }
+                serde_json::to_value(options)
+            }
+            AgentId::Cursor=>{
+                let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
+                options.force=false;
+                options.approve_mcps=false;
+                if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
+                serde_json::to_value(options)
+            }
+        }.unwrap_or_default();
+        Self{options,..self.clone()}
+    }
 }
 
 /// Um modelo que o agente oferece, com os números que a tela preenche sozinha

@@ -44,7 +44,19 @@ pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,Re
     let mut result=Round::default();
     upload(store,backend,&mut result).await?;
     download(store,backend,&mut result).await?;
+    refresh_policies(store,backend).await;
     Ok(result)
+}
+
+/// A política de LLM desce depois dos projetos, que já subiram com os
+/// `repo_keys` desta volta. Falhar aqui não para a volta — o servidor sem a
+/// migração da política, por exemplo —, e o cache anterior continua valendo.
+async fn refresh_policies(store:&SharedWorkspace,backend:&dyn Backend) {
+    match backend.project_policies().await {
+        Ok(Some(rows))=>{ if let Err(error)=store.lock().await.replace_project_policies(&rows) {eprintln!("política de LLM: {error:#}");} }
+        Ok(None)=>{}
+        Err(error)=>eprintln!("política de LLM: {error}"),
+    }
 }
 
 /// Erro do banco local no meio da volta. Não é culpa da rede nem da
@@ -244,6 +256,9 @@ mod tests {
         clock:Plain<i64>,
         calls:Plain<Vec<String>>,
         failures:Plain<VecDeque<RemoteError>>,
+        /// O que `my_project_policies` devolve; `None` é o backend que não
+        /// fala da política.
+        policies:Plain<Option<Result<Vec<crate::policy::RemotePolicy>,RemoteError>>>,
     }
 
     impl FakeBackend {
@@ -293,6 +308,10 @@ mod tests {
             rows.truncate(limit);
             Ok(rows)
         }
+
+        async fn project_policies(&self)->Result<Option<Vec<crate::policy::RemotePolicy>>,RemoteError> {
+            self.policies.lock().unwrap().clone().transpose()
+        }
     }
 
     fn shared(store:WorkspaceStore)->SharedWorkspace { Arc::new(Mutex::new(store)) }
@@ -325,6 +344,25 @@ mod tests {
         assert_eq!(sent["name"],"Loja");
         assert!(sent["row_updated_at"].is_string(),"a hora da escrita local sobe junto");
         assert!(sent["row_deleted_at"].is_null(),"recriar desfaz uma exclusão anterior");
+    }
+
+    #[tokio::test] async fn the_round_brings_the_llm_policies_and_survives_their_failure() {
+        let store=shared(WorkspaceStore::in_memory().unwrap());
+        let (project,chat)=a_chat(&store).await;
+        let backend=FakeBackend::default();
+        *backend.policies.lock().unwrap()=Some(Ok(vec![crate::policy::RemotePolicy{project_id:project.clone(),org_slug:"acme".into(),policy:json!({"agents":["codex"]})}]));
+        round(&store,&backend).await.expect("volta");
+        let cached=store.lock().await.chat_policy(&chat).unwrap().expect("o chat ganhou a política do projeto");
+        assert_eq!(cached.org_slug,"acme");
+
+        // Servidor sem a migração: a volta segue e o cache anterior fica.
+        *backend.policies.lock().unwrap()=Some(Err(RemoteError::Rejected{status:404,detail:"function not found".into()}));
+        round(&store,&backend).await.expect("a falha da política não derruba a volta");
+        assert!(store.lock().await.chat_policy(&chat).unwrap().is_some());
+
+        *backend.policies.lock().unwrap()=Some(Ok(vec![]));
+        round(&store,&backend).await.expect("volta");
+        assert!(store.lock().await.chat_policy(&chat).unwrap().is_none(),"lista vazia tira a política");
     }
 
     #[tokio::test] async fn offline_the_queue_stays_whole() {

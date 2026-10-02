@@ -1,17 +1,17 @@
-import { FolderGit2Icon, SettingsIcon, UsersIcon } from "lucide-react";
+import { FolderGit2Icon, SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
 import { useOrganizations } from "@/modules/organizations";
 import { LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { OrganizationMembers, OrganizationRepositories, OrganizationSettings } from "@/components/organisms";
+import { OrganizationMembers, OrganizationPolicy, OrganizationRepositories, OrganizationSettings } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-/** Uma organização: membros, repositórios e configurações. Quem é member vê
- * as duas primeiras só para leitura. */
+/** Uma organização: membros, repositórios, política de LLM e configurações.
+ * Quem é member vê as três primeiras só para leitura. */
 export function OrganizationPage() {
   const t = useT();
   const openId = useOrganizations((state) => state.openId);
@@ -43,6 +43,7 @@ export function OrganizationPage() {
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
           {tab("members", UsersIcon, "org.tab.members")}
           {tab("repositories", FolderGit2Icon, "org.tab.repositories")}
+          {tab("policy", ShieldCheckIcon, "org.tab.policy")}
           {tab("settings", SettingsIcon, "org.tab.settings")}
         </TabsList>
         <TabsContent value="members">
@@ -50,6 +51,9 @@ export function OrganizationPage() {
         </TabsContent>
         <TabsContent value="repositories">
           {detail ? <OrganizationRepositories detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
+        </TabsContent>
+        <TabsContent value="policy">
+          {detail ? <OrganizationPolicy detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
         <TabsContent value="settings"><OrganizationSettings key={organization.id + organization.name} organization={organization} /></TabsContent>
       </Tabs>

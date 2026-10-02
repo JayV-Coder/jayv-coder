@@ -4,8 +4,10 @@ import type { Provider } from "@/modules/auth";
 import { navigate } from "@/modules/navigation";
 
 export * from "./rules";
+export * from "./policy";
 
 import type { Role } from "./rules";
+import { policyPayload, storedPolicy, type LlmPolicy, type StoredPolicy } from "./policy";
 
 export interface Organization {
   id: string;
@@ -29,6 +31,8 @@ export interface OrganizationDetail {
   members: Member[];
   invites: PendingInvite[];
   repositories: Repository[];
+  /** A política da organização e as dos repositórios dela. */
+  policies: StoredPolicy[];
 }
 
 interface OrganizationsState {
@@ -36,18 +40,20 @@ interface OrganizationsState {
   incoming: IncomingInvite[];
   /** A organização de cada projeto associado, por id do projeto. */
   projects: Record<string, ProjectOrganization>;
+  /** Os projetos que rodam sob uma política de LLM, por id. */
+  policed: Record<string, true>;
   loaded: boolean;
   /** A organização aberta na vista `organization`. */
   openId: string | null;
   detail: OrganizationDetail | null;
 }
 
-export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, loaded: false, openId: null, detail: null }));
+export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, detail: null }));
 
 /** As RPCs falham com uma chave do i18n (`org.forbidden`); o resto segue como
  * veio. */
 function failure(error: { message?: string; code?: string }) {
-  if (error.message && /^org\.[A-Za-z]+$/.test(error.message)) return { key: error.message };
+  if (error.message && /^(org|policy)\.[A-Za-z]+$/.test(error.message)) return { key: error.message };
   return error;
 }
 
@@ -73,12 +79,14 @@ type Row = Record<string, unknown>;
 
 export async function loadOrganizations() {
   const me = await userId();
-  const [mine, members, repositories, incoming, projects] = await Promise.all([
+  const [mine, members, repositories, incoming, projects, policed] = await Promise.all([
     supabase.from("organization_members").select("role, organizations(id, name, slug)").eq("user_id", me),
     supabase.from("organization_members").select("org_id"),
     supabase.from("organization_repositories").select("org_id"),
     call<Row[]>("my_invites"),
     call<Row[]>("my_project_organizations"),
+    // Antes da migração da política, o resto da tela continua de pé.
+    call<Row[]>("my_project_policies").catch(() => [] as Row[]),
   ]);
   for (const result of [mine, members, repositories]) if (result.error) throw failure(result.error);
   const memberCount = count(members.data);
@@ -95,15 +103,17 @@ export async function loadOrganizations() {
       role: row.role as Role, invitedBy: (row.invited_by_username as string) ?? null, expiresAt: row.expires_at as string,
     })),
     projects: Object.fromEntries((projects ?? []).map((row) => [row.project_id as string, { orgId: row.org_id as string, slug: row.org_slug as string, name: row.org_name as string }])),
+    policed: Object.fromEntries((policed ?? []).map((row) => [row.project_id as string, true as const])),
   });
 }
 
 export async function loadDetail(id: string) {
   const manages = ["owner", "maintainer"].includes(useOrganizations.getState().list.find((org) => org.id === id)?.role ?? "");
-  const [members, invites, repositories] = await Promise.all([
+  const [members, invites, repositories, policies] = await Promise.all([
     call<Row[]>("organization_members_view", { org: id }),
     manages ? call<Row[]>("organization_invites_view", { org: id }) : Promise.resolve([]),
     supabase.from("organization_repositories").select("id, provider, path, repo_key").eq("org_id", id).order("repo_key"),
+    supabase.from("organization_llm_policies").select("*").eq("org_id", id),
   ]);
   if (repositories.error) throw failure(repositories.error);
   if (useOrganizations.getState().openId !== id) return;
@@ -119,6 +129,8 @@ export async function loadDetail(id: string) {
         role: row.role as Role, invitedBy: (row.invited_by_username as string) ?? null, expiresAt: row.expires_at as string,
       })),
       repositories: (repositories.data ?? []).map((row) => ({ id: row.id, provider: row.provider as Provider, path: row.path, repoKey: row.repo_key })),
+      // Sem a tabela (migração ainda não aplicada), a aba mostra sem política.
+      policies: policies.error ? [] : (policies.data ?? []).map((row) => storedPolicy(row as Row)),
     },
   });
 }
@@ -157,6 +169,8 @@ export async function setMemberRole(org: string, member: string, role: Role) { a
 export async function removeMember(org: string, member: string) { await call("remove_member", { org, member }); await refresh(); }
 export async function addRepository(org: string, provider: Provider, path: string) { await call("add_repository", { org, provider, path }); await refresh(); }
 export async function removeRepository(repository: string) { await call("remove_repository", { repository }); await refresh(); }
+export async function savePolicy(org: string, repository: string | null, policy: LlmPolicy) { await call("set_llm_policy", { org, repository, policy: policyPayload(policy) }); await refresh(); }
+export async function clearPolicy(org: string, repository: string | null) { await call("clear_llm_policy", { org, repository }); await refresh(); }
 export async function acceptInvite(invite: string) { await call("accept_invite", { invite }); await refresh(); }
 export async function declineInvite(invite: string) { await call("decline_invite", { invite }); await refresh(); }
 
@@ -166,6 +180,6 @@ export async function findUsers(query: string): Promise<FoundUser[]> {
 }
 
 export function clearOrganizations() {
-  useOrganizations.setState({ list: [], incoming: [], projects: {}, loaded: false, openId: null, detail: null });
+  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, detail: null });
 }
 

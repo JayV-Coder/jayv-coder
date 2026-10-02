@@ -152,6 +152,7 @@ impl WorkspaceStore {
         ensure_project_repo_keys(&connection)?;
         crate::usage::store::ensure(&connection)?;
         connection.execute_batch(crate::expertise::SCHEMA)?;
+        connection.execute_batch(crate::policy::SCHEMA)?;
         crate::local::outbox::install(&connection)?;
         turns::requeue_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
@@ -366,6 +367,12 @@ impl WorkspaceStore {
     pub fn chat_project(&self, chat_id: &str) -> Result<Option<String>> {
         Ok(self.connection.query_row("SELECT project_id FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).optional()?)
     }
+
+    /// A política de LLM do projeto do chat, do cache que a sincronização
+    /// mantém.
+    pub fn chat_policy(&self, chat_id: &str) -> Result<Option<crate::policy::ProjectPolicy>> {crate::policy::for_chat(&self.connection,chat_id)}
+
+    pub fn replace_project_policies(&mut self, rows: &[crate::policy::RemotePolicy]) -> Result<()> {crate::policy::replace_all(&mut self.connection,rows)}
 
     pub fn average_output(&self) -> Result<u64> {crate::usage::store::average_output(&self.connection)}
 

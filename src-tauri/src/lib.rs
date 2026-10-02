@@ -18,6 +18,7 @@ pub mod local;
 pub mod memory;
 pub mod model;
 pub mod orchestrator;
+pub mod policy;
 pub mod progress;
 pub mod providers;
 pub mod rag;
