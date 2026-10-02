@@ -47,3 +47,11 @@ export function recentChats(chats: Chat[], openChatId: string | null): Chat[] {
 export function folderName(path: string) {
   return path.split(/[\\/]+/).filter(Boolean).pop() ?? "";
 }
+
+/** O projeto que já usa a pasta, comparada sem barra no fim. É só o aviso
+ * antecipado: o núcleo confere de novo, com o caminho real, ao criar. */
+export function folderOwner(projects: Project[], path: string) {
+  const key = (value: string) => value.trim().replace(/[\\/]+$/, "");
+  const wanted = key(path);
+  return wanted ? projects.find((project) => key(project.rootPath) === wanted) ?? null : null;
+}
