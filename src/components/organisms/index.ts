@@ -28,6 +28,7 @@ export { QuotaPanel } from "./QuotaPanel";
 export { UsageCharts } from "./UsageCharts";
 export { JevUsagePanel } from "./JevUsagePanel";
 export { UpdateDialog } from "./UpdateDialog";
+export { UpdateBanner } from "./UpdateBanner";
 export { UsageTable } from "./UsageTable";
 export { ChatUsageBar } from "./ChatUsageBar";
 export { ProjectUsageLine } from "./ProjectUsageLine";

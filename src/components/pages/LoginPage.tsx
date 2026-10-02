@@ -60,7 +60,7 @@ export function LoginPage() {
   const action = mode === "signIn" ? t("auth.signIn") : mode === "signUp" ? t("auth.signUp") : t("auth.reset.send");
 
   return (
-    <div className="grid min-h-screen place-items-center px-6 py-10">
+    <div className="grid min-h-full place-items-center px-6 py-10">
       <div className="grid w-full max-w-sm gap-6">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />

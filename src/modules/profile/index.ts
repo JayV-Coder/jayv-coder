@@ -13,7 +13,7 @@ interface ProfileState {
  * sync porque os membros de uma organização vão ler o perfil uns dos outros. */
 export const useProfile = create<ProfileState>(() => ({ profile: null, loading: true }));
 
-const COLUMNS = "display_name,username,sex,gender,gender_custom,pronouns,pronouns_custom,birth_date,country,timezone,role,company,completed_at";
+const COLUMNS = "display_name,username,sex,gender,gender_custom,pronouns,pronouns_custom,birth_date,country,timezone,role,company,completed_at,username_set_at";
 
 async function userId() {
   const { data, error } = await supabase.auth.getUser();
@@ -23,8 +23,9 @@ async function userId() {
 
 /** O banco recusou um valor que passou pela tela: nome de usuário tomado
  * (índice único) ou outro `check`. */
-function failure(error: { code?: string }) {
+function failure(error: { code?: string; message?: string }) {
   if (error.code === "23505") return { key: "profile.usernameTaken" };
+  if (error.message === "profile.username.locked") return { key: "profile.username.locked" };
   return error.code === "23514" || error.code === "22007" || error.code === "22008" ? { key: "profile.invalid" } : error;
 }
 
@@ -41,9 +42,11 @@ export async function loadProfile() {
   if (error) throw error;
 }
 
-/** Salvar ou pular marcam `completed_at`: o passo de perfil não volta. */
+/** Salvar ou pular marcam `completed_at`: o passo de perfil não volta. Salvar
+ * também fixa o nome de usuário (o banco guarda só a primeira vez). */
 export async function saveProfile(draft: AccountProfile) {
-  await write({ ...toRow(normalizeProfile(draft)), completed_at: new Date().toISOString() });
+  const now = new Date().toISOString();
+  await write({ ...toRow(normalizeProfile(draft)), completed_at: now, username_set_at: now });
 }
 
 export async function skipSetup() {
