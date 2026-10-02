@@ -24,7 +24,7 @@ pub struct SyncTable {
 
 /// Em ordem de dependência: quem sobe primeiro é quem os outros apontam.
 pub const TABLES:[SyncTable;14]=[
-    SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at"]},
+    SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at","repo_keys"]},
     SyncTable{name:"chats",key:&["id"],columns:&["id","code","project_id","title","named","created_at","updated_at"]},
     SyncTable{name:"turns",key:&["id"],columns:&["id","chat_id","ordinal","status","created_at"]},
     SyncTable{name:"messages",key:&["uid"],columns:&["uid","chat_id","turn_id","role","content","created_at"]},
@@ -92,7 +92,15 @@ pub fn install(connection:&Connection)->Result<()> {
          INSERT INTO sync_flag(applying) SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM sync_flag);
          UPDATE sync_flag SET applying=0;",
     )?;
-    for table in &TABLES {connection.execute_batch(&triggers(table))?;}
+    for table in &TABLES {
+        // O gatilho de update de um banco antigo olha as colunas de antes: uma
+        // coluna nova que sobe não entraria na fila. Recria os três.
+        let update:Option<String>=connection.query_row("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1",[format!("outbox_{}_update",table.name)],|row|row.get(0)).optional()?;
+        if update.is_some_and(|sql|!sql.contains(&format!("UPDATE OF {} ON",table.columns.join(",")))) {
+            connection.execute_batch(&format!("DROP TRIGGER outbox_{0}_insert; DROP TRIGGER outbox_{0}_update; DROP TRIGGER outbox_{0}_delete;",table.name))?;
+        }
+        connection.execute_batch(&triggers(table))?;
+    }
     Ok(())
 }
 
@@ -199,7 +207,7 @@ pub fn apply_remote(connection:&mut Connection,table:&SyncTable,rows:&[Value])->
         let written=if deleted {
             transaction.execute(&format!("DELETE FROM {} WHERE {}",table.name,matching(table)),params_from_iter(key_values(table,&key)?))
         } else {
-            transaction.execute(&upsert(table),params_from_iter(table.columns.iter().map(|column|to_sql(remote.get(*column).unwrap_or(&Value::Null)))))
+            transaction.execute(&upsert(table),params_from_iter(table.columns.iter().map(|column|to_sql(remote.get(*column).unwrap_or(&absent(table,column))))))
         };
         // No SQLite a restrição desfaz só o comando, não a transação: a linha
         // órfã fica de fora e as outras seguem.
@@ -212,6 +220,15 @@ pub fn apply_remote(connection:&mut Connection,table:&SyncTable,rows:&[Value])->
     transaction.execute("UPDATE sync_flag SET applying=0",[])?;
     transaction.commit()?;
     Ok(applied)
+}
+
+/// O valor de uma coluna que a linha baixada não trouxe — o servidor ainda sem
+/// a coluna nova — : o padrão dela aqui, para a linha não cair no `NOT NULL`.
+fn absent(table:&SyncTable,column:&str)->Value {
+    match (table.name,column) {
+        ("projects","repo_keys")=>Value::String("[]".into()),
+        _=>Value::Null,
+    }
 }
 
 /// O último `synced_at` baixado desta tabela.
@@ -304,6 +321,58 @@ mod tests {
         assert_eq!(store.expertise().expect("nível"),crate::expertise::Expertise::Architect);
     }
 
+    fn git_folder(url:&str)->tempfile::TempDir {
+        let dir=tempfile::tempdir().expect("pasta");
+        std::fs::create_dir(dir.path().join(".git")).expect(".git");
+        std::fs::write(dir.path().join(".git/config"),format!("[remote \"origin\"]\n\turl = {url}\n")).expect("config");
+        dir
+    }
+
+    fn repo_keys(store:&WorkspaceStore,id:&str)->String {
+        store.connection().query_row("SELECT repo_keys FROM projects WHERE id=?1",[id],|row|row.get(0)).expect("repo_keys")
+    }
+
+    /// As chaves dos remotes sobem com o projeto: é por elas que o servidor
+    /// sabe de que organização ele é.
+    #[test] fn a_project_carries_the_keys_of_its_remotes() {
+        let folder=git_folder("git@github.com:Acme/API.git");
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        let project=store.create_project("Api",Some(folder.path().to_string_lossy().into())).expect("projeto");
+        assert_eq!(repo_keys(&store,&project.id),r#"["github.com/acme/api"]"#);
+        assert!(table("projects").unwrap().columns.contains(&"repo_keys"));
+    }
+
+    /// Recalcular na abertura só escreve o que mudou: sem mudança, a fila não
+    /// ganha nada.
+    #[test] fn refreshing_the_keys_only_writes_what_changed() {
+        let folder=git_folder("git@github.com:acme/api.git");
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        let project=store.create_project("Api",Some(folder.path().to_string_lossy().into())).expect("projeto");
+        let queued=entries(&store,"projects");
+        settle(store.connection(),queued[0].seq,queued[0].version).expect("enviado");
+        store.refresh_repo_keys().expect("recalcula");
+        assert!(entries(&store,"projects").is_empty(),"nada mudou, nada sobe");
+        std::fs::write(folder.path().join(".git/config"),"[remote \"origin\"]\n\turl = https://gitlab.com/acme/api\n").expect("config");
+        store.refresh_repo_keys().expect("recalcula");
+        assert_eq!(repo_keys(&store,&project.id),r#"["gitlab.com/acme/api"]"#);
+        assert_eq!(entries(&store,"projects").len(),1,"a mudança sobe");
+    }
+
+    /// Um banco antigo tem o gatilho de update sem a coluna nova: a instalação
+    /// o troca, senão a mudança de `repo_keys` nunca subiria.
+    #[test] fn old_triggers_are_replaced_when_the_columns_change() {
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        store.connection().execute_batch(
+            "DROP TRIGGER outbox_projects_update;
+             CREATE TRIGGER outbox_projects_update AFTER UPDATE OF id,name,created_at ON projects BEGIN SELECT 1; END;").expect("gatilho velho");
+        install(store.connection()).expect("instala");
+        let project=store.create_project("Loja",None).expect("projeto");
+        let queued=entries(&store,"projects");
+        settle(store.connection(),queued[0].seq,queued[0].version).expect("enviado");
+        store.connection().execute("UPDATE projects SET repo_keys='[\"github.com/a/b\"]' WHERE id=?1",[&project.id]).expect("update");
+        assert_eq!(entries(&store,"projects").len(),1);
+    }
+
     #[test] fn creating_a_project_queues_an_entry() {
         let mut store=WorkspaceStore::in_memory().expect("store");
         let project=store.create_project("Loja",None).expect("projeto");
@@ -312,7 +381,7 @@ mod tests {
         assert_eq!(queue[0].key,json!([project.id]));
         assert_eq!(queue[0].op,Op::Upsert);
         assert_eq!(queue[0].version,1);
-        assert_eq!(row(store.connection(),table("projects").unwrap(),&queue[0].key).expect("linha"),Some(json!({"id":project.id,"name":"Loja","created_at":project.created_at.to_rfc3339()})));
+        assert_eq!(row(store.connection(),table("projects").unwrap(),&queue[0].key).expect("linha"),Some(json!({"id":project.id,"name":"Loja","created_at":project.created_at.to_rfc3339(),"repo_keys":"[]"})));
     }
 
     #[test] fn writes_in_the_same_turn_become_one_entry() {

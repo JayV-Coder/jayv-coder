@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { loadOrganizations } from "@/modules/organizations";
 import { chatsOf, createChat, deleteProject, openProject, setLayout, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { EmptyText } from "@/components/atoms";
@@ -10,6 +12,9 @@ import { cn } from "@/lib/utils";
 export function ProjectsPage() {
   const t = useT();
   const { data, layout } = useWorkspace();
+  // O selo da organização depende do que já subiu dos remotes: confere de novo
+  // a cada volta à lista.
+  useEffect(() => { loadOrganizations().catch((error) => console.error("organizations", error)); }, []);
   return (
     <ScrollPage>
       <PageHeading eyebrow={t("projects.eyebrow")} title={t("nav.projects")} description={t("projects.description")}>

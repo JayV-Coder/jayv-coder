@@ -8,12 +8,13 @@ import { reportError } from "@/modules/feedback";
 import { connectGate } from "@/modules/gate";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
+import { clearOrganizations, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
 import { connectSystem, loadStatus } from "@/modules/system";
 import { checkForUpdate } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
-import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, ProfilePage, ProfileSetupPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
 import { UpdateDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
@@ -28,6 +29,8 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   stats: StatsPage,
   settings: SettingsPage,
   profile: ProfilePage,
+  organizations: OrganizationsPage,
+  organization: OrganizationPage,
 };
 
 /** Liga os módulos uma vez: cada um passa a ouvir o núcleo e o barramento por
@@ -52,10 +55,13 @@ export function App() {
   useEffect(() => {
     if (status !== "signedIn") {
       clearProfile();
+      clearOrganizations();
       return;
     }
     navigate("projects");
     loadProfile().catch(reportError);
+    // Sem a migração das organizações (ou sem rede), o resto do app segue.
+    loadOrganizations().catch((error) => console.error("organizations", error));
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
     // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.
     void refreshQuotas();

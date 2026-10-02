@@ -1,6 +1,7 @@
 import { Trash2Icon } from "lucide-react";
 import type { Chat, Project } from "@/modules/core";
 import { useProjectRefusals } from "@/modules/connection";
+import { useOrganizations } from "@/modules/organizations";
 import { formatSince, useT } from "@/modules/i18n";
 import { FolderIcon, PathText } from "@/components/atoms";
 import { ConfirmAction } from "@/components/molecules";
@@ -19,6 +20,7 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
   const last = chats[0]?.updatedAt ?? project.createdAt;
   const count = chats.length;
   const refused = useProjectRefusals(project.id);
+  const organization = useOrganizations((state) => state.projects[project.id]);
   return (
     <YardCard
       onOpen={onOpen}
@@ -38,7 +40,12 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
         </>
       )}
     >
-      <span className="text-lg font-bold tracking-[-0.01em] break-words">{project.name}</span>
+      <span className="flex flex-wrap items-baseline gap-2">
+        <span className="text-lg font-bold tracking-[-0.01em] break-words">{project.name}</span>
+        {organization && (
+          <span title={t("org.project.badge", { name: organization.name })} className="rounded-md border border-[#2f4433] px-1.5 font-mono text-[11px] text-[#a4f4a9]">@{organization.slug}</span>
+        )}
+      </span>
       {project.rootPath ? (
         <span title={project.rootPath} className="flex min-w-0 items-center gap-2 text-[#8ba892]">
           <FolderIcon className="size-4 flex-none" />

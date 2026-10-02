@@ -149,12 +149,16 @@ impl WorkspaceStore {
         ensure_turn_partial(&connection)?;
         ensure_turn_local(&connection)?;
         ensure_message_uid(&connection)?;
+        ensure_project_repo_keys(&connection)?;
         crate::usage::store::ensure(&connection)?;
         connection.execute_batch(crate::expertise::SCHEMA)?;
         crate::local::outbox::install(&connection)?;
         turns::requeue_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
         store.ensure_chat_codes()?;
+        // Os remotes mudam fora do app (um `git remote add`): a abertura
+        // confere de novo. Pasta que sumiu só deixa a lista como estava.
+        if let Err(error)=store.refresh_repo_keys() {eprintln!("repo keys: {error:#}");}
         Ok(store)
     }
 
@@ -188,8 +192,26 @@ impl WorkspaceStore {
             if let Some((owner,_))=folders.into_iter().find(|(_,path)|folder_key(path)==wanted) { anyhow::bail!(Text::new("project.pathTaken").with("name",owner)); }
         }
         let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path,created_at:Utc::now()};
-        self.connection.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES(?1,?2,?3,?4)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339()])?;
+        let keys=serde_json::to_string(&crate::repo_keys::of_folder(&project.root_path))?;
+        self.connection.execute("INSERT INTO projects(id,name,root_path,created_at,repo_keys) VALUES(?1,?2,?3,?4,?5)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339(),keys])?;
         Ok(project)
+    }
+
+    /// Recalcula as chaves dos remotes de cada projeto com pasta e grava só o
+    /// que mudou: cada gravação vira uma subida na fila.
+    pub fn refresh_repo_keys(&mut self) -> Result<()> {
+        let folders={
+            let mut statement=self.connection.prepare("SELECT id,root_path,repo_keys FROM projects WHERE trim(root_path)<>''")?;
+            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (id,root,current) in folders {
+            // A pasta de outra máquina (vinda pela sync) ou apagada não diz
+            // nada: fica o que estava.
+            if !Path::new(root.trim()).is_dir() {continue;}
+            let keys=serde_json::to_string(&crate::repo_keys::of_folder(&root))?;
+            if keys!=current {self.connection.execute("UPDATE projects SET repo_keys=?1 WHERE id=?2",params![keys,id])?;}
+        }
+        Ok(())
     }
 
     pub fn create_chat(&mut self, project_id: &str, title: Option<String>) -> Result<ChatRecord> {
@@ -529,6 +551,14 @@ fn ensure_message_uid(connection:&Connection)->Result<()> {
 /// esta marca a única pista era "o chat não tem mensagem nenhuma" — e desde que
 /// o pedido passa a ser gravado antes de sair, essa pista deixa de existir.
 /// Um chat que já existia e tem histórico é dado por batizado.
+/// As chaves dos remotes do git da pasta (`["github.com/acme/api"]`), com o
+/// `origin` primeiro: sobem para o servidor ligar o projeto à organização.
+fn ensure_project_repo_keys(connection:&Connection)->Result<()> {
+    if connection.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name='repo_keys'")?.exists([])? {return Ok(());}
+    connection.execute_batch("ALTER TABLE projects ADD COLUMN repo_keys TEXT NOT NULL DEFAULT '[]'")?;
+    Ok(())
+}
+
 fn ensure_chat_named(connection:&Connection)->Result<()> {
     if connection.prepare("SELECT 1 FROM pragma_table_info('chats') WHERE name='named'")?.exists([])? {return Ok(());}
     connection.execute_batch("ALTER TABLE chats ADD COLUMN named INTEGER NOT NULL DEFAULT 0")?;

@@ -21,6 +21,7 @@ pub mod orchestrator;
 pub mod progress;
 pub mod providers;
 pub mod rag;
+pub mod repo_keys;
 pub mod router;
 pub mod sandbox;
 pub mod sync;

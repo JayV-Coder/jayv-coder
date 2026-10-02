@@ -7,6 +7,7 @@ import { ChatRow, ConnectionNote, NavItem, ProjectPlate } from "@/components/mol
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/modules/auth";
 import { useProfile } from "@/modules/profile";
+import { useOrganizations } from "@/modules/organizations";
 import { openStats } from "@/modules/usage";
 import { cn } from "@/lib/utils";
 import { displayName } from "./ProfileCard";
@@ -20,6 +21,7 @@ export function Sidebar() {
   const account = useProfile((state) => state.profile);
   const name = displayName(account, profile, email);
   const view = useNavigation((state) => state.view);
+  const invites = useOrganizations((state) => state.incoming.length);
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const project = findProject(data, activeProjectId);
   // O chat só aparece selecionado enquanto a conversa dele está na tela: na
@@ -40,6 +42,12 @@ export function Sidebar() {
       {!project ? (
         <nav className="grid gap-[5px] border-b border-[#202521] pb-5">
           <NavItem active={view === "projects"} mark="▦" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+          <NavItem active={view === "organizations" || view === "organization"} mark="◈" onClick={() => navigate("organizations")}>
+            <span className="flex-1">{t("nav.organizations")}</span>
+            {invites > 0 && (
+              <span title={t("org.invites.count", { count: invites })} className="rounded-full bg-[#2b5a33] px-1.5 text-[11px] font-semibold text-[#a4f4a9]">{invites}</span>
+            )}
+          </NavItem>
           <NavItem active={view === "stats"} mark="▥" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
           <NavItem active={view === "status"} mark="◉" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
         </nav>
