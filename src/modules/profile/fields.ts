@@ -20,6 +20,8 @@ export interface AccountProfile {
   displayName: string;
   /** Único, em minúsculas: o nome pelo qual se busca alguém no JayV. */
   username: string;
+  /** Quando a pessoa gravou o nome de usuário; depois disso ele não muda. */
+  usernameSetAt: string | null;
   sex: Sex | null;
   gender: Gender | null;
   genderCustom: string | null;
@@ -50,6 +52,7 @@ export interface ProfileRow {
   role: Role | null;
   company: string | null;
   completed_at?: string | null;
+  username_set_at?: string | null;
 }
 
 const clean = (value: string | null) => (value?.trim() ? value.trim() : null);
@@ -70,7 +73,8 @@ export function normalizeProfile(draft: AccountProfile): AccountProfile {
   };
 }
 
-/** A linha para gravar; `completed_at` fica de fora, quem grava decide. */
+/** A linha para gravar; `completed_at` e `username_set_at` ficam de fora,
+ * quem grava decide. */
 export function toRow(profile: AccountProfile): ProfileRow {
   return {
     display_name: profile.displayName,
@@ -92,6 +96,7 @@ export function fromRow(row: ProfileRow): AccountProfile {
   return {
     displayName: row.display_name,
     username: row.username,
+    usernameSetAt: row.username_set_at ?? null,
     sex: row.sex,
     gender: row.gender,
     genderCustom: row.gender_custom,
