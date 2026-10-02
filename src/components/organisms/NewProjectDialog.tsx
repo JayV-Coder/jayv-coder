@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
-import { createProject, folderName } from "@/modules/workspace";
+import { createProject, folderName, folderOwner, useWorkspace } from "@/modules/workspace";
 import { Eyebrow } from "@/components/atoms";
 import { FormField } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ export function NewProjectDialog({ children }: { children: ReactNode }) {
   // Quem digita o nome manda: a pasta só preenche o campo enquanto ele estiver
   // intocado ou vazio.
   const [typed, setTyped] = useState(false);
+  const projects = useWorkspace((state) => state.data.projects);
+  const owner = folderOwner(projects, path);
 
   const reset = (next: boolean) => {
     setOpen(next);
@@ -42,6 +44,7 @@ export function NewProjectDialog({ children }: { children: ReactNode }) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (owner) return;
     try {
       await createProject(name, path.trim() || null);
       setOpen(false);
@@ -76,10 +79,11 @@ export function NewProjectDialog({ children }: { children: ReactNode }) {
               <Button type="button" variant="outline" onClick={() => void explore()}>{t("project.explore")}</Button>
             </div>
             {note && <small className="text-xs text-destructive">{note}</small>}
+            {owner && <small role="alert" className="text-xs text-destructive">{t("project.pathTaken", { name: owner.name })}</small>}
           </FormField>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>{t("common.cancel")}</Button>
-            <Button type="submit">{t("project.create")}</Button>
+            <Button type="submit" disabled={Boolean(owner)}>{t("project.create")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
