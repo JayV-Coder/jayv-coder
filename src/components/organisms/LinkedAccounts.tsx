@@ -12,12 +12,10 @@ export function LinkedAccounts() {
   const t = useT();
   const providers = useAuth((state) => state.providers);
   const hasPassword = useAuth((state) => state.hasPassword);
-  const waiting = useAuth((state) => state.waitingBrowser);
-  const [chosen, setChosen] = useState<Provider | null>(null);
+  const linking = useAuth((state) => state.linking);
   const [busy, setBusy] = useState(false);
 
   const link = (provider: Provider) => {
-    setChosen(provider);
     linkProvider(provider).catch(reportError);
   };
 
@@ -51,7 +49,7 @@ export function LinkedAccounts() {
                 )
               ) : (
                 <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => link(provider)}>
-                  {waiting && chosen === provider ? t("auth.waitingBrowser") : t("linked.link")}
+                  {linking === provider ? t("auth.waitingBrowser") : t("linked.link")}
                 </Button>
               )}
             </li>

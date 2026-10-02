@@ -5,12 +5,12 @@ describe("readCallback", () => {
   it("devolve o código do PKCE", () => expect(readCallback("jayv://auth/callback?code=abc")).toEqual({ code: "abc" }));
   it("traduz o erro conhecido da query", () =>
     expect(readCallback("jayv://auth/callback?error=server_error&error_code=identity_already_exists&error_description=Identity+is+already+linked"))
-      .toEqual({ failure: { key: "auth.identityTaken" } }));
+      .toEqual({ failure: { key: "auth.identityTaken" }, reason: "identity_already_exists" }));
   it("lê o erro que vem no fragmento", () =>
     expect(readCallback("jayv://auth/callback#error=access_denied&error_code=otp_expired&error_description=Email+link+expired"))
-      .toEqual({ failure: { key: "auth.badCode" } }));
+      .toEqual({ failure: { key: "auth.badCode" }, reason: "otp_expired" }));
   it("erro desconhecido fica com a descrição", () =>
-    expect(readCallback("jayv://auth/callback?error=x&error_description=Algo")).toEqual({ failure: "Algo" }));
+    expect(readCallback("jayv://auth/callback?error=x&error_description=Algo")).toEqual({ failure: "Algo", reason: null }));
   it("ignora o que não é do app", () => {
     expect(readCallback("https://example.com/?code=abc")).toBeNull();
     expect(readCallback("não é url")).toBeNull();
