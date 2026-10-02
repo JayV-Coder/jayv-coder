@@ -76,6 +76,7 @@ fn keep_webkit_off_dmabuf() {
 }
 
 pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
+    crate::lockdown::strip_inspector_switches();
     #[cfg(target_os = "linux")]
     keep_webkit_off_dmabuf();
     let mut orchestrator=Orchestrator::unindexed(config_path.clone(),root.clone())?;
@@ -87,7 +88,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     let workspace=WorkspaceStore::in_memory()?;
     orchestrator.use_llm(&workspace.llm_settings()?);
 
-    let http=reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let http=crate::lockdown::http_client(Duration::from_secs(30)).build()?;
     let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root}));
     let workspace:SharedWorkspace=Arc::new(Mutex::new(workspace));
     let bell:QueueBell=Arc::new(Notify::new());

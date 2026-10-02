@@ -65,7 +65,7 @@ pub async fn discover_models(name: &str, config: &ProviderConfig) -> Result<Vec<
         "openai-compatible"=>config.base_url.as_deref().filter(|value|!value.trim().is_empty()).ok_or_else(||anyhow!("the provider base URL is required"))?,
         _=>return Err(anyhow!("unsupported provider kind")),
     };
-    let client=reqwest::Client::builder().timeout(Duration::from_secs(config.timeout.max(5))).build()?;
+    let client=crate::lockdown::http_client(Duration::from_secs(config.timeout.max(5))).build()?;
     let mut request=client.get(format!("{}/models",default_base.trim_end_matches('/')));
     if config.kind=="anthropic" {
         let key=config.api_key.as_deref().filter(|key|!key.trim().is_empty()).ok_or_else(||anyhow!("an API key is required to load the models"))?;
@@ -191,7 +191,7 @@ impl HttpProvider {
     fn openai(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::OpenAi) }
     fn anthropic(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::Anthropic) }
     fn compatible(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::OpenAi) }
-    fn new(name:String,config:ProviderConfig,kind:HttpKind)->Self { let client=reqwest::Client::builder().timeout(Duration::from_secs(config.timeout)).build().expect("HTTP client"); Self{name,config,kind,client} }
+    fn new(name:String,config:ProviderConfig,kind:HttpKind)->Self { let client=crate::lockdown::http_client(Duration::from_secs(config.timeout)).build().expect("HTTP client"); Self{name,config,kind,client} }
     /// O que um corpo de resposta inteiro carrega. O mesmo leitor serve à
     /// conversa comum e ao provedor que ignorou o pedido de transmissão e
     /// devolveu tudo de uma vez — sem ele, um endpoint desses devolveria texto
