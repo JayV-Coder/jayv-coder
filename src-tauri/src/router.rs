@@ -6,6 +6,11 @@ const MAX_RECORDS:usize=1000;
 const FREE_COST_BONUS:f64=1.5;
 const COMPLEX_REASONING_BONUS:f64=1.2;
 const FAST_SPEED_BONUS:f64=0.4;
+/// O quanto vale o modelo do porte que o pedido pede, e o quanto cada degrau
+/// de distância tira. Pesa mais que a velocidade e que o histórico juntos: um
+/// pedido grande não vai para o modelo pequeno só porque ele responde rápido.
+const TIER_BONUS:f64=2.5;
+const TIER_STEP_PENALTY:f64=1.25;
 const HISTORICAL_WEIGHT:f64=2.0;
 const HISTORICAL_PRIOR:f64=0.5;
 const HISTORICAL_PRIOR_SAMPLES:f64=5.0;
@@ -25,16 +30,37 @@ fn effective_model_id<'a>(name:&'a str,model:&'a ModelConfig)->&'a str { if mode
 
 pub fn required_capabilities(intent:&str)->Vec<String> { match intent { "code"|"refactor"=>vec!["code".into(),"tools".into()], "test"=>vec!["code".into(),"tools".into()], "security"=>vec!["reasoning".into(),"tools".into()], "analysis"|"review"=>vec!["reasoning".into()], "frontend"=>vec!["code".into()], _=>vec!["chat".into()] } }
 
+/// O porte de um modelo pela classe de custo: `free` (local) 0, `low` 1,
+/// `medium` 2, `high` 3. Classe desconhecida não entra na conta de porte.
+fn cost_rank(cost_class:&str)->Option<usize> { ["free","low","medium","high"].iter().position(|class|*class==cost_class) }
+
+/// O porte que o pedido pede: o pequeno para o trivial, o grande para o
+/// complexo. Análise, revisão e segurança pensam mais que escrevem e sobem um
+/// degrau a partir do médio.
+pub fn wanted_tier(intent:&str,complexity:&str)->usize {
+    let base=match complexity { "trivial"|"simple"=>1, "medium"=>2, "complex"=>3, _=>2 };
+    if base>=2 && matches!(intent,"analysis"|"review"|"security") { (base+1).min(3) } else { base }
+}
+
+fn tier_fit(model:&ModelConfig,wanted:usize)->f64 {
+    match cost_rank(&model.cost_class) {
+        // O modelo local é do porte pequeno: o bônus de local é à parte.
+        Some(rank)=>TIER_BONUS-TIER_STEP_PENALTY*(rank.max(1).abs_diff(wanted) as f64),
+        None=>0.0,
+    }
+}
+
 pub fn select_model(config:&Config,intent:&str,complexity:&str,context:&Context,performance:&PerformanceTracker)->ModelSelection {
     let required=required_capabilities(intent); let required_set=required.iter().collect::<HashSet<_>>();
     let budget=*config.budgets.get(complexity).unwrap_or(&12_000);
     let executable=|model:&ModelConfig|model.enabled && config.providers.get(&model.provider).is_some_and(|provider|provider.is_executable());
-    let mut choices=config.models.iter().filter(|(_,m)| executable(m) && context.estimated_tokens<=m.context_window && required_set.iter().all(|cap|m.capabilities.contains(cap))).map(|(name,m)|(name,m,score_model(name,m,complexity,config,performance))).collect::<Vec<_>>();
-    if choices.is_empty() { choices=config.models.iter().filter(|(_,m)|executable(m) && context.estimated_tokens<=m.context_window).map(|(name,m)|(name,m,score_model(name,m,complexity,config,performance))).collect(); }
-    choices.sort_by(|a,b|b.2.total_cmp(&a.2));
-    match choices.first() { Some((name,model,score))=>ModelSelection{model_name:effective_model_id(name,model).to_string(),provider:model.provider.clone(),estimated_tokens:context.estimated_tokens.min(budget),score:*score,reason:format!("matched {} capabilities within {budget}-token budget",required.len())}, None=>ModelSelection{model_name:"configuration".into(),provider:"jev".into(),estimated_tokens:context.estimated_tokens.min(budget),score:0.0,reason:"no configured model can satisfy this request".into()} }
+    let mut choices=config.models.iter().filter(|(_,m)| executable(m) && context.estimated_tokens<=m.context_window && required_set.iter().all(|cap|m.capabilities.contains(cap))).map(|(name,m)|(name,m,score_model(name,m,intent,complexity,config,performance))).collect::<Vec<_>>();
+    if choices.is_empty() { choices=config.models.iter().filter(|(_,m)|executable(m) && context.estimated_tokens<=m.context_window).map(|(name,m)|(name,m,score_model(name,m,intent,complexity,config,performance))).collect(); }
+    // Empate desfeito pelo nome: a mesma pergunta cai sempre no mesmo modelo.
+    choices.sort_by(|a,b|b.2.total_cmp(&a.2).then_with(||a.0.cmp(b.0)));
+    match choices.first() { Some((name,model,score))=>ModelSelection{model_name:effective_model_id(name,model).to_string(),provider:model.provider.clone(),estimated_tokens:context.estimated_tokens.min(budget),score:*score,reason:format!("{intent}/{complexity} wants a {} model; matched {} capabilities within {budget}-token budget",["local","small","mid-size","large"][wanted_tier(intent,complexity)],required.len()),..Default::default()}, None=>ModelSelection{model_name:"configuration".into(),provider:"jev".into(),estimated_tokens:context.estimated_tokens.min(budget),score:0.0,reason:"no configured model can satisfy this request".into(),..Default::default()} }
 }
-fn score_model(name:&str,model:&ModelConfig,complexity:&str,config:&Config,performance:&PerformanceTracker)->f64 { let mut score=1.0; if config.jev.optimization.prefer_local && model.cost_class=="free" {score+=FREE_COST_BONUS;} if complexity=="complex" && model.capabilities.contains(&"reasoning".into()){score+=COMPLEX_REASONING_BONUS;} if model.speed=="fast"{score+=FAST_SPEED_BONUS;} if config.jev.adaptive_routing.enabled { if let Some(historical)=performance.shrunk_model_score(effective_model_id(name,model)){score+=historical*HISTORICAL_WEIGHT;} } score }
+fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&Config,performance:&PerformanceTracker)->f64 { let mut score=1.0+tier_fit(model,wanted_tier(intent,complexity)); if config.jev.optimization.prefer_local && model.cost_class=="free" {score+=FREE_COST_BONUS;} if complexity=="complex" && model.capabilities.contains(&"reasoning".into()){score+=COMPLEX_REASONING_BONUS;} if model.speed=="fast" && matches!(complexity,"trivial"|"simple") {score+=FAST_SPEED_BONUS;} if config.jev.adaptive_routing.enabled { if let Some(historical)=performance.shrunk_model_score(effective_model_id(name,model)){score+=historical*HISTORICAL_WEIGHT;} } score }
 
 #[cfg(test)] mod tests {
     use super::*;
@@ -66,6 +92,27 @@ fn score_model(name:&str,model:&ModelConfig,complexity:&str,config:&Config,perfo
         assert_ne!(selection.provider, "none");
     }
 
+    /// Três portes no mesmo agente: o pedido escolhe o porte, não a pressa.
+    #[test]
+    fn the_size_of_the_request_picks_the_size_of_the_model() {
+        let mut config=bare();
+        config.providers.insert("claude".into(),crate::config::ProviderConfig { enabled:true, kind:"openai".into(), api_key:Some("configured".into()), ..Default::default() });
+        let all=vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()];
+        for (id,cost,speed) in [("small","low","fast"),("mid","medium","medium"),("large","high","slow")] {
+            config.models.insert(format!("claude:{id}"),ModelConfig{enabled:true,provider:"claude".into(),model:id.into(),capabilities:all.clone(),cost_class:cost.into(),speed:speed.into(),context_window:200_000});
+        }
+        let pick=|config:&Config,intent:&str,complexity:&str|select_model(config,intent,complexity,&Context::default(),&PerformanceTracker::default()).model_name;
+        assert_eq!(pick(&config,"general","trivial"),"small");
+        assert_eq!(pick(&config,"code","simple"),"small");
+        assert_eq!(pick(&config,"code","medium"),"mid");
+        assert_eq!(pick(&config,"analysis","medium"),"large","análise média pensa como pedido grande");
+        assert_eq!(pick(&config,"refactor","complex"),"large");
+
+        // Um disabled sai da conta, e o porte vizinho assume.
+        config.models.get_mut("claude:large").expect("large").enabled=false;
+        assert_eq!(pick(&config,"refactor","complex"),"mid");
+    }
+
     #[test]
     fn ignores_disabled_local_model() {
         let mut config=bare();
@@ -86,8 +133,8 @@ fn score_model(name:&str,model:&ModelConfig,complexity:&str,config:&Config,perfo
         let mut tracker=PerformanceTracker::default();
         tracker.record(sample("claude-sonnet-4-5",true)); tracker.record(sample("claude-sonnet-4-5",true)); tracker.record(sample("claude-sonnet-4-5",false)); tracker.record(sample("claude-sonnet-4-5",false));
         assert!(tracker.model_score("coding-premium").is_none());
-        let baseline=score_model("coding-premium",&model,"simple",&config,&PerformanceTracker::default());
-        let learned=score_model("coding-premium",&model,"simple",&config,&tracker);
+        let baseline=score_model("coding-premium",&model,"code","simple",&config,&PerformanceTracker::default());
+        let learned=score_model("coding-premium",&model,"code","simple",&config,&tracker);
         assert!((learned-baseline-0.5*HISTORICAL_WEIGHT).abs()<1e-9,"expected historical bonus, got {learned} vs {baseline}");
     }
 
@@ -97,7 +144,7 @@ fn score_model(name:&str,model:&ModelConfig,complexity:&str,config:&Config,perfo
         let model=ModelConfig{enabled:true,provider:"local".into(),model:String::new(),capabilities:vec!["chat".into()],context_window:8_192,..Default::default()};
         config.models.insert("local-fast".into(),model.clone());
         let mut tracker=PerformanceTracker::default(); tracker.record(sample("local-fast",true));
-        assert!(score_model("local-fast",&model,"simple",&config,&tracker)>score_model("local-fast",&model,"simple",&config,&PerformanceTracker::default()));
+        assert!(score_model("local-fast",&model,"general","simple",&config,&tracker)>score_model("local-fast",&model,"general","simple",&config,&PerformanceTracker::default()));
     }
 
     #[test]
@@ -115,15 +162,15 @@ fn score_model(name:&str,model:&ModelConfig,complexity:&str,config:&Config,perfo
         assert!(tracker.shrunk_model_score("newcomer-1")<tracker.shrunk_model_score("veteran-1"));
         assert_eq!(select_model(&config,"general","trivial",&Context::default(),&tracker).model_name,"veteran-1");
         let newcomer=ModelConfig{model:"newcomer-1".into(),..template};
-        let baseline=score_model("newcomer",&newcomer,"simple",&config,&PerformanceTracker::default());
-        assert!(score_model("newcomer",&newcomer,"simple",&config,&tracker)-baseline<0.6*HISTORICAL_WEIGHT);
+        let baseline=score_model("newcomer",&newcomer,"general","simple",&config,&PerformanceTracker::default());
+        assert!(score_model("newcomer",&newcomer,"general","simple",&config,&tracker)-baseline<0.6*HISTORICAL_WEIGHT);
     }
 
     #[test]
     fn disabled_adaptive_routing_drops_the_historical_term() {
         let (mut config,model)=premium(); config.jev.adaptive_routing.enabled=false;
         let mut tracker=PerformanceTracker::default(); tracker.record(sample("claude-sonnet-4-5",true));
-        assert_eq!(score_model("coding-premium",&model,"simple",&config,&tracker),score_model("coding-premium",&model,"simple",&config,&PerformanceTracker::default()));
+        assert_eq!(score_model("coding-premium",&model,"code","simple",&config,&tracker),score_model("coding-premium",&model,"code","simple",&config,&PerformanceTracker::default()));
     }
 
     #[test]
