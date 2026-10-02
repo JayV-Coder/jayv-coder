@@ -1,17 +1,18 @@
-import { FolderGit2Icon, SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
+import { FolderGit2Icon, FolderKanbanIcon, SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
 import { useOrganizations } from "@/modules/organizations";
 import { LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { OrganizationMembers, OrganizationPolicy, OrganizationRepositories, OrganizationSettings } from "@/components/organisms";
+import { OrganizationMembers, OrganizationPolicy, OrganizationProjects, OrganizationRepositories, OrganizationSettings } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-/** Uma organização: membros, repositórios, política de LLM e configurações.
- * Quem é member vê as três primeiras só para leitura. */
+/** Uma organização: os projetos de quem usa o app que entraram nela, membros,
+ * repositórios, política de LLM e configurações. Quem é member vê membros,
+ * repositórios e política só para leitura. */
 export function OrganizationPage() {
   const t = useT();
   const openId = useOrganizations((state) => state.openId);
@@ -39,13 +40,15 @@ export function OrganizationPage() {
         description={<span className="flex items-center gap-2"><span className="font-mono">@{organization.slug}</span><Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge></span>}>
         <Button variant="outline" onClick={() => navigate("organizations")}>{t("org.back")}</Button>
       </PageHeading>
-      <Tabs defaultValue="members" className="gap-5">
+      <Tabs defaultValue="projects" className="gap-5">
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
+          {tab("projects", FolderKanbanIcon, "org.tab.projects")}
           {tab("members", UsersIcon, "org.tab.members")}
           {tab("repositories", FolderGit2Icon, "org.tab.repositories")}
           {tab("policy", ShieldCheckIcon, "org.tab.policy")}
           {tab("settings", SettingsIcon, "org.tab.settings")}
         </TabsList>
+        <TabsContent value="projects"><OrganizationProjects orgId={organization.id} /></TabsContent>
         <TabsContent value="members">
           {detail ? <OrganizationMembers detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
