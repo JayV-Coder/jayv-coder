@@ -59,3 +59,13 @@ export function chatReach<R extends { repoKey: string }>(
   }
   return reach;
 }
+
+/** Esquece a pasta da organização neste computador. Os clones e os projetos
+ * continuam onde estão: só a pasta lembrada sai. */
+export function forgetOrganizationFolder(orgId: string) {
+  try {
+    localStorage.removeItem(FOLDER_KEY + orgId);
+  } catch {
+    // Sem armazenamento não havia pasta guardada.
+  }
+}

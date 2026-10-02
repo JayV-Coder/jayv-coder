@@ -9,13 +9,17 @@ import { readCallback } from "./callback";
 import { CALLBACK_URL, supabase } from "./client";
 import { authFailure } from "./errors";
 import { canUnlink, linkOutcome, PROVIDER_NAMES, type Provider } from "./identities";
+import { needsSecondFactor } from "./mfa";
 
 export { authFailure } from "./errors";
 export { canUnlink, PROVIDER_NAMES, PROVIDERS, type Provider } from "./identities";
 export { CODE_MAX, codeDigits, codeOk } from "./code";
+export { secretGroups, TOTP_LENGTH, totpDigits, totpOk } from "./mfa";
 export { PASSWORD_MIN, PASSWORD_RULES, passwordOk, passwordRules, type PasswordRule } from "./password";
 
-type Status = "loading" | "signedOut" | "signedIn";
+/** `secondFactor`: a senha (ou o provedor) passou, falta o código do app
+ * autenticador. O núcleo ainda não recebeu o token. */
+type Status = "loading" | "signedOut" | "secondFactor" | "signedIn";
 
 /** A sessão como a página de perfil a mostra. Nome e foto só existem quando o
  * login foi por um provedor; `provider` é o do último login (`email`,
@@ -41,9 +45,24 @@ interface AuthState {
   /** As identidades da conta (`email`, `github`, `gitlab`, `bitbucket`). */
   providers: string[];
   hasPassword: boolean;
+  /** O app autenticador já confirmado, quando a conta tem um. */
+  totpFactorId: string | null;
 }
 
-const SIGNED_OUT = { email: null, profile: null, recovering: false, providers: [], hasPassword: false };
+const SIGNED_OUT = { email: null, profile: null, recovering: false, providers: [], hasPassword: false, totpFactorId: null };
+
+/** O app autenticador recém-cadastrado, até a pessoa digitar o primeiro
+ * código: `uri` vira o QR code e `secret` é a chave para digitar à mão. */
+export interface TotpEnrollment {
+  factorId: string;
+  uri: string;
+  secret: string;
+}
+
+/** Enquanto a troca de senha entra de novo para conferir a atual, a sessão
+ * passa um instante por `aal1`: o ouvinte não a repassa, e a troca entrega a
+ * sessão final quando termina. */
+let reauthenticating = false;
 
 export const useAuth = create<AuthState>(() => ({ status: "loading", waitingBrowser: false, linking: null, ...SIGNED_OUT }));
 
@@ -72,6 +91,15 @@ async function hand(session: Session | null) {
   if (!session) {
     await commands.clearSession().catch(reportError);
     useAuth.setState({ status: "signedOut", linking: null, ...SIGNED_OUT });
+    return;
+  }
+  // Com o app autenticador cadastrado, a senha sozinha não abre o app: o
+  // token `aal1` não vai ao núcleo, e o banco também o recusa (migração
+  // `second_factor` do repositório do Supabase).
+  const { data: level } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (needsSecondFactor(level)) {
+    await commands.clearSession().catch(reportError);
+    useAuth.setState({ status: "secondFactor", email: session.user.email ?? null, profile: null, waitingBrowser: false });
     return;
   }
   try {
@@ -122,6 +150,7 @@ async function settleLink(provider: Provider) {
 
 export function connectAuth() {
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    if (reauthenticating && session) return;
     // Fora da chamada do supabase-js: esperar dentro dela trava o cliente.
     setTimeout(() => {
       if (event === "PASSWORD_RECOVERY") useAuth.setState({ recovering: true });
@@ -166,14 +195,18 @@ export async function signOut() {
   if (error) reportError(error);
 }
 
-/** As identidades e se há senha: a conta OAuth que define senha não ganha a
- * identidade `email`, então só o banco sabe (`account_has_password`). */
+/** As identidades, se há senha e se há app autenticador: a conta OAuth que
+ * define senha não ganha a identidade `email`, então só o banco sabe
+ * (`account_has_password`). */
 export async function loadAccess() {
-  const [identities, password] = await Promise.all([supabase.auth.getUserIdentities(), supabase.rpc("account_has_password")]);
+  const [identities, password, factors] = await Promise.all([supabase.auth.getUserIdentities(), supabase.rpc("account_has_password"), supabase.auth.mfa.listFactors()]);
   if (identities.error) fail(identities.error);
+  if (factors.error) fail(factors.error);
   useAuth.setState({
     providers: (identities.data?.identities ?? []).map((identity) => identity.provider),
     hasPassword: password.data === true,
+    // `totp` traz só os fatores já confirmados.
+    totpFactorId: factors.data?.totp[0]?.id ?? null,
   });
 }
 
@@ -202,14 +235,80 @@ export async function requestPasswordReset(email: string) {
 }
 
 /** Conferir a senha atual entrando de novo também renova a sessão, que é o
- * que o "secure password change" do Supabase pede. */
-export async function changePassword(current: string, next: string) {
-  const email = useAuth.getState().email;
+ * que o "secure password change" do Supabase pede. Com o app autenticador,
+ * esse novo login volta a `aal1` e o Supabase só troca a senha em `aal2`: o
+ * código do app (`code`) sobe a sessão de novo antes da troca. Se o código
+ * falhar, a sessão fica em `aal1` e o app pede o segundo fator. */
+export async function changePassword(current: string, next: string, code?: string) {
+  const { email, totpFactorId } = useAuth.getState();
   if (!email) fail(new Error("account without email"));
-  const check = await supabase.auth.signInWithPassword({ email: email!, password: current });
-  if (check.error) fail(check.error.code === "invalid_credentials" ? { code: "wrong_password" } : check.error);
-  const { error } = await supabase.auth.updateUser({ password: next });
+  reauthenticating = true;
+  try {
+    const check = await supabase.auth.signInWithPassword({ email: email!, password: current });
+    if (check.error) fail(check.error.code === "invalid_credentials" ? { code: "wrong_password" } : check.error);
+    if (totpFactorId) {
+      const verified = await supabase.auth.mfa.challengeAndVerify({ factorId: totpFactorId, code: code?.trim() ?? "" });
+      if (verified.error) fail(verified.error);
+    }
+    const { error } = await supabase.auth.updateUser({ password: next });
+    if (error) fail(error);
+  } finally {
+    reauthenticating = false;
+    const { data } = await supabase.auth.getSession();
+    await hand(data.session);
+  }
+}
+
+/** O código do app autenticador depois da senha ou do provedor. O Supabase
+ * avisa a sessão nova (`MFA_CHALLENGE_VERIFIED`) e o `hand` abre o app. */
+export async function verifySecondFactor(code: string) {
+  const { data, error } = await supabase.auth.mfa.listFactors();
   if (error) fail(error);
+  const factor = data?.totp[0];
+  if (!factor) fail({ code: "mfa_factor_not_found" });
+  const verified = await supabase.auth.mfa.challengeAndVerify({ factorId: factor!.id, code: code.trim() });
+  if (verified.error) fail(verified.error);
+}
+
+/** Cadastra o app autenticador. Um cadastro anterior que não chegou ao
+ * primeiro código sai antes, para não acumular fatores pela metade. */
+export async function enrollTotp(): Promise<TotpEnrollment> {
+  const listed = await supabase.auth.mfa.listFactors();
+  if (listed.error) fail(listed.error);
+  for (const stale of listed.data?.all ?? []) {
+    if (stale.factor_type !== "totp" || stale.status !== "unverified") continue;
+    const removed = await supabase.auth.mfa.unenroll({ factorId: stale.id });
+    if (removed.error) fail(removed.error);
+  }
+  const { data, error } = await supabase.auth.mfa.enroll({ factorType: "totp", issuer: "JayV" });
+  if (error) fail(error);
+  return { factorId: data!.id, uri: data!.totp.uri, secret: data!.totp.secret };
+}
+
+/** O primeiro código confirma o cadastro e já sobe a sessão para `aal2`. */
+export async function confirmTotp(factorId: string, code: string) {
+  const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code: code.trim() });
+  if (error) fail(error);
+  await loadAccess();
+}
+
+export async function cancelTotp(factorId: string) {
+  const { error } = await supabase.auth.mfa.unenroll({ factorId });
+  if (error) fail(error);
+}
+
+/** Desligar pede um código atual do app: uma sessão esquecida aberta não
+ * basta para tirar a proteção da conta. A sessão é renovada em seguida para
+ * deixar de carregar o fator removido. */
+export async function removeTotp(code: string) {
+  const factorId = useAuth.getState().totpFactorId;
+  if (!factorId) return;
+  const verified = await supabase.auth.mfa.challengeAndVerify({ factorId, code: code.trim() });
+  if (verified.error) fail(verified.error);
+  const { error } = await supabase.auth.mfa.unenroll({ factorId });
+  if (error) fail(error);
+  await supabase.auth.refreshSession();
+  await loadAccess();
 }
 
 /** O código que vai ao e-mail antes da primeira senha (de 6 a 10 dígitos,

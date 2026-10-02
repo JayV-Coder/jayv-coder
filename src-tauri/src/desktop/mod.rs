@@ -76,6 +76,7 @@ fn keep_webkit_off_dmabuf() {
 }
 
 pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
+    crate::lockdown::strip_inspector_switches();
     #[cfg(target_os = "linux")]
     keep_webkit_off_dmabuf();
     let mut orchestrator=Orchestrator::unindexed(config_path.clone(),root.clone())?;
@@ -87,7 +88,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     let workspace=WorkspaceStore::in_memory()?;
     orchestrator.use_llm(&workspace.llm_settings()?);
 
-    let http=reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let http=crate::lockdown::http_client(Duration::from_secs(30)).build()?;
     let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root}));
     let workspace:SharedWorkspace=Arc::new(Mutex::new(workspace));
     let bell:QueueBell=Arc::new(Notify::new());
@@ -137,7 +138,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             projects::get_workspace,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::refresh_models,settings::check_agent,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,settings::save_expertise,
             system::system_status,
-            gate::gate_feed,
+            gate::gate_feed,gate::scoped_gate_feed,
             files::open_file,
             repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,
             usage::usage_report,usage::chat_usage,usage::refresh_quotas,

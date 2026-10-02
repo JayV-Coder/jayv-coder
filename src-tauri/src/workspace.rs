@@ -548,6 +548,16 @@ impl WorkspaceStore {
         Ok(statement.query_map([project_id],|row|row.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Os chats de um punhado de projetos (os de uma organização), ou só um
+    /// deles. Um chat de fora desses projetos não entra: o recorte nunca
+    /// alarga a vista.
+    pub fn chat_ids_for_projects(&self,project_ids:&[String],chat_id:Option<&str>)->Result<BTreeSet<String>>{
+        let mut chats=BTreeSet::new();
+        for project_id in project_ids { chats.extend(self.chat_ids_for_project(project_id)?); }
+        if let Some(chat_id)=chat_id { chats.retain(|id|id==chat_id); }
+        Ok(chats)
+    }
+
     fn messages(&self,chat_id:&str)->Result<Vec<WorkspaceMessage>>{
         let rows={
             let mut statement=self.connection.prepare("SELECT role,content,created_at,turn_id FROM messages WHERE chat_id=?1 ORDER BY created_at,id")?;
@@ -992,6 +1002,24 @@ mod tests {
         let ids=store.chat_ids_for_project(&mine.id).expect("ids");
         assert_eq!(ids.iter().collect::<std::collections::BTreeSet<_>>(),[&first.id,&second.id].into_iter().collect());
         assert!(store.chat_ids_for_project("inexistente").expect("ids").is_empty());
+    }
+
+    #[test]
+    fn a_set_of_projects_narrows_to_one_of_its_chats_and_never_beyond() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let first=store.create_project("Um",None).expect("project");
+        let second=store.create_project("Dois",None).expect("project");
+        let outside=store.create_project("Fora",None).expect("project");
+        let a=store.create_chat(&first.id,None).expect("chat");
+        let b=store.create_chat(&second.id,None).expect("chat");
+        let c=store.create_chat(&outside.id,None).expect("chat");
+        let projects=[first.id.clone(),second.id.clone()];
+
+        assert_eq!(store.chat_ids_for_projects(&projects,None).expect("ids"),[a.id.clone(),b.id.clone()].into_iter().collect());
+        assert_eq!(store.chat_ids_for_projects(&projects,Some(&b.id)).expect("ids"),[b.id.clone()].into_iter().collect());
+        assert!(store.chat_ids_for_projects(&projects,Some(&c.id)).expect("ids").is_empty());
+        assert!(store.chat_ids_for_projects(&[],None).expect("ids").is_empty());
     }
 
     #[test]

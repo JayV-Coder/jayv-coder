@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { daysInMonth, fromRow, joinDate, normalizeProfile, splitDate, toRow, usernameOk, type AccountProfile } from "./fields";
 
-const base: AccountProfile = { displayName: "Ana", username: "ana", sex: null, gender: null, genderCustom: null, pronouns: null, pronounsCustom: null, birthDate: null, country: null, timezone: null, role: null, company: null, completedAt: null };
+const base: AccountProfile = { displayName: "Ana", username: "ana", sex: null, gender: null, genderCustom: null, pronouns: null, pronounsCustom: null, birthDate: null, country: null, timezone: null, role: null, company: null, completedAt: null, usernameSetAt: null };
 
 describe("normalizeProfile", () => {
   it("apara e troca vazio por null", () => {
@@ -18,6 +18,11 @@ describe("normalizeProfile", () => {
 
 describe("linhas", () => {
   it("ida e volta", () => expect(fromRow(toRow({ ...base, role: "qa" }) as never)).toMatchObject({ displayName: "Ana", role: "qa" }));
+  it("a linha para gravar não mexe no nome fixado", () => expect(toRow({ ...base, usernameSetAt: "2026-01-01T00:00:00Z" })).not.toHaveProperty("username_set_at"));
+  it("o nome fixado volta do banco", () => {
+    expect(fromRow({ ...toRow(base), username_set_at: "2026-01-01T00:00:00Z" }).usernameSetAt).toBe("2026-01-01T00:00:00Z");
+    expect(fromRow(toRow(base)).usernameSetAt).toBeNull();
+  });
 });
 
 describe("usernameOk", () => {

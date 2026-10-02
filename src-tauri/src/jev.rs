@@ -137,7 +137,7 @@ impl Client {
     pub fn for_session(token:impl Into<String>)->Result<Self> {
         let token=token.into().trim().to_string();
         if token.is_empty(){return Err(anyhow!("no session to reach the Jev"));}
-        let http=reqwest::Client::builder().timeout(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("could not build the Jev HTTP client")?;
+        let http=crate::lockdown::http_client(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("could not build the Jev HTTP client")?;
         Ok(Self{http,token,attempts:DEFAULT_ATTEMPTS})
     }
     pub fn with_attempts(mut self,attempts:u32)->Self{self.attempts=attempts.max(1);self}

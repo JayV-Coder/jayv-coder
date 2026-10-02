@@ -4,7 +4,7 @@ import type { FoundRepository } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import {
-  addRepository, can, cloneRepository, linkFolder, localCopy, newClones, organizationFolder, parseRepoUrl, pickFolder,
+  addRepository, can, cloneRepository, forgetOrganizationFolder, linkFolder, localCopy, newClones, organizationFolder, parseRepoUrl, pickFolder,
   rememberOrganizationFolder, removeRepository, scanFolder, type OrganizationDetail, type Repository, type Role,
 } from "@/modules/organizations";
 import { openProject, useWorkspace } from "@/modules/workspace";
@@ -114,6 +114,12 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
             <Button variant="outline" size="sm" disabled={busy || detail.repositories.length === 0} onClick={() => void scan(folder)}>
               <FolderSearchIcon />{t("repos.folder.scan")}
             </Button>
+          )}
+          {folder && (
+            <ConfirmAction title={t("repos.folder.remove.title")} description={t("repos.folder.remove.description", { path: folder })}
+              confirm={t("repos.folder.remove")} onConfirm={() => { forgetOrganizationFolder(detail.id); setFolder(null); }}>
+              <Button variant="ghost" size="sm" disabled={busy || cloning !== null} className="text-muted-foreground hover:text-destructive">{t("repos.folder.remove")}</Button>
+            </ConfirmAction>
           )}
         </div>
       </div>

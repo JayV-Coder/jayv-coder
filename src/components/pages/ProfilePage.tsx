@@ -8,7 +8,7 @@ import { useSettings } from "@/modules/settings";
 import { useUsage } from "@/modules/usage";
 import { useWorkspace } from "@/modules/workspace";
 import { LoadingNote } from "@/components/atoms";
-import { AccountActivity, ExpertisePanel, LinkedAccounts, ProfileCard, ProfileForm, QuotaPanel, SecurityPanel } from "@/components/organisms";
+import { AccountActivity, ExpertisePanel, LinkedAccounts, ProfileCard, ProfileForm, QuotaPanel, SecurityPanel, TwoFactorPanel } from "@/components/organisms";
 import { SettingsSection } from "@/components/molecules";
 import { ScrollPage } from "@/components/templates";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -70,7 +70,12 @@ export function ProfilePage() {
             )
             : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
-        <TabsContent value="security"><SecurityPanel /></TabsContent>
+        <TabsContent value="security">
+          <div className="grid gap-5">
+            <SecurityPanel />
+            <TwoFactorPanel />
+          </div>
+        </TabsContent>
         <TabsContent value="linked"><LinkedAccounts /></TabsContent>
       </Tabs>
     </ScrollPage>
