@@ -3,7 +3,7 @@ import type { EntryCheck } from "@/modules/core";
 import { ENTRY_VERDICTS, sourceLabel } from "@/modules/conversation";
 import { useGate } from "@/modules/gate";
 import { useT, type Key } from "@/modules/i18n";
-import { openChat } from "@/modules/workspace";
+import { openChat, useWorkspace } from "@/modules/workspace";
 import { ChevronIcon, SignalHead3Icon, Stamp } from "@/components/atoms";
 import { ChatRef, Gauge, scopeKey } from "@/components/molecules";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,11 @@ const NOTES: Record<EntryCheck["verdict"], Key> = { pass: "entry.note.pass", ask
 export function EntryItem({ check }: { check: EntryCheck }) {
   const t = useT();
   const [opened, setOpened] = useState(false);
-  const chat = useGate((state) => state.chats[check.chatId]);
+  // Fora do projeto aberto (a portaria da organização), o chat vem da área
+  // de trabalho inteira.
+  const projectChat = useGate((state) => state.chats[check.chatId]);
+  const anyChat = useWorkspace((state) => projectChat ? undefined : state.data.chats.find((found) => found.id === check.chatId));
+  const chat = projectChat ?? anyChat;
   const { aspect, label } = ENTRY_VERDICTS[check.verdict] ?? ENTRY_VERDICTS.block;
   const panelId = `criteria-${check.id}`;
   // O núcleo escreve a nota e o tamanho em português; os dois são refeitos

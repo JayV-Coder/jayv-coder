@@ -9,14 +9,14 @@ import { connectGate } from "@/modules/gate";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
 import { clearNotifications, connectNotifications, loadNotifications } from "@/modules/notifications";
-import { clearOrganizations, loadOrganizations } from "@/modules/organizations";
+import { clearOrganizations, connectOrganizationDashboard, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
 import { connectSystem, loadStatus } from "@/modules/system";
-import { checkForUpdate } from "@/modules/updates";
+import { connectUpdates } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
-import { UpdateDialog } from "@/components/organisms";
+import { UpdateBanner, UpdateDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -46,8 +46,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage(), connectNotifications()];
-    void checkForUpdate();
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard()];
     return () => disconnect.forEach((off) => off());
   }, []);
 
@@ -72,7 +71,7 @@ export function App() {
   }, [status, userEmail]);
 
   const Page = PAGES[view];
-  const loading = <p className="grid min-h-screen place-items-center text-sm text-muted-foreground">{t("auth.loading")}</p>;
+  const loading = <p className="grid min-h-full place-items-center text-sm text-muted-foreground">{t("auth.loading")}</p>;
   // Sem perfil (a leitura falhou ou a linha não existe), o app abre mesmo
   // assim: o passo de perfil é convite, não porta.
   const signedIn = recovering
@@ -84,7 +83,13 @@ export function App() {
         : <AppShell><Page /></AppShell>;
   return (
     <TooltipProvider>
-      {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
+      {/* O aviso de versão nova fica acima de qualquer tela, logada ou não. */}
+      <div className="flex h-screen flex-col">
+        <UpdateBanner />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
+        </div>
+      </div>
       <UpdateDialog />
       <Toaster position="bottom-right" />
     </TooltipProvider>

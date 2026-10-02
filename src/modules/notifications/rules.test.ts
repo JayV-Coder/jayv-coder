@@ -47,6 +47,7 @@ describe("targetOf", () => {
     expect(targetOf(make("org.roleChanged", { orgId: "o1" }))).toEqual({ kind: "organization", orgId: "o1" });
     expect(targetOf(make("org.removed", { orgId: "o1" }))).toBeNull();
     expect(targetOf(make("quota.crossed"))).toEqual({ kind: "stats" });
+    expect(targetOf(make("update.available", { version: "1.2.3" }))).toEqual({ kind: "update" });
   });
 });
 

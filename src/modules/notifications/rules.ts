@@ -7,7 +7,8 @@ import type { Chat, TurnStatus } from "@/modules/core";
 export type NotificationKind =
   | "org.invited" | "org.inviteAccepted" | "org.inviteDeclined" | "org.roleChanged" | "org.removed" | "org.deleted" | "org.policyChanged"
   | "turn.answered" | "turn.asking" | "turn.failed" | "turn.blocked"
-  | "quota.crossed";
+  | "quota.crossed"
+  | "update.available";
 
 export const ACCOUNT_KINDS: NotificationKind[] = ["org.invited", "org.inviteAccepted", "org.inviteDeclined", "org.roleChanged", "org.removed", "org.deleted", "org.policyChanged"];
 
@@ -31,12 +32,14 @@ export type NotificationTarget =
   | { kind: "organization"; orgId: string }
   | { kind: "organizations" }
   | { kind: "stats" }
+  | { kind: "update" }
   | null;
 
 export function targetOf(notification: AppNotification): NotificationTarget {
   const { kind, data } = notification;
   if (kind.startsWith("turn.") && typeof data.chatId === "string") return { kind: "chat", chatId: data.chatId };
   if (kind === "quota.crossed") return { kind: "stats" };
+  if (kind === "update.available") return { kind: "update" };
   if (kind === "org.invited") return { kind: "organizations" };
   if (kind === "org.removed" || kind === "org.deleted") return null;
   if (typeof data.orgId === "string") return { kind: "organization", orgId: data.orgId };
@@ -49,7 +52,7 @@ export type Tone = "go" | "ask" | "stop" | "info";
 
 export function toneOf(kind: NotificationKind): Tone {
   switch (kind) {
-    case "turn.answered": case "org.inviteAccepted": return "go";
+    case "turn.answered": case "org.inviteAccepted": case "update.available": return "go";
     case "turn.asking": case "org.invited": case "quota.crossed": return "ask";
     case "turn.failed": case "turn.blocked": case "org.removed": case "org.deleted": case "org.inviteDeclined": return "stop";
     default: return "info";
@@ -97,6 +100,10 @@ export function turnEvents(memory: TurnMemory, chats: Chat[], first: boolean): T
   }
   return events;
 }
+
+/** O id da notificação de uma versão nova: uma por versão, mesmo que a
+ * consulta a ache de novo a cada meia hora. */
+export const updateNotificationId = (version: string) => `update:${version}`;
 
 /** Quantas notificações deste aparelho ficam; as mais velhas saem. */
 export const LOCAL_LIMIT = 50;

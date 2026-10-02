@@ -1,15 +1,18 @@
 import { create } from "zustand";
 import { supabase } from "@/modules/auth/client";
 import type { Provider } from "@/modules/auth";
-import { navigate } from "@/modules/navigation";
+import { navigate, useNavigation } from "@/modules/navigation";
 
 export * from "./rules";
 export * from "./policy";
 export * from "./scope";
 export * from "./checkout";
 export * from "./local";
+export * from "./filter";
+export * from "./dashboard";
 
 import type { Role } from "./rules";
+import { connectDashboard } from "./dashboard";
 import { policyPayload, storedPolicy, type LlmPolicy, type StoredPolicy } from "./policy";
 
 export interface Organization {
@@ -38,7 +41,7 @@ export interface OrganizationDetail {
   policies: StoredPolicy[];
 }
 
-export type OrganizationTab = "projects" | "members" | "repositories" | "policy" | "settings";
+export type OrganizationTab = "projects" | "stats" | "gate" | "members" | "repositories" | "policy" | "settings";
 
 interface OrganizationsState {
   list: Organization[];
@@ -194,3 +197,13 @@ export function setOrganizationTab(tab: OrganizationTab) {
   useOrganizations.setState({ tab });
 }
 
+
+/** Relê as abas Estatísticas e Portaria da organização aberta quando entra
+ * gasto ou pedido novo. */
+export function connectOrganizationDashboard() {
+  return connectDashboard(() => {
+    if (useNavigation.getState().view !== "organization") return null;
+    const { tab } = useOrganizations.getState();
+    return tab === "stats" || tab === "gate" ? tab : null;
+  });
+}
