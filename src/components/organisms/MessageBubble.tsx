@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { TurnView } from "@/modules/core";
-import { messageLight, shownText } from "@/modules/conversation";
+import { messageLight, routeHint, routeLabel, shownText } from "@/modules/conversation";
 import { useT } from "@/modules/i18n";
 import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -28,10 +28,18 @@ export function MessageBubble({ role, content, turn, meta, pending, onRetry, onO
   // Pedido barrado, falha e resposta a uma pergunta ficam gravados como aviso
   // e são ditos aqui no idioma de quem lê.
   const text = shownText(content);
+  // A resposta diz quem a escreveu: o agente, o modelo, o modo e o papel que
+  // o Jev escolheu para o pedido.
+  const route = !user && turn?.route ? turn.route : null;
   return (
     <article className={cn("my-[22px]", user ? "ms-[16%]" : "me-[10%]", pending && "animate-pending-in motion-reduce:animate-none")}>
       <div className="flex items-baseline gap-2.5 px-1 pb-2 text-xs">
-        <strong className="me-auto">{user ? t("chat.you") : "JayV"}</strong>
+        <strong className={route ? undefined : "me-auto"}>{user ? t("chat.you") : "JayV"}</strong>
+        {route && (
+          <small data-mode={route.mode ?? undefined} title={routeHint(route)} className="me-auto truncate text-[#8fa394] data-[mode=build]:text-[#a4f4a9]">
+            {routeLabel(route)}
+          </small>
+        )}
         {light && <small data-aspect={light.aspect} className="text-[var(--aspect)]">{t(light.label)}</small>}
         {meta && <small className="text-[#6e7870]">{meta}</small>}
       </div>
