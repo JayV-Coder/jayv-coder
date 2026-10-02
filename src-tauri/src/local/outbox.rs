@@ -23,7 +23,7 @@ pub struct SyncTable {
 }
 
 /// Em ordem de dependência: quem sobe primeiro é quem os outros apontam.
-pub const TABLES:[SyncTable;13]=[
+pub const TABLES:[SyncTable;14]=[
     SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at"]},
     SyncTable{name:"chats",key:&["id"],columns:&["id","code","project_id","title","named","created_at","updated_at"]},
     SyncTable{name:"turns",key:&["id"],columns:&["id","chat_id","ordinal","status","created_at"]},
@@ -38,6 +38,8 @@ pub const TABLES:[SyncTable;13]=[
     // chat não apaga o que ele gastou.
     SyncTable{name:"usage_records",key:&["id"],columns:&["id","project_id","chat_id","turn_id","source","model","input_tokens","output_tokens","cache_read_tokens","cache_write_tokens","cost_usd","requests","duration_ms","success","precision","machine_id","created_at"]},
     SyncTable{name:"quota_snapshots",key:&["id"],columns:&["id","agent","span","used_percent","resets_at","plan","captured_at","machine_id"]},
+    // O que é da conta e não de um projeto: o nível do desenvolvedor.
+    SyncTable{name:"account_settings",key:&["key"],columns:&["key","value","updated_at"]},
     SyncTable{name:"jev_records",key:&["id"],columns:&["id","project_id","chat_id","turn_id","kind","amount","precision","created_at"]},
 ];
 
@@ -287,6 +289,19 @@ mod tests {
         let store=WorkspaceStore::in_memory().expect("store");
         assert!(pending(store.connection(),100).expect("fila").is_empty());
         assert!(!store.llm_settings().expect("llm").agents.is_empty());
+    }
+
+    /// O nível é da conta: sobe como as outras linhas, e o que chega de outro
+    /// computador vale aqui.
+    #[test] fn the_level_travels_with_the_account() {
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        store.save_expertise("senior").expect("nível");
+        let queue=entries(&store,"account_settings");
+        assert_eq!(queue.len(),1);
+        assert_eq!(queue[0].key,json!(["expertise_level"]));
+        settle(store.connection(),queue[0].seq,queue[0].version).expect("enviado");
+        apply_remote(store.connection_mut(),table("account_settings").unwrap(),&[json!({"key":"expertise_level","value":"architect","updated_at":"2026-10-02T12:00:00+00:00"})]).expect("aplica");
+        assert_eq!(store.expertise().expect("nível"),crate::expertise::Expertise::Architect);
     }
 
     #[test] fn creating_a_project_queues_an_entry() {
