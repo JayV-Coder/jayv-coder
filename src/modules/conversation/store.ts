@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { bus, commands, onCore, type Activity, type Question, type TurnView } from "@/modules/core";
+import { bus, commands, onCore, type Activity, type FormItem, type Question, type TurnView } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 
 /** O que está acontecendo agora, por pedido em aberto: o texto que vai
@@ -19,6 +19,8 @@ interface Answering {
   turnId: string | null;
   writing: boolean;
   picked: string[];
+  /** No formulário, a resposta de cada pergunta, na ordem delas. */
+  form: string[];
 }
 
 interface ConversationState {
@@ -28,7 +30,7 @@ interface ConversationState {
   drafts: Record<string, string>;
 }
 
-const IDLE: Answering = { turnId: null, writing: false, picked: [] };
+const IDLE: Answering = { turnId: null, writing: false, picked: [], form: [] };
 
 export const useConversation = create<ConversationState>(() => ({ live: {}, answering: IDLE, drafts: {} }));
 
@@ -57,6 +59,28 @@ export function setDraft(chatId: string, value: string) {
 
 export function setWriting(question: Question, writing: boolean) {
   useConversation.setState((state) => ({ answering: { ...answeringFor(question, state.answering), writing } }));
+}
+
+/** As perguntas do formulário. Uma linha que não se lê fica de fora, e o
+ * `RESPONDER` continua de pé. */
+export function formItems(question: Question): FormItem[] {
+  return question.options.flatMap((item) => {
+    try {
+      const parsed = JSON.parse(item) as FormItem;
+      return typeof parsed.prompt === "string" && Array.isArray(parsed.options) ? [parsed] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function answerForm(question: Question, index: number, value: string) {
+  useConversation.setState((state) => {
+    const current = answeringFor(question, state.answering);
+    const form = [...current.form];
+    form[index] = value;
+    return { answering: { ...current, form } };
+  });
 }
 
 export function pick(question: Question, option: string, checked: boolean) {

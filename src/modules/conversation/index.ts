@@ -1,5 +1,5 @@
 export {
-  useConversation, liveOf, answeringFor, setDraft, setWriting, pick, sendPrompt, answerQuestion,
+  useConversation, liveOf, answeringFor, setDraft, setWriting, pick, formItems, answerForm, sendPrompt, answerQuestion,
   dismissQuestion, clearChat, connectConversation,
 } from "./store";
 export { beatLine, beatLines, pendingWord, messageLight, routeLabel, routeHint, ENTRY_VERDICTS, EXIT_VERDICTS } from "./beats";

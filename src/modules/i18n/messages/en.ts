@@ -79,6 +79,9 @@ export const en = {
   "ask.reply": "Reply",
   "ask.sendChoice": "Send choice",
   "ask.ignore": "Ignore",
+  "ask.form.send": "Send answers",
+  "ask.form.other": "Or answer in your own words…",
+  "ask.form.answer": "Your answer…",
 
   "pending.running": "in progress",
   "pending.queued": "in progress · {count} queued",

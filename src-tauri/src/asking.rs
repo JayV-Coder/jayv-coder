@@ -22,19 +22,34 @@ pub const LOCAL_SOURCE:&str="local";
 pub const NOUL_LINE:f64=0.5;
 
 /// O traje que o box vai vestir. `Score` ficou fora de propósito: nível de 0 a
-/// 10 não é interação de tela neste app.
+/// 10 não é interação de tela neste app. `Form` é a resposta que termina com
+/// várias perguntas: cada uma vira um cartão, com as alternativas dela ou um
+/// campo de texto.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="lowercase")]
-pub enum Shape { Noul, Single, Multiple }
+pub enum Shape { Noul, Single, Multiple, Form }
 
 impl Shape {
-    pub fn as_str(&self)->&'static str { match self { Self::Noul=>"noul", Self::Single=>"single", Self::Multiple=>"multiple" } }
+    pub fn as_str(&self)->&'static str { match self { Self::Noul=>"noul", Self::Single=>"single", Self::Multiple=>"multiple", Self::Form=>"form" } }
     pub fn parse(value:&str)->Result<Self> { Ok(match value {
-        "noul"=>Self::Noul, "single"=>Self::Single, "multiple"=>Self::Multiple,
+        "noul"=>Self::Noul, "single"=>Self::Single, "multiple"=>Self::Multiple, "form"=>Self::Form,
         other=>return Err(anyhow!("unknown question kind: `{other}`")),
     }) }
     pub fn wants_options(&self)->bool { !matches!(self,Self::Noul) }
 }
+
+/// Uma pergunta do formulário. Vai gravada como texto JSON dentro da lista de
+/// opções da linha de `questions`, que continua sendo uma lista de textos: a
+/// tabela e a sincronização não mudam.
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+pub struct FormItem { pub prompt:String, pub options:Vec<String> }
+
+/// Onde uma mensagem do agente termina e a próxima começa, dentro da resposta
+/// gravada. A tela desenha cada mensagem no seu balão.
+pub const MESSAGE_BREAK:char='\u{2063}';
+
+/// A última mensagem da resposta: é nela que o agente pergunta.
+fn last_message(answer:&str)->&str { answer.rsplit(MESSAGE_BREAK).next().unwrap_or(answer) }
 
 /// O que a extração local achou: o enunciado e as alternativas logo abaixo dele.
 #[derive(Debug,Clone,PartialEq)]
@@ -52,17 +67,40 @@ pub struct Pending { pub kind:Shape, pub prompt:String, pub options:Vec<String>,
 /// que segue explicando não é convite para responder, e travar o box por causa
 /// dela seria pior que não ter interação nenhuma.
 pub fn extract(answer:&str)->Option<Candidate> {
-    let lines=answer.lines().collect::<Vec<_>>();
-    let mut index=lines.iter().rposition(|line|!line.trim().is_empty())?;
-    let mut options=Vec::new();
-    while let Some(item)=bullet(lines[index]) {
-        options.push(item.to_string());
-        index=lines[..index].iter().rposition(|line|!line.trim().is_empty())?;
-    }
-    options.reverse();
-    if options.len()>MAX_CHOICE_OPTIONS { return None; }
-    Some(Candidate{prompt:asking(lines[index])?,options})
+    extract_all(answer).pop()
 }
+
+/// Todas as perguntas que fecham a resposta, na ordem em que aparecem: cada
+/// enunciado com as alternativas logo abaixo dele. Para no primeiro trecho que
+/// não é pergunta nem alternativa — o texto de antes é explicação.
+pub fn extract_all(answer:&str)->Vec<Candidate> {
+    let lines=last_message(answer).lines().collect::<Vec<_>>();
+    let previous=|end:usize|lines[..end].iter().rposition(|line|!line.trim().is_empty());
+    let mut found=Vec::new();
+    let Some(mut index)=previous(lines.len()) else { return found };
+    loop {
+        let mut options=Vec::new();
+        // Um item de lista que pergunta é o enunciado numerado ("1. Qual?"),
+        // não uma alternativa da pergunta de baixo.
+        while let Some(item)=bullet(lines[index]).filter(|item|asking(item).is_none()) {
+            options.push(clean(item));
+            match previous(index) { Some(above)=>index=above, None=>return found.into_iter().rev().collect() }
+        }
+        options.reverse();
+        let line=bullet(lines[index]).unwrap_or(lines[index]);
+        let Some(prompt)=asking(line) else { break };
+        // A primeira pergunta sem alternativas fecha a resposta sozinha; acima
+        // dela, uma lista longa demais não é escolha de ninguém.
+        if options.len()>MAX_CHOICE_OPTIONS { break; }
+        found.push(Candidate{prompt,options});
+        match previous(index) { Some(above)=>index=above, None=>break }
+    }
+    found.reverse();
+    found
+}
+
+/// A alternativa sem os enfeites do Markdown que a tela não desenharia no botão.
+fn clean(item:&str)->String { item.replace("**","").replace("__","").replace('`',"").trim().to_string() }
 
 /// O item de lista dentro de uma linha, nos quatro formatos que aparecem: `- `,
 /// `* `, `1.` e `A)`. A etiqueta fica fora: o que vai para o botão é a opção.
@@ -84,9 +122,13 @@ fn bullet(line:&str)->Option<&str> {
 /// A última frase da linha, se ela for uma pergunta. Negrito e cabeçalho saem:
 /// `**Quer que eu continue?**` é a mesma pergunta sem os asteriscos.
 fn asking(line:&str)->Option<String> {
+    let line=line.replace("**","").replace("__","");
     let line=line.trim().trim_end_matches(['*','_',' ']).trim_end();
     if !line.ends_with('?') { return None; }
-    let cut=line[..line.len()-1].rfind(['.','!','?']).map(|cut|cut+1).unwrap_or(0);
+    // A frase termina na pontuação seguida de espaço: o ponto de `lib.rs` não
+    // encerra frase nenhuma.
+    let body=&line[..line.len()-1];
+    let cut=body.char_indices().filter(|(at,mark)|matches!(mark,'.'|'!'|'?')&&body[at+1..].starts_with(char::is_whitespace)).last().map(|(at,_)|at+1).unwrap_or(0);
     let sentence=line[cut..].trim().trim_start_matches(['#','*','_','>','-',' ']).trim();
     (!sentence.is_empty()).then(||sentence.to_string())
 }
@@ -95,12 +137,34 @@ fn asking(line:&str)->Option<String> {
 /// quando ele não está configurado ou a chamada falha — um "não é pergunta" dele
 /// é resposta, e não motivo para consultar a heurística por cima.
 pub async fn classify(answer:&str)->Option<Pending> {
-    let candidate=extract(answer)?;
-    match consult(answer,&candidate).await {
+    let mut candidates=extract_all(answer);
+    let candidate=candidates.pop()?;
+    let verdict=match consult(answer,&candidate).await {
         Ok(verdict)=>verdict,
         Err(_)=>guess(&candidate),
+    };
+    if candidates.is_empty() { return verdict; }
+    // Várias perguntas: o Jev confirma que a resposta termina perguntando, e
+    // o formulário leva todas elas.
+    let source=verdict?.source;
+    candidates.push(candidate);
+    Some(form(&candidates,&source))
+}
+
+/// O formulário de várias perguntas. O enunciado gravado é a lista delas, uma
+/// por linha — é o que aparece onde só cabe texto.
+pub fn form(candidates:&[Candidate],source:&str)->Pending {
+    let items=candidates.iter().map(|candidate|FormItem{prompt:candidate.prompt.clone(),options:candidate.options.clone()}).collect::<Vec<_>>();
+    Pending{
+        kind:Shape::Form,
+        prompt:items.iter().map(|item|item.prompt.as_str()).collect::<Vec<_>>().join("\n"),
+        options:items.iter().filter_map(|item|serde_json::to_string(item).ok()).collect(),
+        source:source.into(),
     }
 }
+
+/// As perguntas do formulário, lidas da lista gravada.
+pub fn form_items(options:&[String])->Vec<FormItem> { options.iter().filter_map(|item|serde_json::from_str(item).ok()).collect() }
 
 /// As duas perguntas deste módulo, como vão para o seed de `jev_questions`. A
 /// segunda só vai quando o pedido trouxe opções.
@@ -166,6 +230,14 @@ pub const NO:&str="no";
 pub fn compose(question:&str,kind:Shape,options:&[String],picked:&[String],text:Option<&str>)->Result<String> {
     if let Some(text)=text.map(str::trim).filter(|text|!text.is_empty()) { return Ok(answer_line(question,text)); }
     match kind {
+        // No formulário, `picked` traz uma resposta por pergunta, na ordem
+        // delas; a vazia é pergunta pulada.
+        Shape::Form=>{
+            let lines=form_items(options).iter().zip(picked).filter(|(_,answer)|!answer.trim().is_empty())
+                .map(|(item,answer)|Text::new("ask.answer").with("question",&item.prompt).with("answer",answer.trim())).collect::<Vec<_>>();
+            if lines.is_empty() { return Err(Text::new("answer.pickOne").into()); }
+            Ok(i18n::notice(&lines))
+        }
         Shape::Noul=>match picked.first().map(String::as_str) {
             Some(YES)=>Ok(answer_line(question,Text::new("ask.yes"))),
             Some(NO)=>Ok(answer_line(question,Text::new("ask.no"))),
@@ -314,6 +386,33 @@ mod tests {
         let paired_check=judge(&paired);
         assert!(paired_check.score>bare.score,"o par diz onde mexer e quando está pronto: {} contra {}",paired_check.score,bare.score);
         assert_ne!(paired_check.verdict,EntryVerdict::Block,"a portaria não barra o fluxo que ela própria mandou abrir");
+    }
+
+    /// O caso que motivou o formulário: o agente não conseguiu abrir o dele e
+    /// mandou as perguntas numeradas, cada uma com as suas alternativas.
+    #[test] fn several_closing_questions_become_one_form() {
+        let answer="Li o projeto.\u{2063}\nNão consegui abrir o formulário de perguntas, então vão aqui.\n\n**1. Escopo** — Mexo só no `src/lib.rs`?\n\n2. Qual banco usar?\n- **Postgres** — o atual\n- SQLite\n\n3. Quer testes?\n";
+        let found=extract_all(answer);
+        assert_eq!(found.iter().map(|candidate|candidate.prompt.as_str()).collect::<Vec<_>>(),["Escopo — Mexo só no `src/lib.rs`?","Qual banco usar?","Quer testes?"]);
+        assert_eq!(found[1].options,["Postgres — o atual","SQLite"]);
+        assert!(found[0].options.is_empty()&&found[2].options.is_empty());
+        let pending=form(&found,LOCAL_SOURCE);
+        assert_eq!(pending.kind,Shape::Form);
+        assert_eq!(form_items(&pending.options).len(),3);
+        assert_eq!(extract(answer).map(|candidate|candidate.prompt),Some("Quer testes?".into()),"a pergunta única continua sendo a última");
+    }
+
+    #[test] fn only_the_last_message_can_ask() {
+        assert!(extract_all("Quer que eu leia o arquivo?\n\u{2063}\nPronto, terminei.").is_empty());
+    }
+
+    #[test] fn a_form_answer_names_each_question_and_skips_the_blank_ones() {
+        let pending=form(&[candidate("Qual banco?",&["Postgres","SQLite"]),candidate("Quer testes?",&[])],LOCAL_SOURCE);
+        let line=compose(&pending.prompt,Shape::Form,&pending.options,&["SQLite".into(),"".into()],None).expect("resposta");
+        let read=i18n::read_notice(&line).expect("aviso");
+        assert_eq!(read.len(),1);
+        assert_eq!(i18n::for_model(&line),"Answer to the question «Qual banco?»: SQLite");
+        assert!(compose(&pending.prompt,Shape::Form,&pending.options,&["".into(),"  ".into()],None).is_err(),"nada respondido não vira pedido");
     }
 
     #[test] fn the_kind_round_trips_through_the_database_as_text() {

@@ -4,7 +4,13 @@
 export type TurnStatus = "queued" | "flying" | "answered" | "failed" | "blocked";
 export type EntryVerdict = "pass" | "ask" | "block";
 export type ExitVerdict = "cleared" | "held";
-export type QuestionKind = "noul" | "single" | "multiple";
+export type QuestionKind = "noul" | "single" | "multiple" | "form";
+
+/** Uma pergunta do formulário: vem gravada como texto JSON em `options`. */
+export interface FormItem {
+  prompt: string;
+  options: string[];
+}
 /** A cor do semáforo. É ela que pinta balão, cartão e lente. */
 export type Aspect = "go" | "ask" | "stop";
 

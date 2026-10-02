@@ -145,6 +145,8 @@ pub const AUTO_EFFORT:&str="auto";
 /// O argumento que vira o esforço escolhido pelo Jev.
 pub const EFFORT:&str="{effort}";
 const CLAUDE_EFFORTS:[&str;6]=["auto","low","medium","high","xhigh","max"];
+/// A ferramenta do Claude que abre um formulário no terminal interativo.
+const INTERACTIVE_ONLY_TOOL:&str="AskUserQuestion";
 pub const CLAUDE_TOOLS:[&str;6]=["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"];
 const CODEX_SANDBOXES:[&str;3]=["read-only","workspace-write","danger-full-access"];
 const CODEX_EFFORTS:[&str;4]=["auto","low","medium","high"];
@@ -187,7 +189,12 @@ impl ClaudeOptions {
         args.extend(strings(&["--effort",if effort==AUTO_EFFORT {EFFORT} else {&effort}]));
         if !self.fallback_model.is_empty() { args.extend(strings(&["--fallback-model",&self.fallback_model])); }
         if let Some(budget)=self.max_budget_usd { args.extend(["--max-budget-usd".to_string(),format!("{budget:.2}")]); }
-        if !self.blocked_tools.is_empty() { args.extend(["--disallowed-tools".to_string(),self.blocked_tools.join(",")]); }
+        // O `AskUserQuestion` só existe no terminal interativo: no `--print` ele
+        // falha, e o Claude despejava as perguntas em texto avisando que "não
+        // conseguiu abrir o formulário". Sem ele, o Claude pergunta no fim da
+        // resposta, e é de lá que o JayV monta o formulário.
+        let blocked=[INTERACTIVE_ONLY_TOOL.to_string()].into_iter().chain(self.blocked_tools.iter().cloned()).collect::<Vec<_>>();
+        args.extend(["--disallowed-tools".to_string(),blocked.join(",")]);
         if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
         if !self.persist_sessions { args.push("--no-session-persistence".into()); }
         if self.safe_mode { args.push("--safe-mode".into()); }

@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, time::Instant};
 
-const SYSTEM_INSTRUCTIONS:&str="You are Jev, a senior software engineering orchestrator. Use supplied repository context only when relevant. Never reveal secrets. State uncertainty explicitly.";
+const SYSTEM_INSTRUCTIONS:&str="You are Jev, a senior software engineering orchestrator. Use supplied repository context only when relevant. Never reveal secrets. State uncertainty explicitly. To ask the developer something, end the reply with the questions, each on its own line ending in '?' with its options right below as a '- ' list.";
 const REMOVAL_NOTE:&str="Context was filtered on purpose: [*_REDACTED] replaces secrets, [CONTEXT_TRUNCATED] marks a file cut to fit the token budget, and some files were withheld. Never guess removed content; say it is missing when it matters.";
 const TRUNCATION_MARKER:&str="\n[CONTEXT_TRUNCATED]";
 const PERFORMANCE_FILE:&str=".jev_performance.json";

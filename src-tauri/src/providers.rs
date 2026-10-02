@@ -395,6 +395,15 @@ fn said(event:&Value)->Option<String> {
     event.pointer("/delta/text").and_then(Value::as_str).map(str::to_string)
 }
 
+/// Se a linha traz uma mensagem inteira do assistente — e não um pedaço dela
+/// nem uma linha de texto puro, que continua a anterior.
+fn whole_message(line:&str)->bool {
+    let Ok(event)=serde_json::from_str::<Value>(line.trim()) else { return false };
+    if crate::usage::codex::said(&event).is_some() { return true; }
+    event.get("type").and_then(Value::as_str)!=Some("user")
+        && event.pointer("/message/content").and_then(Value::as_array).is_some_and(|parts|parts.iter().any(|part|part.get("type").and_then(Value::as_str)==Some("text")))
+}
+
 /// A recusa que o agente anuncia na própria saída. Em `stream-json` o Claude
 /// não explica a falha no canal de erro: ele fecha com um evento `result`
 /// marcado `is_error`, e o motivo — modelo inexistente, cota estourada, login
@@ -562,7 +571,15 @@ impl Provider for CliProvider {
                     line=talk.next_line(),if talking=>match line.context("CLI provider returned non-UTF-8 output")? {
                         None=>talking=false,
                         Some(line)=>if let Some(reason)={ meter.read(&line); refusal(&line) } { refused=Some(reason); } else if let Some(beat)=classify(&line) {
-                            if let Beat::Chunk{text}=&beat { response.push_str(text); }
+                            if let Beat::Chunk{text}=&beat {
+                                // Cada mensagem inteira do agente fica no seu balão.
+                                if whole_message(&line)&&!response.trim().is_empty() {
+                                    let gap=format!("\n{}\n",crate::asking::MESSAGE_BREAK);
+                                    response.push_str(&gap);
+                                    pulse.beat(Beat::Chunk{text:gap});
+                                }
+                                response.push_str(text);
+                            }
                             pulse.beat(beat);
                         },
                     },
@@ -897,6 +914,14 @@ mod tests {
 
     /// O esforço escolhido pelo Jev entra no lugar dele; sem escolha, a flag
     /// some junto e o agente usa o seu padrão.
+    #[test] fn only_a_whole_assistant_message_opens_a_new_balloon() {
+        assert!(whole_message(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"oi"}]}}"#));
+        assert!(whole_message(r#"{"type":"item.completed","item":{"type":"agent_message","text":"feito"}}"#));
+        assert!(!whole_message(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#));
+        assert!(!whole_message("uma linha de texto puro"));
+        assert!(!whole_message(r#"{"type":"user","message":{"content":[{"type":"text","text":"pedido"}]}}"#));
+    }
+
     #[test] fn the_effort_jev_picked_reaches_the_command_line() {
         let provider=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["--model".into(),"{model}".into(),"-c".into(),"model_reasoning_effort=\"{effort}\"".into(),"-".into()],..config("cli")},workdir:Workdir::default()};
         assert_eq!(provider.args("gpt-5",Some("low"),"",std::path::Path::new("u.json")),["--model","gpt-5","-c","model_reasoning_effort=\"low\"","-"]);

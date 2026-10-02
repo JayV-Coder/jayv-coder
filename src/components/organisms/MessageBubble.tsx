@@ -6,6 +6,15 @@ import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+/** Onde uma mensagem do agente termina e a próxima começa (o
+ * `MESSAGE_BREAK` do núcleo). */
+const MESSAGE_BREAK = "\u2063";
+
+function splitMessages(text: string): string[] {
+  const parts = text.split(MESSAGE_BREAK).map((part) => part.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : [text];
+}
+
 /** Um balão da conversa. O pedido e a resposta levam a cor que a portaria deu
  * ao pedido. */
 export function MessageBubble({ role, content, turn, meta, pending, onRetry, onOpenFile, children }: {
@@ -31,6 +40,15 @@ export function MessageBubble({ role, content, turn, meta, pending, onRetry, onO
   // A resposta diz quem a escreveu: o agente, o modelo, o modo e o papel que
   // o Jev escolheu para o pedido.
   const route = !user && turn?.route ? turn.route : null;
+  // Cada mensagem do agente no seu balão, como o Claude e o Codex mostram:
+  // o que ele avisou no caminho não se mistura com a resposta final.
+  const parts = user ? [text] : splitMessages(text);
+  const bubble = cn(
+    "rounded-[13px] border border-border bg-[#151916] px-[19px] py-[17px] leading-[1.58] [overflow-wrap:anywhere]",
+    user && "border-[#324a37] bg-[#1d2920] whitespace-pre-wrap",
+    pending && "border-dashed whitespace-pre-wrap",
+    light && "border-[var(--aspect)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--aspect)_22%,transparent),0_6px_20px_-14px_var(--glow)]",
+  );
   return (
     <article className={cn("my-[22px]", user ? "ms-[16%]" : "me-[10%]", pending && "animate-pending-in motion-reduce:animate-none")}>
       <div className="flex items-baseline gap-2.5 px-1 pb-2 text-xs">
@@ -44,16 +62,12 @@ export function MessageBubble({ role, content, turn, meta, pending, onRetry, onO
         {meta && <small className="text-[#6e7870]">{meta}</small>}
       </div>
       {(text || !pending) && (
-        <div
-          data-aspect={light?.aspect}
-          className={cn(
-            "rounded-[13px] border border-border bg-[#151916] px-[19px] py-[17px] leading-[1.58] [overflow-wrap:anywhere]",
-            user && "border-[#324a37] bg-[#1d2920] whitespace-pre-wrap",
-            pending && "border-dashed whitespace-pre-wrap",
-            light && "border-[var(--aspect)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--aspect)_22%,transparent),0_6px_20px_-14px_var(--glow)]",
-          )}
-        >
-          {user || pending ? text : <Markdown content={text} onOpenFile={onOpenFile} />}
+        <div className="grid gap-2">
+          {parts.map((part, index) => (
+            <div key={index} data-aspect={light?.aspect} className={cn(bubble, index < parts.length - 1 && "border-border shadow-none text-[#c3cdc5]")}>
+              {user || pending ? part : <Markdown content={part} onOpenFile={onOpenFile} />}
+            </div>
+          ))}
         </div>
       )}
       {children}
