@@ -478,9 +478,20 @@ impl VerificationVerdict {
         assert_eq!(quota.resets_at.as_deref(),Some("2026-10-02T00:00:00Z"));
     }
 
+    /// O seed mora no repositório `JayV-Coder/supabase`, clonado ao lado deste
+    /// (ou onde `JAYV_SUPABASE_REPO` apontar). Sem ele o teste avisa e passa:
+    /// não há contra o que comparar.
+    fn jev_seed()->Option<String> {
+        const SEED:&str="20261001120100_seed_jev_en.sql";
+        let repository=std::env::var_os("JAYV_SUPABASE_REPO").map(std::path::PathBuf::from)
+            .unwrap_or_else(||std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../supabase"));
+        ["supabase/migrations","migrations"].iter().find_map(|folder|std::fs::read_to_string(repository.join(folder).join(SEED)).ok())
+    }
+
     #[test]
     fn the_jev_seed_is_what_rust_asks_today() {
-        let rows=seed_rows(include_str!("../../supabase/migrations/20261001120100_seed_jev_en.sql"));
+        let Some(seed)=jev_seed() else { eprintln!("seed do Jev não encontrado: clone JayV-Coder/supabase ao lado ou defina JAYV_SUPABASE_REPO"); return };
+        let rows=seed_rows(&seed);
         let mut sets:BTreeMap<String,BTreeMap<String,Question>>=BTreeMap::new();
         let mut parameters:BTreeMap<String,Value>=BTreeMap::new();
         for (fields,value) in rows {
