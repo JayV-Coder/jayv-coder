@@ -27,6 +27,10 @@ const REQUEST_LANGUAGE_NOTE:&str="Reply to the developer in the language their r
 const NO_REPOSITORY_NOTE:&str="No repository files were supplied: this request does not depend on them. Answer from general knowledge and never guess this codebase's contents.";
 const TOOLS_NOTE:&str="This asks for commands to run or files to change, which this orchestrator cannot execute. Hand back the exact commands or edits for the developer to apply.";
 const DESTRUCTIVE_NOTE:&str="This would overwrite or remove existing work. State the exact effect and how to undo it before giving the change.";
+const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Investigate what is needed and answer with a concrete step-by-step plan (files, changes, how to verify). Do not claim that any file was changed.";
+const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it.";
+pub const MODE_PLAN:&str="plan";
+pub const MODE_BUILD:&str="build";
 const REPOSITORY_CONTEXT_THRESHOLD:f64=0.5;
 const TOOLS_THRESHOLD:f64=0.5;
 const DESTRUCTIVE_THRESHOLD:f64=0.35;
@@ -60,8 +64,16 @@ pub struct Orchestrator {
     /// do texto cru só na mensagem enviada: roteamento, contexto e histórico
     /// continuam lendo o que o desenvolvedor escreveu. `process` o consome uma vez.
     pub pending_brief: Option<String>,
+    /// Se a portaria liberou o pedido de vez (`pass`) ou com ressalva (`ask`).
+    /// Só o liberado de vez pode ir em modo build. Sem portaria — a linha de
+    /// comando, os testes — vale como liberado. `process` o consome uma vez.
+    pub pending_gate_passed: Option<bool>,
+    /// O nível da conta: quanto o Jev confia no pedido e até onde ele constrói.
+    pub expertise: crate::expertise::Expertise,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
+    /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
+    planners: HashMap<String, Box<dyn Provider>>,
     /// A pasta que os agentes de linha de comando enxergam. Anda junto com o
     /// índice: os dois descrevem o projeto do chat que está sendo atendido.
     workdir: Workdir,
@@ -86,7 +98,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -111,11 +123,12 @@ impl Orchestrator {
     pub fn use_llm(&mut self,settings:&crate::llm::LlmSettings) {
         let (providers,models)=crate::llm::to_config(settings);
         self.providers=build_providers(&providers,&self.workdir);
+        self.planners=build_planners(&providers,&self.workdir);
         self.config.providers=providers;
         self.config.models=models;
     }
 
-    pub fn reload(&mut self)->Result<()> { let mut config=Config::load(&self.config_path)?; config.providers=std::mem::take(&mut self.config.providers); config.models=std::mem::take(&mut self.config.models); self.providers=build_providers(&config.providers,&self.workdir); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
+    pub fn reload(&mut self)->Result<()> { let mut config=Config::load(&self.config_path)?; config.providers=std::mem::take(&mut self.config.providers); config.models=std::mem::take(&mut self.config.models); self.providers=build_providers(&config.providers,&self.workdir); self.planners=build_planners(&config.providers,&self.workdir); self.firewall=ContextFirewall::new(config.privacy.clone()); self.cache=SemanticCache::new(config.jev.context.cache_ttl,1000); self.config=config; self.rag.index(&self.firewall)?; Ok(()) }
 
     /// Cada chat pertence a um projeto, e é a pasta desse projeto que precisa
     /// entrar no contexto: sem isto o Jev descreveria o diretório de onde o
@@ -145,31 +158,34 @@ impl Orchestrator {
         }
         self.memory.add_message(session_id,"user",normalized.clone());
         let brief=self.pending_brief.take();
+        let gate_passed=self.pending_gate_passed.take().unwrap_or(true);
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
+        let mode=select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise);
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
-        let notes=routing_notes(&signals);
+        let notes=mode_notes(&signals,mode);
         let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)));
-        let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals);
+        let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals,mode);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
-        let capabilities=routing_capabilities(&intent.intent,&signals);
-        let selection=select_model(&self.config,&intent.intent,&complexity,&context,&self.performance);
+        let mut selection=select_model(&self.config,&intent.intent,&complexity,&context,&self.performance);
+        selection.mode=mode.into();
+        selection.agent=self.agents.for_intent(&intent.intent).map(|agent|agent.name.clone());
         if let Some(guidance)=self.configuration_guidance(&selection) {
             let response=ProviderResponse { response:guidance, input_tokens:0, output_tokens:0, model:"configuration".into(), provider:"jev".into(), latency_ms:0 };
             pulse.beat(Beat::Chunk{text:response.response.clone()});
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
             self.memory.add_message(session_id,"assistant",i18n::for_model(&response.response));
-            let model_selection=ModelSelection { model_name:"configuration".into(), provider:"jev".into(), estimated_tokens:selection.estimated_tokens, score:0.0, reason:"LLM configuration is required before execution".into() };
+            let model_selection=ModelSelection { model_name:"configuration".into(), provider:"jev".into(), estimated_tokens:selection.estimated_tokens, score:0.0, reason:"LLM configuration is required before execution".into(), ..Default::default() };
             let decision=Decision { model_provider:"jev".into(), model_name:"configuration".into(), estimated_tokens:model_selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
             self.last_decision=Some(decision.clone());
             return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
         }
         let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
-        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone()});
+        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone()});
         pulse.beat(Beat::Running);
         let started=Instant::now();
-        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&capabilities,&context,&selection,session_id,pulse).await;
+        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await;
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
             Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
@@ -203,7 +219,7 @@ impl Orchestrator {
     }
 
     pub fn jev_routing(&self,decision:&jev::RoutingDecision)->(IntentAnalysis,String,RoutingSignals) {
-        let threshold=self.config.jev.adaptive_routing.confidence_threshold;
+        let threshold=self.expertise.confidence(self.config.jev.adaptive_routing.confidence_threshold);
         let complexity=if decision.complexity_confidence>=threshold{decision.complexity.clone()}else{widen_complexity(decision)};
         let widened=(complexity!=decision.complexity).then(||decision.complexity.clone());
         let confident=decision.is_confident(threshold);
@@ -221,10 +237,10 @@ impl Orchestrator {
     fn request_overhead(&self,input:&str,session_id:&str)->usize { estimate_tokens(SYSTEM_INSTRUCTIONS)+estimate_tokens(input)+self.history_tokens(session_id)+REQUEST_MARGIN }
     fn history_tokens(&self,session_id:&str)->usize { self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).map(|message|estimate_tokens(&message.content)).sum() }
 
-    fn assemble_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize,signals:&RoutingSignals)->Context {
+    fn assemble_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize,signals:&RoutingSignals,mode:&str)->Context {
         let mut context=if repository_context_wanted(signals){self.build_context(input,plan,budget,reserved)}else{Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),project:self.rag.project_info(),relevant_files:vec![],snippets:vec![],estimated_tokens:reserved,repository_context_skipped:true}};
         note_project(&mut context);
-        note_routing(&mut context,signals);
+        note_routing(&mut context,signals,mode);
         if let Some(note)=self.pending_gate_note.take() { context.system_instructions.push_str(&format!("\n{note}")); }
         context
     }
@@ -262,10 +278,11 @@ impl Orchestrator {
     /// executável, ou com resposta que não serve como título, devolve nada e o
     /// resumo local que já está no banco continua valendo.
     pub async fn name_chat(&self,prompt:&str,intent:&str)->Option<String> {
-        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.providers.contains_key(&model.provider)).collect();
+        // O batismo não mexe em nada: vai sempre pelos agentes em somente leitura.
+        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.planners.contains_key(&model.provider)).collect();
         usable.sort_by(|(left,_),(right,_)|left.cmp(right));
         let (_,model)=usable.first()?;
-        let provider=self.providers.get(&model.provider)?;
+        let provider=self.planners.get(&model.provider)?;
         let request:String=prompt.trim().chars().take(TITLE_PROMPT_CHARS).collect();
         let messages=[
             ChatMessage{role:"system".into(),content:format!("{TITLE_INSTRUCTIONS}\n{}",language_note())},
@@ -274,10 +291,11 @@ impl Orchestrator {
         clean_title(&provider.chat(&messages,&model.model).await.ok()?.response)
     }
 
-    async fn execute(&self,input:&str,capabilities:&[String],context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
-        let provider=self.providers.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
+    async fn execute(&self,input:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
+        let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
-        let agent=self.agents.select(capabilities);
+        let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
         let repository_context=safe_context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
@@ -320,7 +338,7 @@ impl Orchestrator {
         let explained=self.last_decision.as_ref().map(|d|Text::new("explain.last").with("model",&d.model_name).with("provider",&d.model_provider).with("files",d.context_files_count).with("tokens",d.estimated_tokens)).unwrap_or_else(||Text::new("explain.none"));
         let response=i18n::notice(&[explained]);
         let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
-        ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
+        ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into(),..Default::default()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
     }
 }
 
@@ -411,7 +429,27 @@ fn note_project(context:&mut Context){
     if !context.system_instructions.contains(&line) { context.system_instructions.push_str(&line); }
 }
 
-fn note_routing(context:&mut Context,signals:&RoutingSignals){ let notes=routing_notes(signals); if !notes.is_empty()&&!context.system_instructions.contains(notes.trim_start()) { context.system_instructions.push_str(&notes); } }
+/// Planejamento ou build. Só vai em build o pedido que a portaria liberou de
+/// vez, que pede para escrever código (código, refatoração, teste ou tela),
+/// que precisa de ferramentas, que não apaga trabalho — pela régua do nível —
+/// e cuja complexidade cabe no teto do nível. Todo o resto é planejamento:
+/// análise, revisão, segurança, conversa, pedido com ressalva.
+pub fn select_mode(intent:&str,complexity:&str,signals:&RoutingSignals,gate_passed:bool,level:crate::expertise::Expertise)->&'static str {
+    let writes=matches!(intent,"code"|"refactor"|"test"|"frontend");
+    let erases=signals.is_destructive.is_some_and(|probability|jev::RoutingDecision::holds(probability,level.destructive_threshold()));
+    if gate_passed && writes && tools_wanted(signals) && !erases && level.builds(complexity) { MODE_BUILD } else { MODE_PLAN }
+}
+/// As notas do roteamento mais a do modo. Em build o agente executa, então a
+/// nota de "devolva os comandos para o desenvolvedor" não vale.
+pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
+    let notes=routing_notes(signals);
+    let notes=if mode==MODE_BUILD { notes.replace(&format!("\n{TOOLS_NOTE}"),"") } else { notes };
+    format!("{notes}\n{}",if mode==MODE_BUILD {BUILD_NOTE} else {PLAN_NOTE})
+}
+fn build_planners(configs:&HashMap<String,crate::config::ProviderConfig>,workdir:&Workdir)->HashMap<String,Box<dyn Provider>> {
+    build_providers(&configs.iter().map(|(name,config)|(name.clone(),config.for_planning())).collect(),workdir)
+}
+fn note_routing(context:&mut Context,signals:&RoutingSignals,mode:&str){ let notes=mode_notes(signals,mode); if !notes.is_empty()&&!context.system_instructions.contains(notes.trim_start()) { context.system_instructions.push_str(&notes); } }
 fn estimate_tokens(value:&str)->usize{(value.chars().count()/4).max(1)}
 fn snippet_tokens(snippet:&ContextSnippet)->usize{estimate_tokens(&snippet.content)+estimate_tokens(&snippet.path)+SNIPPET_WRAPPER}
 fn note_removal(context:&mut Context){ if !context.system_instructions.contains(REMOVAL_NOTE) { context.system_instructions=format!("{}\n{REMOVAL_NOTE}",context.system_instructions); } }
@@ -556,8 +594,8 @@ mod tests {
         let plan=plan_context("general","trivial");
         let retrieved=orchestrator.retrieve_context(request,&plan);
 
-        let before=orchestrator.assemble_context(request,&plan,2_000,120,&heuristic);
-        let after=orchestrator.assemble_context(request,&plan,2_000,120,&signals);
+        let before=orchestrator.assemble_context(request,&plan,2_000,120,&heuristic,MODE_PLAN);
+        let after=orchestrator.assemble_context(request,&plan,2_000,120,&signals,MODE_PLAN);
 
         assert!(!before.snippets.is_empty(),"the fixture must retrieve something to save");
         assert!(sent_tokens(&before)>0);
@@ -578,7 +616,7 @@ mod tests {
         let mut orchestrator=orchestrator(&dir);
         let plan=plan_context("general","trivial");
 
-        let context=orchestrator.assemble_context("onde estou",&plan,2_000,120,&RoutingSignals::default());
+        let context=orchestrator.assemble_context("onde estou",&plan,2_000,120,&RoutingSignals::default(),MODE_PLAN);
 
         assert!(context.system_instructions.contains(&context.project.root),"o caminho do projeto vai no prompt: {}",context.system_instructions);
         assert!(context.system_instructions.contains(&context.project.name),"o nome do projeto vai junto");
@@ -616,6 +654,61 @@ mod tests {
         assert!(result.result.is_some());
     }
 
+    #[test]
+    fn only_a_cleared_request_to_write_code_goes_to_build() {
+        use crate::expertise::Expertise::{Architect, Mid, Starter};
+        let jev=|tools:f64,destructive:f64|RoutingSignals{source:SOURCE_JEV.into(),needs_tools:Some(tools),is_destructive:Some(destructive),..Default::default()};
+        assert_eq!(select_mode("code","simple",&jev(0.9,0.0),true,Mid),MODE_BUILD);
+        assert_eq!(select_mode("frontend","medium",&jev(0.9,0.0),true,Mid),MODE_BUILD);
+        assert_eq!(select_mode("code","simple",&jev(0.9,0.0),false,Mid),MODE_PLAN,"a ressalva da portaria pede plano");
+        assert_eq!(select_mode("code","simple",&jev(0.1,0.0),true,Mid),MODE_PLAN,"sem ferramentas não há o que construir");
+        assert_eq!(select_mode("refactor","medium",&jev(0.9,0.8),true,Mid),MODE_PLAN,"apagar trabalho começa por um plano");
+        assert_eq!(select_mode("code","complex",&jev(0.9,0.0),true,Mid),MODE_PLAN,"o sistema inteiro começa por um plano");
+        for intent in ["analysis","review","security","general"] { assert_eq!(select_mode(intent,"simple",&jev(0.9,0.0),true,Mid),MODE_PLAN,"{intent}"); }
+        assert_eq!(select_mode("code","simple",&RoutingSignals::default(),true,Mid),MODE_BUILD,"a heurística local não sabe das ferramentas e não trava o build");
+        // O nível move o teto do build e a régua do que apaga trabalho.
+        assert_eq!(select_mode("code","medium",&jev(0.9,0.0),true,Starter),MODE_PLAN,"quem começa recebe plano no médio");
+        assert_eq!(select_mode("code","complex",&jev(0.9,0.0),true,Architect),MODE_BUILD,"quem projeta constrói o sistema");
+        assert_eq!(select_mode("refactor","simple",&jev(0.9,0.25),true,Starter),MODE_PLAN);
+        assert_eq!(select_mode("refactor","simple",&jev(0.9,0.25),true,Mid),MODE_BUILD);
+
+        let build=mode_notes(&jev(0.9,0.0),MODE_BUILD);
+        assert!(build.contains(BUILD_NOTE)&&!build.contains(TOOLS_NOTE)&&!build.contains(PLAN_NOTE));
+        let plan=mode_notes(&jev(0.9,0.0),MODE_PLAN);
+        assert!(plan.contains(PLAN_NOTE)&&plan.contains(TOOLS_NOTE));
+    }
+
+    /// O mesmo agente, duas linhas de comando: a do modo escolhido é a que roda,
+    /// e o balão sabe qual agente, modelo, modo e papel atenderam.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_chosen_mode_runs_the_matching_command_line() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),"cat >/dev/null; echo ran-build".into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo ran-plan".into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        let built=orchestrator.process("adicione um teste ao roteador",Some("build"),&Pulse::silent()).await;
+        assert_eq!(built.result.as_ref().map(|answer|answer.response.trim()),Some("ran-build"));
+        assert_eq!((built.model_selection.provider.as_str(),built.model_selection.model_name.as_str(),built.model_selection.mode.as_str(),built.model_selection.agent.as_deref()),("cli","modelo",MODE_BUILD,Some("developer")));
+
+        orchestrator.pending_gate_passed=Some(false);
+        let held=orchestrator.process("adicione um teste ao roteador",Some("held"),&Pulse::silent()).await;
+        assert_eq!(held.result.as_ref().map(|answer|answer.response.trim()),Some("ran-plan"),"liberado com ressalva não escreve");
+        assert_eq!(held.model_selection.mode,MODE_PLAN);
+
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+        let reviewed=orchestrator.process("revise o roteador",Some("review"),&Pulse::silent()).await;
+        assert_eq!(reviewed.result.as_ref().map(|answer|answer.response.trim()),Some("ran-plan"));
+        assert_eq!(reviewed.model_selection.agent.as_deref(),Some("reviewer"));
+    }
+
     #[tokio::test]
     async fn a_routing_failure_falls_back_to_the_heuristics_without_failing_the_request() {
         let dir=repository(&[("router.rs",filler("router",200))]);
@@ -646,8 +739,9 @@ mod tests {
         assert_eq!(result.intent_analysis.intent,analyze_intent("Explique o roteador").intent);
         assert_eq!(result.complexity,analyze_complexity("Explique o roteador",&analyze_intent("Explique o roteador")));
         // Sem o Jev, o prompt é o de sempre mais a linha do projeto — ela não vem
-        // do roteador, vem de onde o pedido está sendo atendido, e vai sempre.
-        assert_eq!(result.context.system_instructions,format!("{SYSTEM_INSTRUCTIONS}\nPROJECT: {} at {}",result.context.project.name,result.context.project.root));
+        // do roteador, vem de onde o pedido está sendo atendido, e vai sempre —
+        // e a linha do modo, que todo pedido leva.
+        assert_eq!(result.context.system_instructions,format!("{SYSTEM_INSTRUCTIONS}\nPROJECT: {} at {}\n{PLAN_NOTE}",result.context.project.name,result.context.project.root));
         assert!(!result.context.repository_context_skipped);
         assert!(routing_notes(&result.routing).is_empty());
     }
@@ -663,9 +757,11 @@ mod tests {
 
         assert!(notes.contains(CLARIFY_NOTE) && notes.contains(NO_REPOSITORY_NOTE) && notes.contains(TOOLS_NOTE) && notes.contains(DESTRUCTIVE_NOTE));
         assert!(estimate_tokens(&notes)<=140,"worst-case routing instructions cost {} tokens",estimate_tokens(&notes));
+        let with_mode=mode_notes(&signals,MODE_PLAN);
+        assert!(estimate_tokens(&with_mode)<=200,"worst-case routing and mode instructions cost {} tokens",estimate_tokens(&with_mode));
         let mut context=Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),..Default::default()};
-        note_routing(&mut context,&signals); let once=context.system_instructions.clone();
-        note_routing(&mut context,&signals);
+        note_routing(&mut context,&signals,MODE_PLAN); let once=context.system_instructions.clone();
+        note_routing(&mut context,&signals,MODE_PLAN);
         assert_eq!(context.system_instructions,once);
         assert_eq!(estimate_tokens(&routing_notes(&RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()})),1);
     }
