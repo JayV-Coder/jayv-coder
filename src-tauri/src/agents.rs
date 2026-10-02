@@ -15,7 +15,26 @@ impl Default for AgentRegistry {
 }
 impl AgentRegistry {
     pub fn list(&self) -> &[Agent] { &self.agents }
-    pub fn select(&self, required: &[String]) -> Option<&Agent> { self.agents.iter().max_by_key(|agent| required.iter().filter(|r| agent.capabilities.contains(r)).count()) }
+    pub fn find(&self, name: &str) -> Option<&Agent> { self.agents.iter().find(|agent| agent.name == name) }
+    /// O papel que atende a intenção lida pelo Jev. Conversa geral não ganha
+    /// papel: o pedido vai sem persona.
+    pub fn for_intent(&self, intent: &str) -> Option<&Agent> {
+        self.find(match intent { "code"|"refactor"|"test"=>"developer", "frontend"=>"frontend", "security"=>"security", "review"|"analysis"=>"reviewer", _=>return None })
+    }
 }
 
-#[cfg(test)] mod tests { use super::*; #[test] fn selects_security_agent() { let r=AgentRegistry::default(); assert_eq!(r.select(&["security".into()]).unwrap().name,"security"); } }
+#[cfg(test)] mod tests {
+    use super::*;
+    #[test] fn each_intent_gets_its_own_agent() {
+        let registry=AgentRegistry::default();
+        let named=|intent:&str|registry.for_intent(intent).map(|agent|agent.name.as_str());
+        assert_eq!(named("security"),Some("security"));
+        assert_eq!(named("code"),Some("developer"));
+        assert_eq!(named("refactor"),Some("developer"));
+        assert_eq!(named("test"),Some("developer"));
+        assert_eq!(named("frontend"),Some("frontend"));
+        assert_eq!(named("review"),Some("reviewer"));
+        assert_eq!(named("analysis"),Some("reviewer"));
+        assert_eq!(named("general"),None);
+    }
+}
