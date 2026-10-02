@@ -22,6 +22,7 @@ export const commands = {
     invoke<Turn>("answer_question", { answer: { questionTurnId, picked, text } }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
+  scopedGateFeed: (projectIds: string[], chatId: string | null) => invoke<GateFeed>("scoped_gate_feed", { projectIds, chatId }),
   openFile: (chatId: string, path: string) => invoke<void>("open_file", { chatId, path }),
   scanRepositories: (folder: string, keys: string[]) => invoke<FoundRepository[]>("scan_repositories", { folder, keys }),
   cloneRepository: (key: string, folder: string) => invoke<Project>("clone_repository", { key, folder }),

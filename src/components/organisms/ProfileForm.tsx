@@ -68,10 +68,12 @@ export function ProfileForm({ initial, busy, submitLabel, onSubmit, secondary }:
   const [draft, setDraft] = useState(initial);
   const set = <K extends keyof AccountProfile>(key: K, value: AccountProfile[K]) => setDraft((current) => ({ ...current, [key]: value }));
   const username = useUsernameState(draft.username, initial.username);
+  const usernameLocked = initial.usernameSetAt !== null;
   const usernameNote = username === "invalid" ? t("profile.username.invalid", { min: 3, max: USERNAME_MAX })
     : username === "taken" ? t("profile.usernameTaken") : null;
   const usernameHint = username === "checking" ? t("profile.username.checking")
-    : username === "available" ? t("profile.username.available") : t("profile.field.username.hint");
+    : username === "available" ? t("profile.username.available")
+    : t(usernameLocked ? "profile.username.locked" : "profile.username.once");
 
   const unset: Option<typeof UNSET> = { value: UNSET, label: t("profile.unset") };
   const closed = <V extends string>(group: string, values: readonly V[]): Option<Choice<V>>[] =>
@@ -98,7 +100,7 @@ export function ProfileForm({ initial, busy, submitLabel, onSubmit, secondary }:
         <FormField label={t("profile.field.username")} htmlFor="profile-username" hint={usernameHint} error={usernameNote}>
           <div className="relative">
             <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 start-3 grid place-items-center text-sm text-muted-foreground">@</span>
-            <Input id="profile-username" required autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={USERNAME_MAX} className="ps-7"
+            <Input id="profile-username" required disabled={usernameLocked} autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={USERNAME_MAX} className="ps-7"
               aria-invalid={usernameNote ? true : undefined} value={draft.username} onChange={(event) => set("username", event.target.value.toLowerCase().replace(/\s/g, ""))} />
           </div>
         </FormField>

@@ -301,7 +301,9 @@ export interface AgentProbe {
 }
 
 /** De quem é a conta das estatísticas (ver `src-tauri/src/usage/store.rs`). */
-export type UsageScope = { kind: "global" } | { kind: "project"; id: string } | { kind: "chat"; id: string };
+/** De quem é a conta. `projects` é um punhado de projetos (os de uma
+ * organização); vazio, não conta nada. */
+export type UsageScope = { kind: "global" } | { kind: "project"; id: string } | { kind: "projects"; id: string[] } | { kind: "chat"; id: string };
 /** De onde vem um número: a ferramenta informou, o app calculou, ou é de um
  * turno antigo, de antes da contagem existir. */
 export type UsagePrecision = "reported" | "estimated" | "legacy";

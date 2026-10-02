@@ -2,10 +2,12 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
 
-/** Em que pé está a atualização. `latest` e `failed` são os únicos pontos em
- * que a janela pode ser fechada: no meio do download ou da instalação o
- * aplicativo está trocando os próprios arquivos. */
-export type UpdatePhase = "idle" | "checking" | "latest" | "downloading" | "installing" | "restarting" | "failed";
+/** Em que pé está a atualização. `available` é a versão nova achada sozinha,
+ * esperando a pessoa mandar instalar (o aviso no topo e a notificação).
+ * `available`, `latest` e `failed` são os únicos pontos em que a janela pode
+ * ser fechada: no meio do download ou da instalação o aplicativo está
+ * trocando os próprios arquivos. */
+export type UpdatePhase = "idle" | "checking" | "available" | "latest" | "downloading" | "installing" | "restarting" | "failed";
 export type UpdateStep = "checking" | "downloading" | "installing" | "restarting";
 
 interface UpdateState {
@@ -23,37 +25,98 @@ interface UpdateState {
   error: string | null;
   /** O passo em que a falha aconteceu. */
   failedAt: UpdateStep | null;
+  /** A versão cujo aviso no topo a pessoa fechou: a mesma não volta a
+   * aparecer até reabrir o app; uma mais nova, sim. */
+  dismissed: string | null;
 }
 
 export const useUpdate = create<UpdateState>(() => ({
-  phase: "idle", open: false, current: null, next: null, notes: null, date: null, received: 0, total: null, error: null, failedAt: null,
+  phase: "idle", open: false, current: null, next: null, notes: null, date: null, received: 0, total: null, error: null, failedAt: null, dismissed: null,
 }));
 
 const busy = (phase: UpdatePhase) => phase === "checking" || phase === "downloading" || phase === "installing" || phase === "restarting";
 
-/** Pergunta ao repositório de releases se há versão nova e, havendo, já
- * atualiza, mostrando cada passo numa janela. Ao abrir o aplicativo
- * (`announce` falso) a janela só aparece se houver o que instalar: sem rede ou
- * numa build de desenvolvimento a falha fica calada. Pelo botão a janela
- * aparece desde a consulta e diz também "já está na mais nova" e o erro. */
+/** De quanto em quanto tempo o app aberto pergunta de novo: o release pode
+ * sair com o JayV aberto o dia todo. */
+export const RECHECK_MS = 30 * 60 * 1000;
+
+/** A versão achada pela consulta silenciosa, guardada até a pessoa mandar
+ * instalar. */
+let pending: Update | null = null;
+
+/** Pergunta ao repositório de releases se há versão nova. Ao abrir o
+ * aplicativo e a cada `RECHECK_MS` (`announce` falso) nada se instala sozinho:
+ * a versão nova vira `available` (o aviso no topo e a notificação), e sem
+ * rede ou numa build de desenvolvimento a falha fica calada. Pelo botão
+ * (`announce`) a janela aparece desde a consulta, diz também "já está na mais
+ * nova" e o erro, e a versão achada já se instala. */
 export async function checkForUpdate(announce = false) {
   const state = useUpdate.getState();
   // Uma atualização em curso não começa outra: o botão só reabre a janela.
-  if (busy(state.phase)) { useUpdate.setState({ open: true }); return; }
-  useUpdate.setState({ phase: "checking", open: announce, error: null, failedAt: null, received: 0, total: null, next: null, notes: null, date: null });
+  if (busy(state.phase)) { if (announce) useUpdate.setState({ open: true }); return; }
+  if (!announce) { await checkQuietly(); return; }
+  if (pending) { await install(pending); return; }
+  useUpdate.setState({ phase: "checking", open: true, error: null, failedAt: null, received: 0, total: null, next: null, notes: null, date: null });
   let update: Update | null;
   try {
     update = await check();
   } catch (error) {
     console.warn("update check failed", error);
-    useUpdate.setState({ phase: announce ? "failed" : "idle", error: String(error), failedAt: "checking" });
+    useUpdate.setState({ phase: "failed", error: String(error), failedAt: "checking" });
     return;
   }
-  if (!update) {
-    useUpdate.setState({ phase: announce ? "latest" : "idle" });
-    return;
-  }
+  if (!update) { useUpdate.setState({ phase: "latest" }); return; }
   await install(update);
+}
+
+/** A consulta sem janela: não mexe na fase enquanto pergunta (o aviso do topo
+ * não pisca), e o que volta depois que a pessoa já mandou atualizar é
+ * descartado. */
+async function checkQuietly() {
+  let update: Update | null;
+  try {
+    update = await check();
+  } catch (error) {
+    console.warn("update check failed", error);
+    return;
+  }
+  const { phase } = useUpdate.getState();
+  if (phase !== "idle" && phase !== "available" && phase !== "latest") { void update?.close().catch(() => undefined); return; }
+  if (pending) void pending.close().catch(() => undefined);
+  pending = update;
+  if (!update) {
+    if (phase === "available") useUpdate.setState({ phase: "idle" });
+    return;
+  }
+  useUpdate.setState({
+    phase: "available", current: update.currentVersion, next: update.version,
+    notes: update.body?.trim() || null, date: update.date ?? null, error: null, failedAt: null,
+  });
+}
+
+/** Instala a versão já achada (o botão do aviso e da janela); sem uma
+ * guardada, consulta e instala. */
+export async function installUpdate() {
+  if (pending && !busy(useUpdate.getState().phase)) await install(pending);
+  else await checkForUpdate(true);
+}
+
+/** Abre a janela com a versão nova e o que muda, sem instalar ainda. */
+export function showUpdate() {
+  if (useUpdate.getState().phase === "available" || busy(useUpdate.getState().phase)) useUpdate.setState({ open: true });
+  else void checkForUpdate(true);
+}
+
+/** Esconde o aviso do topo para esta versão; a notificação fica no sino. */
+export function dismissUpdate() {
+  useUpdate.setState((state) => ({ dismissed: state.next }));
+}
+
+/** Consulta ao abrir e de novo a cada `RECHECK_MS`. */
+export function connectUpdates() {
+  void checkForUpdate();
+  const timer = setInterval(() => void checkForUpdate(), RECHECK_MS);
+  return () => clearInterval(timer);
 }
 
 async function install(update: Update) {
@@ -75,14 +138,17 @@ async function install(update: Update) {
     const at = useUpdate.getState().phase;
     useUpdate.setState({ phase: "failed", error: String(error), failedAt: at === "installing" || at === "restarting" ? at : "downloading" });
   } finally {
+    if (pending === update) pending = null;
     void update.close().catch(() => undefined);
   }
 }
 
-/** Fecha a janela, quando ela pode ser fechada. */
+/** Fecha a janela, quando ela pode ser fechada. A versão nova ainda não
+ * instalada continua esperando no aviso do topo. */
 export function closeUpdate() {
-  if (busy(useUpdate.getState().phase)) return;
-  useUpdate.setState({ open: false, phase: "idle" });
+  const { phase } = useUpdate.getState();
+  if (busy(phase)) return;
+  useUpdate.setState({ open: false, phase: phase === "available" ? "available" : "idle" });
 }
 
 export function isUpdateBusy(phase: UpdatePhase) { return busy(phase); }
