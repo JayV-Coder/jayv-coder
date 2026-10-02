@@ -1,0 +1,123 @@
+//! O nível do desenvolvedor: o quanto a portaria e o Jev confiam no pedido.
+//!
+//! Cada conta escolhe o seu — `starter`, `junior`, `mid`, `senior` ou
+//! `architect` — e ele anda com a conta pela sincronização. O nível não muda
+//! o quanto se barra: muda o quanto se pergunta e o quanto o agente pode
+//! construir sozinho. Quem está começando ouve mais perguntas e recebe mais
+//! planos; quem projeta sistemas escreve pedidos curtos e recebe build até no
+//! trabalho do tamanho do sistema.
+
+use crate::local::global::JevParameters;
+use anyhow::{bail, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+
+const KEY:&str="expertise_level";
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Default,Serialize,Deserialize)]
+#[serde(rename_all="lowercase")]
+pub enum Expertise { Starter, Junior, #[default] Mid, Senior, Architect }
+
+impl Expertise {
+    pub const ALL:[Expertise;5]=[Self::Starter,Self::Junior,Self::Mid,Self::Senior,Self::Architect];
+
+    pub fn as_str(&self)->&'static str { match self { Self::Starter=>"starter", Self::Junior=>"junior", Self::Mid=>"mid", Self::Senior=>"senior", Self::Architect=>"architect" } }
+
+    pub fn parse(value:&str)->Option<Self> { Self::ALL.into_iter().find(|level|level.as_str()==value) }
+
+    /// O deslocamento da exigência: soma à clareza que a portaria pede e à
+    /// confiança que o roteamento do Jev quer antes de pedir esclarecimento.
+    /// `mid` é o comportamento de sempre.
+    pub fn shift(&self)->f64 { match self { Self::Starter=>0.10, Self::Junior=>0.05, Self::Mid=>0.0, Self::Senior=>-0.05, Self::Architect=>-0.10 } }
+
+    /// A maior complexidade que ainda vai em modo build. Acima dela o agente
+    /// devolve um plano.
+    pub fn build_ceiling(&self)->&'static str { match self { Self::Starter|Self::Junior=>"simple", Self::Mid|Self::Senior=>"medium", Self::Architect=>"complex" } }
+
+    /// A partir de que probabilidade de apagar trabalho o pedido vira plano.
+    pub fn destructive_threshold(&self)->f64 { match self { Self::Starter=>0.20, Self::Junior=>0.30, Self::Mid=>0.35, Self::Senior=>0.45, Self::Architect=>0.55 } }
+
+    /// Os números da portaria para este nível. A exigência de cada tamanho
+    /// anda com o deslocamento e a folga anda junto, ao contrário: a linha do
+    /// bloqueio (exigência − folga) fica onde estava. O nível muda a faixa em
+    /// que o portão pergunta, não a em que ele recusa.
+    pub fn gate(&self,base:&JevParameters)->JevParameters {
+        let shift=self.shift();
+        let mut adjusted=base.clone();
+        for (demand,original) in adjusted.scope_demand.iter_mut().zip(base.scope_demand) { *demand=(original+shift).clamp(0.05,0.95); }
+        adjusted.block_margin=(base.block_margin+shift).clamp(0.0,0.9);
+        adjusted
+    }
+
+    /// A confiança mínima do roteamento, para este nível.
+    pub fn confidence(&self,configured:f64)->f64 { (configured+self.shift()).clamp(0.3,0.99) }
+
+    /// Se uma complexidade cabe no modo build deste nível.
+    pub fn builds(&self,complexity:&str)->bool {
+        let rank=|level:&str|crate::core_settings::COMPLEXITIES.iter().position(|known|*known==level);
+        match (rank(complexity),rank(self.build_ceiling())) { (Some(asked),Some(ceiling))=>asked<=ceiling, _=>false }
+    }
+}
+
+/// A tabela da conta: chave e valor, sincronizada como as outras.
+pub const SCHEMA:&str="CREATE TABLE IF NOT EXISTS account_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);";
+
+/// O nível gravado na conta. Sem escolha — ou com um valor que esta versão
+/// não conhece — vale `mid`, que é o comportamento de antes dos níveis.
+pub fn load(connection:&Connection)->Result<Expertise> {
+    let value:Option<String>=connection.query_row("SELECT value FROM account_settings WHERE key=?1",[KEY],|row|row.get(0)).optional()?;
+    Ok(value.as_deref().and_then(Expertise::parse).unwrap_or_default())
+}
+
+pub fn save(connection:&Connection,level:&str)->Result<Expertise> {
+    let Some(level)=Expertise::parse(level) else { bail!(crate::i18n::Text::new("expertise.invalid").with("value",level)) };
+    connection.execute(
+        "INSERT INTO account_settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+        params![KEY,level.as_str(),chrono::Utc::now().to_rfc3339()],
+    )?;
+    Ok(level)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] fn mid_is_what_the_gate_always_did() {
+        let base=JevParameters::default();
+        assert_eq!(Expertise::default(),Expertise::Mid);
+        assert_eq!(Expertise::Mid.gate(&base),base);
+        assert_eq!(Expertise::Mid.confidence(0.7),0.7);
+    }
+
+    #[test] fn the_level_moves_the_question_band_not_the_block_line() {
+        let base=JevParameters::default();
+        let starter=Expertise::Starter.gate(&base);
+        let architect=Expertise::Architect.gate(&base);
+        for size in 0..3 {
+            assert!(starter.scope_demand[size]>base.scope_demand[size] && architect.scope_demand[size]<base.scope_demand[size]);
+            let block=|parameters:&JevParameters|((parameters.scope_demand[size]-parameters.block_margin)*1000.0).round();
+            assert_eq!(block(&starter),block(&base),"a linha do bloqueio não anda");
+            assert_eq!(block(&architect),block(&base));
+        }
+    }
+
+    #[test] fn each_level_builds_up_to_its_ceiling() {
+        assert!(Expertise::Starter.builds("simple") && !Expertise::Starter.builds("medium"));
+        assert!(Expertise::Mid.builds("medium") && !Expertise::Mid.builds("complex"));
+        assert!(Expertise::Architect.builds("complex"));
+        assert!(!Expertise::Architect.builds("whatever"));
+        let thresholds=Expertise::ALL.map(|level|level.destructive_threshold());
+        assert!(thresholds.windows(2).all(|pair|pair[0]<pair[1]),"quem sabe mais é avisado mais tarde");
+    }
+
+    #[test] fn the_choice_is_saved_and_an_unknown_value_falls_back_to_mid() {
+        let connection=Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        assert_eq!(load(&connection).unwrap(),Expertise::Mid);
+        assert_eq!(save(&connection,"architect").unwrap(),Expertise::Architect);
+        assert_eq!(load(&connection).unwrap(),Expertise::Architect);
+        assert!(save(&connection,"guru").is_err());
+        connection.execute("UPDATE account_settings SET value='guru'",[]).unwrap();
+        assert_eq!(load(&connection).unwrap(),Expertise::Mid);
+    }
+}
