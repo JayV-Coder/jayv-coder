@@ -263,6 +263,19 @@ pub struct TurnView {
     /// aberto: a narração de um pedido já respondido fica no banco e é buscada
     /// sob demanda, em vez de engordar todo retrato da área de trabalho.
     pub activity:Vec<Activity>,
+    /// Quem atendeu o pedido, como o Jev decidiu: o último `route` da narração.
+    pub route:Option<TurnRoute>,
+}
+
+/// O agente (CLI), o modelo, o modo e o papel de um turno, para o balão.
+/// Turno narrado antes do modo existir chega sem modo nem papel.
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct TurnRoute {
+    pub provider:String,
+    pub model:String,
+    #[serde(default)] pub mode:Option<String>,
+    #[serde(default)] pub agent:Option<String>,
 }
 
 /// Uma linha da narração do turno, como a tela a lê.
@@ -283,13 +296,15 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
         "SELECT t.id,c.code,t.ordinal,t.status,
            (SELECT e.verdict FROM entry_checks e WHERE e.turn_id=t.id),
            (SELECT CASE WHEN COUNT(*)=0 THEN NULL WHEN SUM(x.verdict='held')>0 THEN 'held' ELSE 'cleared' END FROM exit_checks x WHERE x.turn_id=t.id),
-           t.partial
+           t.partial,
+           (SELECT v.detail FROM turn_events v WHERE v.turn_id=t.id AND v.kind='route' ORDER BY v.seq DESC LIMIT 1)
          FROM turns t JOIN chats c ON c.id=t.chat_id WHERE t.chat_id=?1 ORDER BY t.ordinal")?;
     let rows=statement.query_map([chat_id],|row|Ok((
         row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,u32>(2)?,row.get::<_,String>(3)?,
         row.get::<_,Option<String>>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,Option<String>>(6)?,
+        row.get::<_,Option<String>>(7)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial)|{
+    rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial,route)|{
         let status=TurnStatus::parse(&status)?;
         let activity=if status.is_open(){activity(connection,&id)?}else{vec![]};
         Ok(TurnView{
@@ -297,6 +312,8 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
             entry:entry.as_deref().map(EntryVerdict::parse).transpose()?,
             exit:exit.as_deref().map(ExitVerdict::parse).transpose()?,
             partial:partial.filter(|text|!text.is_empty()),activity,
+            // Um detalhe ilegível só tira a linha do balão, não o chat.
+            route:route.and_then(|detail|serde_json::from_str::<TurnRoute>(&detail).ok()).filter(|route|!route.provider.is_empty()),
         })
     }).collect()
 }
