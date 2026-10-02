@@ -605,7 +605,7 @@ export const en = {
   "security.changed": "Password changed.",
   "security.noPassword": "Your account has no password yet: you sign in only through a linked account. Set one to also sign in with your email.",
   "security.sendCode": "Email me a code",
-  "security.codeSent": "We sent a 6-digit code to {email}.",
+  "security.codeSent": "We sent a code to {email}.",
   "security.code": "Code from the email",
   "security.setPassword": "Set password",
   "security.set": "Password set. You can now sign in with your email.",
