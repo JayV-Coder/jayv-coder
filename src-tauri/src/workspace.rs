@@ -1000,6 +1000,25 @@ mod tests {
         assert!(data.chats.is_empty());
     }
 
+    /// A exclusão local do projeto tem de subir para o Supabase também a dos
+    /// chats e do que eles guardam: é a fila que leva cada uma.
+    #[test]
+    fn project_delete_queues_its_chats_for_deletion() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.open_turn(&chat.id).expect("turno");
+        store.append_exchange(&chat.id,&turn.id,"Pergunta","Resposta").expect("exchange");
+        store.connection().execute("DELETE FROM outbox",[]).unwrap();
+        store.delete_project(&project.id).expect("delete");
+        let queued:Vec<(String,String)>=store.connection().prepare("SELECT tbl,op FROM outbox ORDER BY seq").unwrap().query_map([],|row|Ok((row.get(0)?,row.get(1)?))).unwrap().map(Result::unwrap).collect();
+        for table in ["projects","chats","turns","messages"] {
+            assert!(queued.contains(&(table.into(),"delete".into())),"exclusão de {table} fora da fila: {queued:?}");
+        }
+        assert!(queued.iter().all(|(_,op)|op=="delete"),"{queued:?}");
+    }
+
     #[test]
     fn deletes_one_chat_without_removing_its_project() {
         let root=tempfile::tempdir().expect("root");
