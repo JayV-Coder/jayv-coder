@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type KnownModel,
-  type CoreSettings, type CoreSnapshot, type SettingsSnapshot,
+  type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { t, type Key } from "@/modules/i18n";
@@ -234,6 +234,18 @@ export async function saveSettings() {
     reportError(error);
   } finally {
     useSettings.setState({ saving: false });
+  }
+}
+
+/** O nível vale na hora, como o idioma: não espera o "Salvar". Só a parte
+ * lida do snapshot é trocada — o que estiver sendo editado no Jev continua. */
+export async function saveExpertise(level: Expertise) {
+  try {
+    const coreSnapshot = await commands.saveExpertise(level);
+    useSettings.setState({ coreSnapshot });
+    notify(t("expertise.saved", { level: t(`expertise.${level}` as Key) }));
+  } catch (error) {
+    reportError(error);
   }
 }
 
