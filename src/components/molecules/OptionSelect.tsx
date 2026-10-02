@@ -18,7 +18,7 @@ export function OptionSelect<V extends string>({ id, value, options, onChange, d
           {current && (
             <span className="flex min-w-0 items-baseline gap-2">
               <span className="truncate">{current.label}</span>
-              {current.hint && <span className="truncate font-mono text-[11px] text-muted-foreground">{current.hint}</span>}
+              {current.hint && <span className="truncate font-mono text-caption text-muted-foreground">{current.hint}</span>}
             </span>
           )}
         </SelectValue>

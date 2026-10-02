@@ -49,7 +49,7 @@ export function UpdateDialog() {
             return (
               <li key={step} data-state={state} className="flex items-center gap-2.5 text-sm text-muted-foreground data-[state=active]:text-foreground data-[state=done]:text-foreground data-[state=failed]:text-destructive">
                 <span className="grid size-5 place-items-center">
-                  {state === "done" && <CheckIcon aria-hidden="true" className="size-4 text-[#7bd985]" />}
+                  {state === "done" && <CheckIcon aria-hidden="true" className="size-4 text-success" />}
                   {state === "active" && <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />}
                   {state === "failed" && <XIcon aria-hidden="true" className="size-4" />}
                   {state === "waiting" && <span aria-hidden="true" className="size-1.5 rounded-full bg-muted-foreground/50" />}
@@ -63,8 +63,8 @@ export function UpdateDialog() {
         {(phase === "downloading" || (failedAt === "downloading" && received > 0)) && (
           <div className="grid gap-1.5">
             <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={share === null ? undefined : Math.round(share * 100)}
-              className="h-2 overflow-hidden rounded-full bg-[#202521]">
-              <div className={cn("h-full rounded-full bg-[#7bd985] transition-[width]", share === null && "w-1/3 animate-pulse motion-reduce:animate-none")}
+              className="h-2 overflow-hidden rounded-full bg-secondary">
+              <div className={cn("h-full rounded-full bg-primary transition-[width]", share === null && "w-1/3 animate-pulse motion-reduce:animate-none")}
                 style={share === null ? undefined : { width: `${share * 100}%` }} />
             </div>
             <small className="font-mono text-xs text-muted-foreground">
@@ -77,8 +77,8 @@ export function UpdateDialog() {
 
         {notes && (
           <div className="grid gap-1.5">
-            <strong className="text-xs tracking-[0.12em] text-muted-foreground uppercase">{t("update.notes")}</strong>
-            <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-[#151916] px-4 py-3 text-sm">
+            <strong className="text-xs tracking-wider text-muted-foreground uppercase">{t("update.notes")}</strong>
+            <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-muted px-4 py-3 text-sm">
               <Markdown content={notes} />
             </div>
           </div>

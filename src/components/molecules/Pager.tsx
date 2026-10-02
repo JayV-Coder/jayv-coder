@@ -16,7 +16,7 @@ export function Pager({ id, page, size, total, onPage, onSize }: {
   const to = Math.min(total, (page + 1) * size);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-[12.5px] text-muted-foreground">
+    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
       <label htmlFor={id} className="flex items-center gap-2">
         <span>{t("pager.perPage")}</span>
         <Select value={String(size)} onValueChange={(value) => onSize(Number(value))}>

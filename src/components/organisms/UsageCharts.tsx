@@ -4,8 +4,11 @@ import { useLocale, useT } from "@/modules/i18n";
 import { formatTokens, sourceColor, sourceLabel } from "@/modules/usage";
 import { Card } from "@/components/ui/card";
 
-const AXIS = { stroke: "#5c665e", fontSize: 11 };
-const TOOLTIP = { contentStyle: { background: "#111512", border: "1px solid #2b322d", fontSize: 12 }, cursor: { fill: "#ffffff0a" } };
+const AXIS = { stroke: "var(--chart-axis)", fontSize: 11 };
+const TOOLTIP = {
+  contentStyle: { background: "var(--popover)", color: "var(--popover-foreground)", border: "1px solid var(--border)", borderRadius: "var(--radius)", fontSize: 12 },
+  cursor: { fill: "var(--muted)", fillOpacity: 0.6 },
+};
 
 /** Os tokens ao longo do tempo, empilhados por quem gastou, e o peso de
  * cada modelo no período. */
@@ -30,10 +33,10 @@ export function UsageCharts({ daily, byModel }: { daily: UsageDay[]; byModel: Us
   return (
     <section className="mb-6 grid gap-4 xl:grid-cols-2">
       <Card className="gap-3 px-5 py-4">
-        <h3 className="text-sm font-bold">{t("usage.chart.daily")}</h3>
+        <h3 className="text-sm font-semibold">{t("usage.chart.daily")}</h3>
         <ResponsiveContainer width="100%" height={240}>
           <BarChart data={days}>
-            <CartesianGrid stroke="#1e242a" vertical={false} />
+            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
             <XAxis dataKey="day" tickFormatter={dayLabel} {...AXIS} />
             <YAxis tickFormatter={tokens} width={56} {...AXIS} />
             <Tooltip {...TOOLTIP} labelFormatter={(day) => dayLabel(String(day))} formatter={(value, name) => [tokens(Number(value)), sourceLabel(String(name), t)]} />
@@ -43,15 +46,15 @@ export function UsageCharts({ daily, byModel }: { daily: UsageDay[]; byModel: Us
         </ResponsiveContainer>
       </Card>
       <Card className="gap-3 px-5 py-4">
-        <h3 className="text-sm font-bold">{t("usage.chart.models")}</h3>
+        <h3 className="text-sm font-semibold">{t("usage.chart.models")}</h3>
         <ResponsiveContainer width="100%" height={240}>
           <BarChart data={models} layout="vertical">
-            <CartesianGrid stroke="#1e242a" horizontal={false} />
+            <CartesianGrid stroke="var(--chart-grid)" horizontal={false} />
             <XAxis type="number" tickFormatter={tokens} {...AXIS} />
             <YAxis type="category" dataKey="name" width={150} {...AXIS} />
             <Tooltip {...TOOLTIP} formatter={(value, name) => [tokens(Number(value)), name === "input" ? t("usage.input") : t("usage.output")]} />
-            <Bar dataKey="input" stackId="model" fill="#6aa9ff" />
-            <Bar dataKey="output" stackId="model" fill="#7bd985" />
+            <Bar dataKey="input" stackId="model" fill="var(--chart-2)" />
+            <Bar dataKey="output" stackId="model" fill="var(--chart-1)" />
           </BarChart>
         </ResponsiveContainer>
       </Card>

@@ -64,7 +64,7 @@ const FLAGS: Record<string, ReactNode> = {
 /** A bandeira que acompanha cada idioma no seletor. */
 export function Flag({ locale, className, ...props }: { locale: Locale } & SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 30 20" aria-hidden="true" className={cn("h-3.5 w-[21px] shrink-0 rounded-[2px] shadow-[0_0_0_1px_rgba(255,255,255,0.12)]", className)} {...props}>
+    <svg viewBox="0 0 30 20" aria-hidden="true" className={cn("h-3.5 w-[21px] shrink-0 rounded-xs ring-1 ring-border", className)} {...props}>
       {FLAGS[locale] ?? null}
     </svg>
   );

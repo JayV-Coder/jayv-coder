@@ -32,7 +32,7 @@ export function SettingsPage() {
   return (
     <ScrollPage>
       <PageHeading eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={t("settings.description")}>
-        {dirty && <Badge variant="outline" className="border-amber-400/50 text-amber-400">{t("settings.unsaved")}</Badge>}
+        {dirty && <Badge variant="warning">{t("settings.unsaved")}</Badge>}
         <Button variant="ghost" disabled={saving} onClick={restoreCoreDefaults} title={t("settings.defaults.hint")}>{t("settings.defaults")}</Button>
         <Button variant="ghost" disabled={!dirty || saving} onClick={discardChanges}>{t("settings.discard")}</Button>
         <Button disabled={!dirty || saving || broken || noneEnabled} onClick={() => void saveSettings()}>{t("settings.save")}</Button>
@@ -65,7 +65,7 @@ export function SettingsPage() {
                 <span
                   title={t(`settings.health.${state}`)}
                   aria-label={t(`settings.health.${state}`)}
-                  className={cn("size-2 rounded-full", state === "ok" ? "bg-emerald-400" : state === "problem" ? "bg-destructive" : "bg-muted-foreground/40")}
+                  className={cn("size-2 rounded-full", state === "ok" ? "bg-success" : state === "problem" ? "bg-destructive" : "bg-muted-foreground/40")}
                 />
               </TabsTrigger>
             );

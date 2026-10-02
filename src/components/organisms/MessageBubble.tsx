@@ -44,27 +44,27 @@ export function MessageBubble({ role, content, turn, meta, pending, onRetry, onO
   // o que ele avisou no caminho não se mistura com a resposta final.
   const parts = user ? [text] : splitMessages(text);
   const bubble = cn(
-    "rounded-[13px] border border-border bg-[#151916] px-[19px] py-[17px] leading-[1.58] [overflow-wrap:anywhere]",
-    user && "border-[#324a37] bg-[#1d2920] whitespace-pre-wrap",
+    "rounded-lg border border-border bg-card px-4 py-3.5 leading-relaxed [overflow-wrap:anywhere]",
+    user && "border-border bg-secondary whitespace-pre-wrap",
     pending && "border-dashed whitespace-pre-wrap",
-    light && "border-[var(--aspect)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--aspect)_22%,transparent),0_6px_20px_-14px_var(--glow)]",
+    light && "border-[var(--aspect)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--aspect)_22%,transparent),0_6px_20px_-16px_var(--glow)]",
   );
   return (
     <article className={cn("my-[22px]", user ? "ms-[16%]" : "me-[10%]", pending && "animate-pending-in motion-reduce:animate-none")}>
       <div className="flex items-baseline gap-2.5 px-1 pb-2 text-xs">
         <strong className={route ? undefined : "me-auto"}>{user ? t("chat.you") : "JayV"}</strong>
         {route && (
-          <small data-mode={route.mode ?? undefined} title={routeHint(route)} className="me-auto truncate text-[#8fa394] data-[mode=build]:text-[#a4f4a9]">
+          <small data-mode={route.mode ?? undefined} title={routeHint(route)} className="me-auto truncate text-muted-foreground data-[mode=build]:text-success">
             {routeLabel(route)}
           </small>
         )}
         {light && <small data-aspect={light.aspect} className="text-[var(--aspect)]">{t(light.label)}</small>}
-        {meta && <small className="text-[#6e7870]">{meta}</small>}
+        {meta && <small className="text-muted-foreground">{meta}</small>}
       </div>
       {(text || !pending) && (
         <div className="grid gap-2">
           {parts.map((part, index) => (
-            <div key={index} data-aspect={light?.aspect} className={cn(bubble, index < parts.length - 1 && "border-border shadow-none text-[#c3cdc5]")}>
+            <div key={index} data-aspect={light?.aspect} className={cn(bubble, index < parts.length - 1 && "border-border shadow-none text-muted-foreground")}>
               {user || pending ? part : <Markdown content={part} onOpenFile={onOpenFile} />}
             </div>
           ))}
@@ -74,7 +74,7 @@ export function MessageBubble({ role, content, turn, meta, pending, onRetry, onO
       {user && turn?.status === "failed" && onRetry && (
         <div className="flex items-center gap-2.5 px-1 pt-2">
           <Button variant="outline" size="xs" title={t("chat.retry.title")} onClick={onRetry}>{t("chat.retry")}</Button>
-          <small className="text-xs text-[#6e7870]">{t("chat.retry.note")}</small>
+          <small className="text-xs text-muted-foreground">{t("chat.retry.note")}</small>
         </div>
       )}
     </article>

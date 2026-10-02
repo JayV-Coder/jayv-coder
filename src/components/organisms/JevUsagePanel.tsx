@@ -28,7 +28,7 @@ export function JevUsagePanel({ report }: { report: UsageReport }) {
 
   return (
     <section className="mb-6">
-      <h3 className="mb-3 text-sm font-bold">{t("usage.jev.title")}</h3>
+      <h3 className="mb-3 text-sm font-semibold">{t("usage.jev.title")}</h3>
       <div className="grid gap-4 xl:grid-cols-3">
         <Card className="gap-2 px-5 py-4">
           <strong className="text-xs text-muted-foreground">{t("usage.jev.work")}</strong>
@@ -48,7 +48,7 @@ export function JevUsagePanel({ report }: { report: UsageReport }) {
         </Card>
         <Card className="gap-2 px-5 py-4">
           <strong className="text-xs text-muted-foreground">{t("usage.jev.saved")}</strong>
-          <p className="text-xs text-[#c9a86a]">{t("usage.jev.saved.hint")}</p>
+          <p className="text-xs text-warning">{t("usage.jev.saved.hint")}</p>
           {SAVED.map(([kind, label]) => <Row key={kind} label={t(label)} value={`≈ ${count(report.jev.saved[kind] ?? 0)}`} />)}
           <Row label={t("usage.jev.saved.total")} value={`≈ ${count(saved)}`} strong />
         </Card>
@@ -59,9 +59,9 @@ export function JevUsagePanel({ report }: { report: UsageReport }) {
 
 function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
-    <span className="flex items-baseline justify-between gap-3 border-t border-[#1a1f1b] pt-1.5 text-xs">
-      <span className="text-[#c6ccd3]">{label}</span>
-      <span className={strong ? "font-bold tabular-nums" : "tabular-nums text-muted-foreground"}>{value}</span>
+    <span className="flex items-baseline justify-between gap-3 border-t border-border pt-1.5 text-xs">
+      <span className="text-foreground">{label}</span>
+      <span className={strong ? "font-semibold tabular-nums" : "tabular-nums text-muted-foreground"}>{value}</span>
     </span>
   );
 }

@@ -13,7 +13,7 @@ export function ChatRef({ chat, onOpen }: { chat: Chat | undefined; onOpen: () =
       disabled={!chat}
       title={chat ? t("gate.ref.open", { title: chatTitle(chat) }) : undefined}
       onClick={onOpen}
-      className="flex max-w-full items-center gap-2 border border-rail-2 bg-[#0e1216] py-1.5 pe-2.5 ps-2 text-[12.5px] text-dim hover:enabled:border-[#48525c] hover:enabled:bg-[#141a20] hover:enabled:text-[#e3e8ed] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7d8b99] disabled:cursor-default disabled:opacity-50"
+      className="flex max-w-full items-center gap-2 border border-rail-2 bg-panel py-1.5 pe-2.5 ps-2 text-xs text-dim hover:enabled:border-faint hover:enabled:bg-rail hover:enabled:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-50"
     >
       <ChatRefIcon className="size-[15px] flex-none text-faint" />
       <span className="truncate">{chat ? chatTitle(chat) : t("gate.ref.gone")}</span>

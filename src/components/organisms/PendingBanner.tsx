@@ -31,18 +31,18 @@ export function PendingBanner({ chat }: { chat: Chat | null }) {
   if (!turn) return null;
   const queued = open.length - 1;
   return (
-    <div className="animate-pending-in border-b border-[#252d27] px-[18px] pt-[11px] pb-2.5 motion-reduce:animate-none" role="status" aria-live="polite">
+    <div className="animate-pending-in border-b border-border px-[18px] pt-[11px] pb-2.5 motion-reduce:animate-none" role="status" aria-live="polite">
       <div className="flex items-baseline gap-[9px]">
         <PulseDot />
-        <strong className="text-xs font-bold text-[#d9e4db]">JayV</strong>
-        <span className="ms-auto text-[11px] text-[#6e7870]">{queued > 0 ? t("pending.queued", { count: queued }) : t("pending.running")}</span>
+        <strong className="text-xs font-semibold text-foreground">JayV</strong>
+        <span className="ms-auto text-caption text-muted-foreground">{queued > 0 ? t("pending.queued", { count: queued }) : t("pending.running")}</span>
       </div>
       {done.length > 0 && (
-        <ol ref={steps} className="mt-[7px] grid max-h-[6.75rem] gap-1 overflow-y-auto font-mono text-[11.5px] leading-[1.45] text-[#7f8981]">
+        <ol ref={steps} className="mt-[7px] grid max-h-[6.75rem] gap-1 overflow-y-auto font-mono text-xs leading-[1.45] text-muted-foreground">
           {done.map((line) => <li key={line.seq} data-kind={line.kind} className="data-[kind=failed]:text-destructive">{line.line}</li>)}
         </ol>
       )}
-      <p className="shimmer-text mt-[5px] text-[12.5px] leading-[1.45]">{pendingWord(text, beats)}</p>
+      <p className="shimmer-text mt-[5px] text-xs leading-[1.45]">{pendingWord(text, beats)}</p>
     </div>
   );
 }

@@ -17,12 +17,12 @@ export function ChatUsageBar({ chatId }: { chatId: string }) {
       type="button"
       onClick={() => openStats({ kind: "chat", id: chatId })}
       title={t("usage.chat.open")}
-      className="mx-[max(40px,calc((100%-880px)/2))] mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-start text-[11px] text-[#6e7870] hover:text-[#c9d1cb]"
+      className="mx-[max(40px,calc((100%-880px)/2))] mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-start text-caption text-muted-foreground hover:text-foreground"
     >
       <span>{t("usage.chat.tokens", { input: formatTokens(totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens, locale), output: formatTokens(totals.outputTokens, locale) })}</span>
       {totals.costUsd !== null && <span>{formatCost(totals.costUsd, locale)}</span>}
       {blocked > 0 && <span>{t("usage.chat.blocked", { count: blocked })}</span>}
-      {estimatedShare(totals) > 0 && <span className="text-[#c9a86a]">≈</span>}
+      {estimatedShare(totals) > 0 && <span className="text-warning">≈</span>}
     </button>
   );
 }

@@ -7,7 +7,7 @@ export function AspectDot({ aspect, className, ...props }: ComponentProps<"span"
   return (
     <span
       data-aspect={aspect ?? undefined}
-      className={cn("inline-block size-[7px] flex-none rounded-full bg-[var(--aspect,#4b544d)] shadow-[0_0_6px_var(--glow,transparent)]", className)}
+      className={cn("inline-block size-[7px] flex-none rounded-full bg-[var(--aspect,var(--faint))] shadow-[0_0_6px_var(--glow,transparent)]", className)}
       {...props}
     />
   );

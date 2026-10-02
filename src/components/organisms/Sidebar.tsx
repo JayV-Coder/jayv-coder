@@ -1,4 +1,4 @@
-import { SettingsIcon } from "lucide-react";
+import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, FolderKanbanIcon, MessagesSquareIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
@@ -30,55 +30,55 @@ export function Sidebar() {
   const chats = project ? recentChats(chatsOf(data, project.id), openId) : [];
 
   return (
-    <aside className="flex h-screen flex-col overflow-hidden border-e border-[#252a26] bg-[rgba(8,10,9,.9)] px-[15px] pt-[25px] pb-[18px]">
-      <div className="flex items-center gap-3 px-2.5 pb-[25px]">
+    <aside className="flex h-screen flex-col overflow-hidden border-e border-sidebar-border bg-sidebar px-3 pt-4 pb-3 text-sidebar-foreground">
+      <div className="flex items-center gap-2.5 px-1.5 pb-5">
         <BrandMark />
         <div className="flex flex-col">
-          <strong>JayV</strong>
-          <small className="text-xs text-muted-foreground">{t("brand.tagline")}</small>
+          <strong className="text-sm font-semibold tracking-tight">JayV</strong>
+          <small className="text-caption text-sidebar-muted">{t("brand.tagline")}</small>
         </div>
       </div>
 
       {!project ? (
-        <nav className="grid gap-[5px] border-b border-[#202521] pb-5">
-          <NavItem active={view === "projects"} mark="▦" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
-          <NavItem active={view === "organizations" || view === "organization"} mark="◈" onClick={() => navigate("organizations")}>
+        <nav className="grid gap-0.5">
+          <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+          <NavItem active={view === "organizations" || view === "organization"} mark={<Building2Icon />} onClick={() => navigate("organizations")}>
             <span className="flex-1">{t("nav.organizations")}</span>
             {invites > 0 && (
-              <span title={t("org.invites.count", { count: invites })} className="rounded-full bg-[#2b5a33] px-1.5 text-[11px] font-semibold text-[#a4f4a9]">{invites}</span>
+              <span title={t("org.invites.count", { count: invites })} className="rounded-md bg-accent px-1.5 font-mono text-caption font-semibold text-accent-foreground tabular-nums">{invites}</span>
             )}
           </NavItem>
-          <NavItem active={view === "stats"} mark="▥" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
-          <NavItem active={view === "status"} mark="◉" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
+          <NavItem active={view === "stats"} mark={<ChartColumnIcon />} onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
+          <NavItem active={view === "status"} mark={<ActivityIcon />} onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
         </nav>
       ) : (
         <div className="flex min-h-0 flex-col">
           <button
             type="button"
             onClick={leaveProject}
-            className="mb-2.5 flex w-full items-center gap-[9px] rounded-[9px] border border-[#2b322d] px-[11px] py-[9px] text-start text-xs text-[#aab4ac] hover:border-[#4e6353] hover:bg-[#161c17] hover:text-[#eef5ef]"
+            className="mb-2 flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-start text-xs font-medium text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <span className="text-sm leading-none text-[#7bd985] rtl:-scale-x-100">←</span>
+            <ArrowLeftIcon aria-hidden="true" className="size-4 rtl:-scale-x-100" />
             {t("nav.allProjects")}
           </button>
           <ProjectPlate project={project} />
-          <NavItem active={view === "chats"} mark="▤" onClick={() => navigate("chats")}>{t("nav.chats")}</NavItem>
+          <NavItem active={view === "chats"} mark={<MessagesSquareIcon />} onClick={() => navigate("chats")}>{t("nav.chats")}</NavItem>
           <NavItem
             active={view === "gate"}
             className="mb-1"
-            mark={<LogoIcon className="size-[17px] [&_.logo-halo]:stroke-ask [&_.logo-lamp]:fill-ask" />}
+            mark={<LogoIcon className="size-[18px] [&_.logo-halo]:stroke-ask [&_.logo-lamp]:fill-ask" />}
             onClick={() => navigate("gate")}
           >
             {t("nav.gate")}
           </NavItem>
-          <NavItem active={view === "stats"} mark="▥" onClick={() => openStats({ kind: "project", id: project.id })}>{t("nav.stats")}</NavItem>
-          <div className="flex items-center justify-between px-[9px] pt-5 pb-[9px] text-[10px] font-bold tracking-[0.16em] text-[#657068] uppercase">
+          <NavItem active={view === "stats"} mark={<ChartColumnIcon />} onClick={() => openStats({ kind: "project", id: project.id })}>{t("nav.stats")}</NavItem>
+          <div className="flex items-center justify-between ps-2.5 pe-1 pt-5 pb-1.5 font-mono text-caption font-medium tracking-wider text-sidebar-muted uppercase">
             {t("nav.recentChats")}
-            <button type="button" title={t("common.newChat")} onClick={() => void createChat(project.id)} className="text-[19px] leading-none text-[#849087] hover:text-[#a4f4a9]">+</button>
+            <button type="button" title={t("common.newChat")} aria-label={t("common.newChat")} onClick={() => void createChat(project.id)} className="grid size-6 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"><PlusIcon aria-hidden="true" className="size-4" /></button>
           </div>
           <div className="grid min-h-0 grid-cols-[minmax(0,1fr)] gap-0.5 overflow-x-hidden overflow-y-auto pe-[3px]">
             {chats.length === 0
-              ? <p className="mx-[15px] my-[5px] text-[11px] text-[#555e57]">{t("nav.noChats")}</p>
+              ? <p className="mx-3 my-1 text-caption text-sidebar-muted">{t("nav.noChats")}</p>
               : chats.map((chat) => (
                 <ChatRow key={chat.id} chat={chat} open={chat.id === openId} onOpen={() => openChat(chat.id)} onDelete={() => void deleteChat(chat.id)} />
               ))}
@@ -88,7 +88,7 @@ export function Sidebar() {
 
       {/* A conta abre o perfil; a engrenagem, as configurações — o idioma
           mora lá dentro. */}
-      <div className="mt-auto grid gap-2.5 border-t border-[#222723] pt-3">
+      <div className="mt-auto grid gap-2 border-t border-sidebar-border pt-3">
         <ConnectionNote />
         <div className="flex items-center gap-1.5">
           <button
@@ -97,14 +97,14 @@ export function Sidebar() {
             title={t("nav.profile")}
             onClick={() => navigate("profile")}
             className={cn(
-              "flex min-w-0 flex-1 items-center gap-2.5 rounded-[9px] px-2 py-1.5 text-start transition-colors hover:bg-accent",
-              view === "profile" && "bg-accent",
+              "flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-start transition-colors outline-none hover:bg-sidebar-accent/70 focus-visible:ring-2 focus-visible:ring-ring",
+              view === "profile" && "bg-sidebar-accent",
             )}
           >
-            <UserAvatar name={name} src={profile?.avatarUrl} className="size-8 text-sm" />
+            <UserAvatar name={name} src={profile?.avatarUrl} className="size-7 text-xs" />
             <span className="grid min-w-0">
-              <span className="truncate text-[13px] font-medium text-[#dfe6e0]">{name}</span>
-              {email && name !== email && <span className="truncate text-[11px] text-[#657068]">{email}</span>}
+              <span className="truncate text-[13px] font-medium text-sidebar-foreground">{name}</span>
+              {email && name !== email && <span className="truncate text-caption text-sidebar-muted">{email}</span>}
             </span>
           </button>
           <Tooltip>
@@ -115,11 +115,11 @@ export function Sidebar() {
                 aria-current={view === "settings" ? "page" : undefined}
                 onClick={() => navigate("settings")}
                 className={cn(
-                  "grid size-9 shrink-0 place-items-center rounded-[9px] text-[#8f9991] transition-colors hover:bg-accent hover:text-accent-foreground",
-                  view === "settings" && "bg-accent text-[#a4f4a9]",
+                  "grid size-9 shrink-0 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                  view === "settings" && "bg-sidebar-accent text-sidebar-foreground",
                 )}
               >
-                <SettingsIcon className="size-[18px]" />
+                <SettingsIcon aria-hidden="true" className="size-[18px]" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="top">{t("nav.settings")}</TooltipContent>

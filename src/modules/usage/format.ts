@@ -65,11 +65,13 @@ export function formatReset(value: string, locale: string) {
   return new Intl.DateTimeFormat(locale, { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(at);
 }
 
-const PALETTE = ["#7bd985", "#6aa9ff", "#e0b25c", "#c78bff", "#ff8a7a", "#5fd4c8", "#d4d46a", "#9aa5b0"];
+// As cores vêm dos tokens do tema: o mesmo agente muda de tom com o tema,
+// não de cor.
+const PALETTE = [1, 2, 3, 4, 5, 6, 7, 8].map((index) => `var(--chart-${index})`);
 
 /** Uma cor fixa por fonte: o mesmo agente tem a mesma cor em todo gráfico. */
 export function sourceColor(source: string) {
-  if (source.startsWith("jev:")) return "#9aa5b0";
+  if (source.startsWith("jev:")) return PALETTE[PALETTE.length - 1];
   let hash = 0;
   for (const char of source) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return PALETTE[hash % (PALETTE.length - 1)];

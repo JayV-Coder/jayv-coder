@@ -64,7 +64,7 @@ export function LoginPage() {
       <div className="grid w-full max-w-sm gap-6">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />
-          <h1 className="text-lg font-semibold">{title}</h1>
+          <h1 className="text-h3 font-semibold tracking-tight">{title}</h1>
           <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
         <form onSubmit={submit} className="grid gap-4">
@@ -94,12 +94,12 @@ export function LoginPage() {
               {t("auth.forgot")}
             </button>
           )}
-          {note && <p role="status" className="text-[12px] text-muted-foreground">{note}</p>}
+          {note && <p role="status" className="text-xs text-muted-foreground">{note}</p>}
           <Button type="submit" disabled={busy || !ready}>{action}</Button>
         </form>
         {mode !== "reset" && (
           <div className="grid gap-2">
-            <p className="flex items-center gap-3 text-[11px] uppercase tracking-wider text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">{t("auth.or")}</p>
+            <p className="flex items-center gap-3 text-caption uppercase tracking-wider text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">{t("auth.or")}</p>
             {/* Esperando o navegador, os botões seguem ativos: se o retorno não
                 vier (Redirect URL fora da lista no Supabase, aba fechada), dá
                 para tentar de novo sem fechar o app. */}

@@ -3,53 +3,175 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* A paleta é a mesma de antes, agora como tokens do shadcn: verde sobre grafite
-   no aplicativo, e a cabine de sinalização da Portaria com os seus próprios. */
+/* O design system: superfícies claras e neutras, texto de alto contraste,
+   bordas de 1px, cantos discretos e um verde-limão reservado ao destaque.
+   Toda cor da tela sai daqui; o tema escuro só troca os valores. */
 :root {
-  --radius: 0.6rem;
-  --background: #090b0a;
-  --foreground: #edf0e8;
-  --card: #131713;
-  --card-foreground: #edf0e8;
-  --popover: #121613;
-  --popover-foreground: #edf0e8;
-  --primary: #9defa4;
-  --primary-foreground: #08110a;
-  --secondary: #171b18;
-  --secondary-foreground: #bdc6bf;
-  --muted: #151916;
-  --muted-foreground: #79837b;
-  --accent: #1b211d;
-  --accent-foreground: #ecf5ed;
-  --destructive: #ff8f84;
-  --border: #29302b;
-  --input: #303832;
-  --ring: #78bd7f;
+  color-scheme: light;
+  --radius: 0.25rem;
+
+  --background: #f4f4f0;
+  --foreground: #161616;
+  --card: #ffffff;
+  --card-foreground: #161616;
+  --popover: #ffffff;
+  --popover-foreground: #161616;
+  --primary: #161616;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeae5;
+  --secondary-foreground: #161616;
+  --muted: #eaeae5;
+  --muted-foreground: #777773;
+  --accent: #dfff5f;
+  --accent-foreground: #161616;
+  --border: #d8d8d2;
+  --input: #d8d8d2;
+  --ring: #161616;
+  --overlay: rgb(17 18 16 / 0.45);
+
+  /* estados: o texto e o ícone carregam a cor; o fundo é a mesma cor, rala */
+  --destructive: #c4331f;
+  --destructive-foreground: #ffffff;
+  --success: #2f7a3d;
+  --warning: #96600a;
+  --info: #2f5f9e;
+
+  /* a lateral */
+  --sidebar: #eaeae5;
+  --sidebar-foreground: #161616;
+  --sidebar-muted: #6c6c68;
+  --sidebar-accent: #ffffff;
+  --sidebar-border: #d8d8d2;
 
   /* o semáforo: entrada e saída falam pelas mesmas três cores */
+  --go: #23874a;
+  --ask: #b07a06;
+  --stop: #d13a26;
+
+  /* a cabine da portaria */
+  --void: #eeeee9;
+  --panel: #ffffff;
+  --rail: #eaeae5;
+  --rail-2: #d8d8d2;
+  --dim: #6c6c68;
+  --faint: #9a9a94;
+  --lens: #e4e4de;
+  --housing: #fafaf7;
+  --hood: #b5b5ae;
+  --glint: #c9c9c2;
+
+  /* as séries dos gráficos */
+  --chart-1: #3f8f4c;
+  --chart-2: #3a6fc4;
+  --chart-3: #b07a06;
+  --chart-4: #8a55c9;
+  --chart-5: #cc5340;
+  --chart-6: #1f8f86;
+  --chart-7: #8a8a1c;
+  --chart-8: #7d7d78;
+  --chart-grid: #e4e4de;
+  --chart-axis: #777773;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #111210;
+  --foreground: #f4f4f0;
+  --card: #1b1c19;
+  --card-foreground: #f4f4f0;
+  --popover: #1b1c19;
+  --popover-foreground: #f4f4f0;
+  --primary: #f4f4f0;
+  --primary-foreground: #111210;
+  --secondary: #252620;
+  --secondary-foreground: #f4f4f0;
+  --muted: #252620;
+  --muted-foreground: #a0a09a;
+  --accent: #dfff5f;
+  --accent-foreground: #161616;
+  --border: #353630;
+  --input: #353630;
+  --ring: #dfff5f;
+  --overlay: rgb(0 0 0 / 0.6);
+
+  --destructive: #f2705f;
+  --destructive-foreground: #161616;
+  --success: #7fd38a;
+  --warning: #f0b44c;
+  --info: #84b2f5;
+
+  --sidebar: #161714;
+  --sidebar-foreground: #f4f4f0;
+  --sidebar-muted: #a0a09a;
+  --sidebar-accent: #252620;
+  --sidebar-border: #353630;
+
   --go: #3fd07a;
   --ask: #f5b53d;
   --stop: #f2402c;
 
-  /* a cabine da portaria */
-  --void: #07080a;
-  --panel: #0b0e11;
-  --rail: #151a1e;
-  --rail-2: #22282f;
-  --dim: #7d868f;
-  --faint: #555d66;
+  --void: #0c0d0b;
+  --panel: #161714;
+  --rail: #252620;
+  --rail-2: #353630;
+  --dim: #a0a09a;
+  --faint: #6b6c65;
+  --lens: #1f201c;
+  --housing: #141512;
+  --hood: #4a4b44;
+  --glint: #5a5b53;
+
+  --chart-1: #7bd985;
+  --chart-2: #6aa9ff;
+  --chart-3: #e0b25c;
+  --chart-4: #c78bff;
+  --chart-5: #ff8a7a;
+  --chart-6: #5fd4c8;
+  --chart-7: #d4d46a;
+  --chart-8: #a0a09a;
+  --chart-grid: #2a2b26;
+  --chart-axis: #a0a09a;
 }
 
 @theme inline {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  --font-plate: "Liberation Sans Narrow", "Inter", ui-sans-serif, sans-serif;
-  --font-gate-mono: "Adwaita Mono", "Source Code Pro", ui-monospace, monospace;
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --font-plate: "Liberation Sans Narrow", "Inter Variable", ui-sans-serif, sans-serif;
+  --font-gate-mono: "IBM Plex Mono", ui-monospace, monospace;
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
+  /* a hierarquia: títulos em 600 com tracking-tight, corpo de 14px */
+  --text-h1: 2rem;
+  --text-h1--line-height: 2.5rem;
+  --text-h2: 1.5rem;
+  --text-h2--line-height: 2rem;
+  --text-h3: 1.25rem;
+  --text-h3--line-height: 1.75rem;
+  --text-h4: 1rem;
+  --text-h4--line-height: 1.5rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-small: 0.75rem;
+  --text-small--line-height: 1rem;
+  --text-caption: 0.6875rem;
+  --text-caption--line-height: 1rem;
+
+  /* botões, campos e selos 4px; cartões 6px; diálogos 8px */
+  --radius-xs: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 1px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 4px);
+  --radius-3xl: calc(var(--radius) + 4px);
+
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 2px rgb(17 18 16 / 0.06);
+  --shadow-md: 0 4px 12px -4px rgb(17 18 16 / 0.12);
+  --shadow-lg: 0 12px 32px -12px rgb(17 18 16 / 0.22);
+
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -66,9 +188,20 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-overlay: var(--overlay);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
 
   --color-go: var(--go);
   --color-ask: var(--ask);
@@ -80,54 +213,71 @@
   --color-dim: var(--dim);
   --color-faint: var(--faint);
 
-  --animate-pending-in: pending-in 0.28s ease-out both;
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+
+  --animate-pending-in: pending-in 0.2s ease-out both;
   --animate-pending-pulse: pending-pulse 1.5s ease-in-out infinite;
   --animate-pending-sweep: pending-sweep 2.6s linear infinite;
   --animate-gate-wait: gate-wait 1.7s ease-in-out infinite;
   --animate-gate-strike: gate-strike 0.85s ease-out;
 
-  @keyframes pending-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes pending-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   @keyframes pending-pulse {
-    0%, 100% { opacity: 0.3; transform: scale(0.72); box-shadow: 0 0 0 0 #9defa400; }
-    50% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 4px #9defa41f; }
+    0%, 100% { opacity: 0.3; transform: scale(0.72); box-shadow: 0 0 0 0 transparent; }
+    50% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 4px color-mix(in srgb, var(--go) 14%, transparent); }
   }
   @keyframes pending-sweep { from { background-position: 150% 0; } to { background-position: -150% 0; } }
   @keyframes gate-wait { 50% { opacity: 0.35; } }
-  @keyframes gate-strike { from { background: #181e25; } to { background: transparent; } }
+  @keyframes gate-strike { from { background: var(--rail); } to { background: transparent; } }
 }
 
 @layer base {
   * { @apply border-border outline-ring/50; }
   html, body, #root { height: 100%; }
   body {
-    @apply text-foreground antialiased;
+    @apply bg-background font-sans text-body text-foreground antialiased;
     min-width: 760px;
     font-synthesis: none;
-    background: radial-gradient(circle at 70% 0, #1c281f 0, #0b0e0c 34%, #080a09 70%);
+    font-feature-settings: "cv11", "ss01";
   }
+  h1 { @apply text-h1 font-semibold tracking-tight; }
+  h2 { @apply text-h2 font-semibold tracking-tight; }
+  h3 { @apply text-h3 font-semibold tracking-tight; }
+  h4 { @apply text-h4 font-semibold tracking-tight; }
+  code, kbd, samp, pre { @apply font-mono; }
+  ::selection { @apply bg-accent text-accent-foreground; }
   button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+  /* Ícone Lucide sem tamanho próprio segue o traço do design system. */
+  .lucide { stroke-width: 1.75; }
 }
 
 /* ── O semáforo ──────────────────────────────────────────────────────────────
    Quem carrega `data-aspect` define a cor da vez; os desenhos e os textos lá
    dentro só leem `--aspect`. */
 @layer components {
-  [data-aspect="stop"] { --aspect: var(--stop); --glow: #f2402c8c; }
-  [data-aspect="ask"] { --aspect: var(--ask); --glow: #f5b53d8c; }
-  [data-aspect="go"] { --aspect: var(--go); --glow: #3fd07a8c; }
+  [data-aspect="stop"] { --aspect: var(--stop); --glow: color-mix(in srgb, var(--stop) 55%, transparent); }
+  [data-aspect="ask"] { --aspect: var(--ask); --glow: color-mix(in srgb, var(--ask) 55%, transparent); }
+  [data-aspect="go"] { --aspect: var(--go); --glow: color-mix(in srgb, var(--go) 55%, transparent); }
 
   /* lentes: uma acende por vez, o resto do vidro fica apagado */
-  .lens { fill: #14181c; stroke: #242a31; stroke-width: 1; }
-  .housing { fill: #0e1114; stroke: #2b323a; stroke-width: 1.4; }
-  .hood, .hoods path, .mast { stroke: #39424b; }
-  .glint, .glints path { stroke: #4d5761; stroke-width: 1.1; fill: none; }
+  .lens { fill: var(--lens); stroke: var(--rail-2); stroke-width: 1; }
+  .housing { fill: var(--housing); stroke: var(--rail-2); stroke-width: 1.4; }
+  .hood, .hoods path, .mast { stroke: var(--hood); }
+  .glint, .glints path { stroke: var(--glint); stroke-width: 1.1; fill: none; }
   [data-aspect="stop"] .lens--stop,
   [data-aspect="ask"] .lens--ask,
   [data-aspect="go"] .lens--go,
   .lamp[data-aspect] .lens { fill: var(--aspect); stroke: none; filter: drop-shadow(0 0 4px var(--glow)); }
 
   @keyframes lens-strike {
-    from { filter: brightness(2.1) drop-shadow(0 0 9px var(--glow)); }
+    from { filter: brightness(1.6) drop-shadow(0 0 9px var(--glow)); }
     to { filter: drop-shadow(0 0 4px var(--glow)); }
   }
   [data-arriving][data-aspect="stop"] .lens--stop,
@@ -141,7 +291,7 @@
   /* A frase da espera é varrida por uma luz: é a mesma frase, e mesmo assim não
      fica parada enquanto a etapa não muda. */
   .shimmer-text {
-    background: linear-gradient(100deg, #8d978f 34%, #e4f2e6 50%, #8d978f 66%) 0 0 / 300% 100%;
+    background: linear-gradient(100deg, var(--muted-foreground) 34%, var(--foreground) 50%, var(--muted-foreground) 66%) 0 0 / 300% 100%;
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -149,26 +299,30 @@
   }
 
   /* A resposta do modelo, em Markdown já montado. */
+  .prose-answer { @apply leading-relaxed; }
   .prose-answer > :first-child { margin-top: 0; }
   .prose-answer > :last-child { margin-bottom: 0; }
-  .prose-answer p { white-space: pre-wrap; margin: 0 0 13px; }
-  .prose-answer :is(h3, h4, h5, h6) { margin: 20px 0 8px; color: #f0f5f1; font-weight: 700; }
+  .prose-answer p { white-space: pre-wrap; margin: 0 0 12px; }
+  .prose-answer :is(h3, h4, h5, h6) { margin: 20px 0 8px; color: var(--foreground); font-size: var(--text-h4); line-height: var(--text-h4--line-height); font-weight: 600; }
   .prose-answer :is(ul, ol) { margin: 8px 0 16px; padding-left: 24px; }
   .prose-answer ul { list-style: disc; }
   .prose-answer ol { list-style: decimal; }
-  .prose-answer li { margin: 5px 0; }
-  .prose-answer a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
-  .prose-answer :not(pre) > code { padding: 2px 6px; border: 1px solid #333c35; border-radius: 5px; background: #0d110e; color: #bff4c4; font: 12px var(--font-mono); }
-  .prose-answer blockquote { margin: 14px 0; padding: 8px 14px; border-left: 3px solid #72b67a; color: #aab4ac; background: #101411; white-space: pre-wrap; }
+  .prose-answer li { margin: 4px 0; }
+  .prose-answer a { color: var(--foreground); text-decoration: underline; text-decoration-color: var(--muted-foreground); text-underline-offset: 3px; }
+  .prose-answer a:hover { text-decoration-color: var(--foreground); }
+  .prose-answer :not(pre) > code { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); color: var(--foreground); font: 12px var(--font-mono); }
+  .prose-answer blockquote { margin: 12px 0; padding: 8px 14px; border-left: 2px solid var(--border); color: var(--muted-foreground); background: var(--muted); white-space: pre-wrap; }
   .prose-answer .file-ref { display: inline; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
-  .prose-answer .file-ref code { text-decoration: underline dotted #72b67a; text-underline-offset: 3px; }
-  .prose-answer .file-ref:hover code, .prose-answer .file-ref:focus-visible code { border-color: #72b67a; background: #142017; }
-  .prose-answer hr { border: 0; border-top: 1px solid #303730; margin: 18px 0; }
+  .prose-answer .file-ref code { text-decoration: underline dotted var(--muted-foreground); text-underline-offset: 3px; }
+  .prose-answer .file-ref:hover code, .prose-answer .file-ref:focus-visible code { border-color: var(--foreground); background: var(--secondary); }
+  .prose-answer hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 }
 
 /* Movimento é informação aqui, não enfeite — por isso o que sobra sem ele é a
-   cor cheia do texto, e não um texto transparente que ninguém leria. */
+   cor cheia do texto, e não um texto transparente que ninguém leria. O resto
+   das transições vira instantâneo. */
 @media (prefers-reduced-motion: reduce) {
-  .shimmer-text { background: none; -webkit-text-fill-color: currentColor; color: #c6cfc5; animation: none; }
+  *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  .shimmer-text { background: none; -webkit-text-fill-color: currentColor; color: var(--muted-foreground); animation: none; }
   [data-arriving] .lens { animation: none !important; }
 }

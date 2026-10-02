@@ -22,15 +22,15 @@ export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
               key={level.id}
               htmlFor={`expertise-${level.id}`}
               className={cn(
-                "grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 rounded-md border border-border px-3.5 py-3 font-normal hover:bg-accent",
-                chosen && "border-[#4e6353] bg-[#161c17]",
+                "grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 rounded-md border border-border px-3.5 py-3 font-normal hover:bg-secondary",
+                chosen && "border-muted-foreground/50 bg-secondary",
               )}
             >
               <RadioGroupItem id={`expertise-${level.id}`} value={level.id} className="mt-0.5" />
               <span className="grid gap-1">
                 <strong className="text-sm">{t(`expertise.${level.id}` as Key)}</strong>
-                <span className="text-[12.5px] text-muted-foreground">{t(`expertise.${level.id}.hint` as Key)}</span>
-                <span className="font-mono text-[11.5px] text-[#8fa394]">
+                <span className="text-xs text-muted-foreground">{t(`expertise.${level.id}.hint` as Key)}</span>
+                <span className="font-mono text-xs text-muted-foreground">
                   {t("expertise.numbers", {
                     demand: level.scopeDemand.map(percent).join(" / "),
                     confidence: percent(level.confidence),

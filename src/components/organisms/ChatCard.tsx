@@ -28,10 +28,10 @@ export function ChatCard({ chat, onOpen, onDelete }: { chat: Chat; onOpen: () =>
         </ConfirmAction>
       )}
     >
-      <span className="text-lg font-bold tracking-[-0.01em] break-words">{chatTitle(chat)}</span>
+      <span className="text-lg font-semibold tracking-tight break-words">{chatTitle(chat)}</span>
       <span className="text-xs text-muted-foreground">{t("chat.createdAt", { date: formatSince(chat.createdAt) })}</span>
       <GatePass pass={lastGatePass(feed, chat.id)} />
-      <span className={cn("text-[13px] leading-relaxed text-[#aab4ac]", !said && "text-[#5b655d] italic")}>
+      <span className={cn("text-sm leading-relaxed text-muted-foreground", !said && "text-muted-foreground italic")}>
         {said ? shorten(said, 150) : t("chat.noPrompt")}
       </span>
     </YardCard>

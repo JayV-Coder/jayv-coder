@@ -16,7 +16,7 @@ export function UsageTable({ title, rows, name, onPick }: {
   if (rows.length === 0) return null;
   return (
     <section className="mb-6">
-      <h3 className="mb-2 text-sm font-bold">{title}</h3>
+      <h3 className="mb-2 text-sm font-semibold">{title}</h3>
       <Table>
         <TableHeader>
           <TableRow>
@@ -33,7 +33,7 @@ export function UsageTable({ title, rows, name, onPick }: {
             <TableRow key={row.key} className={onPick ? "cursor-pointer" : undefined} onClick={onPick ? () => onPick(row) : undefined}>
               <TableCell className="max-w-[320px] truncate">
                 {name(row)}
-                {row.totals.estimatedTokens > 0 && <span title={t("usage.estimated.hint")} className="ms-1.5 text-[#c9a86a]">≈</span>}
+                {row.totals.estimatedTokens > 0 && <span title={t("usage.estimated.hint")} className="ms-1.5 text-warning">≈</span>}
               </TableCell>
               <TableCell className="text-end tabular-nums">{formatTokens(row.totals.inputTokens, locale)}</TableCell>
               <TableCell className="text-end tabular-nums">{formatTokens(row.totals.outputTokens, locale)}</TableCell>

@@ -28,11 +28,11 @@ export function ProfileCard({ email, account, profile, expertise }: { email: str
 
   return (
     <Card className="relative mb-5 gap-0 overflow-hidden p-0">
-      <div aria-hidden="true" className="h-20 bg-[radial-gradient(120%_140%_at_0%_0%,#2b5a33_0%,#142118_45%,transparent_80%)]" />
+      <div aria-hidden="true" className="h-20 border-b border-border bg-secondary" />
       <div className="flex flex-wrap items-end gap-5 px-7 pb-6">
-        <UserAvatar name={name} src={profile?.avatarUrl} className="-mt-10 size-[84px] border-4 border-card text-[32px]" />
+        <UserAvatar name={name} src={profile?.avatarUrl} className="-mt-10 size-[84px] border-4 border-card text-h1" />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[25px] font-bold tracking-[-0.02em]">{name}</h2>
+          <h2 className="truncate text-h2 font-semibold tracking-tight">{name}</h2>
           {(account?.username || email) && (
             <p className="truncate text-sm text-muted-foreground">
               {account?.username && <span className="font-mono text-foreground/80">@{account.username}</span>}
@@ -46,7 +46,7 @@ export function ProfileCard({ email, account, profile, expertise }: { email: str
             {linked.map((linkedProvider) => (
               <Badge key={linkedProvider} variant="outline"><ProviderIcon provider={linkedProvider} />{PROVIDER_NAMES[linkedProvider]}</Badge>
             ))}
-            {expertise && <Badge variant="outline" className="border-[#4e6353] text-[#a4f4a9]">{t(`expertise.${expertise}` as Key)}</Badge>}
+            {expertise && <Badge variant="outline" className="border-muted-foreground/50 text-success">{t(`expertise.${expertise}` as Key)}</Badge>}
           </div>
         </div>
         <Button variant="outline" onClick={() => void signOut()} className="hover:border-destructive/60 hover:text-destructive">

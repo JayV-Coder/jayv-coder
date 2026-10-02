@@ -31,20 +31,20 @@ export function EntryItem({ check }: { check: EntryCheck }) {
         aria-expanded={opened}
         aria-controls={panelId}
         onClick={() => setOpened(!opened)}
-        className="flex w-full items-start gap-[17px] px-5 pt-[15px] pb-4 text-start hover:bg-[#0f1317] focus-visible:outline-2 focus-visible:-outline-offset-[3px] focus-visible:outline-[#7d8b99]"
+        className="flex w-full items-start gap-[17px] px-5 pt-[15px] pb-4 text-start hover:bg-rail focus-visible:outline-2 focus-visible:-outline-offset-[3px] focus-visible:outline-ring"
       >
         <SignalHead3Icon className="w-6 flex-none" />
         <span className="grid min-w-0 flex-1 gap-2">
           <span className="flex flex-wrap items-center gap-x-[13px] gap-y-1.5">
             <Stamp at={check.at} />
-            <span className="text-[14.5px] font-semibold text-[var(--aspect)]">{t(label)}</span>
+            <span className="text-sm font-semibold text-[var(--aspect)]">{t(label)}</span>
             <span className="ms-auto flex items-baseline gap-[9px] font-gate-mono">
-              <b className="text-2xl font-semibold text-[#eef1f4] tabular-nums">{check.score}</b>
-              <i className="text-[11.5px] text-faint not-italic">{t("entry.min", { demand: check.demand })}</i>
+              <b className="text-2xl font-semibold text-foreground tabular-nums">{check.score}</b>
+              <i className="text-xs text-faint not-italic">{t("entry.min", { demand: check.demand })}</i>
             </span>
           </span>
-          <p className={cn("max-w-[64ch] overflow-hidden font-gate-mono text-[14.5px] leading-[1.6] text-[#e6eaee]", !opened && "line-clamp-3")}>{check.prompt}</p>
-          <p className="max-w-[58ch] text-[13.5px] leading-normal text-dim">{note}</p>
+          <p className={cn("max-w-[64ch] overflow-hidden font-gate-mono text-sm leading-[1.6] text-foreground", !opened && "line-clamp-3")}>{check.prompt}</p>
+          <p className="max-w-[58ch] text-sm leading-normal text-dim">{note}</p>
         </span>
         <ChevronIcon className={cn("mt-[3px] w-[15px] flex-none text-faint transition-transform duration-200 motion-reduce:transition-none", opened && "rotate-180")} />
       </button>
@@ -52,8 +52,8 @@ export function EntryItem({ check }: { check: EntryCheck }) {
         <ChatRef chat={chat} onOpen={() => openChat(check.chatId)} />
       </div>
       {opened && (
-        <div id={panelId} className="border-t border-rail bg-[#090b0e] pe-6 pb-[18px] ps-6 xl:ps-[61px]">
-          <div className="flex flex-wrap justify-between gap-x-[18px] gap-y-1.5 pt-[13px] pb-1.5 text-[13px] text-dim">
+        <div id={panelId} className="border-t border-rail bg-void pe-6 pb-[18px] ps-6 xl:ps-[61px]">
+          <div className="flex flex-wrap justify-between gap-x-[18px] gap-y-1.5 pt-[13px] pb-1.5 text-sm text-dim">
             <span>{t("entry.demand", { scope, demand: check.demand })}</span>
             <span className="font-gate-mono text-faint">{t("entry.source", { source: sourceLabel(check.source) })}</span>
           </div>

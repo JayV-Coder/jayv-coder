@@ -8,12 +8,12 @@ export function ProjectPlate({ project }: { project: Project }) {
   const t = useT();
   const refused = useProjectRefusals(project.id);
   return (
-    <div className="mb-3.5 rounded-e-[10px] border border-s-[3px] border-[#2b3a2e] border-s-[#7bd985] bg-[linear-gradient(100deg,#16211a,#111614)] px-3 py-3">
-      <strong title={project.name} className="block text-base leading-tight tracking-[-0.01em] break-words text-[#f1f7f2]">{project.name}</strong>
+    <div className="mb-3 rounded-lg border border-sidebar-border bg-card px-3 py-2.5">
+      <strong title={project.name} className="block text-sm leading-tight font-semibold tracking-tight break-words text-foreground">{project.name}</strong>
       {project.rootPath
-        ? <PathText title={project.rootPath} className="mt-1.5 text-[11px] leading-snug text-[#8ba892]">{project.rootPath}</PathText>
-        : <span title={t("project.noFolder.title")} className="mt-1.5 block text-[11px] text-[#5c665e]">{t("common.noFolder")}</span>}
-      {refused > 0 && <span role="status" className="mt-1.5 block text-[11px] text-[#c9a86a]">{t("project.refused", { count: refused })}</span>}
+        ? <PathText title={project.rootPath} className="mt-1 font-mono text-caption leading-snug text-muted-foreground">{project.rootPath}</PathText>
+        : <span title={t("project.noFolder.title")} className="mt-1 block text-caption text-muted-foreground">{t("common.noFolder")}</span>}
+      {refused > 0 && <span role="status" className="mt-1 block text-caption text-warning">{t("project.refused", { count: refused })}</span>}
     </div>
   );
 }

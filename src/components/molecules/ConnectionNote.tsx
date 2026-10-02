@@ -14,7 +14,7 @@ export function ConnectionNote() {
   ].filter(Boolean) as string[];
   if (lines.length === 0) return null;
   return (
-    <div role="status" className="grid gap-0.5 px-1 text-[11px] text-[#c9a86a]">
+    <div role="status" className="grid gap-0.5 px-1 text-caption text-warning">
       {lines.map((line) => <span key={line}>{line}</span>)}
     </div>
   );
