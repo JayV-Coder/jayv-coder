@@ -44,12 +44,12 @@ pub struct Remote {
     token:Option<String>,
 }
 
-/// A chave de conflito no Supabase. As tabelas de LLM são por usuário — dois
-/// usuários têm cada um o seu agente `claude` —, então o `user_id` entra na
-/// chave; nas outras o id já é único.
+/// A chave de conflito no Supabase. As tabelas de LLM e as da conta são por
+/// usuário — dois usuários têm cada um o seu agente `claude` e o seu nível —,
+/// então o `user_id` entra na chave; nas outras o id já é único.
 pub fn conflict_target(table:&SyncTable)->String {
     match table.name {
-        "llm_agents"|"llm_models"=>format!("user_id,{}",table.key.join(",")),
+        "llm_agents"|"llm_models"|"account_settings"=>format!("user_id,{}",table.key.join(",")),
         _=>table.key.join(","),
     }
 }
