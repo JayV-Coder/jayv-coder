@@ -1,5 +1,6 @@
-import type { Activity, Aspect, EntryVerdict, ExitVerdict, TurnStatus } from "@/modules/core";
+import type { Activity, AgentId, Aspect, EntryVerdict, ExitVerdict, RouteMode, TurnRoute, TurnStatus } from "@/modules/core";
 import { t, type Key } from "@/modules/i18n";
+import { AGENT_LABELS } from "@/modules/settings";
 import { shownText, sourceLabel } from "./notice";
 
 const GATE_WORDS: Record<string, Key> = { pass: "beat.gate.pass", ask: "beat.gate.ask", block: "beat.gate.block" };
@@ -15,7 +16,10 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     }
     case "read": return t("beat.read", { intent: d.intent ?? "", complexity: d.complexity ?? "", source: sourceLabel(String(d.source ?? "")) });
     case "context": return t("beat.context", { count: d.files ?? 0, tokens: d.tokens ?? 0 });
-    case "route": return `${t("beat.route", { provider: d.provider ?? "", model: d.model ?? "" })}${d.reason ? ` — ${d.reason}` : ""}`;
+    case "route": {
+      const said = routeLabel({ provider: String(d.provider ?? ""), model: String(d.model ?? ""), mode: (d.mode as RouteMode | undefined) ?? null, agent: (d.agent as string | undefined) ?? null });
+      return `${t("beat.routed", { route: said })}${d.reason ? ` — ${d.reason}` : ""}`;
+    }
     case "running": return t("beat.running");
     case "agent": return String(d.line ?? "");
     case "done": return t("beat.done", { latency: d.latencyMs ?? 0, input: d.inputTokens ?? 0, output: d.outputTokens ?? 0 });
@@ -23,6 +27,25 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     case "dismissed": return t("beat.dismissed", { prompt: d.prompt ?? "" });
     default: return null;
   }
+}
+
+const MODE_WORDS: Record<RouteMode, Key> = { plan: "route.mode.plan", build: "route.mode.build" };
+const ROLE_WORDS: Record<string, Key> = {
+  developer: "route.agent.developer", frontend: "route.agent.frontend", security: "route.agent.security", reviewer: "route.agent.reviewer",
+};
+
+/** Quem atendeu, em uma linha: `Claude Code · sonnet · Build · desenvolvedor`. */
+export function routeLabel(route: TurnRoute) {
+  const provider = route.provider in AGENT_LABELS ? AGENT_LABELS[route.provider as AgentId] : route.provider;
+  const parts = [provider, route.model];
+  if (route.mode && MODE_WORDS[route.mode]) parts.push(t(MODE_WORDS[route.mode]));
+  if (route.agent) parts.push(ROLE_WORDS[route.agent] ? t(ROLE_WORDS[route.agent]) : route.agent);
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** O que o modo quer dizer, para a dica do balão. */
+export function routeHint(route: TurnRoute) {
+  return route.mode && MODE_WORDS[route.mode] ? t(`${MODE_WORDS[route.mode]}.hint` as Key) : undefined;
 }
 
 export function beatLines(beats: Activity[]) {
