@@ -237,6 +237,19 @@ impl AgentSettings {
             AgentId::Copilot=>parse::<CopilotOptions>(&self.options).unwrap_or_default().args(),
         }
     }
+
+    /// A linha de comando do modo planejamento: as opções do desenvolvedor,
+    /// com a escrita desligada. O Claude entra no `--permission-mode plan`, o
+    /// Codex no sandbox `read-only` sem rede, e o Copilot só lê. No modo build
+    /// valem as opções como estão: o Jev nunca dá ao agente mais do que a
+    /// configuração deu.
+    pub fn plan_args(&self)->Vec<String> {
+        match self.id {
+            AgentId::Claude=>ClaudeOptions{permission_mode:"plan".into(),..parse::<ClaudeOptions>(&self.options).unwrap_or_default()}.args(),
+            AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
+            AgentId::Copilot=>CopilotOptions{tool_access:"read".into(),..parse::<CopilotOptions>(&self.options).unwrap_or_default()}.args(),
+        }
+    }
 }
 
 /// Um modelo que o agente oferece, com os números que a tela preenche sozinha
@@ -489,7 +502,7 @@ pub fn model_key(model:&AgentModel)->String { format!("{}/{}",model.agent.key(),
 /// Os provedores e modelos no formato que o orquestrador já entende.
 pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap<String,ModelConfig>) {
     let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),ProviderConfig{
-        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.args(),..ProviderConfig::default()
+        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.args(),plan_args:agent.plan_args(),..ProviderConfig::default()
     })).collect();
     let models=settings.models.iter().map(|model|(model_key(model),ModelConfig{
         enabled:model.enabled,provider:model.agent.key().into(),model:model.model.clone(),capabilities:model.capabilities.clone(),
@@ -797,6 +810,28 @@ mod tests {
         assert!(args.windows(2).any(|pair|pair==["-p","{prompt}"]));
         assert!(args.iter().any(|arg|arg=="--allow-all-tools"));
         assert!(args.windows(2).any(|pair|pair==["--deny-tool","shell(rm)"]));
+    }
+
+    /// O modo planejamento só tira a escrita: o resto do que foi configurado
+    /// segue igual, e o que já era somente leitura continua somente leitura.
+    #[test] fn planning_runs_every_agent_read_only() {
+        let claude=agent(AgentId::Claude,json!({"permissionMode":"bypassPermissions","effort":"high"})).plan_args();
+        assert!(claude.windows(2).any(|pair|pair==["--permission-mode","plan"]));
+        assert!(!claude.iter().any(|arg|arg=="bypassPermissions"));
+        assert!(claude.windows(2).any(|pair|pair==["--effort","high"]));
+
+        let codex=agent(AgentId::Codex,json!({"sandbox":"workspace-write","networkAccess":true})).plan_args();
+        assert!(codex.windows(2).any(|pair|pair==["--sandbox","read-only"]));
+        assert!(!codex.iter().any(|arg|arg.contains("network_access")));
+
+        let copilot=agent(AgentId::Copilot,json!({"toolAccess":"all","blockedTools":["shell(rm)"]})).plan_args();
+        assert!(!copilot.iter().any(|arg|arg=="--allow-all-tools"||arg=="--allow-tool"));
+        assert!(copilot.windows(2).any(|pair|pair==["--deny-tool","shell(rm)"]));
+
+        let (providers,_)=to_config(&settings(vec![agent(AgentId::Codex,json!({"sandbox":"workspace-write"}))]));
+        let codex=&providers["codex"];
+        assert!(codex.args.windows(2).any(|pair|pair==["--sandbox","workspace-write"]),"o build usa o que foi configurado");
+        assert!(codex.for_planning().args.windows(2).any(|pair|pair==["--sandbox","read-only"]));
     }
 
     #[test] fn the_orchestrator_configuration_comes_from_the_database() {
