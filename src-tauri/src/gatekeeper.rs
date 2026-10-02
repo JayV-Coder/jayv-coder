@@ -174,8 +174,11 @@ pub fn verdict_with(reading:&EntryReading,parameters:&crate::local::global::JevP
 }
 
 /// Monta o veredito a partir das leituras, aplicando a exigência do tamanho.
-pub fn judge(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str)->EntryCheck {
-    let parameters=crate::local::global::current_parameters();
+pub fn judge(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str)->EntryCheck { judge_for(turn,prompt,reading,source,crate::expertise::Expertise::default()) }
+
+/// O mesmo, com a exigência do nível de quem pediu.
+pub fn judge_for(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str,level:crate::expertise::Expertise)->EntryCheck {
+    let parameters=level.gate(&crate::local::global::current_parameters());
     let level=reading.scope_level();
     let demand=parameters.scope_demand[level];
     let clarity=reading.clarity_with(&parameters.weights);
