@@ -133,10 +133,11 @@ pub fn write(connection:&Connection,entry:&Entry)->Result<bool> {
     Ok(true)
 }
 
-/// De quem é a conta.
+/// De quem é a conta. `Projects` é um punhado de projetos (os de uma
+/// organização); vazio, não conta nada.
 #[derive(Debug,Clone,PartialEq,Eq,serde::Deserialize)]
 #[serde(tag="kind",content="id",rename_all="camelCase")]
-pub enum ReportScope { Global, Project(String), Chat(String) }
+pub enum ReportScope { Global, Project(String), Projects(Vec<String>), Chat(String) }
 
 /// O pedido da tela: o escopo, o intervalo (RFC 3339, aberto nas pontas que
 /// vierem vazias) e o fuso de quem lê, para que "hoje" seja o hoje dele.
@@ -201,15 +202,20 @@ pub struct Report {
 
 /// O filtro comum às duas tabelas com escopo, e os valores dele em ordem.
 fn filter(query:&Query)->(String,Vec<Box<dyn ToSql>>) {
-    let mut clauses=Vec::new();
+    let mut clauses:Vec<String>=Vec::new();
     let mut values:Vec<Box<dyn ToSql>>=Vec::new();
     match &query.scope {
         ReportScope::Global=>{}
-        ReportScope::Project(id)=>{ clauses.push("project_id=?"); values.push(Box::new(id.clone())); }
-        ReportScope::Chat(id)=>{ clauses.push("chat_id=?"); values.push(Box::new(id.clone())); }
+        ReportScope::Project(id)=>{ clauses.push("project_id=?".into()); values.push(Box::new(id.clone())); }
+        ReportScope::Projects(ids) if ids.is_empty()=>clauses.push("0=1".into()),
+        ReportScope::Projects(ids)=>{
+            clauses.push(format!("project_id IN ({})",vec!["?"; ids.len()].join(",")));
+            values.extend(ids.iter().map(|id|Box::new(id.clone()) as Box<dyn ToSql>));
+        }
+        ReportScope::Chat(id)=>{ clauses.push("chat_id=?".into()); values.push(Box::new(id.clone())); }
     }
-    if let Some(from)=&query.from { clauses.push("julianday(created_at)>=julianday(?)"); values.push(Box::new(from.clone())); }
-    if let Some(to)=&query.to { clauses.push("julianday(created_at)<julianday(?)"); values.push(Box::new(to.clone())); }
+    if let Some(from)=&query.from { clauses.push("julianday(created_at)>=julianday(?)".into()); values.push(Box::new(from.clone())); }
+    if let Some(to)=&query.to { clauses.push("julianday(created_at)<julianday(?)".into()); values.push(Box::new(to.clone())); }
     let sql=if clauses.is_empty() { "1=1".to_string() } else { clauses.join(" AND ") };
     (sql,values)
 }
@@ -313,6 +319,29 @@ mod tests {
         let project=store.create_project("demo",None).unwrap();
         let chat=store.create_chat(&project.id,Some("primeiro".into())).unwrap();
         (store,project.id,chat.id)
+    }
+
+    /// A conta de uma organização soma só os projetos dela; sem projeto
+    /// nenhum, não soma nada (e não cai na conta inteira).
+    #[test] fn a_set_of_projects_counts_only_those_projects() {
+        let store=WorkspaceStore::in_memory().unwrap();
+        let connection=store.connection();
+        write(connection,&Entry::Spend(scoped("p1","c1","t1"),spend("claude",100,10,Precision::Reported))).unwrap();
+        write(connection,&Entry::Spend(scoped("p2","c2","t2"),spend("codex",50,5,Precision::Reported))).unwrap();
+        write(connection,&Entry::Spend(scoped("p3","c3","t3"),spend("codex",7,1,Precision::Reported))).unwrap();
+        write(connection,&Entry::Jev(scoped("p1","c1","t1"),JevMark::count("entry:block",1))).unwrap();
+        write(connection,&Entry::Jev(scoped("p3","c3","t3"),JevMark::count("entry:block",1))).unwrap();
+        let both=report(connection,&query(ReportScope::Projects(vec!["p1".into(),"p2".into()]))).unwrap();
+        assert_eq!(both.totals.input_tokens,150);
+        assert_eq!(both.by_project.len(),2);
+        assert_eq!(both.jev.work.get("entry:block"),Some(&1.0));
+        let none=report(connection,&query(ReportScope::Projects(Vec::new()))).unwrap();
+        assert_eq!(none.totals.calls,0);
+    }
+
+    #[test] fn the_scope_reads_a_set_of_projects_from_the_screen() {
+        let scope:ReportScope=serde_json::from_str(r#"{"kind":"projects","id":["p1","p2"]}"#).unwrap();
+        assert_eq!(scope,ReportScope::Projects(vec!["p1".into(),"p2".into()]));
     }
 
     #[test] fn the_scope_separates_chat_project_and_global() {

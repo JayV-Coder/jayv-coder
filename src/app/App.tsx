@@ -9,7 +9,7 @@ import { connectGate } from "@/modules/gate";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
 import { clearNotifications, connectNotifications, loadNotifications } from "@/modules/notifications";
-import { clearOrganizations, loadOrganizations } from "@/modules/organizations";
+import { clearOrganizations, connectOrganizationDashboard, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
 import { connectSystem, loadStatus } from "@/modules/system";
 import { connectUpdates } from "@/modules/updates";
@@ -46,7 +46,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates()];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard()];
     return () => disconnect.forEach((off) => off());
   }, []);
 

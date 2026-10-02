@@ -2,7 +2,7 @@ import type { ExitCheck } from "@/modules/core";
 import { EXIT_VERDICTS } from "@/modules/conversation";
 import { EXIT_KINDS, useGate } from "@/modules/gate";
 import { useT } from "@/modules/i18n";
-import { openChat } from "@/modules/workspace";
+import { openChat, useWorkspace } from "@/modules/workspace";
 import { CommandIcon, FileIcon, HouseRuleIcon, SignalHead2Icon, Stamp } from "@/components/atoms";
 import { ChatRef } from "@/components/molecules";
 import { cn } from "@/lib/utils";
@@ -13,7 +13,11 @@ const KIND_ICONS: Record<string, typeof FileIcon> = { command: CommandIcon, file
 /** O que o modelo pediu para rodar ou mexer, e a regra da casa que isso tocou. */
 export function ExitItem({ check }: { check: ExitCheck }) {
   const t = useT();
-  const chat = useGate((state) => state.chats[check.chatId]);
+  // Fora do projeto aberto (a portaria da organização), o chat vem da área
+  // de trabalho inteira.
+  const projectChat = useGate((state) => state.chats[check.chatId]);
+  const anyChat = useWorkspace((state) => projectChat ? undefined : state.data.chats.find((found) => found.id === check.chatId));
+  const chat = projectChat ?? anyChat;
   const { aspect, label } = EXIT_VERDICTS[check.verdict] ?? EXIT_VERDICTS.held;
   const Kind = KIND_ICONS[check.kind] ?? FileIcon;
   return (
