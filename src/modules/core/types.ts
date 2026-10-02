@@ -37,6 +37,18 @@ export interface TurnView {
   exit: ExitVerdict | null;
   partial: string | null;
   activity: Activity[];
+  /** Quem atendeu: o agente (CLI), o modelo, o modo e o papel que o Jev deu. */
+  route: TurnRoute | null;
+}
+
+export type RouteMode = "plan" | "build";
+
+export interface TurnRoute {
+  provider: string;
+  model: string;
+  /** Vazio nos turnos narrados antes de o modo existir. */
+  mode: RouteMode | null;
+  agent: string | null;
 }
 
 export interface Question {
@@ -231,10 +243,26 @@ export interface GateParameters {
   noulLine: number;
 }
 
+export type Expertise = "starter" | "junior" | "mid" | "senior" | "architect";
+export const EXPERTISE_LEVELS: Expertise[] = ["starter", "junior", "mid", "senior", "architect"];
+
+/** O que um nível faz com a portaria e com o Jev. */
+export interface LevelView {
+  id: Expertise;
+  scopeDemand: [number, number, number];
+  blockMargin: number;
+  confidence: number;
+  buildCeiling: Complexity;
+  destructiveThreshold: number;
+}
+
 export interface CoreSnapshot {
   settings: CoreSettings;
   defaults: CoreSettings;
+  /** Os números da portaria já no nível da conta. */
   gate: GateParameters;
+  expertise: Expertise;
+  levels: LevelView[];
   confidenceRange: [number, number];
   budgetRange: [number, number];
   cacheTtlRange: [number, number];
