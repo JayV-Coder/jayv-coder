@@ -6,8 +6,8 @@ import {
 import { notify, reportError } from "@/modules/feedback";
 import { t, type Key } from "@/modules/i18n";
 
-export const AGENTS: AgentId[] = ["claude", "codex", "copilot"];
-export const AGENT_LABELS: Record<AgentId, string> = { claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot" };
+export const AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor"];
+export const AGENT_LABELS: Record<AgentId, string> = { claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot", cursor: "Cursor" };
 
 /** O modelo como está na aba: `uid` segura a linha enquanto o identificador
  * muda. */
@@ -38,10 +38,10 @@ interface SettingsState {
 
 let next = 0;
 const uid = () => `model-${++next}`;
-const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null, copilot: null });
+const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null, copilot: null, cursor: null });
 
 export const useSettings = create<SettingsState>(() => ({
-  loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [] }, timeoutRange: [30, 3600],
+  loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [], cursor: [] }, timeoutRange: [30, 3600],
   contextRange: [8000, 2000000], probes: noProbes(), saved: "", saving: false, refreshing: null,
   core: null, coreSnapshot: null, savedCore: "",
 }));
@@ -237,6 +237,18 @@ export async function saveSettings() {
   }
 }
 
+/** Só o retrato do Jev, para a página de perfil mostrar o nível. Um
+ * rascunho em edição nas configurações continua como está. */
+export async function loadCoreSnapshot() {
+  try {
+    const coreSnapshot = await commands.getCoreSettings();
+    if (useSettings.getState().core) useSettings.setState({ coreSnapshot });
+    else applyCore(coreSnapshot);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 /** O nível vale na hora, como o idioma: não espera o "Salvar". Só a parte
  * lida do snapshot é trocada — o que estiver sendo editado no Jev continua. */
 export async function saveExpertise(level: Expertise) {
@@ -258,6 +270,7 @@ export function connectSettings() {
   const off = bus.on("view:changed", ({ view }) => {
     stop?.();
     stop = null;
+    if (view === "profile") void loadCoreSnapshot();
     if (view !== "settings") return;
     void loadSettings();
     stop = watchAgents();

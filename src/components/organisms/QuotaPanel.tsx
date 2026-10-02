@@ -4,7 +4,7 @@ import { agentLabel, formatReset, useUsage, windowLabel } from "@/modules/usage"
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-const ORDER = ["claude", "codex", "copilot", "jev"];
+const ORDER = ["claude", "codex", "copilot", "cursor", "jev"];
 
 /** O limite do plano de cada agente: quanto da janela já foi, quando ela
  * renova e de quando é a leitura. É da conta inteira, não só do JayV. */

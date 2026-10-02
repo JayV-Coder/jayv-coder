@@ -2,7 +2,7 @@
 //! um. Moram no banco, não no `config.yaml`: a tela Configuração do LLM é a
 //! única porta de entrada, e o que ela grava é o que o orquestrador usa.
 //!
-//! No MVP são três agentes, e só três: Claude Code, Codex e Copilot. Nenhum
+//! São quatro agentes, e só quatro: Claude Code, Codex, Copilot e Cursor. Nenhum
 //! deles recebe argumentos crus. Cada opção da tela tem um conjunto fechado de
 //! valores, e é daqui que sai a linha de comando — um argumento digitado errado
 //! era o jeito mais fácil de quebrar o agente sem saber por quê.
@@ -46,12 +46,14 @@ pub const SPEEDS:[&str;3]=["fast","medium","slow"];
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Hash,Serialize,Deserialize)]
 #[serde(rename_all="lowercase")]
-pub enum AgentId { Claude, Codex, Copilot }
+pub enum AgentId { Claude, Codex, Copilot, Cursor }
 
 impl AgentId {
-    pub const ALL:[AgentId;3]=[AgentId::Claude,AgentId::Codex,AgentId::Copilot];
-    pub fn key(self)->&'static str { match self { Self::Claude=>"claude", Self::Codex=>"codex", Self::Copilot=>"copilot" } }
-    pub fn binary(self)->&'static str { self.key() }
+    pub const ALL:[AgentId;4]=[AgentId::Claude,AgentId::Codex,AgentId::Copilot,AgentId::Cursor];
+    pub fn key(self)->&'static str { match self { Self::Claude=>"claude", Self::Codex=>"codex", Self::Copilot=>"copilot", Self::Cursor=>"cursor" } }
+    /// O nome do executável. O instalador do Cursor cria `agent` e
+    /// `cursor-agent`; `agent` sozinho é genérico demais para achar no PATH.
+    pub fn binary(self)->&'static str { match self { Self::Cursor=>"cursor-agent", other=>other.key() } }
     fn parse(key:&str)->Result<Self> { Self::ALL.into_iter().find(|agent|agent.key()==key).ok_or_else(||anyhow!("agente desconhecido: `{key}`")) }
     fn default_timeout(self)->u64 { 300 }
 }
@@ -124,6 +126,18 @@ pub struct CopilotOptions {
 }
 impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true} } }
 
+#[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
+#[serde(rename_all="camelCase",default)]
+pub struct CursorOptions {
+    /// `default`, `enabled` ou `disabled`. `default` segue a configuração
+    /// do próprio Cursor.
+    pub sandbox:String,
+    /// Aplica as edições e roda os comandos sem pedir aprovação.
+    pub force:bool,
+    pub approve_mcps:bool,
+}
+impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false} } }
+
 const CLAUDE_PERMISSIONS:[&str;5]=["default","plan","acceptEdits","auto","bypassPermissions"];
 const CLAUDE_EFFORTS:[&str;6]=["default","low","medium","high","xhigh","max"];
 pub const CLAUDE_TOOLS:[&str;6]=["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"];
@@ -131,6 +145,7 @@ const CODEX_SANDBOXES:[&str;3]=["read-only","workspace-write","danger-full-acces
 const CODEX_EFFORTS:[&str;4]=["default","low","medium","high"];
 const COPILOT_ACCESS:[&str;3]=["read","edits","all"];
 pub const COPILOT_TOOLS:[&str;4]=["shell","write","shell(git push)","shell(rm)"];
+const CURSOR_SANDBOXES:[&str;3]=["default","enabled","disabled"];
 
 /// `field` é a chave do i18n do nome do campo, sem o prefixo
 /// `settings.field.`.
@@ -208,6 +223,28 @@ impl CopilotOptions {
     }
 }
 
+impl CursorOptions {
+    fn checked(self)->Result<Self> {
+        one_of("cursor.sandbox",&self.sandbox,&CURSOR_SANDBOXES)?;
+        Ok(self)
+    }
+    fn args(&self)->Vec<String> {
+        // Em `stream-json` o Cursor narra como o Claude: a fala do assistente
+        // num evento, as ferramentas em outro e a conta no `result`. O pedido
+        // chega pela entrada padrão.
+        let mut args=strings(&["--print","--output-format","stream-json","--model","{model}"]);
+        if self.sandbox!="default" { args.extend(strings(&["--sandbox",&self.sandbox])); }
+        if self.force { args.push("--force".into()); }
+        if self.approve_mcps { args.push("--approve-mcps".into()); }
+        args
+    }
+    fn plan_args(&self)->Vec<String> {
+        let mut args=CursorOptions{force:false,..self.clone()}.args();
+        args.extend(strings(&["--mode","plan"]));
+        args
+    }
+}
+
 fn strings(items:&[&str])->Vec<String> { items.iter().map(|item|item.to_string()).collect() }
 
 fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
@@ -217,7 +254,7 @@ fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
 
 impl AgentSettings {
     fn fresh(id:AgentId)->Self {
-        let options=match id { AgentId::Claude=>serde_json::to_value(ClaudeOptions::default()), AgentId::Codex=>serde_json::to_value(CodexOptions::default()), AgentId::Copilot=>serde_json::to_value(CopilotOptions::default()) }.unwrap_or_default();
+        let options=match id { AgentId::Claude=>serde_json::to_value(ClaudeOptions::default()), AgentId::Codex=>serde_json::to_value(CodexOptions::default()), AgentId::Copilot=>serde_json::to_value(CopilotOptions::default()), AgentId::Cursor=>serde_json::to_value(CursorOptions::default()) }.unwrap_or_default();
         Self{id,enabled:locate(id.binary()).is_some(),command:id.binary().into(),timeout:id.default_timeout(),options}
     }
 
@@ -227,6 +264,7 @@ impl AgentSettings {
             AgentId::Claude=>serde_json::to_value(parse::<ClaudeOptions>(&self.options)?.checked(models)?)?,
             AgentId::Codex=>serde_json::to_value(parse::<CodexOptions>(&self.options)?.checked()?)?,
             AgentId::Copilot=>serde_json::to_value(parse::<CopilotOptions>(&self.options)?.checked()?)?,
+            AgentId::Cursor=>serde_json::to_value(parse::<CursorOptions>(&self.options)?.checked()?)?,
         })
     }
 
@@ -235,12 +273,14 @@ impl AgentSettings {
             AgentId::Claude=>parse::<ClaudeOptions>(&self.options).unwrap_or_default().args(),
             AgentId::Codex=>parse::<CodexOptions>(&self.options).unwrap_or_default().args(),
             AgentId::Copilot=>parse::<CopilotOptions>(&self.options).unwrap_or_default().args(),
+            AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().args(),
         }
     }
 
     /// A linha de comando do modo planejamento: as opções do desenvolvedor,
     /// com a escrita desligada. O Claude entra no `--permission-mode plan`, o
-    /// Codex no sandbox `read-only` sem rede, e o Copilot só lê. No modo build
+    /// Codex no sandbox `read-only` sem rede, o Copilot só lê e o Cursor entra
+    /// no `--mode plan`, sem `--force`. No modo build
     /// valem as opções como estão: o Jev nunca dá ao agente mais do que a
     /// configuração deu.
     pub fn plan_args(&self)->Vec<String> {
@@ -248,6 +288,7 @@ impl AgentSettings {
             AgentId::Claude=>ClaudeOptions{permission_mode:"plan".into(),..parse::<ClaudeOptions>(&self.options).unwrap_or_default()}.args(),
             AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
             AgentId::Copilot=>CopilotOptions{tool_access:"read".into(),..parse::<CopilotOptions>(&self.options).unwrap_or_default()}.args(),
+            AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
         }
     }
 }
@@ -269,7 +310,7 @@ impl KnownModel {
             else if has(&["fable"]) {("high","medium")}
             else {("medium","medium")};
         if lower.ends_with("-fast") { speed="fast"; }
-        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000 }});
+        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000, AgentId::Cursor=>200_000 }});
         Self{id:id.into(),label:label.unwrap_or_else(||id.into()),context_window:context.clamp(CONTEXT_RANGE.0,CONTEXT_RANGE.1),cost_class:cost_class.into(),speed:speed.into()}
     }
 }
@@ -282,6 +323,7 @@ fn starter_ids(agent:AgentId)->&'static [&'static str] {
         AgentId::Claude=>&["sonnet","opus","haiku","fable"],
         AgentId::Codex=>&["gpt-5.5"],
         AgentId::Copilot=>&["claude-sonnet-4.5"],
+        AgentId::Cursor=>&["auto"],
     }
 }
 
@@ -308,12 +350,14 @@ pub fn catalog(agent:AgentId,settings:&LlmSettings)->Vec<KnownModel> {
 /// Os argumentos que fazem o agente listar, sem gastar crédito, os modelos
 /// do `/model`. O Claude Code responde ao `/model` no `--print` sem chamar o
 /// modelo; o Codex tem o catálogo no `debug models`; o Copilot lista os
-/// valores aceitos de `model` na ajuda de configuração.
+/// valores aceitos de `model` na ajuda de configuração; o Cursor tem o
+/// `models`.
 fn listing_args(agent:AgentId)->&'static [&'static str] {
     match agent {
         AgentId::Claude=>&["--print","/model","--output-format","json","--no-session-persistence"],
         AgentId::Codex=>&["debug","models"],
         AgentId::Copilot=>&["help","config"],
+        AgentId::Cursor=>&["models"],
     }
 }
 
@@ -331,6 +375,7 @@ pub async fn discover(agent:AgentId,command:&str)->Option<Vec<KnownModel>> {
         AgentId::Claude=>parse_claude_listing(&text),
         AgentId::Codex=>parse_codex_listing(&text),
         AgentId::Copilot=>parse_copilot_listing(&text),
+        AgentId::Cursor=>parse_cursor_listing(&text),
     };
     if found.is_empty() { eprintln!("[llm] {} listed no models",agent.key()); return None; }
     if let Ok(mut cache)=DISCOVERED.lock() { cache.insert(agent,found.clone()); }
@@ -367,6 +412,16 @@ fn parse_copilot_listing(text:&str)->Vec<KnownModel> {
     unique(ids.map(|id|KnownModel::named(AgentId::Copilot,id,None,None)))
 }
 
+/// Uma linha `id - Nome` por modelo, depois do `Available models`. O
+/// `(default)` e o `(current)` do fim do nome são da conta, não do modelo.
+fn parse_cursor_listing(text:&str)->Vec<KnownModel> {
+    let found=text.lines().map(str::trim).filter_map(|line|line.split_once(" - ")).filter(|(id,_)|valid_id(id)).map(|(id,name)|{
+        let name=name.trim().trim_end_matches("(default)").trim_end_matches("(current)").trim();
+        KnownModel::named(AgentId::Cursor,id,Some(name.to_string()).filter(|name|!name.is_empty()),None)
+    });
+    unique(found)
+}
+
 fn unique(models:impl Iterator<Item=KnownModel>)->Vec<KnownModel> {
     let mut seen=HashSet::new();
     models.filter(|model|seen.insert(model.id.clone())).collect()
@@ -394,7 +449,7 @@ pub fn adopt_listing(settings:&LlmSettings,agent:AgentId,found:&[KnownModel])->L
     LlmSettings{agents,models}
 }
 
-/// Cria as tabelas e, na primeira vez, cadastra os três agentes com os modelos
+/// Cria as tabelas e, na primeira vez, cadastra os agentes com os modelos
 /// de fábrica — a descoberta troca-os pela lista do CLI assim que ele
 /// responde. Um agente cujo binário não está no PATH nasce desligado: ligado,
 /// ele seria escolhido pelo roteador e falharia no primeiro pedido.
@@ -405,6 +460,16 @@ pub fn ensure(connection:&Connection)->Result<()> {
         let agents=AgentId::ALL.into_iter().map(AgentSettings::fresh).collect();
         let models=AgentId::ALL.into_iter().flat_map(starter_models).collect();
         write(connection,&LlmSettings{agents,models})?;
+        return Ok(());
+    }
+    // Um agente que chegou numa versão nova entra no banco que já existia com
+    // os modelos de fábrica: ligado e sem modelo, ele travaria o salvar.
+    for id in AgentId::ALL {
+        let present:i64=connection.query_row("SELECT COUNT(*) FROM llm_agents WHERE id=?1",[id.key()],|row|row.get(0))?;
+        if present>0 { continue; }
+        let mut settings=load(connection)?;
+        settings.models.extend(starter_models(id));
+        write(connection,&settings)?;
     }
     Ok(())
 }
@@ -420,8 +485,8 @@ pub fn load(connection:&Connection)->Result<LlmSettings> {
             agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:serde_json::from_str(&options).unwrap_or(Value::Null)});
         }
     }
-    // Um agente que falte no banco volta com o padrão: a tela sempre tem as
-    // três abas.
+    // Um agente que falte no banco volta com o padrão: a tela sempre tem uma
+    // aba por agente.
     for id in AgentId::ALL { if !agents.iter().any(|agent|agent.id==id) { agents.push(AgentSettings::fresh(id)); } }
     agents.sort_by_key(|agent|AgentId::ALL.iter().position(|id|*id==agent.id));
     let mut models=Vec::new();
@@ -511,7 +576,7 @@ pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap
     (providers,models)
 }
 
-fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude Code", AgentId::Codex=>"Codex", AgentId::Copilot=>"Copilot" } }
+fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude Code", AgentId::Codex=>"Codex", AgentId::Copilot=>"Copilot", AgentId::Cursor=>"Cursor" } }
 
 /// Onde o executável está, procurando como o shell faria: no PATH e, depois,
 /// nas pastas onde os instaladores dos agentes os põem — o app aberto pelo menu
@@ -677,6 +742,7 @@ mod tests {
         assert_eq!(of(AgentId::Claude),["sonnet","opus","haiku","fable"]);
         assert_eq!(of(AgentId::Codex).len(),1);
         assert_eq!(of(AgentId::Copilot).len(),1);
+        assert_eq!(of(AgentId::Cursor),["auto"]);
         assert!(loaded.models.iter().all(|model|model.enabled));
     }
 
@@ -706,6 +772,45 @@ mod tests {
         let found=parse_copilot_listing(help);
         assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["model-one","model-two-fast"]);
         assert_eq!(found[1].speed,"fast");
+    }
+
+    #[test] fn cursor_lists_one_model_per_line() {
+        let output="Available models\n\nauto - Auto (default)\nmodel-one - Model One\nmodel-two-fast - Model Two Fast (current)\n\nTip: use --model <id> (or /model <id> in interactive mode) to switch.\n";
+        let found=parse_cursor_listing(output);
+        assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["auto","model-one","model-two-fast"],"a dica do fim não é modelo");
+        assert_eq!(found[0].label,"Auto");
+        assert_eq!(found[2].label,"Model Two Fast");
+        assert_eq!(found[2].speed,"fast");
+    }
+
+    /// O pedido do Cursor vai pela entrada padrão; o modo planejamento tira o
+    /// `--force` e entra no `--mode plan`.
+    #[test] fn cursor_builds_its_command_line_from_the_options() {
+        let cursor=agent(AgentId::Cursor,json!({"sandbox":"enabled","force":true,"approveMcps":true}));
+        let args=cursor.args();
+        assert!(!args.iter().any(|arg|arg=="{prompt}"),"o pedido chega pela entrada padrão");
+        assert!(args.windows(2).any(|pair|pair==["--output-format","stream-json"]));
+        assert!(args.windows(2).any(|pair|pair==["--sandbox","enabled"]));
+        assert!(args.iter().any(|arg|arg=="--force")&&args.iter().any(|arg|arg=="--approve-mcps"));
+        let plan=cursor.plan_args();
+        assert!(!plan.iter().any(|arg|arg=="--force"));
+        assert!(plan.windows(2).any(|pair|pair==["--mode","plan"]));
+        let plain=agent(AgentId::Cursor,Value::Null).args();
+        assert!(!plain.iter().any(|arg|arg=="--sandbox"||arg=="--force"),"o padrão segue a configuração do próprio Cursor");
+        assert!(agent(AgentId::Cursor,json!({"sandbox":"maybe"})).checked(&HashSet::new()).is_err());
+    }
+
+    /// Quem já tinha o banco antes do Cursor existir ganha a aba dele com o
+    /// modelo de fábrica, sem perder o que já estava gravado.
+    #[test] fn a_new_agent_joins_an_existing_database() {
+        let connection=memory();
+        connection.execute("DELETE FROM llm_models WHERE agent='cursor'",[]).expect("modelos");
+        connection.execute("DELETE FROM llm_agents WHERE id='cursor'",[]).expect("agente");
+        connection.execute("UPDATE llm_agents SET timeout=900 WHERE id='codex'",[]).expect("ajuste");
+        ensure(&connection).expect("de novo");
+        let loaded=load(&connection).expect("leitura");
+        assert!(loaded.models.iter().any(|model|model.agent==AgentId::Cursor&&model.model=="auto"));
+        assert_eq!(loaded.agents.iter().find(|agent|agent.id==AgentId::Codex).map(|agent|agent.timeout),Some(900));
     }
 
     /// A lista do CLI manda: o novo nasce ligado, o gravado guarda o que o

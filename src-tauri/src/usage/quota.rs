@@ -2,7 +2,7 @@
 //!
 //! O Claude responde ao `/usage` no `--print` sem chamar o modelo; o Codex
 //! deixa a leitura nos arquivos de sessão; o Copilot CLI não a diz fora do
-//! modo interativo. Toda leitura é da conta inteira — inclui o uso fora do
+//! modo interativo, e o Cursor CLI também não. Toda leitura é da conta inteira — inclui o uso fora do
 //! JayV — e a que falha diz por quê, sem número inventado.
 
 use super::{codex, Quota};
@@ -33,6 +33,7 @@ pub async fn read(agent:&str,command:&str)->Reading {
             let found=codex::sessions_dir().map(|dir|codex::latest_session_quotas(&dir)).unwrap_or_default();
             if found.is_empty() { Reading::Unavailable(Text::new("usage.quota.noData").with("agent","Codex")) } else { Reading::Read(found) }
         }
+        "cursor"=>Reading::Unavailable(Text::new("usage.quota.cursorUnreported")),
         _=>Reading::Unavailable(Text::new("usage.quota.copilotUnreported")),
     }
 }
@@ -104,5 +105,10 @@ mod tests {
     #[tokio::test] async fn copilot_is_never_invented() {
         let Reading::Unavailable(reason)=read("copilot","copilot").await else { panic!("o Copilot não informa o limite") };
         assert_eq!(reason.key,"usage.quota.copilotUnreported");
+    }
+
+    #[tokio::test] async fn cursor_is_never_invented() {
+        let Reading::Unavailable(reason)=read("cursor","cursor-agent").await else { panic!("o Cursor não informa o limite") };
+        assert_eq!(reason.key,"usage.quota.cursorUnreported");
     }
 }

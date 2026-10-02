@@ -25,7 +25,7 @@ export function formatPercent(value: number, locale: string) {
   return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: value < 0.1 && value > 0 ? 1 : 0 }).format(value);
 }
 
-/** O nome de quem gastou. O núcleo grava `claude`, `codex`, `copilot`,
+/** O nome de quem gastou. O núcleo grava `claude`, `codex`, `copilot`, `cursor`,
  * `http:<provedor>` e `jev:<etapa>`; a etapa do Jev é traduzida. */
 export function sourceLabel(source: string, t: (key: Key) => string) {
   if (source in AGENT_LABELS) return AGENT_LABELS[source as AgentId];
@@ -39,7 +39,7 @@ export function sourceLabel(source: string, t: (key: Key) => string) {
   return source;
 }
 
-/** O nome do agente de um limite: os três CLIs e o próprio Jev. */
+/** O nome do agente de um limite: os CLIs e o próprio Jev. */
 export function agentLabel(agent: string) {
   if (agent in AGENT_LABELS) return AGENT_LABELS[agent as AgentId];
   return agent === "jev" ? "Jev" : agent;

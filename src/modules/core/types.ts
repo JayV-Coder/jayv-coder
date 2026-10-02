@@ -150,7 +150,7 @@ export interface SystemStatus {
   performance_records: number;
 }
 
-export type AgentId = "claude" | "codex" | "copilot";
+export type AgentId = "claude" | "codex" | "copilot" | "cursor";
 export type CostClass = "free" | "low" | "medium" | "high";
 export type Speed = "fast" | "medium" | "slow";
 export type Capability = "chat" | "code" | "reasoning" | "tools";
@@ -182,10 +182,17 @@ export interface CopilotOptions {
   silent: boolean;
 }
 
+export interface CursorOptions {
+  sandbox: "default" | "enabled" | "disabled";
+  force: boolean;
+  approveMcps: boolean;
+}
+
 export interface AgentOptions {
   claude: ClaudeOptions;
   codex: CodexOptions;
   copilot: CopilotOptions;
+  cursor: CursorOptions;
 }
 
 export interface AgentSettings<A extends AgentId = AgentId> {

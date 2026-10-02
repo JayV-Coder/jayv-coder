@@ -12,7 +12,7 @@ import { connectSystem, loadStatus } from "@/modules/system";
 import { checkForUpdate } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
-import { ChatPage, ChatsPage, GatePage, LoginPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, ProfilePage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
 import { UpdateDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
@@ -26,6 +26,7 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   status: StatusPage,
   stats: StatsPage,
   settings: SettingsPage,
+  profile: ProfilePage,
 };
 
 /** Liga os módulos uma vez: cada um passa a ouvir o núcleo e o barramento por

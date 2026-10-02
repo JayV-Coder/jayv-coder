@@ -9,6 +9,7 @@
 pub mod claude;
 pub mod codex;
 pub mod copilot;
+pub mod cursor;
 pub mod quota;
 pub mod store;
 
@@ -26,7 +27,7 @@ impl Precision {
     pub fn as_str(&self)->&'static str { match self { Self::Reported=>"reported", Self::Estimated=>"estimated", Self::Legacy=>"legacy" } }
 }
 
-/// Uma chamada a um modelo. `source` é `claude`, `codex`, `copilot`,
+/// Uma chamada a um modelo. `source` é `claude`, `codex`, `copilot`, `cursor`, `cursor`,
 /// `http:<provedor>` ou `jev:<conjunto>`. O custo só existe quando a
 /// ferramenta o informou.
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
@@ -161,6 +162,9 @@ impl Meter {
             "codex"=>{
                 if let Some(mut found)=codex::spend(&event,&self.model) { found.duration_ms=elapsed; self.spends.push(found); }
                 self.quotas.extend(codex::quotas(&event));
+            }
+            "cursor"=>{
+                if let Some(mut found)=cursor::spend(&event,&self.model) { if found.duration_ms==0 { found.duration_ms=elapsed; } self.spends.push(found); }
             }
             _=>{}
         }

@@ -365,8 +365,9 @@ fn classify(line:&str)->Option<Beat> {
 /// centenas de vezes por pedido: é sinal de vida — e por isso a linha chega até
 /// aqui —, mas não é etapa nenhuma para quem espera, e enfileirá-las afogaria as
 /// que importam. O texto da resposta não se perde nisso: ele volta inteiro no
-/// evento do assistente, e é de lá que `said` o tira.
-const BOOKKEEPING:[&str;9]=["rate_limit_event","stream_event","thinking_tokens","hook_started","hook_progress","hook_response","thread.started","turn.started","turn.completed"];
+/// evento do assistente, e é de lá que `said` o tira. O `thinking` é o
+/// raciocínio do Cursor, um pedaço por evento.
+const BOOKKEEPING:[&str;10]=["rate_limit_event","stream_event","thinking_tokens","thinking","hook_started","hook_progress","hook_response","thread.started","turn.started","turn.completed"];
 fn bookkeeping(kind:&str,event:&Value)->bool {
     BOOKKEEPING.contains(&kind)||event.get("subtype").and_then(Value::as_str).is_some_and(|subtype|BOOKKEEPING.contains(&subtype))
 }
@@ -376,6 +377,9 @@ fn bookkeeping(kind:&str,event:&Value)->bool {
 /// de mensagem não, porque ele continua no pedaço seguinte.
 fn said(event:&Value)->Option<String> {
     if let Some(text)=crate::usage::codex::said(event) { return Some(text); }
+    // O Cursor repete o pedido num evento `user` antes de responder: é a fala
+    // de quem pediu, não a do assistente.
+    if event.get("type").and_then(Value::as_str)==Some("user") { return None; }
     if let Some(parts)=event.pointer("/message/content").and_then(Value::as_array) {
         let text=parts.iter().filter(|part|part.get("type").and_then(Value::as_str)==Some("text"))
             .filter_map(|part|part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("");
@@ -416,6 +420,10 @@ fn reported(kind:&str,event:&Value)->String {
     let tool=event.pointer("/message/content").and_then(Value::as_array)
         .and_then(|parts|parts.iter().find_map(|part|part.get("name").and_then(Value::as_str)));
     let tool=tool.or_else(||["/item/command","/item/type"].iter().find_map(|pointer|event.pointer(pointer).and_then(Value::as_str)));
+    // O `tool_call` do Cursor guarda a ferramenta como chave
+    // (`readToolCall`, `writeToolCall`) ou em `function.name`.
+    let tool=tool.or_else(||event.pointer("/tool_call/function/name").and_then(Value::as_str))
+        .or_else(||event.get("tool_call").and_then(Value::as_object).and_then(|call|call.keys().next()).map(String::as_str));
     let detail=tool.or_else(||["name","command","tool","subtype","status"].iter().find_map(|field|event.get(field).and_then(Value::as_str)));
     match detail { Some(detail)=>format!("{kind}: {detail}"), None=>kind.to_string() }
 }
@@ -778,6 +786,16 @@ mod tests {
         let mut steps=Vec::new();
         while let Some(beat)=beats.recv().await { if let Beat::Agent{line}=beat { steps.push(line); } }
         assert_eq!(steps,vec!["system: init".to_string(),"assistant: Read".into(),"result: success".into()],"as etapas sao o trabalho, sem a escrituracao");
+    }
+
+    /// O Cursor repete o pedido num evento `user` e pensa em voz alta em
+    /// `thinking`: nenhum dos dois é a resposta.
+    #[test] fn the_cursor_stream_keeps_only_the_assistant_speech() {
+        assert_eq!(classify("{\"type\":\"thinking\",\"subtype\":\"delta\",\"text\":\"hmm\"}"),None);
+        assert_ne!(classify("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"oi\"}]}}"),Some(Beat::Chunk{text:"oi\n".into()}));
+        assert_eq!(classify("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]}}"),Some(Beat::Chunk{text:"pong\n".into()}));
+        assert_eq!(classify("{\"type\":\"tool_call\",\"subtype\":\"started\",\"tool_call\":{\"readToolCall\":{\"args\":{\"path\":\"src/lib.rs\"}}}}"),Some(Beat::Agent{line:"tool_call: readToolCall".into()}));
+        assert_eq!(refusal("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"pong\"}"),None);
     }
 
     /// O relógio do provedor de linha de comando conta silêncio, não trabalho.

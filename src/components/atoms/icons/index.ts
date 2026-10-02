@@ -15,3 +15,4 @@ export { SignalHead3Icon } from "./SignalHead3Icon";
 export { ClaudeIcon } from "./ClaudeIcon";
 export { CodexIcon } from "./CodexIcon";
 export { CopilotIcon } from "./CopilotIcon";
+export { CursorIcon } from "./CursorIcon";

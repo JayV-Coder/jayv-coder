@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { ClaudeOptionsForm } from "./ClaudeOptionsForm";
 import { CodexOptionsForm } from "./CodexOptionsForm";
 import { CopilotOptionsForm } from "./CopilotOptionsForm";
+import { CursorOptionsForm } from "./CursorOptionsForm";
 import { ModelRow } from "./ModelRow";
 
 export const AGENT_NAMES: Record<AgentId, string> = AGENT_LABELS;
@@ -72,6 +73,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         {agent.id === "claude" && <ClaudeOptionsForm agent={agent as AgentSettings<"claude">} models={models} problems={problems} />}
         {agent.id === "codex" && <CodexOptionsForm agent={agent as AgentSettings<"codex">} />}
         {agent.id === "copilot" && <CopilotOptionsForm agent={agent as AgentSettings<"copilot">} />}
+        {agent.id === "cursor" && <CursorOptionsForm agent={agent as AgentSettings<"cursor">} />}
       </SettingsSection>
 
       <SettingsSection

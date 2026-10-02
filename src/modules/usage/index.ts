@@ -23,6 +23,8 @@ interface UsageState {
   chats: Record<string, UsageReport>;
   /** Os últimos 30 dias de cada projeto, para o cartão dele. */
   projects: Record<string, UsageReport>;
+  /** Os últimos 30 dias da conta inteira, para a página de perfil. */
+  account: UsageReport | null;
 }
 
 /** A data de hoje no fuso de quem lê: `toISOString` daria o dia em UTC, e
@@ -40,6 +42,7 @@ export const useUsage = create<UsageState>(() => ({
   turns: {},
   chats: {},
   projects: {},
+  account: null,
 }));
 
 function midnight(daysAgo: number) {
@@ -141,6 +144,15 @@ export async function loadProjectUsage(projectId: string) {
   }
 }
 
+export async function loadAccountUsage() {
+  try {
+    const account = await commands.usageReport(query({ kind: "global" }, "30d", useUsage.getState().range));
+    useUsage.setState({ account });
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 /** Quanto do total não foi informado pela ferramenta, de 0 a 1. */
 export function estimatedShare(totals: UsageReport["totals"]) {
   const all = totals.inputTokens + totals.outputTokens;
@@ -161,7 +173,9 @@ export function connectUsage() {
   const flush = () => {
     settle = null;
     const state = useUsage.getState();
-    if (useNavigation.getState().view === "stats") void loadReport();
+    const view = useNavigation.getState().view;
+    if (view === "stats") void loadReport();
+    if (view === "profile") void loadAccountUsage();
     for (const chatId of touched.chats) if (state.chats[chatId] || state.turns[chatId]) void loadChatUsage(chatId);
     for (const projectId of touched.projects) if (state.projects[projectId]) void loadProjectUsage(projectId);
     touched.chats.clear();
@@ -180,6 +194,7 @@ export function connectUsage() {
   const offQuota = onCore("quota-changed", () => later());
   const offView = bus.on("view:changed", ({ view }) => {
     if (quotaTimer) { clearInterval(quotaTimer); quotaTimer = null; }
+    if (view === "profile") void loadAccountUsage();
     if (view !== "stats") return;
     void loadReport();
     quotaTimer = setInterval(() => void refreshQuotas(), QUOTA_EVERY);
