@@ -30,7 +30,7 @@ export function NewPasswordPage() {
   };
 
   return (
-    <div className="grid min-h-screen place-items-center px-6">
+    <div className="grid min-h-full place-items-center px-6">
       <form onSubmit={submit} className="grid w-full max-w-sm gap-4">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />
