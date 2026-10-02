@@ -3,6 +3,7 @@ import { useT, type Key } from "@/modules/i18n";
 import { updateCore } from "@/modules/settings";
 import { FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
 import { Input } from "@/components/ui/input";
+import { ExpertisePanel } from "./ExpertisePanel";
 
 const THRESHOLDS = ["0.5", "0.55", "0.6", "0.65", "0.7", "0.75", "0.8", "0.85", "0.9", "0.95"];
 const CACHE_TTLS = [0, 300, 900, 1800, 3600, 7200, 21600, 86400];
@@ -23,6 +24,8 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
 
   return (
     <div className="grid gap-5">
+      <ExpertisePanel snapshot={snapshot} />
+
       <SettingsSection title={t("jev.section.routing")} description={t("jev.section.routing.description")}>
         <div className="grid gap-3">
           <ToggleRow id="jev-adaptive" label={t("jev.adaptive")} hint={t("jev.adaptive.hint")} checked={core.adaptiveRouting} onChange={(adaptiveRouting) => updateCore({ adaptiveRouting })} />
