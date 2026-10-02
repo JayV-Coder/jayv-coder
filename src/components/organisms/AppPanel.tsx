@@ -1,8 +1,7 @@
-import { useState } from "react";
 import type { CoreSettings, CoreSnapshot } from "@/modules/core";
 import { useT } from "@/modules/i18n";
 import { updateCore } from "@/modules/settings";
-import { checkForUpdate } from "@/modules/updates";
+import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { FormField, LanguageSelect, SettingsSection, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,12 +13,10 @@ const lines = (text: string) => text.split("\n");
  * e a versão instalada. */
 export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: CoreSnapshot }) {
   const t = useT();
-  const [checking, setChecking] = useState(false);
-  const check = async () => {
-    setChecking(true);
-    await checkForUpdate(true);
-    setChecking(false);
-  };
+  // O botão abre a mesma janela da abertura do app; enquanto ela trabalha,
+  // clicar de novo só a traz de volta.
+  const checking = useUpdate((state) => isUpdateBusy(state.phase));
+  const check = () => checkForUpdate(true);
 
   return (
     <div className="grid gap-5">
