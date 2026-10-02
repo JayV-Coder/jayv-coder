@@ -11,12 +11,15 @@ export type Pronouns = (typeof PRONOUNS)[number];
 export type Role = (typeof ROLES)[number];
 
 export const DISPLAY_NAME_MAX = 60;
+export const USERNAME_MIN = 3;
+export const USERNAME_MAX = 30;
 export const LONG_TEXT_MAX = 120;
 export const CUSTOM_TEXT_MAX = 40;
 
 export interface AccountProfile {
   displayName: string;
-  fullName: string | null;
+  /** Único, em minúsculas: o nome pelo qual se busca alguém no JayV. */
+  username: string;
   sex: Sex | null;
   gender: Gender | null;
   genderCustom: string | null;
@@ -35,7 +38,7 @@ export interface AccountProfile {
 
 export interface ProfileRow {
   display_name: string;
-  full_name: string | null;
+  username: string;
   sex: Sex | null;
   gender: Gender | null;
   gender_custom: string | null;
@@ -57,7 +60,7 @@ export function normalizeProfile(draft: AccountProfile): AccountProfile {
   return {
     ...draft,
     displayName: draft.displayName.trim(),
-    fullName: clean(draft.fullName),
+    username: draft.username.trim().toLowerCase(),
     genderCustom: draft.gender === "other" ? clean(draft.genderCustom) : null,
     pronounsCustom: draft.pronouns === "custom" ? clean(draft.pronounsCustom) : null,
     birthDate: clean(draft.birthDate),
@@ -71,7 +74,7 @@ export function normalizeProfile(draft: AccountProfile): AccountProfile {
 export function toRow(profile: AccountProfile): ProfileRow {
   return {
     display_name: profile.displayName,
-    full_name: profile.fullName,
+    username: profile.username,
     sex: profile.sex,
     gender: profile.gender,
     gender_custom: profile.genderCustom,
@@ -88,7 +91,7 @@ export function toRow(profile: AccountProfile): ProfileRow {
 export function fromRow(row: ProfileRow): AccountProfile {
   return {
     displayName: row.display_name,
-    fullName: row.full_name,
+    username: row.username,
     sex: row.sex,
     gender: row.gender,
     genderCustom: row.gender_custom,
@@ -101,4 +104,27 @@ export function fromRow(row: ProfileRow): AccountProfile {
     company: row.company,
     completedAt: row.completed_at ?? null,
   };
+}
+
+/** A mesma regra do `public.username_ok`: 3 a 30 caracteres, minúsculas sem
+ * acento, dígitos, `_` e `-`, começando e terminando em letra ou dígito. */
+export const usernameOk = (name: string) => /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/.test(name);
+
+export interface DateParts { year: number | null; month: number | null; day: number | null }
+
+/** Sem ano, fevereiro aceita 29; sem mês, qualquer dia até 31. */
+export function daysInMonth(year: number | null, month: number | null) {
+  if (month === null) return 31;
+  return new Date(Date.UTC(year ?? 2000, month, 0)).getUTCDate();
+}
+
+export function splitDate(iso: string | null): DateParts {
+  const match = iso?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) } : { year: null, month: null, day: null };
+}
+
+/** `YYYY-MM-DD` só com as três partes; incompleta não vira data. */
+export function joinDate({ year, month, day }: DateParts) {
+  if (year === null || month === null || day === null) return null;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }

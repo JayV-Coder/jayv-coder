@@ -200,3 +200,17 @@ Erro desconhecido cai em `error.unexpected` com o motivo técnico.
 
 Organizações (etapa B), política de LLM (C), painel da organização (D) e a
 configuração automática do painel do Supabase.
+
+## Revisão 0.16.0
+
+- `full_name` saiu; entrou `username` (obrigatório, único, 3 a 30 caracteres
+  `^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$`, guardado em minúsculas). Gerado pelo
+  banco a partir do apelido do provedor ou do começo do e-mail, com sufixo na
+  colisão (`ana`, `ana-2`); a tela confere a disponibilidade pela RPC
+  `username_available(name)`, que só devolve sim ou não. Migração
+  `20261002120700_username.sql`. A busca de outras pessoas pelo nome de
+  usuário chega com as organizações (etapa B).
+- Data de nascimento em três escolhas (dia, mês por extenso, ano decrescente
+  desde 1900), com o dia ajustado ao mês e ao ano; só grava completa.
+- Página de Perfil em abas: Visão geral (nível, atividade e limites dos
+  planos), Dados pessoais, Segurança e Contas vinculadas; o card fica acima.

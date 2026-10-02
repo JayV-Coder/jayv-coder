@@ -13,7 +13,7 @@ interface ProfileState {
  * sync porque os membros de uma organização vão ler o perfil uns dos outros. */
 export const useProfile = create<ProfileState>(() => ({ profile: null, loading: true }));
 
-const COLUMNS = "display_name,full_name,sex,gender,gender_custom,pronouns,pronouns_custom,birth_date,country,timezone,role,company,completed_at";
+const COLUMNS = "display_name,username,sex,gender,gender_custom,pronouns,pronouns_custom,birth_date,country,timezone,role,company,completed_at";
 
 async function userId() {
   const { data, error } = await supabase.auth.getUser();
@@ -21,8 +21,10 @@ async function userId() {
   return data.user.id;
 }
 
-/** O `check` do banco recusou um valor que passou pela tela. */
+/** O banco recusou um valor que passou pela tela: nome de usuário tomado
+ * (índice único) ou outro `check`. */
 function failure(error: { code?: string }) {
+  if (error.code === "23505") return { key: "profile.usernameTaken" };
   return error.code === "23514" || error.code === "22007" || error.code === "22008" ? { key: "profile.invalid" } : error;
 }
 
@@ -46,6 +48,13 @@ export async function saveProfile(draft: AccountProfile) {
 
 export async function skipSetup() {
   await write({ completed_at: new Date().toISOString() });
+}
+
+/** Pergunta ao banco sem ler perfil nenhum: o próprio nome conta como livre. */
+export async function usernameAvailable(name: string) {
+  const { data, error } = await supabase.rpc("username_available", { name });
+  if (error) throw error;
+  return data === true;
 }
 
 export function clearProfile() {

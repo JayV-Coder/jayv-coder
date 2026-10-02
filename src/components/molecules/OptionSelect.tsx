@@ -5,13 +5,15 @@ export interface Option<V extends string> { value: V; label: string; hint?: stri
 /** Uma escolha dentro de uma lista fechada: nada que o núcleo não aceite chega
  * a ser digitado. Na lista, a explicação fica embaixo do nome; no campo fechado,
  * ao lado dele, numa linha só. */
-export function OptionSelect<V extends string>({ id, value, options, onChange, disabled, invalid }: {
+export function OptionSelect<V extends string>({ id, value, options, onChange, disabled, invalid, label }: {
   id?: string; value: V; options: Option<V>[]; onChange: (value: V) => void; disabled?: boolean; invalid?: boolean;
+  /** O nome lido pelo leitor de tela quando não há `<label>` apontando para o campo. */
+  label?: string;
 }) {
   const current = options.find((option) => option.value === value);
   return (
     <Select value={value} onValueChange={(next) => onChange(next as V)} disabled={disabled}>
-      <SelectTrigger id={id} className="w-full min-w-0" aria-invalid={invalid || undefined}>
+      <SelectTrigger id={id} className="w-full min-w-0" aria-invalid={invalid || undefined} aria-label={label}>
         <SelectValue>
           {current && (
             <span className="flex min-w-0 items-baseline gap-2">

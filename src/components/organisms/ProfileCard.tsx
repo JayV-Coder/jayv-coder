@@ -33,7 +33,13 @@ export function ProfileCard({ email, account, profile, expertise }: { email: str
         <UserAvatar name={name} src={profile?.avatarUrl} className="-mt-10 size-[84px] border-4 border-card text-[32px]" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[25px] font-bold tracking-[-0.02em]">{name}</h2>
-          {email && <p className="truncate text-sm text-muted-foreground">{email}</p>}
+          {(account?.username || email) && (
+            <p className="truncate text-sm text-muted-foreground">
+              {account?.username && <span className="font-mono text-foreground/80">@{account.username}</span>}
+              {account?.username && email && <span aria-hidden="true"> · </span>}
+              {email}
+            </p>
+          )}
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <Badge variant="outline">{t("profile.provider", { provider })}</Badge>
             {hasPassword && <Badge variant="outline">{t("profile.password")}</Badge>}

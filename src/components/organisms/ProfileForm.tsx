@@ -1,9 +1,9 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import {
-  CUSTOM_TEXT_MAX, DISPLAY_NAME_MAX, GENDERS, LONG_TEXT_MAX, PRONOUNS, ROLES, SEXES, type AccountProfile,
+  CUSTOM_TEXT_MAX, DISPLAY_NAME_MAX, GENDERS, LONG_TEXT_MAX, PRONOUNS, ROLES, SEXES, USERNAME_MAX, usernameAvailable, usernameOk, type AccountProfile,
 } from "@/modules/profile";
-import { FormField, OptionSelect, type Option } from "@/components/molecules";
+import { DateParts, FormField, OptionSelect, type Option } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -30,7 +30,28 @@ function countryCodes(names: Intl.DisplayNames) {
   return codes;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+/** O que a tela sabe do nome de usuário digitado. */
+type UsernameState = "same" | "invalid" | "checking" | "available" | "taken" | "unknown";
+
+/** Confere o formato na hora e a disponibilidade no banco depois de uma pausa
+ * na digitação; o índice único do banco continua sendo a última palavra. */
+function useUsernameState(name: string, original: string): UsernameState {
+  const [state, setState] = useState<UsernameState>("same");
+  useEffect(() => {
+    if (name === original) { setState("same"); return; }
+    if (!usernameOk(name)) { setState("invalid"); return; }
+    setState("checking");
+    let live = true;
+    const timer = setTimeout(() => {
+      usernameAvailable(name)
+        .then((free) => { if (live) setState(free ? "available" : "taken"); })
+        // Sem resposta (rede), deixa gravar: o banco decide.
+        .catch(() => { if (live) setState("unknown"); });
+    }, 400);
+    return () => { live = false; clearTimeout(timer); };
+  }, [name, original]);
+  return state;
+}
 
 /** Os dados pessoais da conta, no passo de perfil e na página de Perfil. Só o
  * nome de exibição é obrigatório; documentos, endereço e telefone não existem
@@ -46,6 +67,11 @@ export function ProfileForm({ initial, busy, submitLabel, onSubmit, secondary }:
   const locale = useLocale();
   const [draft, setDraft] = useState(initial);
   const set = <K extends keyof AccountProfile>(key: K, value: AccountProfile[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const username = useUsernameState(draft.username, initial.username);
+  const usernameNote = username === "invalid" ? t("profile.username.invalid", { min: 3, max: USERNAME_MAX })
+    : username === "taken" ? t("profile.usernameTaken") : null;
+  const usernameHint = username === "checking" ? t("profile.username.checking")
+    : username === "available" ? t("profile.username.available") : t("profile.field.username.hint");
 
   const unset: Option<typeof UNSET> = { value: UNSET, label: t("profile.unset") };
   const closed = <V extends string>(group: string, values: readonly V[]): Option<Choice<V>>[] =>
@@ -69,8 +95,12 @@ export function ProfileForm({ initial, busy, submitLabel, onSubmit, secondary }:
         <FormField label={t("profile.field.displayName")} htmlFor="profile-display-name" hint={t("profile.field.displayName.hint")}>
           <Input id="profile-display-name" required maxLength={DISPLAY_NAME_MAX} value={draft.displayName} onChange={(event) => set("displayName", event.target.value)} />
         </FormField>
-        <FormField label={t("profile.field.fullName")} htmlFor="profile-full-name">
-          <Input id="profile-full-name" autoComplete="name" maxLength={LONG_TEXT_MAX} value={draft.fullName ?? ""} onChange={(event) => set("fullName", event.target.value)} />
+        <FormField label={t("profile.field.username")} htmlFor="profile-username" hint={usernameHint} error={usernameNote}>
+          <div className="relative">
+            <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 start-3 grid place-items-center text-sm text-muted-foreground">@</span>
+            <Input id="profile-username" required autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={USERNAME_MAX} className="ps-7"
+              aria-invalid={usernameNote ? true : undefined} value={draft.username} onChange={(event) => set("username", event.target.value.toLowerCase().replace(/\s/g, ""))} />
+          </div>
         </FormField>
         <FormField label={t("profile.field.sex")} htmlFor="profile-sex">
           <OptionSelect id="profile-sex" value={pick(draft.sex)} options={closed("sex", SEXES)} onChange={(value) => set("sex", drop(value))} />
@@ -91,8 +121,8 @@ export function ProfileForm({ initial, busy, submitLabel, onSubmit, secondary }:
             <Input id="profile-pronouns-custom" maxLength={CUSTOM_TEXT_MAX} value={draft.pronounsCustom ?? ""} onChange={(event) => set("pronounsCustom", event.target.value)} />
           </FormField>
         )}
-        <FormField label={t("profile.field.birthDate")} htmlFor="profile-birth-date">
-          <Input id="profile-birth-date" type="date" min="1900-01-01" max={today()} value={draft.birthDate ?? ""} onChange={(event) => set("birthDate", event.target.value)} />
+        <FormField label={t("profile.field.birthDate")} htmlFor="profile-birth-date" hint={t("profile.birthDate.hint")}>
+          <DateParts id="profile-birth-date" value={draft.birthDate} onChange={(value) => set("birthDate", value)} />
         </FormField>
         <FormField label={t("profile.field.country")} htmlFor="profile-country">
           <OptionSelect id="profile-country" value={draft.country ?? UNSET} options={[unset, ...countries]} onChange={(value) => set("country", value === UNSET ? null : value)} />
@@ -109,7 +139,7 @@ export function ProfileForm({ initial, busy, submitLabel, onSubmit, secondary }:
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         {secondary}
-        <Button type="submit" disabled={busy || !draft.displayName.trim()}>{submitLabel}</Button>
+        <Button type="submit" disabled={busy || !draft.displayName.trim() || username === "invalid" || username === "taken" || username === "checking"}>{submitLabel}</Button>
       </div>
     </form>
   );
