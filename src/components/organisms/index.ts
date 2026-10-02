@@ -30,3 +30,6 @@ export { UpdateDialog } from "./UpdateDialog";
 export { UsageTable } from "./UsageTable";
 export { ChatUsageBar } from "./ChatUsageBar";
 export { ProjectUsageLine } from "./ProjectUsageLine";
+export { ProfileForm } from "./ProfileForm";
+export { SecurityPanel } from "./SecurityPanel";
+export { LinkedAccounts } from "./LinkedAccounts";

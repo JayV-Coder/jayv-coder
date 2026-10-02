@@ -16,3 +16,6 @@ export { ClaudeIcon } from "./ClaudeIcon";
 export { CodexIcon } from "./CodexIcon";
 export { CopilotIcon } from "./CopilotIcon";
 export { CursorIcon } from "./CursorIcon";
+export { GithubIcon } from "./GithubIcon";
+export { GitlabIcon } from "./GitlabIcon";
+export { BitbucketIcon } from "./BitbucketIcon";

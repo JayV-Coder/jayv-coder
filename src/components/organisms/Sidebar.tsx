@@ -6,6 +6,7 @@ import { BrandMark, LogoIcon, UserAvatar } from "@/components/atoms";
 import { ChatRow, ConnectionNote, NavItem, ProjectPlate } from "@/components/molecules";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/modules/auth";
+import { useProfile } from "@/modules/profile";
 import { openStats } from "@/modules/usage";
 import { cn } from "@/lib/utils";
 import { displayName } from "./ProfileCard";
@@ -16,7 +17,8 @@ export function Sidebar() {
   const t = useT();
   const email = useAuth((state) => state.email);
   const profile = useAuth((state) => state.profile);
-  const name = displayName(profile, email);
+  const account = useProfile((state) => state.profile);
+  const name = displayName(account, profile, email);
   const view = useNavigation((state) => state.view);
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const project = findProject(data, activeProjectId);

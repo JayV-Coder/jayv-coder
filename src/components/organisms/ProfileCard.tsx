@@ -1,26 +1,30 @@
 import { LogOutIcon } from "lucide-react";
 import type { Expertise } from "@/modules/core";
-import { signOut, type Profile } from "@/modules/auth";
+import { PROVIDERS, signOut, useAuth, type Profile, type Provider } from "@/modules/auth";
+import type { AccountProfile } from "@/modules/profile";
 import { useLocale, useT, type Key } from "@/modules/i18n";
-import { UserAvatar } from "@/components/atoms";
+import { PROVIDER_NAMES, ProviderIcon, UserAvatar } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-/** O nome que se mostra: o do GitHub ou, sem ele, o começo do e-mail. */
-export function displayName(profile: Profile | null, email: string | null) {
-  return profile?.name ?? email?.split("@")[0] ?? "";
+/** O nome que se mostra: o do perfil, o do provedor ou o começo do e-mail. */
+export function displayName(account: AccountProfile | null, profile: Profile | null, email: string | null) {
+  return account?.displayName || profile?.name || email?.split("@")[0] || "";
 }
 
 /** Quem está conectado: foto, nome, e-mail, como entrou e desde quando. */
-export function ProfileCard({ email, profile, expertise }: { email: string | null; profile: Profile | null; expertise: Expertise | null }) {
+export function ProfileCard({ email, account, profile, expertise }: { email: string | null; account: AccountProfile | null; profile: Profile | null; expertise: Expertise | null }) {
   const t = useT();
   const locale = useLocale();
-  const name = displayName(profile, email);
+  const providers = useAuth((state) => state.providers);
+  const hasPassword = useAuth((state) => state.hasPassword);
+  const linked = PROVIDERS.filter((provider: Provider) => providers.includes(provider));
+  const name = displayName(account, profile, email);
   const date = (iso: string | null | undefined) => (iso ? new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(new Date(iso)) : null);
   const since = date(profile?.createdAt);
   const last = date(profile?.lastSignInAt);
-  const provider = profile?.provider === "github" ? "GitHub" : t("profile.provider.email");
+  const provider = (PROVIDERS as string[]).includes(profile?.provider ?? "") ? PROVIDER_NAMES[profile!.provider as Provider] : t("profile.provider.email");
 
   return (
     <Card className="relative mb-5 gap-0 overflow-hidden p-0">
@@ -32,6 +36,10 @@ export function ProfileCard({ email, profile, expertise }: { email: string | nul
           {email && <p className="truncate text-sm text-muted-foreground">{email}</p>}
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <Badge variant="outline">{t("profile.provider", { provider })}</Badge>
+            {hasPassword && <Badge variant="outline">{t("profile.password")}</Badge>}
+            {linked.map((linkedProvider) => (
+              <Badge key={linkedProvider} variant="outline"><ProviderIcon provider={linkedProvider} />{PROVIDER_NAMES[linkedProvider]}</Badge>
+            ))}
             {expertise && <Badge variant="outline" className="border-[#4e6353] text-[#a4f4a9]">{t(`expertise.${expertise}` as Key)}</Badge>}
           </div>
         </div>

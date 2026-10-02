@@ -4,12 +4,20 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands, onCore } from "@/modules/core/bridge";
 import { reportError } from "@/modules/feedback";
+import { readCallback } from "./callback";
 import { CALLBACK_URL, supabase } from "./client";
+import { authFailure } from "./errors";
+import { canUnlink, type Provider } from "./identities";
+
+export { authFailure } from "./errors";
+export { canUnlink, PROVIDERS, type Provider } from "./identities";
+export { PASSWORD_MIN, PASSWORD_RULES, passwordOk, passwordRules, type PasswordRule } from "./password";
 
 type Status = "loading" | "signedOut" | "signedIn";
 
-/** A conta como a página de perfil a mostra. Nome e foto só existem quando o
- * login foi pelo GitHub; `provider` é `email` ou `github`. */
+/** A sessão como a página de perfil a mostra. Nome e foto só existem quando o
+ * login foi por um provedor; `provider` é o do último login (`email`,
+ * `github`, `gitlab` ou `bitbucket`). */
 export interface Profile {
   name: string | null;
   avatarUrl: string | null;
@@ -22,11 +30,24 @@ interface AuthState {
   status: Status;
   email: string | null;
   profile: Profile | null;
-  /** O GitHub abriu no navegador e o app espera o link de volta. */
+  /** O provedor abriu no navegador e o app espera o link de volta. */
   waitingBrowser: boolean;
+  /** A sessão veio do link de recuperação: falta escolher a senha nova. */
+  recovering: boolean;
+  /** As identidades da conta (`email`, `github`, `gitlab`, `bitbucket`). */
+  providers: string[];
+  hasPassword: boolean;
 }
 
-export const useAuth = create<AuthState>(() => ({ status: "loading", email: null, profile: null, waitingBrowser: false }));
+const SIGNED_OUT = { email: null, profile: null, recovering: false, providers: [], hasPassword: false };
+
+export const useAuth = create<AuthState>(() => ({ status: "loading", waitingBrowser: false, ...SIGNED_OUT }));
+
+/** O erro já pronto para o `reportError`: a chave do i18n quando o Supabase
+ * diz um código que a tela sabe explicar. */
+const fail = (error: unknown): never => {
+  throw authFailure(error);
+};
 
 const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
 
@@ -46,7 +67,7 @@ function profileOf(user: User): Profile {
 async function hand(session: Session | null) {
   if (!session) {
     await commands.clearSession().catch(reportError);
-    useAuth.setState({ status: "signedOut", email: null, profile: null });
+    useAuth.setState({ status: "signedOut", ...SIGNED_OUT });
     return;
   }
   try {
@@ -54,32 +75,36 @@ async function hand(session: Session | null) {
     useAuth.setState({ status: "signedIn", email: view.email ?? session.user.email ?? null, profile: profileOf(session.user), waitingBrowser: false });
   } catch (error) {
     reportError(error);
-    useAuth.setState({ status: "signedOut", email: null, profile: null });
+    useAuth.setState({ status: "signedOut", ...SIGNED_OUT });
+    return;
   }
+  await loadAccess().catch(reportError);
 }
 
-/** O link de volta do GitHub ou da confirmação de e-mail. */
+/** O link de volta de um provedor (login ou vinculação), da confirmação de
+ * e-mail ou da recuperação de senha: o supabase-js sabe qual pelo verificador
+ * do PKCE que guardou. */
 function receive(url: string) {
-  let parsed: URL;
-  try { parsed = new URL(url); } catch { return; }
-  if (parsed.protocol !== "jayv:" || parsed.host !== "auth") return;
-  const failure = parsed.searchParams.get("error_description");
-  const code = parsed.searchParams.get("code");
-  if (failure) {
+  const callback = readCallback(url);
+  if (!callback) return;
+  if ("failure" in callback) {
     useAuth.setState({ waitingBrowser: false });
-    reportError(failure);
-  } else if (code) {
-    supabase.auth.exchangeCodeForSession(code).catch((error) => {
-      useAuth.setState({ waitingBrowser: false });
-      reportError(error);
-    });
+    reportError(callback.failure);
+    return;
   }
+  supabase.auth.exchangeCodeForSession(callback.code).then(({ error }) => {
+    useAuth.setState({ waitingBrowser: false });
+    if (error) reportError(authFailure(error));
+  });
 }
 
 export function connectAuth() {
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
     // Fora da chamada do supabase-js: esperar dentro dela trava o cliente.
-    if (event !== "PASSWORD_RECOVERY") setTimeout(() => void hand(session), 0);
+    setTimeout(() => {
+      if (event === "PASSWORD_RECOVERY") useAuth.setState({ recovering: true });
+      void hand(session);
+    }, 0);
   });
   const offLink = onOpenUrl((urls) => urls.forEach(receive));
   // Aberto pelo próprio link, com o app fechado.
@@ -96,24 +121,90 @@ export function connectAuth() {
 
 export async function signIn(email: string, password: string) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  if (error) fail(error);
 }
 
-/** Devolve `true` quando a conta precisa ser confirmada pelo e-mail. */
-export async function signUp(email: string, password: string) {
-  const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: CALLBACK_URL } });
-  if (error) throw error;
+/** Devolve `true` quando a conta precisa ser confirmada pelo e-mail. O nome
+ * vai nos metadados e o banco o copia para o perfil. */
+export async function signUp(email: string, password: string, displayName: string) {
+  const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: CALLBACK_URL, data: { display_name: displayName.trim() } } });
+  if (error) fail(error);
   return !data.session;
 }
 
-export async function signInWithGithub() {
-  const { data, error } = await supabase.auth.signInWithOAuth({ provider: "github", options: { redirectTo: CALLBACK_URL, skipBrowserRedirect: true } });
-  if (error) throw error;
+export async function signInWithProvider(provider: Provider) {
+  const { data, error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo: CALLBACK_URL, skipBrowserRedirect: true } });
+  if (error) fail(error);
   useAuth.setState({ waitingBrowser: true });
-  await openUrl(data.url);
+  await openUrl(data.url!);
 }
 
 export async function signOut() {
   const { error } = await supabase.auth.signOut();
   if (error) reportError(error);
+}
+
+/** As identidades e se há senha: a conta OAuth que define senha não ganha a
+ * identidade `email`, então só o banco sabe (`account_has_password`). */
+export async function loadAccess() {
+  const [identities, password] = await Promise.all([supabase.auth.getUserIdentities(), supabase.rpc("account_has_password")]);
+  if (identities.error) fail(identities.error);
+  useAuth.setState({
+    providers: (identities.data?.identities ?? []).map((identity) => identity.provider),
+    hasPassword: password.data === true,
+  });
+}
+
+export async function linkProvider(provider: Provider) {
+  const { data, error } = await supabase.auth.linkIdentity({ provider, options: { redirectTo: CALLBACK_URL, skipBrowserRedirect: true } });
+  if (error) fail(error);
+  useAuth.setState({ waitingBrowser: true });
+  await openUrl(data.url!);
+}
+
+export async function unlinkProvider(provider: Provider) {
+  const { providers, hasPassword } = useAuth.getState();
+  if (!canUnlink(providers, hasPassword, provider)) fail({ code: "single_identity_not_deletable" });
+  const { data, error } = await supabase.auth.getUserIdentities();
+  if (error) fail(error);
+  const identity = data?.identities.find((known) => known.provider === provider);
+  if (!identity) return;
+  const unlinked = await supabase.auth.unlinkIdentity(identity);
+  if (unlinked.error) fail(unlinked.error);
+  await loadAccess();
+}
+
+export async function requestPasswordReset(email: string) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: CALLBACK_URL });
+  if (error) fail(error);
+}
+
+/** Conferir a senha atual entrando de novo também renova a sessão, que é o
+ * que o "secure password change" do Supabase pede. */
+export async function changePassword(current: string, next: string) {
+  const email = useAuth.getState().email;
+  if (!email) fail(new Error("account without email"));
+  const check = await supabase.auth.signInWithPassword({ email: email!, password: current });
+  if (check.error) fail(check.error.code === "invalid_credentials" ? { code: "wrong_password" } : check.error);
+  const { error } = await supabase.auth.updateUser({ password: next });
+  if (error) fail(error);
+}
+
+/** O código de 6 dígitos que vai ao e-mail antes da primeira senha. */
+export async function sendSetPasswordCode() {
+  const { error } = await supabase.auth.reauthenticate();
+  if (error) fail(error);
+}
+
+export async function setFirstPassword(code: string, password: string) {
+  const { error } = await supabase.auth.updateUser({ password, nonce: code.trim() });
+  if (error) fail(error);
+  await loadAccess();
+}
+
+export async function finishRecovery(password: string) {
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) fail(error);
+  useAuth.setState({ recovering: false });
+  await loadAccess().catch(reportError);
 }
