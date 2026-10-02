@@ -1,8 +1,9 @@
+import { useState } from "react";
 import type { AgentId, AgentSettings } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { AGENT_LABELS, addModel, checkAgent, isAgentsDirty, refreshModels, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
 import { AgentIcon, EmptyText } from "@/components/atoms";
-import { AgentProbeLine, FormField, OptionSelect, SettingsSection } from "@/components/molecules";
+import { AgentProbeLine, FormField, OptionSelect, PAGE_SIZES, Pager, SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -25,6 +26,14 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
   const refreshing = useSettings((state) => state.refreshing);
   const dirty = useSettings(isAgentsDirty);
   const taken = new Set(models.map((model) => model.model));
+  // Catálogos grandes travam a tela se todas as linhas forem montadas de uma vez.
+  const [pageSize, setPageSize] = useState(10);
+  const [wanted, setPage] = useState(0);
+  const lastPage = Math.max(0, Math.ceil(models.length / pageSize) - 1);
+  const page = Math.min(wanted, lastPage);
+  const shown = models.slice(page * pageSize, (page + 1) * pageSize);
+  const broken = models.findIndex((model) => problems[model.uid]);
+  const brokenPage = broken < 0 ? page : Math.floor(broken / pageSize);
   const timeouts = [...new Set([...TIMEOUTS, agent.timeout])].filter((value) => value >= min && value <= max).sort((a, b) => a - b);
   const duration = (seconds: number) => (seconds % 60 === 0 ? t("agent.timeout.minutes", { count: seconds / 60 }) : t("agent.timeout.seconds", { count: seconds }));
 
@@ -90,14 +99,34 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
             >
               {refreshing === agent.id ? t("model.refresh.running") : t("model.refresh")}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => addModel(agent.id)}>{t("model.add")}</Button>
+            <Button variant="outline" size="sm" onClick={() => { addModel(agent.id); setPage(Math.floor(models.length / pageSize)); }}>{t("model.add")}</Button>
           </div>
         )}
       >
         {problems.models && <p role="alert" className="text-[11.5px] text-destructive">{t(problems.models)}</p>}
+        {brokenPage !== page && (
+          <p role="alert" className="text-[11.5px] text-destructive">
+            {t("model.problemElsewhere")}{" "}
+            <button type="button" className="font-medium underline underline-offset-2" onClick={() => setPage(brokenPage)}>{t("model.problemElsewhere.show")}</button>
+          </p>
+        )}
         {models.length === 0
           ? <EmptyText>{t("model.empty")}</EmptyText>
-          : <div className="grid gap-3">{models.map((model) => <ModelRow key={model.uid} model={model} catalog={catalog} taken={taken} problem={problems[model.uid]} />)}</div>}
+          : (
+            <div className="grid gap-3">
+              {shown.map((model) => <ModelRow key={model.uid} model={model} catalog={catalog} taken={taken} problem={problems[model.uid]} />)}
+              {models.length > PAGE_SIZES[0] && (
+                <Pager
+                  id={`${agent.id}-page-size`}
+                  page={page}
+                  size={pageSize}
+                  total={models.length}
+                  onPage={setPage}
+                  onSize={(size) => { setPageSize(size); setPage(Math.floor((page * pageSize) / size)); }}
+                />
+              )}
+            </div>
+          )}
       </SettingsSection>
     </div>
   );

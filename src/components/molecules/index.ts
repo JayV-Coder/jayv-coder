@@ -19,3 +19,4 @@ export { CheckList } from "./CheckList";
 export { AgentProbeLine } from "./AgentProbeLine";
 export { SettingsSection } from "./SettingsSection";
 export { ConnectionNote } from "./ConnectionNote";
+export { Pager, PAGE_SIZES } from "./Pager";

@@ -1,4 +1,4 @@
-import { PROBE_EVERY_MS, type ProbeState } from "@/modules/settings";
+import type { ProbeState } from "@/modules/settings";
 import { useT } from "@/modules/i18n";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +16,6 @@ export function AgentProbeLine({ probe }: { probe: ProbeState }) {
       <span aria-hidden="true" className={cn("size-1.5 rounded-full", healthy ? "bg-emerald-400" : "bg-amber-400")} />
       {healthy ? t("agent.found", { path: probe.path! }) : found ? t("agent.silent", { path: probe.path! }) : t("agent.missing")}
       {healthy && <span className="font-mono text-muted-foreground">{probe.version}</span>}
-      <span className="text-muted-foreground/70">· {t("agent.watching", { seconds: PROBE_EVERY_MS / 1000 })}</span>
     </p>
   );
 }

@@ -334,6 +334,13 @@ export const en = {
   "model.capabilities.hint": "The router only sends the model what it can do.",
   "model.capabilities.empty": "Check at least one capability.",
   "model.context.value": "{size} tokens",
+  "model.problemElsewhere": "A model on another page needs fixing.",
+  "model.problemElsewhere.show": "Show it",
+  "pager.perPage": "Per page",
+  "pager.range": "{from}–{to} of {total}",
+  "pager.page": "Page {page} of {pages}",
+  "pager.previous": "Previous page",
+  "pager.next": "Next page",
   "capability.chat": "Chat",
   "capability.code": "Code",
   "capability.reasoning": "Reasoning",
@@ -493,7 +500,6 @@ export const en = {
   "provider.notInstalled": "The agent “{provider}” was not found (command `{command}`). Install the CLI or enter its full path in Settings.",
   "provider.start": "Could not start the agent “{provider}” at {path}: {reason}",
   "agent.silent": "Found at {path}, but it did not answer `--version`. Check the installation (npm CLIs need Node 22 or later).",
-  "agent.watching": "checked every {seconds}s",
 
   // Configurações do Jev e do aplicativo.
   "settings.tab.jev": "Jev",
