@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { changePassword, passwordOk, sendSetPasswordCode, setFirstPassword, useAuth } from "@/modules/auth";
+import { changePassword, codeDigits, codeOk, passwordOk, sendSetPasswordCode, setFirstPassword, useAuth } from "@/modules/auth";
 import { notify, reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { FormField, PasswordRules, SettingsSection } from "@/components/molecules";
@@ -20,7 +20,7 @@ export function SecurityPanel() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const mismatch = confirm.length > 0 && confirm !== password;
-  const ready = passwordOk(password) && confirm === password && (hasPassword ? current.length > 0 : code.trim().length === 6);
+  const ready = passwordOk(password) && confirm === password && (hasPassword ? current.length > 0 : codeOk(code));
 
   const run = async (action: () => Promise<void>, done?: string) => {
     setBusy(true);
@@ -72,7 +72,7 @@ export function SecurityPanel() {
             </FormField>
           ) : (
             <FormField label={t("security.code")} htmlFor="security-code" hint={t("security.codeSent", { email: email ?? "" })}>
-              <Input id="security-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} />
+              <Input id="security-code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(codeDigits(event.target.value))} />
             </FormField>
           )}
           <FormField label={t("security.new")} htmlFor="security-new">
