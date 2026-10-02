@@ -40,13 +40,13 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
       <div className="flex flex-wrap items-center gap-4 rounded-xl border border-border/60 bg-card/40 px-6 py-5">
         <AgentIcon agent={agent.id} className="size-11 shrink-0" />
         <div className="min-w-0 flex-1">
-          <h3 className="text-xl font-bold tracking-tight">{AGENT_NAMES[agent.id]}</h3>
+          <h3 className="text-xl font-semibold tracking-tight">{AGENT_NAMES[agent.id]}</h3>
           <p className="text-sm text-muted-foreground">{t(`agent.${agent.id}.tagline`)}</p>
         </div>
         <label htmlFor={`${agent.id}-enabled`} className="flex items-center gap-3">
           <span className="grid text-end">
             <span className="text-sm font-medium">{t("agent.enabled")}</span>
-            <span className="text-[11.5px] text-muted-foreground">{t("agent.enabled.hint")}</span>
+            <span className="text-xs text-muted-foreground">{t("agent.enabled.hint")}</span>
           </span>
           <Switch id={`${agent.id}-enabled`} checked={agent.enabled} onCheckedChange={(enabled) => updateAgent(agent.id, { enabled })} />
         </label>
@@ -101,9 +101,9 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
           </div>
         )}
       >
-        {problems.models && <p role="alert" className="text-[11.5px] text-destructive">{t(problems.models)}</p>}
+        {problems.models && <p role="alert" className="text-xs text-destructive">{t(problems.models)}</p>}
         {brokenPage !== page && (
-          <p role="alert" className="text-[11.5px] text-destructive">
+          <p role="alert" className="text-xs text-destructive">
             {t("model.problemElsewhere")}{" "}
             <button type="button" className="font-medium underline underline-offset-2" onClick={() => setPage(brokenPage)}>{t("model.problemElsewhere.show")}</button>
           </p>

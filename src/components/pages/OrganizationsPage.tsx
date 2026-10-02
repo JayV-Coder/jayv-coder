@@ -61,8 +61,8 @@ export function OrganizationsPage() {
             {list.map((org) => (
               <YardCard key={org.id} onOpen={() => void openOrganization(org.id).catch(reportError)}
                 actions={<Button variant="ghost" size="sm" onClick={() => void openOrganization(org.id).catch(reportError)}>{t("org.open")}</Button>}>
-                <span className="text-lg font-bold tracking-[-0.01em] break-words">{org.name}</span>
-                <span className="font-mono text-xs text-[#8ba892]">@{org.slug}</span>
+                <span className="text-lg font-semibold tracking-tight break-words">{org.name}</span>
+                <span className="font-mono text-xs text-muted-foreground">@{org.slug}</span>
                 <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant="outline">{t(`org.role.${org.role}` as Key)}</Badge>
                   <span>{t("org.count.members", { count: org.members })}</span>

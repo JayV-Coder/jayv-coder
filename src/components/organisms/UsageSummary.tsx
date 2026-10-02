@@ -13,7 +13,7 @@ export function UsageSummary({ totals }: { totals: UsageTotals }) {
   return (
     <section className="mb-6">
       {share > 0 && (
-        <p role="note" className="mb-3 text-xs text-[#c9a86a]" title={t("usage.estimated.hint")}>
+        <p role="note" className="mb-3 text-xs text-warning" title={t("usage.estimated.hint")}>
           {t("usage.estimated.share", { share: formatPercent(share, locale) })}
         </p>
       )}

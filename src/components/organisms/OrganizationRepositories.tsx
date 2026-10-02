@@ -36,7 +36,7 @@ export function OrganizationRepositories({ detail, role }: { detail: Organizatio
               className="min-w-[240px] flex-1 font-mono text-sm" aria-invalid={url.trim() && !parsed ? true : undefined} value={url} onChange={(event) => setUrl(event.target.value)} />
             <Button type="submit" disabled={busy || !parsed}>{t("org.repos.add")}</Button>
           </div>
-          <p className={url.trim() && !parsed ? "text-[11.5px] text-destructive" : "text-[11.5px] text-muted-foreground"}>
+          <p className={url.trim() && !parsed ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
             {parsed
               ? <span className="inline-flex items-center gap-1.5"><ProviderIcon provider={parsed.provider} className="size-3.5" />{PROVIDER_NAMES[parsed.provider]} · <span className="font-mono">{parsed.path}</span></span>
               : url.trim() ? t("org.repos.invalid") : t("org.repos.hint")}

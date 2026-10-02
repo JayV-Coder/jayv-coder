@@ -53,9 +53,9 @@ export function InviteForm({ orgId }: { orgId: string }) {
             <ul role="listbox" className="absolute inset-x-0 top-full z-10 mt-1 grid overflow-hidden rounded-md border border-border bg-popover shadow-lg">
               {found.map((user) => (
                 <li key={user.userId} role="option" aria-selected={false}>
-                  <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-start text-sm hover:bg-accent"
+                  <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-start text-sm hover:bg-secondary"
                     onClick={() => { setTarget(`@${user.username}`); setFound([]); }}>
-                    <UserAvatar name={user.displayName} src={user.avatarUrl} className="size-6 text-[11px]" />
+                    <UserAvatar name={user.displayName} src={user.avatarUrl} className="size-6 text-caption" />
                     <span className="truncate">{user.displayName}</span>
                     <span className="font-mono text-xs text-muted-foreground">@{user.username}</span>
                   </button>
@@ -70,7 +70,7 @@ export function InviteForm({ orgId }: { orgId: string }) {
         </div>
         <Button type="submit" disabled={busy || !target.trim()}>{t("org.invite.send")}</Button>
       </div>
-      <p className="text-[11.5px] text-muted-foreground">{isEmail ? t("org.invite.emailNote") : t("org.invite.hint")}</p>
+      <p className="text-xs text-muted-foreground">{isEmail ? t("org.invite.emailNote") : t("org.invite.hint")}</p>
     </form>
   );
 }

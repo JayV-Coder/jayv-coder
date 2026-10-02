@@ -66,7 +66,7 @@ export function ModelRow({ model, problem }: { model: ModelDraft; problem?: Key 
           items={CAPABILITIES.map((value) => ({ value, label: t(`capability.${value}`) }))} />
       </FormField>
 
-      {(problem || typing) && <p role="alert" className="text-[11.5px] text-destructive">{t(problem ?? "model.invalid")}</p>}
+      {(problem || typing) && <p role="alert" className="text-xs text-destructive">{t(problem ?? "model.invalid")}</p>}
     </div>
   );
 }

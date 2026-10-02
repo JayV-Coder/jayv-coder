@@ -12,8 +12,8 @@ export function FormField({ label, htmlFor, wide, hint, error, className, childr
       <Label htmlFor={htmlFor} className="text-xs font-normal text-muted-foreground">{label}</Label>
       {children}
       {error
-        ? <p role="alert" className="text-[11.5px] leading-snug text-destructive">{error}</p>
-        : hint && <p className="text-[11.5px] leading-snug text-muted-foreground/80">{hint}</p>}
+        ? <p role="alert" className="text-xs leading-snug text-destructive">{error}</p>
+        : hint && <p className="text-xs leading-snug text-muted-foreground/80">{hint}</p>}
     </div>
   );
 }

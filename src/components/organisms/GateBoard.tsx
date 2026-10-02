@@ -9,17 +9,17 @@ export function GateBoard() {
   const t = useT();
   const { project, feed } = useGate();
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-7 gap-y-5 border-b border-rail-2 bg-[linear-gradient(#0f1216,#0a0d10)] px-7 py-[17px]">
+    <div className="flex flex-wrap items-center justify-between gap-x-7 gap-y-5 border-b border-rail-2 bg-panel px-7 py-[17px]">
       <div className="flex min-w-0 items-center gap-[13px]">
-        <LogoIcon className="size-8 flex-none text-[#89939d] [&_.logo-halo]:stroke-ask [&_.logo-lamp]:fill-ask" />
+        <LogoIcon className="size-8 flex-none text-muted-foreground [&_.logo-halo]:stroke-ask [&_.logo-lamp]:fill-ask" />
         <div className="flex min-w-0 flex-col">
-          <strong className="text-[22px] font-semibold tracking-[0.05em] text-[#eef1f4]">{t("nav.gate")}</strong>
-          <span className="flex min-w-0 items-center gap-2 text-[13.5px] text-dim">
+          <strong className="text-h3 font-semibold tracking-wide text-foreground">{t("nav.gate")}</strong>
+          <span className="flex min-w-0 items-center gap-2 text-sm text-dim">
             {!project ? t("gate.subtitle") : (
               <>
-                <b className="font-semibold text-[#cdd4db]">{project.name}</b>
+                <b className="font-semibold text-foreground">{project.name}</b>
                 {project.rootPath
-                  ? <><FolderIcon className="size-[15px] flex-none" /><PathText title={project.rootPath} className="max-w-[38ch] font-gate-mono text-[12.5px] text-faint">{project.rootPath}</PathText></>
+                  ? <><FolderIcon className="size-[15px] flex-none" /><PathText title={project.rootPath} className="max-w-[38ch] font-gate-mono text-xs text-faint">{project.rootPath}</PathText></>
                   : <i className="text-faint">{t("common.noFolder")}</i>}
               </>
             )}

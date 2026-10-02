@@ -6,14 +6,14 @@ import { cn } from "@/lib/utils";
 export function AgentProbeLine({ probe }: { probe: ProbeState }) {
   const t = useT();
   if (probe === null) return null;
-  if (probe === "checking") return <p className="text-[11.5px] text-muted-foreground">{t("agent.checking")}</p>;
+  if (probe === "checking") return <p className="text-xs text-muted-foreground">{t("agent.checking")}</p>;
   // Achado e respondendo; achado mas mudo (o script do npm sem Node, por
   // exemplo); ou não achado.
   const found = probe.path !== null;
   const healthy = found && !!probe.version;
   return (
-    <p className={cn("flex flex-wrap items-center gap-x-2 text-[11.5px]", healthy ? "text-emerald-400" : "text-amber-400")} role="status">
-      <span aria-hidden="true" className={cn("size-1.5 rounded-full", healthy ? "bg-emerald-400" : "bg-amber-400")} />
+    <p className={cn("flex flex-wrap items-center gap-x-2 text-xs", healthy ? "text-success" : "text-warning")} role="status">
+      <span aria-hidden="true" className={cn("size-1.5 rounded-full", healthy ? "bg-success" : "bg-warning")} />
       {healthy ? t("agent.found", { path: probe.path! }) : found ? t("agent.silent", { path: probe.path! }) : t("agent.missing")}
       {healthy && <span className="font-mono text-muted-foreground">{probe.version}</span>}
     </p>

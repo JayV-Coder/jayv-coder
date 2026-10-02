@@ -23,11 +23,11 @@ export function ExitItem({ check }: { check: ExitCheck }) {
         <span className="grid min-w-0 flex-1 gap-2">
           <span className="flex flex-wrap items-center gap-x-[13px] gap-y-1.5">
             <Stamp at={check.at} />
-            <span className="flex items-center gap-1.5 text-[13px] text-dim"><Kind className="size-[15px] flex-none" />{EXIT_KINDS[check.kind] ? t(EXIT_KINDS[check.kind]) : check.kind}</span>
-            <span className="text-[14.5px] font-semibold text-[var(--aspect)]">{t(label)}</span>
+            <span className="flex items-center gap-1.5 text-sm text-dim"><Kind className="size-[15px] flex-none" />{EXIT_KINDS[check.kind] ? t(EXIT_KINDS[check.kind]) : check.kind}</span>
+            <span className="text-sm font-semibold text-[var(--aspect)]">{t(label)}</span>
           </span>
-          <code className="block max-w-[64ch] border-s-2 border-[#2e353d] bg-[#0f1317] px-[11px] py-2 font-gate-mono text-sm leading-[1.55] [overflow-wrap:anywhere] text-[#e9edf1]">{check.target}</code>
-          <p className={cn("flex items-center gap-2 font-gate-mono text-[13px] text-[#ccd3da]", !check.rule && "font-plate text-[13.5px] text-faint")}>
+          <code className="block max-w-[64ch] border-s-2 border-rail-2 bg-rail px-[11px] py-2 font-gate-mono text-sm leading-[1.55] [overflow-wrap:anywhere] text-foreground">{check.target}</code>
+          <p className={cn("flex items-center gap-2 font-gate-mono text-sm text-foreground", !check.rule && "font-plate text-sm text-faint")}>
             <HouseRuleIcon className={cn("size-[15px] flex-none", !check.rule && "opacity-45")} />
             <span>{check.rule ?? t("exit.noRule")}</span>
           </p>

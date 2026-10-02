@@ -43,7 +43,7 @@ export function Markdown({ content, onOpenFile }: { content: string; onOpenFile?
           case "code": return <CodeBlock key={index} language={block.language} code={block.code} />;
           case "table": return (
             <div key={index} className="my-3.5 overflow-x-auto">
-              <table className="w-full border-collapse text-[13px] [&_td]:border [&_td]:border-[#2d352f] [&_td]:px-2.5 [&_td]:py-1.5 [&_th]:border [&_th]:border-[#2d352f] [&_th]:bg-[#101411] [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-start">
+              <table className="w-full border-collapse text-sm [&_td]:border [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_th]:border [&_th]:border-border [&_th]:bg-card [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-start">
                 <thead><tr>{block.head.map((cell, at) => <th key={at}><Inlines items={cell} onOpenFile={onOpenFile} /></th>)}</tr></thead>
                 <tbody>{block.rows.map((row, at) => <tr key={at}>{row.map((cell, col) => <td key={col}><Inlines items={cell} onOpenFile={onOpenFile} /></td>)}</tr>)}</tbody>
               </table>

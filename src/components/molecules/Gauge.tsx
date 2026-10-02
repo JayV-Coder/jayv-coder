@@ -37,26 +37,26 @@ export function Gauge({ criterion }: { criterion: Criterion }) {
   const label = criterion.id === "scope" ? t("criterion.scope") : known ? t(known[0]) : criterion.label;
   const reading = known ? t(outside ? known[2] : known[1]) : criterion.reading;
   return (
-    <div className="relative grid grid-cols-[150px_1fr_48px] items-center gap-x-[15px] gap-y-[5px] border-t border-[#12161a] py-2.5 xl:grid-cols-[196px_1fr_52px]">
+    <div className="relative grid grid-cols-[150px_1fr_48px] items-center gap-x-[15px] gap-y-[5px] border-t border-rail py-2.5 xl:grid-cols-[196px_1fr_52px]">
       {outside && <span className="absolute top-2.5 bottom-2.5 -start-2.5 w-0.5 bg-[var(--aspect)] xl:-start-[17px]" />}
-      <span className={cn("text-sm text-[#c6ccd3]", outside && "text-[#eef1f4]")}>{label}</span>
-      <span className="relative h-[11px] border border-[#1e242a] bg-[#11151a]">
+      <span className={cn("text-sm text-foreground", outside && "text-foreground")}>{label}</span>
+      <span className="relative h-[11px] border border-rail-2 bg-rail">
         {criterion.band && (
           <span
-            className="absolute inset-y-0 z-[2] border-x border-[#9aa5b0] bg-[repeating-linear-gradient(135deg,#ffffff14_0_3px,transparent_3px_6px)]"
+            className="absolute inset-y-0 z-[2] border-x border-dim bg-[repeating-linear-gradient(135deg,color-mix(in_srgb,var(--foreground)_10%,transparent)_0_3px,transparent_3px_6px)]"
             style={{ left: `${criterion.band[0]}%`, width: `${criterion.band[1] - criterion.band[0]}%` }}
           />
         )}
-        <span className="absolute inset-y-0 start-0 z-[1] bg-[#59646f]" style={{ width: `${criterion.percent}%` }} />
-        <span className="absolute -top-[3px] -bottom-[3px] z-[3] -ms-px w-0.5 bg-[#eef1f4]" style={{ insetInlineStart: `${criterion.percent}%` }} />
+        <span className="absolute inset-y-0 start-0 z-[1] bg-faint" style={{ width: `${criterion.percent}%` }} />
+        <span className="absolute -top-[3px] -bottom-[3px] z-[3] -ms-px w-0.5 bg-foreground" style={{ insetInlineStart: `${criterion.percent}%` }} />
       </span>
-      <span className="text-end font-gate-mono text-[13.5px] text-[#eef1f4] tabular-nums">{criterion.percent}%</span>
+      <span className="text-end font-gate-mono text-sm text-foreground tabular-nums">{criterion.percent}%</span>
       {criterion.id === "scope" ? (
-        <span className="col-[2/4] flex justify-between gap-2.5 text-[11px] whitespace-nowrap text-faint">
-          {SCALE.map((level, at) => <i key={level} className={cn("not-italic", level === criterion.reading && "text-[#eef1f4]")}>{t(SCALE_KEYS[at])}</i>)}
+        <span className="col-[2/4] flex justify-between gap-2.5 text-caption whitespace-nowrap text-faint">
+          {SCALE.map((level, at) => <i key={level} className={cn("not-italic", level === criterion.reading && "text-foreground")}>{t(SCALE_KEYS[at])}</i>)}
         </span>
       ) : (
-        <span className="col-[2/4] text-[12.5px] text-dim">{reading}</span>
+        <span className="col-[2/4] text-xs text-dim">{reading}</span>
       )}
     </div>
   );

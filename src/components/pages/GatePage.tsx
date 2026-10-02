@@ -12,7 +12,7 @@ export function GatePage() {
   // aberto em qualquer chat, não enquanto uma chamada estiver presa.
   const waiting = useWorkspace((state) => state.data.chats.some((chat) => openTurns(chat).length > 0));
   return (
-    <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] bg-void font-plate text-[#dce1e6]">
+    <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] bg-void font-plate text-foreground">
       <GateBoard />
       <div className="grid min-h-0 grid-cols-1 grid-rows-2 xl:grid-cols-2 xl:grid-rows-1">
         <GateLane

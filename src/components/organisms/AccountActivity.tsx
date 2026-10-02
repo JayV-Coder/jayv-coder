@@ -30,8 +30,8 @@ export function AccountActivity({ report, projects, chats }: { report: UsageRepo
         <dl className="grid grid-cols-2 gap-3">
           {numbers.map(([label, value]) => (
             <div key={label} className="rounded-lg border border-border/60 px-3.5 py-3 last:col-span-2">
-              <dt className="text-[11.5px] text-muted-foreground">{label}</dt>
-              <dd className="font-gate-mono text-lg font-bold tabular-nums">{value}</dd>
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="font-gate-mono text-lg font-semibold tabular-nums">{value}</dd>
             </div>
           ))}
         </dl>

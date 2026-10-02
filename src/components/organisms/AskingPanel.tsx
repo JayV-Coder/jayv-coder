@@ -17,29 +17,29 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
   const multiple = question.kind === "multiple";
   const form = question.kind === "form";
   const items = form ? formItems(question) : [];
-  const act = "h-8 rounded-md px-3 text-[11px] font-bold tracking-[0.12em] uppercase";
+  const act = "h-8 rounded-md px-3 text-caption font-semibold tracking-wider uppercase";
 
   return (
-    <div className="border-b border-[#252d27] px-[18px] pt-3.5 pb-3">
+    <div className="border-b border-border px-[18px] pt-3.5 pb-3">
       {form ? (
         // Uma pergunta por cartão, como o formulário do Claude: as
         // alternativas dela, e um campo para responder com outras palavras.
         <div className="mb-2 grid max-h-[46vh] gap-2.5 overflow-y-auto pe-1">
-          {answering.writing && <p className="leading-relaxed whitespace-pre-wrap text-[#e6eee7]">{question.prompt}</p>}
+          {answering.writing && <p className="leading-relaxed whitespace-pre-wrap text-foreground">{question.prompt}</p>}
           {!answering.writing && items.map((item, index) => {
             const value = answering.form[index] ?? "";
             const chosen = item.options.includes(value);
             return (
-              <fieldset key={index} className="grid gap-1.5 rounded-lg border border-border/70 bg-[#151916] px-3.5 py-3">
+              <fieldset key={index} className="grid gap-1.5 rounded-lg border border-border/70 bg-muted px-3.5 py-3">
                 <legend className="sr-only">{item.prompt}</legend>
-                <p className="flex gap-2 leading-relaxed text-[#e6eee7]">
-                  <span className="font-mono text-[11px] text-muted-foreground tabular-nums">{index + 1}/{items.length}</span>
+                <p className="flex gap-2 leading-relaxed text-foreground">
+                  <span className="font-mono text-caption text-muted-foreground tabular-nums">{index + 1}/{items.length}</span>
                   <span>{item.prompt}</span>
                 </p>
                 {item.options.length > 0 && (
                   <RadioGroup value={chosen ? value : ""} onValueChange={(next) => answerForm(question, index, next)} className="gap-1.5">
                     {item.options.map((option, at) => (
-                      <Label key={option} htmlFor={`form-${index}-${at}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-accent">
+                      <Label key={option} htmlFor={`form-${index}-${at}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-secondary">
                         <RadioGroupItem id={`form-${index}-${at}`} value={option} />
                         {option}
                       </Label>
@@ -57,29 +57,29 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
           })}
         </div>
       ) : (
-        <p className="mb-2 leading-relaxed whitespace-pre-wrap text-[#e6eee7]">{question.prompt}</p>
+        <p className="mb-2 leading-relaxed whitespace-pre-wrap text-foreground">{question.prompt}</p>
       )}
       {!form && question.kind !== "noul" && (
         <div className="mb-2 grid gap-1.5">
           {multiple ? question.options.map((option, index) => (
-            <Label key={option} htmlFor={`pick-${index}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-accent">
+            <Label key={option} htmlFor={`pick-${index}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-secondary">
               <Checkbox id={`pick-${index}`} checked={answering.picked.includes(option)} onCheckedChange={(checked) => pick(question, option, checked === true)} />
               {option}
             </Label>
           )) : (
             <RadioGroup value={answering.picked[0] ?? ""} onValueChange={(value) => pick(question, value, true)} className="gap-1.5">
               {question.options.map((option, index) => (
-                <Label key={option} htmlFor={`pick-${index}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-accent">
+                <Label key={option} htmlFor={`pick-${index}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-secondary">
                   <RadioGroupItem id={`pick-${index}`} value={option} />
                   {option}
                 </Label>
               ))}
             </RadioGroup>
           )}
-          {multiple && <small className="text-[11px] text-muted-foreground">{t("ask.multiple")}</small>}
+          {multiple && <small className="text-caption text-muted-foreground">{t("ask.multiple")}</small>}
         </div>
       )}
-      <small className="block font-mono text-[11px] text-[#6e7870]">{t("ask.from", { source: sourceLabel(question.source) })}</small>
+      <small className="block font-mono text-caption text-muted-foreground">{t("ask.from", { source: sourceLabel(question.source) })}</small>
       <div className="mt-3 flex flex-wrap gap-2">
         {answering.writing ? (
           <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}>{t("ask.back")}</Button>

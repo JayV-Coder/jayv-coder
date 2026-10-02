@@ -41,23 +41,23 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
       )}
     >
       <span className="flex flex-wrap items-baseline gap-2">
-        <span className="text-lg font-bold tracking-[-0.01em] break-words">{project.name}</span>
+        <span className="text-lg font-semibold tracking-tight break-words">{project.name}</span>
         {organization && (
-          <span title={t("org.project.badge", { name: organization.name })} className="rounded-md border border-[#2f4433] px-1.5 font-mono text-[11px] text-[#a4f4a9]">@{organization.slug}</span>
+          <span title={t("org.project.badge", { name: organization.name })} className="rounded-md border border-border px-1.5 font-mono text-caption text-success">@{organization.slug}</span>
         )}
       </span>
       {project.rootPath ? (
-        <span title={project.rootPath} className="flex min-w-0 items-center gap-2 text-[#8ba892]">
+        <span title={project.rootPath} className="flex min-w-0 items-center gap-2 text-muted-foreground">
           <FolderIcon className="size-4 flex-none" />
-          <PathText className="text-[11.5px]">{project.rootPath}</PathText>
+          <PathText className="text-xs">{project.rootPath}</PathText>
         </span>
-      ) : <span className="text-xs text-[#5c665e]">{t("common.noFolder")}</span>}
+      ) : <span className="text-xs text-muted-foreground">{t("common.noFolder")}</span>}
       <span className="flex items-baseline gap-3 text-xs text-muted-foreground">
         <b className="font-normal text-foreground">{t("project.chats", { count })}</b>
         <i className="not-italic">{t("project.lastActivity", { date: formatSince(last) })}</i>
       </span>
       <ProjectUsageLine projectId={project.id} />
-      {refused > 0 && <span role="status" className="text-xs text-[#c9a86a]">{t("project.refused", { count: refused })}</span>}
+      {refused > 0 && <span role="status" className="text-xs text-warning">{t("project.refused", { count: refused })}</span>}
     </YardCard>
   );
 }

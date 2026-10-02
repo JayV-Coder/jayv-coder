@@ -54,7 +54,7 @@ export function LanguageSelect() {
       <PopoverTrigger
         aria-label={t("language.label")}
         title={t("language.label")}
-        className="flex h-8 w-full items-center gap-2 rounded-md border border-[#2b322d] px-2.5 text-xs text-[#8f9991] outline-none hover:border-[#3a433c] hover:text-[#c9d1cb] focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex h-10 w-full items-center gap-2 rounded-md border border-input bg-card px-3 text-sm text-foreground transition-colors outline-none hover:border-muted-foreground/50 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
       >
         <Flag locale={locale} />
         <span className="min-w-0 flex-1 truncate text-start" lang={locale}>{current.name}</span>
@@ -86,12 +86,12 @@ export function LanguageSelect() {
               data-index={index}
               onPointerMove={() => setActive(index)}
               onClick={() => choose(option.id)}
-              className={cn("flex cursor-default items-center gap-2.5 rounded-sm px-2 py-1.5", index === active && "bg-accent text-accent-foreground")}
+              className={cn("flex cursor-default items-center gap-2.5 rounded-sm px-2 py-1.5", index === active && "bg-secondary text-foreground")}
             >
               <Flag locale={option.id} />
               <span className="grid min-w-0 flex-1">
                 <span className="truncate text-sm" lang={option.id}>{option.name}</span>
-                {option.translated !== option.name && <span className="truncate text-[11px] text-muted-foreground">{option.translated}</span>}
+                {option.translated !== option.name && <span className="truncate text-caption text-muted-foreground">{option.translated}</span>}
               </span>
               {option.id === locale && <CheckIcon className="size-4 shrink-0" />}
             </div>
