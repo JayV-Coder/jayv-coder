@@ -8,6 +8,7 @@ import { reportError } from "@/modules/feedback";
 import { connectGate } from "@/modules/gate";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
+import { clearNotifications, connectNotifications, loadNotifications } from "@/modules/notifications";
 import { clearOrganizations, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
 import { connectSystem, loadStatus } from "@/modules/system";
@@ -45,7 +46,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage()];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage(), connectNotifications()];
     void checkForUpdate();
     return () => disconnect.forEach((off) => off());
   }, []);
@@ -56,12 +57,15 @@ export function App() {
     if (status !== "signedIn") {
       clearProfile();
       clearOrganizations();
+      clearNotifications();
       return;
     }
     navigate("projects");
     loadProfile().catch(reportError);
     // Sem a migração das organizações (ou sem rede), o resto do app segue.
     loadOrganizations().catch((error) => console.error("organizations", error));
+    // Idem sem a migração das notificações: o sino fica só com as do aparelho.
+    loadNotifications().catch((error) => console.error("notifications", error));
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
     // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.
     void refreshQuotas();

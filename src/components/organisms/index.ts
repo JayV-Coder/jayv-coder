@@ -42,3 +42,4 @@ export { OrganizationProjects } from "./OrganizationProjects";
 export { OrganizationRepositories } from "./OrganizationRepositories";
 export { OrganizationSettings } from "./OrganizationSettings";
 export { YardCard } from "./YardCard";
+export { NotificationBell } from "./NotificationBell";

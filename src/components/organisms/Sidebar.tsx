@@ -11,6 +11,7 @@ import { useOrganizations } from "@/modules/organizations";
 import { openStats } from "@/modules/usage";
 import { cn } from "@/lib/utils";
 import { displayName } from "./ProfileCard";
+import { NotificationBell } from "./NotificationBell";
 
 /** A lateral. Sem projeto aberto, ela é o menu principal; com projeto, só mostra
  * a placa dele, a portaria e os chats recentes. */
@@ -86,8 +87,8 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* A conta abre o perfil; a engrenagem, as configurações — o idioma
-          mora lá dentro. */}
+      {/* A conta abre o perfil; o sino, as notificações; a engrenagem, as
+          configurações — o idioma mora lá dentro. */}
       <div className="mt-auto grid gap-2 border-t border-sidebar-border pt-3">
         <ConnectionNote />
         <div className="flex items-center gap-1.5">
@@ -107,6 +108,7 @@ export function Sidebar() {
               {email && name !== email && <span className="truncate text-caption text-sidebar-muted">{email}</span>}
             </span>
           </button>
+          <NotificationBell />
           <Tooltip>
             <TooltipTrigger asChild>
               <button
