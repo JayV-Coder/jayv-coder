@@ -7,9 +7,10 @@ import { supabase } from "@/modules/auth/client";
 import { t, type Key } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { loadOrganizations, openOrganization, useOrganizations } from "@/modules/organizations";
+import { showUpdate, useUpdate } from "@/modules/updates";
 import { agentLabel, openStats, windowLabel } from "@/modules/usage";
 import { chatTitle, findProject, openChat, useWorkspace } from "@/modules/workspace";
-import { emptyMemory, LOCAL_LIMIT, newestFirst, targetOf, turnEvents, type AppNotification, type NotificationData, type NotificationKind } from "./rules";
+import { emptyMemory, LOCAL_LIMIT, newestFirst, targetOf, turnEvents, updateNotificationId, type AppNotification, type NotificationData, type NotificationKind } from "./rules";
 
 export * from "./rules";
 
@@ -57,6 +58,7 @@ export function describe(notification: AppNotification, say: (key: Key, params?:
       title: say("notifications.quota.crossed", { agent: agentLabel(text(data.agent)), percent: Number(data.percent ?? 0) }),
       detail: windowLabel(text(data.window), say),
     };
+    case "update.available": return { title: say("notifications.update.available", { version: text(data.version) }), detail: null };
     default: {
       // O título do chat pode ter mudado depois (o núcleo renomeia após a
       // primeira resposta): vale o atual, se o chat ainda existe.
@@ -76,6 +78,7 @@ export function openNotification(notification: AppNotification) {
   if (!target) return;
   if (target.kind === "chat") openChat(target.chatId);
   else if (target.kind === "stats") openStats({ kind: "global" });
+  else if (target.kind === "update") showUpdate();
   else if (target.kind === "organization" && useOrganizations.getState().list.some((org) => org.id === target.orgId)) void openOrganization(target.orgId);
   else navigate("organizations");
 }
@@ -89,11 +92,20 @@ function announce(notification: AppNotification) {
   });
 }
 
-function addDevice(id: string, kind: NotificationKind, data: NotificationData) {
+function addDevice(id: string, kind: NotificationKind, data: NotificationData, quiet = false) {
   if (useNotifications.getState().device.some((item) => item.id === id)) return;
   const notification: AppNotification = { id, kind, data, createdAt: new Date().toISOString(), read: false, local: true };
   useNotifications.setState((state) => ({ device: newestFirst([notification, ...state.device]).slice(0, LOCAL_LIMIT) }));
-  announce(notification);
+  if (!quiet) announce(notification);
+}
+
+/** A versão nova esperando para ser instalada vira notificação, uma por
+ * versão. `quiet` só a põe de volta no sino (depois de uma troca de conta),
+ * sem o toast: o aviso no topo já está na tela. */
+function noteUpdate(quiet = false) {
+  const { phase, next } = useUpdate.getState();
+  if (phase !== "available" || !next) return;
+  addDevice(updateNotificationId(next), "update.available", { version: next }, quiet);
 }
 
 function upsertAccount(notification: AppNotification) {
@@ -144,6 +156,8 @@ export function clearNotifications() {
   memory = emptyMemory();
   learned = false;
   useNotifications.setState({ account: [], device: [] });
+  // A atualização é do aparelho, não da conta: continua no sino.
+  noteUpdate(true);
 }
 
 async function markAccount(ids: string[] | null) {
@@ -173,7 +187,8 @@ export async function clearRead() {
 
 /** Cada leitura do banco local é comparada com a anterior: o turno que fechou
  * e a pergunta nova viram notificação, a não ser no chat que está na tela.
- * A cota que passa de um patamar (80, 95, 100) também. */
+ * A cota que passa de um patamar (80, 95, 100) também, e a versão nova do
+ * JayV achada pela consulta de atualização. */
 export function connectNotifications() {
   const offLoaded = bus.on("workspace:loaded", ({ chats }) => {
     const events = turnEvents(memory, chats, !learned);
@@ -187,8 +202,12 @@ export function connectNotifications() {
     if (!crossed) return;
     addDevice(`quota:${quota.agent}:${quota.window}:${crossed}:${quota.resetsAt ?? ""}`, "quota.crossed", { agent: quota.agent, window: quota.window, percent: crossed });
   });
+  const offUpdate = useUpdate.subscribe((state, before) => {
+    if (state.phase === "available" && (before.phase !== "available" || state.next !== before.next)) noteUpdate();
+  });
   return () => {
     offLoaded();
+    offUpdate();
     void offQuota.then((unlisten) => unlisten());
   };
 }

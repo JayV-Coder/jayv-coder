@@ -1,6 +1,6 @@
 import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useLocale, useT, type Key } from "@/modules/i18n";
-import { checkForUpdate, closeUpdate, isUpdateBusy, useUpdate, type UpdatePhase, type UpdateStep as Step } from "@/modules/updates";
+import { checkForUpdate, closeUpdate, installUpdate, isUpdateBusy, useUpdate, type UpdatePhase, type UpdateStep as Step } from "@/modules/updates";
 import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,7 +11,7 @@ const STEPS: Step[] = ["checking", "downloading", "installing", "restarting"];
 /** Onde cada passo está: feito, em curso, à frente ou o que falhou. */
 function stepState(step: Step, phase: UpdatePhase, failedAt: Step | null): "done" | "active" | "waiting" | "failed" {
   if (failedAt === step) return "failed";
-  if (phase === "latest") return step === "checking" ? "done" : "waiting";
+  if (phase === "latest" || phase === "available") return step === "checking" ? "done" : "waiting";
   const at = failedAt ?? (STEPS.includes(phase as Step) ? (phase as Step) : "checking");
   const index = STEPS.indexOf(step);
   const current = STEPS.indexOf(at);
@@ -31,7 +31,7 @@ export function UpdateDialog() {
   const megabytes = (bytes: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(bytes / 1_048_576);
   const share = total ? Math.min(1, received / total) : null;
 
-  const title = phase === "latest" ? t("update.latest") : next ? t("update.title", { version: next }) : t("update.checking");
+  const title = phase === "latest" ? t("update.latest") : phase === "available" && next ? t("update.available.title", { version: next }) : next ? t("update.title", { version: next }) : t("update.checking");
   return (
     <Dialog open={open} onOpenChange={(wanted) => { if (!wanted) closeUpdate(); }}>
       <DialogContent showCloseButton={!busy} className="sm:max-w-[520px]"
@@ -39,7 +39,7 @@ export function UpdateDialog() {
         <DialogHeader>
           <DialogTitle className="text-xl">{title}</DialogTitle>
           <DialogDescription>
-            {next && current ? t("update.fromTo", { current, next }) : t("update.description")}
+            {next && current ? t(phase === "available" ? "update.available.fromTo" : "update.fromTo", { current, next }) : t("update.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -88,8 +88,9 @@ export function UpdateDialog() {
 
         {!busy && (
           <DialogFooter>
-            <Button variant="outline" onClick={closeUpdate}>{t("common.close")}</Button>
+            <Button variant="outline" onClick={closeUpdate}>{t(phase === "available" ? "update.later" : "common.close")}</Button>
             {phase === "failed" && <Button onClick={() => void checkForUpdate(true)}>{t("update.retry")}</Button>}
+            {phase === "available" && <Button onClick={() => void installUpdate()}>{t("update.install")}</Button>}
           </DialogFooter>
         )}
       </DialogContent>

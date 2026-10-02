@@ -5,9 +5,9 @@ import { AppHeader, Sidebar } from "@/components/organisms";
  * direita. Cada região rola sozinha. */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="grid h-screen grid-cols-[240px_minmax(0,1fr)] bg-background">
+    <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] bg-background">
       <Sidebar />
-      <main className="flex h-screen min-w-0 flex-col">
+      <main className="flex h-full min-w-0 flex-col">
         <AppHeader />
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </main>

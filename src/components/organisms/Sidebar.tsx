@@ -31,7 +31,7 @@ export function Sidebar() {
   const chats = project ? recentChats(chatsOf(data, project.id), openId) : [];
 
   return (
-    <aside className="flex h-screen flex-col overflow-hidden border-e border-sidebar-border bg-sidebar px-3 pt-4 pb-3 text-sidebar-foreground">
+    <aside className="flex h-full flex-col overflow-hidden border-e border-sidebar-border bg-sidebar px-3 pt-4 pb-3 text-sidebar-foreground">
       <div className="flex items-center gap-2.5 px-1.5 pb-5">
         <BrandMark />
         <div className="flex flex-col">
