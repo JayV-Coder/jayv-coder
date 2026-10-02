@@ -17,6 +17,10 @@ pub struct ProjectRecord {
     /// tela sabe quais repositórios da organização já estão neste computador.
     #[serde(default)]
     pub repo_keys: Vec<String>,
+    /// A organização de que este projeto é o chat: a pasta dele junta os
+    /// repositórios dela. Nulo nos projetos de um repositório só.
+    #[serde(default)]
+    pub org_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +158,7 @@ impl WorkspaceStore {
         ensure_turn_local(&connection)?;
         ensure_message_uid(&connection)?;
         ensure_project_repo_keys(&connection)?;
+        ensure_project_org(&connection)?;
         crate::usage::store::ensure(&connection)?;
         connection.execute_batch(crate::expertise::SCHEMA)?;
         connection.execute_batch(crate::policy::SCHEMA)?;
@@ -169,10 +174,10 @@ impl WorkspaceStore {
 
     pub fn snapshot(&self) -> Result<WorkspaceData> {
         let project_rows={
-            let mut statement=self.connection.prepare("SELECT id,name,root_path,created_at,repo_keys FROM projects ORDER BY created_at,id")?;
-            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+            let mut statement=self.connection.prepare("SELECT id,name,root_path,created_at,repo_keys,org_id FROM projects ORDER BY created_at,id")?;
+            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let projects=project_rows.into_iter().map(|(id,name,root_path,created_at,keys)|Ok(ProjectRecord{id,name,root_path,created_at:parse_time(&created_at)?,repo_keys:serde_json::from_str(&keys).unwrap_or_default()})).collect::<Result<Vec<_>>>()?;
+        let projects=project_rows.into_iter().map(|(id,name,root_path,created_at,keys,org_id)|Ok(ProjectRecord{id,name,root_path,created_at:parse_time(&created_at)?,repo_keys:serde_json::from_str(&keys).unwrap_or_default(),org_id})).collect::<Result<Vec<_>>>()?;
         let chat_rows={
             let mut statement=self.connection.prepare("SELECT id,code,project_id,title,created_at,updated_at FROM chats ORDER BY updated_at DESC,id")?;
             statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
@@ -185,21 +190,57 @@ impl WorkspaceStore {
     }
 
     pub fn create_project(&mut self, name: &str, root_path: Option<String>) -> Result<ProjectRecord> {
+        self.insert_project(name,root_path,None)
+    }
+
+    /// O projeto do chat da organização neste computador, com a pasta da
+    /// organização como raiz. Reaproveita o que já existe: o desta pasta, ou o
+    /// que veio de outro computador pela sincronização (sem pasta aqui), que
+    /// ganha esta. Só cria quando não há nenhum.
+    pub fn organization_project(&mut self, org_id: &str, name: &str, folder: &str) -> Result<ProjectRecord> {
+        let org_id=org_id.trim();
+        anyhow::ensure!(Uuid::parse_str(org_id).is_ok(),"invalid organization id: `{org_id}`");
+        let folder=folder.trim();
+        anyhow::ensure!(Path::new(folder).is_dir(),Text::new("project.folderMissing").with("path",folder));
+        let wanted=folder_key(folder);
+        let mut existing={
+            let mut statement=self.connection.prepare("SELECT id,name,root_path,created_at FROM projects WHERE org_id=?1 ORDER BY created_at,id")?;
+            let rows=statement.query_map([org_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().map(|(id,name,root_path,created_at)|Ok(ProjectRecord{id,name,root_path,created_at:parse_time(&created_at)?,repo_keys:vec![],org_id:Some(org_id.into())})).collect::<Result<Vec<_>>>()?
+        };
+        if let Some(project)=existing.iter().find(|project|!project.root_path.trim().is_empty() && folder_key(&project.root_path)==wanted) {return Ok(project.clone());}
+        if let Some(index)=existing.iter().position(|project|project.root_path.trim().is_empty()) {
+            self.ensure_folder_free(folder)?;
+            let mut project=existing.swap_remove(index);
+            // A pasta é da máquina e não sobe: o `UPDATE` não entra na fila.
+            self.connection.execute("UPDATE projects SET root_path=?1 WHERE id=?2",params![folder,project.id])?;
+            project.root_path=folder.into();
+            return Ok(project);
+        }
+        self.insert_project(name,Some(folder.into()),Some(org_id.into()))
+    }
+
+    fn ensure_folder_free(&self, root_path: &str) -> Result<()> {
+        // Uma pasta é de um projeto só: dois projetos nela dividiriam o índice,
+        // o cache e a narração dos agentes sem que ninguém percebesse.
+        let wanted=folder_key(root_path);
+        let mut statement=self.connection.prepare("SELECT name,root_path FROM projects WHERE trim(root_path)<>''")?;
+        let folders=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        if let Some((owner,_))=folders.into_iter().find(|(_,path)|folder_key(path)==wanted) { anyhow::bail!(Text::new("project.pathTaken").with("name",owner)); }
+        Ok(())
+    }
+
+    fn insert_project(&mut self, name: &str, root_path: Option<String>, org_id: Option<String>) -> Result<ProjectRecord> {
         let name=name.trim();
         anyhow::ensure!(!name.is_empty(),Text::new("project.nameRequired"));
         let root_path=root_path.map(|path|path.trim().to_string()).unwrap_or_default();
-        // Uma pasta é de um projeto só: dois projetos nela dividiriam o índice,
-        // o cache e a narração dos agentes sem que ninguém percebesse.
-        if !root_path.is_empty() {
-            let wanted=folder_key(&root_path);
-            let mut statement=self.connection.prepare("SELECT name,root_path FROM projects WHERE trim(root_path)<>''")?;
-            let folders=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            if let Some((owner,_))=folders.into_iter().find(|(_,path)|folder_key(path)==wanted) { anyhow::bail!(Text::new("project.pathTaken").with("name",owner)); }
-        }
-        let repo_keys=crate::repo_keys::of_folder(&root_path);
-        let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path,created_at:Utc::now(),repo_keys};
+        if !root_path.is_empty() { self.ensure_folder_free(&root_path)?; }
+        // A pasta da organização não é um repositório: os remotes dela não
+        // dizem nada, o vínculo é o `org_id`.
+        let repo_keys=if org_id.is_some() {vec![]} else {crate::repo_keys::of_folder(&root_path)};
+        let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path,created_at:Utc::now(),repo_keys,org_id};
         let keys=serde_json::to_string(&project.repo_keys)?;
-        self.connection.execute("INSERT INTO projects(id,name,root_path,created_at,repo_keys) VALUES(?1,?2,?3,?4,?5)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339(),keys])?;
+        self.connection.execute("INSERT INTO projects(id,name,root_path,created_at,repo_keys,org_id) VALUES(?1,?2,?3,?4,?5,?6)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339(),keys,project.org_id])?;
         Ok(project)
     }
 
@@ -207,7 +248,7 @@ impl WorkspaceStore {
     /// que mudou: cada gravação vira uma subida na fila.
     pub fn refresh_repo_keys(&mut self) -> Result<()> {
         let folders={
-            let mut statement=self.connection.prepare("SELECT id,root_path,repo_keys FROM projects WHERE trim(root_path)<>''")?;
+            let mut statement=self.connection.prepare("SELECT id,root_path,repo_keys FROM projects WHERE trim(root_path)<>'' AND org_id IS NULL")?;
             statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for (id,root,current) in folders {
@@ -578,6 +619,12 @@ fn ensure_message_uid(connection:&Connection)->Result<()> {
 fn ensure_project_repo_keys(connection:&Connection)->Result<()> {
     if connection.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name='repo_keys'")?.exists([])? {return Ok(());}
     connection.execute_batch("ALTER TABLE projects ADD COLUMN repo_keys TEXT NOT NULL DEFAULT '[]'")?;
+    Ok(())
+}
+
+fn ensure_project_org(connection:&Connection)->Result<()> {
+    if connection.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name='org_id'")?.exists([])? {return Ok(());}
+    connection.execute_batch("ALTER TABLE projects ADD COLUMN org_id TEXT")?;
     Ok(())
 }
 
@@ -1045,6 +1092,44 @@ mod tests {
             assert!(queued.contains(&(table.into(),"delete".into())),"exclusão de {table} fora da fila: {queued:?}");
         }
         assert!(queued.iter().all(|(_,op)|op=="delete"),"{queued:?}");
+    }
+
+    #[test]
+    fn the_organization_project_is_reused_and_takes_this_computers_folder() {
+        let root=tempfile::tempdir().expect("root");
+        let folder=tempfile::tempdir().expect("organization folder");
+        let path=folder.path().display().to_string();
+        let org="6f1c2a4e-0000-4000-8000-000000000001";
+        let mut store=store(&root);
+        let project=store.organization_project(org,"Acme",&path).expect("cria");
+        assert_eq!(project.org_id.as_deref(),Some(org));
+        assert!(project.repo_keys.is_empty(),"a pasta da organização não tem remote");
+        assert_eq!(store.organization_project(org,"Acme",&format!("{path}/")).expect("de novo").id,project.id,"a mesma pasta, o mesmo projeto");
+        let snapshot=store.snapshot().expect("snapshot");
+        assert_eq!(snapshot.projects[0].org_id.as_deref(),Some(org),"o vínculo volta no retrato");
+
+        // O projeto que veio de outro computador chega sem pasta: ganha esta.
+        store.connection().execute("UPDATE projects SET root_path='' WHERE id=?1",[&project.id]).unwrap();
+        let other=tempfile::tempdir().expect("outra pasta");
+        let moved=store.organization_project(org,"Acme",&other.path().display().to_string()).expect("reaproveita");
+        assert_eq!(moved.id,project.id);
+        let chat=store.create_chat(&moved.id,None).unwrap();
+        assert_eq!(store.chat_root(&chat.id).unwrap(),Some(other.path().to_path_buf()));
+
+        assert!(store.organization_project("acme","Acme",&path).is_err(),"id de organização inválido");
+        let missing=store.organization_project(org,"Acme","/no/such/folder").expect_err("pasta que não existe");
+        assert_eq!(missing.downcast_ref::<Text>().map(|text|text.key.as_str()),Some("project.folderMissing"));
+    }
+
+    #[test]
+    fn the_organization_folder_cannot_be_another_projects_folder() {
+        let root=tempfile::tempdir().expect("root");
+        let folder=tempfile::tempdir().expect("pasta");
+        let path=folder.path().display().to_string();
+        let mut store=store(&root);
+        store.create_project("Solto",Some(path.clone())).expect("projeto");
+        let taken=store.organization_project("6f1c2a4e-0000-4000-8000-000000000001","Acme",&path).expect_err("pasta ocupada");
+        assert_eq!(taken.downcast_ref::<Text>().map(|text|text.key.as_str()),Some("project.pathTaken"));
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { TALLY } from "@/modules/gate";
 import { useT } from "@/modules/i18n";
 import {
-  loadDashboardGate, loadDashboardReport, openDashboard, setDashboardFilter, setDashboardPeriod, useDashboard, useOrganizations,
+  loadDashboardGate, loadDashboardReport, openDashboard, projectOrgId, setDashboardFilter, setDashboardPeriod, useDashboard, useOrganizations,
 } from "@/modules/organizations";
 import { sourceLabel, type Period } from "@/modules/usage";
 import { chatTitle, chatsOf, useWorkspace } from "@/modules/workspace";
@@ -24,7 +24,7 @@ const ALL = "*";
 function useOrganizationProjects(orgId: string) {
   const links = useOrganizations((state) => state.projects);
   const all = useWorkspace((state) => state.data.projects);
-  return useMemo(() => all.filter((project) => links[project.id]?.orgId === orgId), [all, links, orgId]);
+  return useMemo(() => all.filter((project) => projectOrgId(project, links) === orgId), [all, links, orgId]);
 }
 
 /** Abre o recorte da organização e devolve os projetos dela. A lista de ids

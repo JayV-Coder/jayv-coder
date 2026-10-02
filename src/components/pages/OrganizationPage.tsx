@@ -4,7 +4,7 @@ import { navigate } from "@/modules/navigation";
 import { setOrganizationTab, useOrganizations, type OrganizationTab } from "@/modules/organizations";
 import { LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { OrganizationGate, OrganizationMembers, OrganizationPolicy, OrganizationProjects, OrganizationRepositories, OrganizationSettings, OrganizationStats } from "@/components/organisms";
+import { OrganizationChatButton, OrganizationGate, OrganizationMembers, OrganizationPolicy, OrganizationProjects, OrganizationRepositories, OrganizationSettings, OrganizationStats } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,10 @@ export function OrganizationPage() {
     <ScrollPage>
       <PageHeading eyebrow={t("nav.organizations")} title={organization.name}
         description={<span className="flex items-center gap-2"><span className="font-mono">@{organization.slug}</span><Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge></span>}>
-        <Button variant="outline" onClick={() => navigate("organizations")}>{t("org.back")}</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => navigate("organizations")}>{t("org.back")}</Button>
+          <OrganizationChatButton organization={organization} detail={detail} />
+        </div>
       </PageHeading>
       <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} className="gap-5">
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">

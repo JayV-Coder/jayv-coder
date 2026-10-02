@@ -21,6 +21,9 @@ export interface Project {
   createdAt: string;
   /** As chaves dos remotes da pasta (`github.com/acme/api`). */
   repoKeys: string[];
+  /** A organização de que este projeto é o chat: a pasta dele junta os
+   * repositórios dela. Nulo nos projetos de um repositório só. */
+  orgId?: string | null;
 }
 
 export interface Message {

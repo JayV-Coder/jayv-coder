@@ -36,6 +36,30 @@ export function rememberOrganizationFolder(orgId: string, path: string) {
   }
 }
 
+/** Os repositórios da organização que o chat dela alcança. O chat trabalha com
+ * a pasta da organização como raiz: entra o clone que está dentro dela; o que
+ * está neste computador em outra pasta fica de fora, e o que não está aqui
+ * nem conta. */
+export interface ChatReach<R> { inside: { repository: R; path: string }[]; elsewhere: { repository: R; path: string }[]; missing: R[] }
+
+const comparable = (path: string) => pathKey(path).replace(/\\/g, "/");
+
+export function chatReach<R extends { repoKey: string }>(
+  repositories: R[],
+  projects: Pick<Project, "rootPath" | "repoKeys">[],
+  folder: string,
+): ChatReach<R> {
+  const base = comparable(folder);
+  const reach: ChatReach<R> = { inside: [], elsewhere: [], missing: [] };
+  for (const repository of repositories) {
+    const copy = localCopy(repository.repoKey, projects);
+    if (!copy) { reach.missing.push(repository); continue; }
+    const path = comparable(copy.rootPath);
+    (path.startsWith(base + "/") ? reach.inside : reach.elsewhere).push({ repository, path: copy.rootPath });
+  }
+  return reach;
+}
+
 /** Esquece a pasta da organização neste computador. Os clones e os projetos
  * continuam onde estão: só a pasta lembrada sai. */
 export function forgetOrganizationFolder(orgId: string) {

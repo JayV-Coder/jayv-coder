@@ -27,4 +27,10 @@ describe("groupByScope", () => {
     expect(groups[1]).toMatchObject({ key: "o9", name: "Beta", slug: "beta", role: null });
     expect(groups[0].projects).toEqual([]);
   });
+
+  it("places the organization chat project by its own organization before the server links it", () => {
+    const groups = groupByScope([{ id: "a", orgId: "o1" }, { id: "b", orgId: "gone" }], {}, [{ id: "o1", name: "Acme", slug: "acme", role: "owner" }]);
+    expect(groups[1].projects.map((item) => item.id)).toEqual(["a"]);
+    expect(groups[0].projects.map((item) => item.id)).toEqual(["b"]);
+  });
 });

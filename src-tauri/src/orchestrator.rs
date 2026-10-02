@@ -32,6 +32,7 @@ const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folde
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
 /// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
 const FOCUS_NOTE:&str="Be brief: REPOSITORY CONTEXT is current, never reread it; read only what the task needs; do not re-plan.";
+const MULTI_REPOSITORY_NOTE:&str="This folder holds several repositories of the same organization; keep each change inside the repository it belongs to and name it in the answer. REPOSITORIES:";
 pub const MODE_PLAN:&str="plan";
 pub const MODE_BUILD:&str="build";
 const REPOSITORY_CONTEXT_THRESHOLD:f64=0.5;
@@ -444,7 +445,10 @@ pub fn routing_notes(signals:&RoutingSignals)->String {
 /// ele um caminho de arquivo na resposta não quer dizer nada: nem o modelo sabe
 /// de onde partir, nem o portão de saída tem contra o que medir o que voltou.
 fn note_project(context:&mut Context){
-    let line=format!("\nPROJECT: {} at {}",context.project.name,context.project.root);
+    let mut line=format!("\nPROJECT: {} at {}",context.project.name,context.project.root);
+    // A pasta da organização junta vários repositórios: o modelo precisa saber
+    // onde cada um está para não misturar um com outro.
+    if !context.project.repositories.is_empty() { line.push_str(&format!("\n{MULTI_REPOSITORY_NOTE} {}",context.project.repositories.join(", "))); }
     if !context.system_instructions.contains(&line) { context.system_instructions.push_str(&line); }
 }
 
@@ -639,6 +643,24 @@ mod tests {
 
         assert!(context.system_instructions.contains(&context.project.root),"o caminho do projeto vai no prompt: {}",context.system_instructions);
         assert!(context.system_instructions.contains(&context.project.name),"o nome do projeto vai junto");
+    }
+
+    #[test]
+    fn the_prompt_lists_the_repositories_of_an_organization_folder() {
+        let dir=repository(&[]);
+        for name in ["api","web"] {
+            std::fs::create_dir_all(dir.path().join(name).join(".git")).unwrap();
+            std::fs::write(dir.path().join(name).join("lib.rs"),filler(name,200)).unwrap();
+            std::fs::write(dir.path().join(name).join(".git/config"),format!("[remote \"origin\"]\n\turl = https://github.com/acme/{name}\n")).unwrap();
+        }
+        let mut orchestrator=orchestrator(&dir);
+        orchestrator.rag.invalidate();
+        orchestrator.focus_on(dir.path()).unwrap();
+        let plan=plan_context("general","trivial");
+
+        let context=orchestrator.assemble_context("onde estou",&plan,2_000,120,&RoutingSignals::default(),MODE_PLAN);
+
+        assert!(context.system_instructions.contains("REPOSITORIES: api/ (github.com/acme/api), web/ (github.com/acme/web)"),"cada repositório da pasta vai no prompt: {}",context.system_instructions);
     }
 
     #[test]

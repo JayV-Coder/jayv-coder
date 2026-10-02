@@ -1006,4 +1006,12 @@ export const en = {
   "notifications.turn.blocked": "The Gatehouse blocked a request in {chat}",
   "notifications.quota.crossed": "{agent} passed {percent}% of its limit",
   "notifications.update.available": "JayV {version} is available to install",
+  "orgChat.open": "Organization chat",
+  "orgChat.title": "Work on several repositories at once",
+  "orgChat.description": "The chat works in the folder of {org} on this computer and sees every clone inside it. The LLM policy of the organization and of all its repositories applies, whichever is stricter.",
+  "orgChat.inside": "In this chat",
+  "orgChat.elsewhere": "Left out: cloned outside this folder",
+  "orgChat.missing": "Left out: not on this computer",
+  "orgChat.none": "No repository of this organization is cloned inside this folder yet. Clone them in the Repositories tab.",
+  "orgChat.start": "Open chat",
 } satisfies Record<string, Message>;
