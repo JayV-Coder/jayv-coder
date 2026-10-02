@@ -19,7 +19,7 @@ export interface ScopeGroup<P> {
  * alfabética, mesmo sem projeto nenhum dela neste computador. Um projeto ligado
  * a uma organização que ainda não voltou na lista ganha o grupo dela com o
  * nome que o vínculo trouxe. */
-export function groupByScope<P extends { id: string }>(
+export function groupByScope<P extends { id: string; orgId?: string | null }>(
   projects: P[],
   links: Record<string, { orgId: string; slug: string; name: string }>,
   organizations: { id: string; name: string; slug: string; role: Role }[],
@@ -30,7 +30,7 @@ export function groupByScope<P extends { id: string }>(
     groups.set(org.id, { key: org.id, scope: { kind: "organization", orgId: org.id }, name: org.name, slug: org.slug, role: org.role, projects: [] });
   }
   for (const project of projects) {
-    const link = links[project.id];
+    const link = links[project.id] ?? ownLink(project, organizations);
     if (!link) { personal.projects.push(project); continue; }
     let group = groups.get(link.orgId);
     if (!group) {
@@ -41,4 +41,17 @@ export function groupByScope<P extends { id: string }>(
   }
   const named = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
   return [personal, ...named];
+}
+
+/** O vínculo que o próprio projeto diz (o chat da organização), antes de a
+ * sincronização trazer o do servidor. Só vale para uma organização de quem usa
+ * o app. */
+function ownLink(project: { orgId?: string | null }, organizations: { id: string; name: string; slug: string }[]) {
+  const org = project.orgId ? organizations.find((item) => item.id === project.orgId) : undefined;
+  return org ? { orgId: org.id, slug: org.slug, name: org.name } : null;
+}
+
+/** A organização do projeto: a do vínculo do servidor ou a que ele mesmo diz. */
+export function projectOrgId(project: { id: string; orgId?: string | null }, links: Record<string, { orgId: string }>): string | null {
+  return links[project.id]?.orgId ?? project.orgId ?? null;
 }

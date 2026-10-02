@@ -13,6 +13,9 @@ pub(crate) async fn get_workspace(workspace:State<'_,SharedWorkspace>)->Result<W
 pub(crate) async fn create_project(workspace:State<'_,SharedWorkspace>,name:String,root_path:Option<String>)->Result<ProjectRecord,Text>{crate::desktop::require_session()?;workspace.lock().await.create_project(&name,root_path).map_err(failure)}
 
 #[tauri::command]
+pub(crate) async fn organization_project(workspace:State<'_,SharedWorkspace>,org_id:String,name:String,folder:String)->Result<ProjectRecord,Text>{crate::desktop::require_session()?;workspace.lock().await.organization_project(&org_id,&name,&folder).map_err(failure)}
+
+#[tauri::command]
 pub(crate) async fn create_chat(workspace:State<'_,SharedWorkspace>,project_id:String,title:Option<String>)->Result<ChatRecord,Text>{crate::desktop::require_session()?;workspace.lock().await.create_chat(&project_id,title).map_err(failure)}
 
 #[tauri::command]

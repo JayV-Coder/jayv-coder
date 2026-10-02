@@ -15,13 +15,14 @@ pub struct IndexedFile { pub path: String, pub language: String, pub hash: Strin
 pub const DEFAULT_BUDGET: u64 = 48 * 1024 * 1024;
 
 #[derive(Debug)]
-pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, repository_hash: String, budget: u64, indexed: bool }
+pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, repository_hash: String, budget: u64, indexed: bool, repositories: Vec<String> }
 impl RepositoryRag {
-    pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false } }
+    pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false, repositories:vec![] } }
     pub fn with_budget(mut self, budget: u64) -> Self { self.budget=budget; self }
     pub fn index(&mut self, firewall: &ContextFirewall) -> Result<usize> {
         self.files.clear();
         self.indexed=true;
+        self.repositories=crate::checkout::nested(&self.root);
         let mut spent=0u64;
         for entry in WalkDir::new(&self.root).follow_links(false).sort_by_file_name().into_iter().filter_entry(allowed_entry).filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
             let relative = entry.path().strip_prefix(&self.root).unwrap_or(entry.path());
@@ -44,7 +45,7 @@ impl RepositoryRag {
         scored.sort_by(|a,b| b.1.total_cmp(&a.1));
         scored.into_iter().take(limit).map(|(f,score)| ContextSnippet { path:f.path.clone(), content:truncate(&f.content,12_000), score }).collect()
     }
-    pub fn project_info(&self) -> ProjectInfo { let mut languages=self.files.iter().map(|f|f.language.clone()).collect::<Vec<_>>(); languages.sort(); languages.dedup(); ProjectInfo { root:self.root.to_string_lossy().to_string(), name:self.root.file_name().unwrap_or_default().to_string_lossy().to_string(), languages } }
+    pub fn project_info(&self) -> ProjectInfo { let mut languages=self.files.iter().map(|f|f.language.clone()).collect::<Vec<_>>(); languages.sort(); languages.dedup(); ProjectInfo { root:self.root.to_string_lossy().to_string(), name:self.root.file_name().unwrap_or_default().to_string_lossy().to_string(), languages, repositories:self.repositories.clone() } }
     pub fn root(&self) -> &Path { &self.root }
     /// Força a próxima leitura da pasta: as regras de privacidade mudaram.
     pub fn invalidate(&mut self) { self.indexed=false; }

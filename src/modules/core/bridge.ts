@@ -12,6 +12,7 @@ import type { Text } from "@/modules/i18n";
 export const commands = {
   getWorkspace: () => invoke<WorkspaceData>("get_workspace"),
   createProject: (name: string, rootPath: string | null) => invoke<Project>("create_project", { name, rootPath }),
+  organizationProject: (orgId: string, name: string, folder: string) => invoke<Project>("organization_project", { orgId, name, folder }),
   createChat: (projectId: string, title: string | null = null) => invoke<Chat>("create_chat", { projectId, title }),
   clearChat: (chatId: string) => invoke<void>("clear_chat", { chatId }),
   deleteChat: (chatId: string) => invoke<void>("delete_chat", { chatId }),

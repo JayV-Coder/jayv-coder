@@ -47,6 +47,10 @@ pub struct ProjectInfo {
     pub root: String,
     pub name: String,
     pub languages: Vec<String>,
+    /// Os repositórios dentro da raiz, quando ela junta vários (a pasta da
+    /// organização): `api/ (github.com/acme/api)`.
+    #[serde(default)]
+    pub repositories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

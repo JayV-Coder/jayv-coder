@@ -24,7 +24,7 @@ pub struct SyncTable {
 
 /// Em ordem de dependência: quem sobe primeiro é quem os outros apontam.
 pub const TABLES:[SyncTable;14]=[
-    SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at","repo_keys"]},
+    SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at","repo_keys","org_id"]},
     SyncTable{name:"chats",key:&["id"],columns:&["id","code","project_id","title","named","created_at","updated_at"]},
     SyncTable{name:"turns",key:&["id"],columns:&["id","chat_id","ordinal","status","created_at"]},
     SyncTable{name:"messages",key:&["uid"],columns:&["uid","chat_id","turn_id","role","content","created_at"]},
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(queue[0].key,json!([project.id]));
         assert_eq!(queue[0].op,Op::Upsert);
         assert_eq!(queue[0].version,1);
-        assert_eq!(row(store.connection(),table("projects").unwrap(),&queue[0].key).expect("linha"),Some(json!({"id":project.id,"name":"Loja","created_at":project.created_at.to_rfc3339(),"repo_keys":"[]"})));
+        assert_eq!(row(store.connection(),table("projects").unwrap(),&queue[0].key).expect("linha"),Some(json!({"id":project.id,"name":"Loja","created_at":project.created_at.to_rfc3339(),"repo_keys":"[]","org_id":null})));
     }
 
     #[test] fn writes_in_the_same_turn_become_one_entry() {

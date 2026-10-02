@@ -1,6 +1,6 @@
 import { ChevronRightIcon } from "lucide-react";
 import { useT } from "@/modules/i18n";
-import { useOrganizations } from "@/modules/organizations";
+import { projectOrgId, useOrganizations } from "@/modules/organizations";
 import { openProject, useWorkspace } from "@/modules/workspace";
 import { FolderIcon, PathText } from "@/components/atoms";
 import { SettingsSection } from "@/components/molecules";
@@ -10,7 +10,7 @@ import { SettingsSection } from "@/components/molecules";
 export function OrganizationProjects({ orgId }: { orgId: string }) {
   const t = useT();
   const links = useOrganizations((state) => state.projects);
-  const projects = useWorkspace((state) => state.data.projects).filter((project) => links[project.id]?.orgId === orgId);
+  const projects = useWorkspace((state) => state.data.projects).filter((project) => projectOrgId(project, links) === orgId);
   return (
     <SettingsSection title={t("org.projects.title")} description={t("org.projects.description")}>
       {projects.length === 0

@@ -1,0 +1,95 @@
+import { useState } from "react";
+import { MessagesSquareIcon } from "lucide-react";
+import { reportError } from "@/modules/feedback";
+import { useT } from "@/modules/i18n";
+import {
+  chatReach, openOrganizationChat, organizationFolder, pickFolder, rememberOrganizationFolder, type Organization, type OrganizationDetail,
+} from "@/modules/organizations";
+import { useWorkspace } from "@/modules/workspace";
+import { Eyebrow, PathText } from "@/components/atoms";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+/** O chat da organização: um chat com a pasta da organização como raiz, que
+ * enxerga todos os clones dela de uma vez. Antes de abrir, mostra o que entra
+ * e o que fica de fora. */
+export function OrganizationChatButton({ organization, detail }: { organization: Organization; detail: OrganizationDetail | null }) {
+  const t = useT();
+  const [folder, setFolder] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const projects = useWorkspace((state) => state.data.projects);
+  const reach = folder && detail ? chatReach(detail.repositories, projects, folder) : null;
+
+  const choose = async (ask: boolean) => {
+    const known = organizationFolder(organization.id);
+    if (known && !ask) { setFolder(known); return; }
+    const chosen = await pickFolder(t("repos.folder.pick", { org: organization.name }), known);
+    if (!chosen) return;
+    rememberOrganizationFolder(organization.id, chosen);
+    setFolder(chosen);
+  };
+
+  const start = async () => {
+    if (!folder) return;
+    setBusy(true);
+    try {
+      await openOrganizationChat(organization.id, organization.name, folder);
+      setFolder(null);
+    } catch (error) {
+      reportError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const list = (title: string, items: { key: string; label: string; path?: string }[]) => items.length > 0 && (
+    <section className="grid gap-2">
+      <Eyebrow>{title}</Eyebrow>
+      <ul className="grid gap-1.5">
+        {items.map((item) => (
+          <li key={item.key} className="grid min-w-0 rounded-md border border-border/60 px-3 py-2">
+            <span className="truncate font-mono text-sm">{item.label}</span>
+            {item.path && <PathText title={item.path} className="text-xs text-muted-foreground">{item.path}</PathText>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+
+  return (
+    <>
+      <Button disabled={!detail} onClick={() => void choose(false).catch(reportError)}>
+        <MessagesSquareIcon className="size-4" />
+        {t("orgChat.open")}
+      </Button>
+      <Dialog open={folder !== null} onOpenChange={(open) => { if (!open) setFolder(null); }}>
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <Eyebrow>{t("orgChat.open")}</Eyebrow>
+            <DialogTitle className="text-xl">{t("orgChat.title")}</DialogTitle>
+            <DialogDescription>{t("orgChat.description", { org: organization.name })}</DialogDescription>
+          </DialogHeader>
+          {folder && reach && (
+            <div className="grid max-h-[55vh] gap-4 overflow-y-auto">
+              <section className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2.5">
+                <span className="grid min-w-0">
+                  <span className="text-xs text-muted-foreground">{t("repos.folder.title")}</span>
+                  <PathText title={folder} className="text-sm">{folder}</PathText>
+                </span>
+                <Button type="button" variant="outline" size="sm" onClick={() => void choose(true).catch(reportError)}>{t("repos.folder.change")}</Button>
+              </section>
+              {reach.inside.length === 0 && <p className="text-sm text-muted-foreground">{t("orgChat.none")}</p>}
+              {list(t("orgChat.inside"), reach.inside.map((item) => ({ key: item.repository.id, label: item.repository.path, path: item.path })))}
+              {list(t("orgChat.elsewhere"), reach.elsewhere.map((item) => ({ key: item.repository.id, label: item.repository.path, path: item.path })))}
+              {list(t("orgChat.missing"), reach.missing.map((repository) => ({ key: repository.id, label: repository.path })))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setFolder(null)}>{t("common.cancel")}</Button>
+            <Button type="button" disabled={busy} aria-busy={busy || undefined} onClick={() => void start()}>{t("orgChat.start")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

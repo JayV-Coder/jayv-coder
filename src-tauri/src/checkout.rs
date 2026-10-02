@@ -101,23 +101,18 @@ pub async fn clone(key:&str,parent:&Path)->Result<PathBuf> {
 
 fn skipped(name:&str)->bool {name.starts_with('.')||matches!(name,"node_modules"|"target"|"vendor"|"dist"|"build")}
 
-/// Os clones dos repositórios `wanted` dentro de `folder`: a própria pasta, as
-/// filhas e as netas. Não desce dentro de um repositório nem em pasta oculta.
-/// Cada chave aparece uma vez, no clone mais raso.
-pub fn scan(folder:&Path,wanted:&[String])->Vec<FoundRepository> {
-    let wanted:Vec<String>=wanted.iter().map(|key|key.trim().to_lowercase()).collect();
-    let mut found:Vec<FoundRepository>=Vec::new();
+/// As pastas de repositório dentro de `folder` — a própria pasta, as filhas e
+/// as netas —, com as chaves dos remotes de cada uma. Não desce dentro de um
+/// repositório nem em pasta oculta.
+fn repositories(folder:&Path)->Vec<(PathBuf,Vec<String>)> {
+    let mut found=Vec::new();
     let mut level=vec![folder.to_path_buf()];
     for depth in 0..=SCAN_DEPTH {
         let mut next=Vec::new();
         for dir in level {
             let keys=repo_keys::of_folder(&dir.to_string_lossy());
             if !keys.is_empty() || dir.join(".git").exists() {
-                for key in keys {
-                    if wanted.contains(&key) && !found.iter().any(|item|item.key==key) {
-                        found.push(FoundRepository{key,path:dir.display().to_string()});
-                    }
-                }
+                found.push((dir,keys));
                 continue;
             }
             if depth==SCAN_DEPTH {continue;}
@@ -131,8 +126,37 @@ pub fn scan(folder:&Path,wanted:&[String])->Vec<FoundRepository> {
         }
         level=next;
     }
+    found
+}
+
+/// Os clones dos repositórios `wanted` dentro de `folder`. Cada chave aparece
+/// uma vez, no clone mais raso.
+pub fn scan(folder:&Path,wanted:&[String])->Vec<FoundRepository> {
+    let wanted:Vec<String>=wanted.iter().map(|key|key.trim().to_lowercase()).collect();
+    let mut found:Vec<FoundRepository>=Vec::new();
+    for (dir,keys) in repositories(folder) {
+        for key in keys {
+            if wanted.contains(&key) && !found.iter().any(|item|item.key==key) {
+                found.push(FoundRepository{key,path:dir.display().to_string()});
+            }
+        }
+    }
     found.sort_by(|a,b|a.key.cmp(&b.key));
     found
+}
+
+/// Os repositórios de uma pasta que junta vários (a pasta da organização),
+/// como o modelo os lê: `api/ (github.com/acme/api)`. Pasta que é ela mesma um
+/// repositório não junta nada e devolve lista vazia.
+pub fn nested(folder:&Path)->Vec<String> {
+    let found=repositories(folder);
+    if found.iter().any(|(dir,_)|dir==folder) {return vec![];}
+    let mut listed:Vec<String>=found.into_iter().map(|(dir,keys)|{
+        let relative=dir.strip_prefix(folder).unwrap_or(&dir).to_string_lossy().replace('\\',"/");
+        match keys.first() {Some(key)=>format!("{relative}/ ({key})"),None=>format!("{relative}/")}
+    }).collect();
+    listed.sort();
+    listed
 }
 
 #[cfg(test)]
@@ -173,6 +197,15 @@ mod tests {
         let root=tempfile::tempdir().unwrap();
         clone_of(root.path(),"","https://bitbucket.org/acme/site.git");
         assert_eq!(scan(root.path(),&["bitbucket.org/acme/site".into()]).len(),1);
+    }
+
+    #[test] fn the_organization_folder_lists_its_repositories() {
+        let root=tempfile::tempdir().unwrap();
+        clone_of(root.path(),"api","git@github.com:acme/api.git");
+        clone_of(root.path(),"backend/worker","https://gitlab.com/acme/worker");
+        fs::create_dir_all(root.path().join("scratch/.git")).unwrap();
+        assert_eq!(nested(root.path()),["api/ (github.com/acme/api)","backend/worker/ (gitlab.com/acme/worker)","scratch/"]);
+        assert!(nested(&root.path().join("api")).is_empty(),"um repositório não junta outros");
     }
 
     #[test] fn urls_and_folder_come_from_the_key() {

@@ -1,4 +1,5 @@
 import { commands, type FoundRepository } from "@/modules/core";
+import { navigate } from "@/modules/navigation";
 import { folderName, loadWorkspace } from "@/modules/workspace";
 
 /** Clona o repositório dentro da pasta; o núcleo já cria o projeto. */
@@ -37,4 +38,13 @@ export async function pickFolder(title: string, defaultPath?: string | null): Pr
   const { open } = await import("@tauri-apps/plugin-dialog");
   const chosen = await open({ directory: true, multiple: false, defaultPath: defaultPath ?? undefined, title });
   return typeof chosen === "string" ? chosen : null;
+}
+
+/** Um chat novo no projeto da organização, cuja pasta é a da organização
+ * neste computador: o agente enxerga todos os clones que estão nela. */
+export async function openOrganizationChat(orgId: string, name: string, folder: string) {
+  const project = await commands.organizationProject(orgId, name, folder);
+  const chat = await commands.createChat(project.id);
+  await loadWorkspace(chat.id);
+  navigate("chat");
 }

@@ -36,6 +36,7 @@ export { SecurityPanel } from "./SecurityPanel";
 export { LinkedAccounts } from "./LinkedAccounts";
 export { NewOrganizationDialog } from "./NewOrganizationDialog";
 export { InviteForm } from "./InviteForm";
+export { OrganizationChatButton } from "./OrganizationChatButton";
 export { OrganizationMembers } from "./OrganizationMembers";
 export { OrganizationPolicy } from "./OrganizationPolicy";
 export { OrganizationProjects } from "./OrganizationProjects";
