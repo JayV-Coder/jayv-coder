@@ -16,6 +16,7 @@ pub mod i18n;
 pub mod jev;
 pub mod llm;
 pub mod local;
+pub mod lockdown;
 pub mod memory;
 pub mod model;
 pub mod orchestrator;

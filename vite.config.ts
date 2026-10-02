@@ -9,4 +9,7 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   clearScreen: false,
   server: { port: 1420, strictPort: true },
+  // O build de produção não leva mapas de código-fonte nem comentários de
+  // licença: o que vai para dentro do instalador é só o código minificado.
+  build: { sourcemap: false, minify: true, cssMinify: true },
 });

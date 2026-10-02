@@ -65,7 +65,7 @@ async fn read_cursor()->Reading {
         .and_then(|auth|auth.get("accessToken").and_then(Value::as_str).map(str::to_string))
         .filter(|token|!token.is_empty());
     let Some(token)=token else { return Reading::Unavailable(Text::new("usage.quota.signedOut").with("agent","Cursor")) };
-    let Ok(client)=reqwest::Client::builder().timeout(TIMEOUT).build() else { return Reading::Unavailable(Text::new("usage.quota.silent").with("agent","Cursor")) };
+    let Ok(client)=crate::lockdown::http_client(TIMEOUT).build() else { return Reading::Unavailable(Text::new("usage.quota.silent").with("agent","Cursor")) };
     let call=|method:&'static str|{
         let request=client.post(format!("{CURSOR_DASHBOARD}/{method}")).bearer_auth(&token).header("Connect-Protocol-Version","1").json(&json!({}));
         async move { request.send().await.ok()?.error_for_status().ok()?.json::<Value>().await.ok() }
