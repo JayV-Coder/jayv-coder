@@ -25,3 +25,4 @@ export { ProviderButton } from "./ProviderButton";
 export { DateParts } from "./DateParts";
 export { SegmentedControl, type SegmentedOption } from "./SegmentedControl";
 export { ThemeSelect } from "./ThemeSelect";
+export { NotificationItem } from "./NotificationItem";
