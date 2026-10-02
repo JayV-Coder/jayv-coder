@@ -113,6 +113,9 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let prompt=prompt.as_str();
     let mut state=desk.lock().await;
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
+    // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
+    // computador pela sincronização, vale já para o próximo.
+    state.orchestrator.expertise=workspace.lock().await.expertise().unwrap_or_default();
 
     // O pedido é lido dentro da pasta do projeto. Se ela sumiu do disco, o
     // atendimento morre aqui — mas com a mensagem já escrita, o turno dado por
@@ -132,7 +135,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or(None);
     let paired=origin.map(|origin|asking::pair(&i18n::for_model(&origin),prompt));
     let request=paired.as_deref().unwrap_or(prompt);
-    let entry=entry_check(&project,turn,request).await;
+    let entry=entry_check(&project,turn,request,state.orchestrator.expertise).await;
     {
         let mut workspace=workspace.lock().await;
         let _=workspace.record_entry_check(&entry);
@@ -158,6 +161,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         return;
     }
     state.orchestrator.pending_gate_note=entry.clarifying_note();
+    state.orchestrator.pending_gate_passed=Some(entry.verdict==EntryVerdict::Pass);
     state.orchestrator.pending_brief=entry.refined_prompt(request);
 
     // O `process` torna a anotar o pedido na memória da sessão, e ele já está
@@ -251,14 +255,14 @@ fn jev_reading(result:&model::ProcessResult)->String{format!("{} task, {} comple
 
 /// Pontua o pedido no Jev quando há credencial e nas heurísticas locais quando
 /// não há — ou quando a chamada falha, para que o portão nunca trave o envio.
-async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str)->EntryCheck {
+async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str,level:crate::expertise::Expertise)->EntryCheck {
     if jev::is_configured() {
         match gatekeeper::evaluate_entry(input,&project.name,&project.languages).await {
-            Ok(reading)=>return gatekeeper::judge(turn,input,&reading,"jev"),
+            Ok(reading)=>return gatekeeper::judge_for(turn,input,&reading,"jev",level),
             Err(error)=>eprintln!("portaria: o Jev não respondeu, usando heurísticas locais ({error})"),
         }
     }
-    gatekeeper::judge(turn,input,&gatekeeper::heuristic_entry(input),asking::LOCAL_SOURCE)
+    gatekeeper::judge_for(turn,input,&gatekeeper::heuristic_entry(input),asking::LOCAL_SOURCE,level)
 }
 
 fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {
