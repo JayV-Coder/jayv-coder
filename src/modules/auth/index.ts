@@ -12,6 +12,7 @@ import { canUnlink, linkOutcome, PROVIDER_NAMES, type Provider } from "./identit
 
 export { authFailure } from "./errors";
 export { canUnlink, PROVIDER_NAMES, PROVIDERS, type Provider } from "./identities";
+export { CODE_MAX, codeDigits, codeOk } from "./code";
 export { PASSWORD_MIN, PASSWORD_RULES, passwordOk, passwordRules, type PasswordRule } from "./password";
 
 type Status = "loading" | "signedOut" | "signedIn";
@@ -211,7 +212,8 @@ export async function changePassword(current: string, next: string) {
   if (error) fail(error);
 }
 
-/** O código de 6 dígitos que vai ao e-mail antes da primeira senha. */
+/** O código que vai ao e-mail antes da primeira senha (de 6 a 10 dígitos,
+ * conforme o projeto do Supabase; ver `code.ts`). */
 export async function sendSetPasswordCode() {
   const { error } = await supabase.auth.reauthenticate();
   if (error) fail(error);
