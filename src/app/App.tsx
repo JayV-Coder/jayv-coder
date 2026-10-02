@@ -15,7 +15,7 @@ import { connectSystem, loadStatus } from "@/modules/system";
 import { connectUpdates } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
-import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
 import { UpdateBanner, UpdateDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
@@ -87,7 +87,7 @@ export function App() {
       <div className="flex h-screen flex-col">
         <UpdateBanner />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {status === "signedIn" ? signedIn : status === "loading" ? loading : <LoginPage />}
+          {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
         </div>
       </div>
       <UpdateDialog />

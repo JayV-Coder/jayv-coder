@@ -11,3 +11,4 @@ export { NewPasswordPage } from "./NewPasswordPage";
 export { ProfileSetupPage } from "./ProfileSetupPage";
 export { OrganizationsPage } from "./OrganizationsPage";
 export { OrganizationPage } from "./OrganizationPage";
+export { SecondFactorPage } from "./SecondFactorPage";
