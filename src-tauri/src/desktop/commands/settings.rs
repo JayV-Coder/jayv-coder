@@ -98,14 +98,34 @@ pub struct CoreSnapshot {
     pub settings:CoreSettings,
     pub defaults:CoreSettings,
     pub gate:crate::local::global::JevParameters,
+    /// O nível da conta e os números da portaria e do Jev em cada nível, para
+    /// a tela mostrar o que a escolha muda antes de ela ser feita.
+    pub expertise:crate::expertise::Expertise,
+    pub levels:Vec<LevelView>,
     pub confidence_range:(f64,f64),
     pub budget_range:(usize,usize),
     pub cache_ttl_range:(u64,u64),
     pub version:&'static str,
 }
 
-fn core_snapshot(settings:CoreSettings,defaults:CoreSettings)->CoreSnapshot {
-    CoreSnapshot{settings,defaults,gate:crate::local::global::current_parameters(),confidence_range:core_settings::CONFIDENCE_RANGE,budget_range:core_settings::BUDGET_RANGE,cache_ttl_range:core_settings::CACHE_TTL_RANGE,version:env!("CARGO_PKG_VERSION")}
+#[derive(Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct LevelView {
+    pub id:crate::expertise::Expertise,
+    pub scope_demand:[f64;3],
+    pub block_margin:f64,
+    pub confidence:f64,
+    pub build_ceiling:&'static str,
+    pub destructive_threshold:f64,
+}
+
+fn core_snapshot(settings:CoreSettings,defaults:CoreSettings,expertise:crate::expertise::Expertise)->CoreSnapshot {
+    let gate=crate::local::global::current_parameters();
+    let levels=crate::expertise::Expertise::ALL.into_iter().map(|level|{
+        let adjusted=level.gate(&gate);
+        LevelView{id:level,scope_demand:adjusted.scope_demand,block_margin:adjusted.block_margin,confidence:level.confidence(settings.confidence_threshold),build_ceiling:level.build_ceiling(),destructive_threshold:level.destructive_threshold()}
+    }).collect();
+    CoreSnapshot{settings,defaults,gate:expertise.gate(&gate),expertise,levels,confidence_range:core_settings::CONFIDENCE_RANGE,budget_range:core_settings::BUDGET_RANGE,cache_ttl_range:core_settings::CACHE_TTL_RANGE,version:env!("CARGO_PKG_VERSION")}
 }
 
 #[tauri::command]
@@ -113,7 +133,8 @@ pub(crate) async fn get_core_settings(desk:State<'_,SharedDesktopState>,workspac
     let (desk,workspace)=crate::desktop::both(&desk,&workspace).await;
     let defaults=desk.orchestrator.core_defaults();
     let settings=workspace.core_settings(&defaults).map_err(failure)?;
-    Ok(core_snapshot(settings,defaults))
+    let expertise=workspace.expertise().map_err(failure)?;
+    Ok(core_snapshot(settings,defaults,expertise))
 }
 
 /// Grava primeiro e só então troca o orquestrador, como as dos agentes.
@@ -122,5 +143,18 @@ pub(crate) async fn save_core_settings(desk:State<'_,SharedDesktopState>,workspa
     let (mut desk,mut workspace)=crate::desktop::both(&desk,&workspace).await;
     let saved=workspace.save_core_settings(&settings).map_err(failure)?;
     desk.orchestrator.use_core(&saved);
-    Ok(core_snapshot(saved,desk.orchestrator.core_defaults()))
+    let expertise=workspace.expertise().map_err(failure)?;
+    Ok(core_snapshot(saved,desk.orchestrator.core_defaults(),expertise))
+}
+
+/// Grava o nível na conta. A sincronização o leva para os outros computadores,
+/// e o próximo pedido já é julgado por ele.
+#[tauri::command]
+pub(crate) async fn save_expertise(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,level:String)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+    let (mut desk,mut workspace)=crate::desktop::both(&desk,&workspace).await;
+    let expertise=workspace.save_expertise(&level).map_err(failure)?;
+    desk.orchestrator.expertise=expertise;
+    let defaults=desk.orchestrator.core_defaults();
+    let settings=workspace.core_settings(&defaults).map_err(failure)?;
+    Ok(core_snapshot(settings,defaults,expertise))
 }
