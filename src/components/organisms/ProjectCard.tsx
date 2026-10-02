@@ -21,6 +21,7 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
   const count = chats.length;
   const refused = useProjectRefusals(project.id);
   const organization = useOrganizations((state) => state.projects[project.id]);
+  const policed = useOrganizations((state) => state.policed[project.id] === true);
   return (
     <YardCard
       onOpen={onOpen}
@@ -44,6 +45,9 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
         <span className="text-lg font-semibold tracking-tight break-words">{project.name}</span>
         {organization && (
           <span title={t("org.project.badge", { name: organization.name })} className="rounded-md border border-border px-1.5 font-mono text-caption text-success">@{organization.slug}</span>
+        )}
+        {organization && policed && (
+          <span title={t("policy.badge.hint", { slug: organization.slug })} className="rounded-md border border-border px-1.5 text-caption text-muted-foreground">{t("policy.badge")}</span>
         )}
       </span>
       {project.rootPath ? (

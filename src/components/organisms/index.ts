@@ -36,6 +36,7 @@ export { LinkedAccounts } from "./LinkedAccounts";
 export { NewOrganizationDialog } from "./NewOrganizationDialog";
 export { InviteForm } from "./InviteForm";
 export { OrganizationMembers } from "./OrganizationMembers";
+export { OrganizationPolicy } from "./OrganizationPolicy";
 export { OrganizationRepositories } from "./OrganizationRepositories";
 export { OrganizationSettings } from "./OrganizationSettings";
 export { YardCard } from "./YardCard";

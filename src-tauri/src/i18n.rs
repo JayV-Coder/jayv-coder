@@ -117,6 +117,8 @@ fn english(text:&Text)->String {
         "guidance.noModels"=>"providers are declared but no model is configured".into(),
         "guidance.noAgent"=>"no agent is on".into(),
         "guidance.noFittingModel"=>"no configured model fits this request".into(),
+        "guidance.policyBlocked"=>format!("the LLM policy of @{} leaves no allowed agent or model for it",param("org")),
+        "guidance.policyFix"=>format!("Turn on, in Settings, an agent and a model that @{} allows, or ask one of its owners or maintainers to allow the ones you use.",param("org")),
         "guidance.unknownProvider"=>format!("the selected model points to the provider `{}`, which does not exist",param("provider")),
         "explain.last"=>format!("The last request used {} through {}. The context had {} files and an estimated budget of {} tokens.",param("model"),param("provider"),param("files"),param("tokens")),
         "explain.none"=>"There is no previous routing decision in this session.".into(),

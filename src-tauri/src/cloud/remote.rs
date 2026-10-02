@@ -5,6 +5,7 @@
 
 use super::{PROJECT_URL, PUBLISHABLE_KEY};
 use crate::local::{global::LocaleRow, outbox::SyncTable};
+use crate::policy::RemotePolicy;
 use async_trait::async_trait;
 use reqwest::{Method, Request};
 use serde::Deserialize;
@@ -35,6 +36,9 @@ pub trait Backend:Send+Sync {
     /// As linhas com `synced_at >= since`, em ordem de `synced_at`. `since`
     /// vazio é a tabela inteira.
     async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError>;
+    /// A política de LLM dos projetos de quem está logado
+    /// (`rpc/my_project_policies`). `None`: este backend não fala dela.
+    async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> { Ok(None) }
 }
 
 pub struct Remote {
@@ -91,6 +95,10 @@ impl Remote {
         self.request(Method::GET,table.name).query(&query).build()
     }
 
+    pub fn project_policies_request(&self)->reqwest::Result<Request> {
+        self.request(Method::POST,"rpc/my_project_policies").json(&json!({})).build()
+    }
+
     async fn send(&self,request:reqwest::Result<Request>)->Result<String,RemoteError> {
         let request=request.map_err(|error|RemoteError::Rejected{status:0,detail:error.to_string()})?;
         let response=self.http.execute(request).await.map_err(|error|RemoteError::Offline(error.to_string()))?;
@@ -135,6 +143,10 @@ impl Backend for Remote {
 
     async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError> {
         self.get(self.pull_request(table,since,limit)).await
+    }
+
+    async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> {
+        self.get(self.project_policies_request()).await.map(Some)
     }
 }
 
@@ -215,6 +227,12 @@ mod tests {
         assert!(matches!(classify(409,r#"{"code":"23503","message":"fk"}"#),RemoteError::Conflict{code,..} if code=="23503"));
         assert_eq!(classify(503,"down"),RemoteError::Server(503));
         assert_eq!(classify(400,r#"{"code":"PGRST204","message":"coluna desconhecida"}"#),RemoteError::Rejected{status:400,detail:"coluna desconhecida".into()});
+    }
+
+    #[test] fn the_policies_come_from_the_rpc_with_the_users_token() {
+        let request=remote().project_policies_request().unwrap();
+        assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_project_policies"));
+        assert_eq!(request.headers()["Authorization"],"Bearer jwt");
     }
 
     #[tokio::test] async fn without_network_the_error_is_offline() {

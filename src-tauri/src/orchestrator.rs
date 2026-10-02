@@ -73,6 +73,11 @@ pub struct Orchestrator {
     pub pending_gate_passed: Option<bool>,
     /// O nível da conta: quanto o Jev confia no pedido e até onde ele constrói.
     pub expertise: crate::expertise::Expertise,
+    /// A organização cuja política de LLM vale para o pedido em atendimento
+    /// (o `@slug`), ou nenhuma. Quem aplica a política (`use_llm` e
+    /// `use_core` com as configurações já restritas) a marca aqui, para a
+    /// orientação dizer quem barrou o pedido.
+    pub policy_scope: Option<String>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
@@ -101,7 +106,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -321,7 +326,13 @@ impl Orchestrator {
 
     /// O que falta configurar, gravado como aviso: cada um o lê no seu idioma.
     fn configuration_guidance(&self, selection:&ModelSelection)->Option<String> {
-        let problem=if self.config.models.is_empty() && self.providers.is_empty() {
+        // Com política, o que sobrou sem agente ou sem modelo foi ela que
+        // desligou — ou ela junto com quem usa. Mexer só na configuração de
+        // quem usa não resolve, então a orientação diz de quem é a regra.
+        let blocked_by_policy=!self.config.models.is_empty() && (self.providers.is_empty()||selection.provider=="jev");
+        let problem=if let Some(org)=self.policy_scope.as_deref().filter(|_|blocked_by_policy) {
+            Text::new("guidance.policyBlocked").with("org",org)
+        } else if self.config.models.is_empty() && self.providers.is_empty() {
             Text::new("guidance.nothingConfigured")
         } else if self.config.models.is_empty() {
             Text::new("guidance.noModels")
@@ -334,7 +345,8 @@ impl Orchestrator {
         } else {
             return None;
         };
-        Some(i18n::notice(&[Text::new("guidance.failed").with("problem",problem),Text::new("guidance.fix")]))
+        let fix=match problem.key.as_str() { "guidance.policyBlocked"=>Text::new("guidance.policyFix").with("org",self.policy_scope.as_deref().unwrap_or_default()), _=>Text::new("guidance.fix") };
+        Some(i18n::notice(&[Text::new("guidance.failed").with("problem",problem),fix]))
     }
 
     fn explanation_result(&self,user_input:&str,normalized:&str)->ProcessResult {
@@ -895,5 +907,27 @@ mod tests {
         assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.nothingConfigured"))));
         assert!(!response.contains("provider named 'none'"));
     }
-}
 
+    /// Quem desligou o único agente foi a política da organização: a
+    /// orientação diz isso, e não para ligar um agente que a política barra.
+    #[tokio::test]
+    async fn a_request_the_policy_leaves_without_a_model_says_whose_rule_it_is() {
+        let root=tempfile::tempdir().expect("temporary repository");
+        let mut orchestrator=Orchestrator::new(root.path().join("missing-config.yaml"),root.path().to_path_buf()).expect("orchestrator");
+        let settings=crate::llm::LlmSettings{
+            agents:vec![crate::llm::AgentSettings{id:crate::llm::AgentId::Claude,enabled:true,command:"claude".into(),timeout:300,options:serde_json::Value::Null}],
+            models:vec![crate::llm::AgentModel{agent:crate::llm::AgentId::Claude,model:"sonnet".into(),enabled:true,capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000}],
+        };
+        let policy=crate::policy::LlmPolicy{agents:Some(vec!["codex".into()]),..Default::default()};
+        orchestrator.use_llm(&policy.restrict_llm(&settings));
+        orchestrator.policy_scope=Some("acme".into());
+
+        let result=orchestrator.process("Explique este projeto",Some("test"),&Pulse::silent()).await;
+
+        let response=result.result.expect("orientação").response;
+        let lines=crate::i18n::read_notice(&response).expect("aviso");
+        assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.policyFix"]);
+        assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.policyBlocked").with("org","acme"))));
+        assert!(crate::i18n::for_model(&response).contains("@acme"));
+    }
+}

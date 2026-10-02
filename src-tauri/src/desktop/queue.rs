@@ -117,6 +117,10 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // computador pela sincronização, vale já para o próximo.
     state.orchestrator.expertise=workspace.lock().await.expertise().unwrap_or_default();
 
+    // A política de LLM do projeto vem antes da pasta: ela pode mudar a
+    // privacidade, e o índice da pasta é lido com o firewall já certo.
+    apply_project_policy(&mut state,workspace,chat_id).await;
+
     // O pedido é lido dentro da pasta do projeto. Se ela sumiu do disco, o
     // atendimento morre aqui — mas com a mensagem já escrita, o turno dado por
     // falho e o motivo no chat, em vez de sumir da conversa.
@@ -237,6 +241,25 @@ async fn fail_turn(workspace:&SharedWorkspace,chat_id:&str,turn:&Turn,error:Stri
 async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->Result<(),Text> {
     let root=workspace.lock().await.chat_root(chat_id).map_err(i18n::failure)?.unwrap_or_else(||state.home_root.clone());
     state.orchestrator.focus_on(&root).map_err(i18n::failure)
+}
+
+/// As configurações de quem usa, passadas pela política de LLM do projeto do
+/// chat. Lidas a cada pedido: a troca na tela, a política que a sincronização
+/// acabou de trazer e o chat de outro projeto valem já para este. Sem política,
+/// valem as configurações como estão.
+async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str) {
+    let defaults=state.orchestrator.core_defaults();
+    let (llm,core,policy)={
+        let workspace=workspace.lock().await;
+        (workspace.llm_settings(),workspace.core_settings(&defaults),workspace.chat_policy(chat_id))
+    };
+    let (Ok(llm),Ok(core))=(llm,core) else { eprintln!("política de LLM: configurações ilegíveis, mantidas as anteriores"); return };
+    let policy=policy.unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});
+    match &policy {
+        Some(project)=>{ state.orchestrator.use_llm(&project.policy.restrict_llm(&llm)); state.orchestrator.use_core(&project.policy.restrict_core(&core)); }
+        None=>{ state.orchestrator.use_llm(&llm); state.orchestrator.use_core(&core); }
+    }
+    state.orchestrator.policy_scope=policy.map(|project|project.org_slug);
 }
 
 /// O pedido está gravado desde o envio, e o `process` torna a anotá-lo na
