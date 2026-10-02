@@ -19,6 +19,8 @@ export interface Project {
   name: string;
   rootPath: string;
   createdAt: string;
+  /** As chaves dos remotes da pasta (`github.com/acme/api`). */
+  repoKeys: string[];
 }
 
 export interface Message {

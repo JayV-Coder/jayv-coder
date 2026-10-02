@@ -2,6 +2,7 @@ pub mod agents;
 pub mod asking;
 pub mod cache;
 pub mod checkpoint;
+pub mod checkout;
 pub mod cloud;
 pub mod config;
 pub mod desktop;

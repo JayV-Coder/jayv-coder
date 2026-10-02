@@ -1,7 +1,7 @@
 import { FolderGit2Icon, FolderKanbanIcon, SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
-import { useOrganizations } from "@/modules/organizations";
+import { setOrganizationTab, useOrganizations, type OrganizationTab } from "@/modules/organizations";
 import { LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
 import { OrganizationMembers, OrganizationPolicy, OrganizationProjects, OrganizationRepositories, OrganizationSettings } from "@/components/organisms";
@@ -18,6 +18,7 @@ export function OrganizationPage() {
   const openId = useOrganizations((state) => state.openId);
   const organization = useOrganizations((state) => state.list.find((org) => org.id === state.openId));
   const detail = useOrganizations((state) => (state.detail?.id === openId ? state.detail : null));
+  const current = useOrganizations((state) => state.tab);
 
   if (!organization) {
     return (
@@ -40,7 +41,7 @@ export function OrganizationPage() {
         description={<span className="flex items-center gap-2"><span className="font-mono">@{organization.slug}</span><Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge></span>}>
         <Button variant="outline" onClick={() => navigate("organizations")}>{t("org.back")}</Button>
       </PageHeading>
-      <Tabs defaultValue="projects" className="gap-5">
+      <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} className="gap-5">
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
           {tab("projects", FolderKanbanIcon, "org.tab.projects")}
           {tab("members", UsersIcon, "org.tab.members")}
@@ -53,7 +54,7 @@ export function OrganizationPage() {
           {detail ? <OrganizationMembers detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
         <TabsContent value="repositories">
-          {detail ? <OrganizationRepositories detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
+          {detail ? <OrganizationRepositories detail={detail} role={organization.role} name={organization.name} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
         <TabsContent value="policy">
           {detail ? <OrganizationPolicy detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}

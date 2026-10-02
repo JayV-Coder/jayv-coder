@@ -1,4 +1,4 @@
-import { Building2Icon, UserIcon } from "lucide-react";
+import { Building2Icon, FolderDownIcon, UserIcon } from "lucide-react";
 import type { Project } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { openOrganization, type ScopeGroup } from "@/modules/organizations";
@@ -38,7 +38,16 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
         )}
       </header>
       {count === 0
-        ? <EmptyText className="text-xs">{personal ? t("projects.personal.empty") : t("projects.org.empty")}</EmptyText>
+        ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <EmptyText className="min-w-0 flex-1 text-xs">{personal ? t("projects.personal.empty") : t("projects.org.empty")}</EmptyText>
+            {!personal && group.role && (
+              <Button variant="outline" size="sm" onClick={() => void openOrganization(group.key, "repositories").catch(reportError)}>
+                <FolderDownIcon />{t("projects.org.bring")}
+              </Button>
+            )}
+          </div>
+        )
         : (
           <div className={cn("grid gap-4", layout === "grid" ? "grid-cols-[repeat(auto-fill,minmax(280px,1fr))]" : "grid-cols-1")}>
             {group.projects.map((project) => (

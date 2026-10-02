@@ -3,6 +3,7 @@
 pub mod files;
 pub mod gate;
 pub mod prompts;
+pub mod repositories;
 pub mod session;
 pub mod settings;
 pub mod system;

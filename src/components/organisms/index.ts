@@ -40,6 +40,7 @@ export { OrganizationMembers } from "./OrganizationMembers";
 export { OrganizationPolicy } from "./OrganizationPolicy";
 export { OrganizationProjects } from "./OrganizationProjects";
 export { OrganizationRepositories } from "./OrganizationRepositories";
+export { ImportClonesDialog } from "./ImportClonesDialog";
 export { OrganizationSettings } from "./OrganizationSettings";
 export { YardCard } from "./YardCard";
 export { NotificationBell } from "./NotificationBell";

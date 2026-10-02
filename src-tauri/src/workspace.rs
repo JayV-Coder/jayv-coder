@@ -13,6 +13,10 @@ pub struct ProjectRecord {
     pub name: String,
     pub root_path: String,
     pub created_at: DateTime<Utc>,
+    /// As chaves dos remotes da pasta (`github.com/acme/api`): é por elas que a
+    /// tela sabe quais repositórios da organização já estão neste computador.
+    #[serde(default)]
+    pub repo_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,10 +169,10 @@ impl WorkspaceStore {
 
     pub fn snapshot(&self) -> Result<WorkspaceData> {
         let project_rows={
-            let mut statement=self.connection.prepare("SELECT id,name,root_path,created_at FROM projects ORDER BY created_at,id")?;
-            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+            let mut statement=self.connection.prepare("SELECT id,name,root_path,created_at,repo_keys FROM projects ORDER BY created_at,id")?;
+            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let projects=project_rows.into_iter().map(|(id,name,root_path,created_at)|Ok(ProjectRecord{id,name,root_path,created_at:parse_time(&created_at)?})).collect::<Result<Vec<_>>>()?;
+        let projects=project_rows.into_iter().map(|(id,name,root_path,created_at,keys)|Ok(ProjectRecord{id,name,root_path,created_at:parse_time(&created_at)?,repo_keys:serde_json::from_str(&keys).unwrap_or_default()})).collect::<Result<Vec<_>>>()?;
         let chat_rows={
             let mut statement=self.connection.prepare("SELECT id,code,project_id,title,created_at,updated_at FROM chats ORDER BY updated_at DESC,id")?;
             statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
@@ -192,8 +196,9 @@ impl WorkspaceStore {
             let folders=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
             if let Some((owner,_))=folders.into_iter().find(|(_,path)|folder_key(path)==wanted) { anyhow::bail!(Text::new("project.pathTaken").with("name",owner)); }
         }
-        let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path,created_at:Utc::now()};
-        let keys=serde_json::to_string(&crate::repo_keys::of_folder(&project.root_path))?;
+        let repo_keys=crate::repo_keys::of_folder(&root_path);
+        let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path,created_at:Utc::now(),repo_keys};
+        let keys=serde_json::to_string(&project.repo_keys)?;
         self.connection.execute("INSERT INTO projects(id,name,root_path,created_at,repo_keys) VALUES(?1,?2,?3,?4,?5)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339(),keys])?;
         Ok(project)
     }
