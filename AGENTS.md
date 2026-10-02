@@ -38,8 +38,11 @@ Nada de texto em português (ou em qualquer idioma) fixo no código.
 - **Diagnóstico interno** (invariantes, protocolo do Jev, fila de sync) é em
   inglês: só aparece em log ou como motivo técnico de `error.unexpected`.
 - **Traduções**: toda chave nova ganha uma migração em `supabase/migrations/`
-  inserindo o texto em todos os idiomas de `public.locales` (pt-BR, en, es,
-  zh-CN, hi, ar, fr, ru, ja, de), com `on conflict (locale, key) do update`.
+  do repositório `JayV-Coder/supabase` (clonado ao lado deste), inserindo o
+  texto em todos os idiomas de `public.locales` (pt-BR, en, es, zh-CN, hi,
+  ar, fr, ru, ja, de), com `on conflict (locale, key) do update`. Mudar os
+  parâmetros de uma chave já publicada é chave nova: o app antigo continua
+  lendo a antiga.
 
 Logs internos (`eprintln!`, `console.error`) e comentários de código não são
 texto para o usuário e não precisam de i18n.
@@ -60,8 +63,8 @@ Todo identificador — `fn`/`function`, `const`, `let`/variável, parâmetro,
 ## Instruções para o Jev e para os LLMs: sempre em inglês
 
 Tudo que é escrito para um modelo ler fica em inglês, seja qual for o idioma
-da conversa: perguntas e critérios do Jev (`jev.rs`, `gatekeeper.rs`,
-`supabase/migrations/*_seed_jev.sql`), prompts de sistema, instruções que vão
+da conversa: perguntas e critérios do Jev (`jev.rs`, `gatekeeper.rs` e o
+`*_seed_jev*.sql` do repositório `JayV-Coder/supabase`), prompts de sistema, instruções que vão
 junto do pedido e identificadores gravados (ex.: os níveis de escopo
 `small change` / `feature` / `whole system`). O modelo responde no idioma do
 usuário; a instrução, não.
