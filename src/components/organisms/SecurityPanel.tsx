@@ -1,26 +1,30 @@
 import { useState, type FormEvent } from "react";
-import { changePassword, codeDigits, codeOk, passwordOk, sendSetPasswordCode, setFirstPassword, useAuth } from "@/modules/auth";
+import { changePassword, codeDigits, codeOk, passwordOk, sendSetPasswordCode, setFirstPassword, TOTP_LENGTH, totpDigits, totpOk, useAuth } from "@/modules/auth";
 import { notify, reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { FormField, PasswordRules, SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-/** A senha da conta. Quem já tem troca informando a atual; quem entrou só por
- * provedor define a primeira com o código que vai ao e-mail, para que uma
- * sessão aberta não baste para cravar uma senha na conta. */
+/** A senha da conta. Quem já tem troca informando a atual (e, com o app
+ * autenticador ligado, o código dele); quem entrou só por provedor define a
+ * primeira com o código que vai ao e-mail, para que uma sessão aberta não
+ * baste para cravar uma senha na conta. */
 export function SecurityPanel() {
   const t = useT();
   const email = useAuth((state) => state.email);
   const hasPassword = useAuth((state) => state.hasPassword);
+  const totpFactorId = useAuth((state) => state.totpFactorId);
+  const askTotp = hasPassword && totpFactorId !== null;
   const [current, setCurrent] = useState("");
   const [code, setCode] = useState("");
+  const [totp, setTotp] = useState("");
   const [codeSent, setCodeSent] = useState(false);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const mismatch = confirm.length > 0 && confirm !== password;
-  const ready = passwordOk(password) && confirm === password && (hasPassword ? current.length > 0 : codeOk(code));
+  const ready = passwordOk(password) && confirm === password && (hasPassword ? current.length > 0 && (!askTotp || totpOk(totp)) : codeOk(code));
 
   const run = async (action: () => Promise<void>, done?: string) => {
     setBusy(true);
@@ -37,6 +41,7 @@ export function SecurityPanel() {
   const reset = () => {
     setCurrent("");
     setCode("");
+    setTotp("");
     setCodeSent(false);
     setPassword("");
     setConfirm("");
@@ -46,7 +51,7 @@ export function SecurityPanel() {
     event.preventDefault();
     if (!ready) return;
     void run(async () => {
-      if (hasPassword) await changePassword(current, password);
+      if (hasPassword) await changePassword(current, password, askTotp ? totp : undefined);
       else await setFirstPassword(code, password);
       reset();
     }, hasPassword ? t("security.changed") : t("security.set"));
@@ -73,6 +78,11 @@ export function SecurityPanel() {
           ) : (
             <FormField label={t("security.code")} htmlFor="security-code" hint={t("security.codeSent", { email: email ?? "" })}>
               <Input id="security-code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(codeDigits(event.target.value))} />
+            </FormField>
+          )}
+          {askTotp && (
+            <FormField label={t("security.totp")} htmlFor="security-totp">
+              <Input id="security-totp" inputMode="numeric" autoComplete="one-time-code" maxLength={TOTP_LENGTH} className="font-mono tracking-[0.3em]" value={totp} onChange={(event) => setTotp(totpDigits(event.target.value))} />
             </FormField>
           )}
           <FormField label={t("security.new")} htmlFor="security-new">

@@ -33,6 +33,7 @@ export { ChatUsageBar } from "./ChatUsageBar";
 export { ProjectUsageLine } from "./ProjectUsageLine";
 export { ProfileForm } from "./ProfileForm";
 export { SecurityPanel } from "./SecurityPanel";
+export { TwoFactorPanel } from "./TwoFactorPanel";
 export { LinkedAccounts } from "./LinkedAccounts";
 export { NewOrganizationDialog } from "./NewOrganizationDialog";
 export { InviteForm } from "./InviteForm";

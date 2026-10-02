@@ -15,7 +15,7 @@ import { connectSystem, loadStatus } from "@/modules/system";
 import { checkForUpdate } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
-import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
 import { UpdateDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
@@ -84,7 +84,7 @@ export function App() {
         : <AppShell><Page /></AppShell>;
   return (
     <TooltipProvider>
-      {status === "signedIn" ? signedIn : status === "loading" ? loading : <LoginPage />}
+      {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
       <UpdateDialog />
       <Toaster position="bottom-right" />
     </TooltipProvider>

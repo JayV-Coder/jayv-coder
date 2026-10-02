@@ -13,6 +13,11 @@ const KNOWN: Record<string, string> = {
   single_identity_not_deletable: "auth.lastIdentity",
   manual_linking_disabled: "auth.linkingDisabled",
   email_not_confirmed: "auth.emailNotConfirmed",
+  mfa_verification_failed: "auth.mfa.badCode",
+  mfa_challenge_expired: "auth.mfa.badCode",
+  mfa_factor_not_found: "auth.mfa.missing",
+  mfa_totp_enroll_not_enabled: "auth.mfa.disabled",
+  mfa_totp_verify_not_enabled: "auth.mfa.disabled",
 };
 
 export function authFailure(error: unknown): unknown {
