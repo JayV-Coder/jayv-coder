@@ -6,6 +6,8 @@ import { navigate } from "@/modules/navigation";
 export * from "./rules";
 export * from "./policy";
 export * from "./scope";
+export * from "./checkout";
+export * from "./local";
 
 import type { Role } from "./rules";
 import { policyPayload, storedPolicy, type LlmPolicy, type StoredPolicy } from "./policy";
@@ -36,6 +38,8 @@ export interface OrganizationDetail {
   policies: StoredPolicy[];
 }
 
+export type OrganizationTab = "projects" | "members" | "repositories" | "policy" | "settings";
+
 interface OrganizationsState {
   list: Organization[];
   incoming: IncomingInvite[];
@@ -46,10 +50,12 @@ interface OrganizationsState {
   loaded: boolean;
   /** A organização aberta na vista `organization`. */
   openId: string | null;
+  /** A aba aberta da organização. */
+  tab: OrganizationTab;
   detail: OrganizationDetail | null;
 }
 
-export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, detail: null }));
+export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, tab: "projects", detail: null }));
 
 /** As RPCs falham com uma chave do i18n (`org.forbidden`); o resto segue como
  * veio. */
@@ -136,8 +142,8 @@ export async function loadDetail(id: string) {
   });
 }
 
-export function openOrganization(id: string) {
-  useOrganizations.setState({ openId: id, detail: null });
+export function openOrganization(id: string, tab: OrganizationTab = "projects") {
+  useOrganizations.setState({ openId: id, tab, detail: null });
   navigate("organization");
   return loadDetail(id);
 }
@@ -181,6 +187,10 @@ export async function findUsers(query: string): Promise<FoundUser[]> {
 }
 
 export function clearOrganizations() {
-  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, detail: null });
+  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, tab: "projects", detail: null });
+}
+
+export function setOrganizationTab(tab: OrganizationTab) {
+  useOrganizations.setState({ tab });
 }
 

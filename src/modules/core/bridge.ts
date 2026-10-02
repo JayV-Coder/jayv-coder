@@ -23,6 +23,9 @@ export const commands = {
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
   openFile: (chatId: string, path: string) => invoke<void>("open_file", { chatId, path }),
+  scanRepositories: (folder: string, keys: string[]) => invoke<FoundRepository[]>("scan_repositories", { folder, keys }),
+  cloneRepository: (key: string, folder: string) => invoke<Project>("clone_repository", { key, folder }),
+  folderRepoKeys: (path: string) => invoke<string[]>("folder_repo_keys", { path }),
   systemStatus: () => invoke<SystemStatus>("system_status"),
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),
@@ -41,6 +44,9 @@ export const commands = {
   chatUsage: (chatId: string) => invoke<TurnUsage[]>("chat_usage", { chatId }),
   refreshQuotas: () => invoke<QuotaStatus[]>("refresh_quotas"),
 };
+
+/** Um clone de repositório da organização achado numa pasta. */
+export interface FoundRepository { key: string; path: string }
 
 /** O pedido das estatísticas: o escopo, o intervalo em ISO (aberto onde vier
  * vazio) e o fuso de quem lê, para que "hoje" seja o hoje dele. */
