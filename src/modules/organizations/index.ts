@@ -5,6 +5,7 @@ import { navigate } from "@/modules/navigation";
 
 export * from "./rules";
 export * from "./policy";
+export * from "./scope";
 
 import type { Role } from "./rules";
 import { policyPayload, storedPolicy, type LlmPolicy, type StoredPolicy } from "./policy";

@@ -1,6 +1,7 @@
 export { Sidebar } from "./Sidebar";
 export { AppHeader } from "./AppHeader";
 export { ProjectCard } from "./ProjectCard";
+export { ProjectScopeSection } from "./ProjectScopeSection";
 export { ChatCard } from "./ChatCard";
 export { NewProjectDialog } from "./NewProjectDialog";
 export { Timeline } from "./Timeline";
@@ -37,6 +38,7 @@ export { NewOrganizationDialog } from "./NewOrganizationDialog";
 export { InviteForm } from "./InviteForm";
 export { OrganizationMembers } from "./OrganizationMembers";
 export { OrganizationPolicy } from "./OrganizationPolicy";
+export { OrganizationProjects } from "./OrganizationProjects";
 export { OrganizationRepositories } from "./OrganizationRepositories";
 export { OrganizationSettings } from "./OrganizationSettings";
 export { YardCard } from "./YardCard";
