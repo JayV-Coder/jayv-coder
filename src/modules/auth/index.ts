@@ -3,14 +3,15 @@ import type { Session, User } from "@supabase/supabase-js";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands, onCore } from "@/modules/core/bridge";
-import { reportError } from "@/modules/feedback";
+import { notify, reportError } from "@/modules/feedback";
+import { t } from "@/modules/i18n";
 import { readCallback } from "./callback";
 import { CALLBACK_URL, supabase } from "./client";
 import { authFailure } from "./errors";
-import { canUnlink, type Provider } from "./identities";
+import { canUnlink, linkOutcome, PROVIDER_NAMES, type Provider } from "./identities";
 
 export { authFailure } from "./errors";
-export { canUnlink, PROVIDERS, type Provider } from "./identities";
+export { canUnlink, PROVIDER_NAMES, PROVIDERS, type Provider } from "./identities";
 export { CODE_MAX, codeDigits, codeOk } from "./code";
 export { PASSWORD_MIN, PASSWORD_RULES, passwordOk, passwordRules, type PasswordRule } from "./password";
 
@@ -33,6 +34,8 @@ interface AuthState {
   profile: Profile | null;
   /** O provedor abriu no navegador e o app espera o link de volta. */
   waitingBrowser: boolean;
+  /** O provedor que está sendo vinculado, até o link de volta chegar. */
+  linking: Provider | null;
   /** A sessão veio do link de recuperação: falta escolher a senha nova. */
   recovering: boolean;
   /** As identidades da conta (`email`, `github`, `gitlab`, `bitbucket`). */
@@ -42,7 +45,7 @@ interface AuthState {
 
 const SIGNED_OUT = { email: null, profile: null, recovering: false, providers: [], hasPassword: false };
 
-export const useAuth = create<AuthState>(() => ({ status: "loading", waitingBrowser: false, ...SIGNED_OUT }));
+export const useAuth = create<AuthState>(() => ({ status: "loading", waitingBrowser: false, linking: null, ...SIGNED_OUT }));
 
 /** O erro já pronto para o `reportError`: a chave do i18n quando o Supabase
  * diz um código que a tela sabe explicar. */
@@ -68,7 +71,7 @@ function profileOf(user: User): Profile {
 async function hand(session: Session | null) {
   if (!session) {
     await commands.clearSession().catch(reportError);
-    useAuth.setState({ status: "signedOut", ...SIGNED_OUT });
+    useAuth.setState({ status: "signedOut", linking: null, ...SIGNED_OUT });
     return;
   }
   try {
@@ -88,15 +91,33 @@ async function hand(session: Session | null) {
 function receive(url: string) {
   const callback = readCallback(url);
   if (!callback) return;
+  const { linking } = useAuth.getState();
   if ("failure" in callback) {
-    useAuth.setState({ waitingBrowser: false });
-    reportError(callback.failure);
+    useAuth.setState({ waitingBrowser: false, linking: null });
+    if (linking && callback.reason === "identity_already_exists") void settleLink(linking);
+    else reportError(callback.failure);
     return;
   }
   supabase.auth.exchangeCodeForSession(callback.code).then(({ error }) => {
-    useAuth.setState({ waitingBrowser: false });
+    useAuth.setState({ waitingBrowser: false, linking: null });
     if (error) reportError(authFailure(error));
+    else if (linking) notify(t("linked.done", { provider: PROVIDER_NAMES[linking] }));
   });
+}
+
+/** O vínculo voltou dizendo que a identidade já existe. Se ela já é desta
+ * conta, o vínculo deu certo antes e só a tela não soube: relê e confirma.
+ * Senão ela entra em outra conta do JayV, e o aviso diz qual provedor. */
+async function settleLink(provider: Provider) {
+  try {
+    await loadAccess();
+  } catch (error) {
+    reportError(error);
+    return;
+  }
+  const name = PROVIDER_NAMES[provider];
+  if (linkOutcome(useAuth.getState().providers, provider) === "linked") notify(t("linked.done", { provider: name }));
+  else reportError({ key: "linked.taken", params: { provider: name } });
 }
 
 export function connectAuth() {
@@ -159,7 +180,7 @@ export async function loadAccess() {
 export async function linkProvider(provider: Provider) {
   const { data, error } = await supabase.auth.linkIdentity({ provider, options: { redirectTo: CALLBACK_URL, skipBrowserRedirect: true } });
   if (error) fail(error);
-  useAuth.setState({ waitingBrowser: true });
+  useAuth.setState({ waitingBrowser: true, linking: provider });
   await openUrl(data.url!);
 }
 

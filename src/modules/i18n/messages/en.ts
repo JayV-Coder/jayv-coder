@@ -617,6 +617,8 @@ export const en = {
   "linked.unlink": "Unlink",
   "linked.unlink.title": "Unlink {provider}",
   "linked.unlink.description": "You will no longer be able to sign in with {provider}.",
+  "linked.done": "{provider} is now linked to your account.",
+  "linked.taken": "This {provider} account already signs in to another JayV account. To bring it here, sign in with {provider}, set a password, unlink {provider} in that account and try again.",
   "profile.activity.title": "Your activity",
   "profile.activity.description": "The last 30 days, across all projects.",
   "profile.activity.open": "Open statistics",
