@@ -150,6 +150,7 @@ impl WorkspaceStore {
         ensure_turn_local(&connection)?;
         ensure_message_uid(&connection)?;
         crate::usage::store::ensure(&connection)?;
+        connection.execute_batch(crate::expertise::SCHEMA)?;
         crate::local::outbox::install(&connection)?;
         turns::requeue_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
@@ -177,7 +178,16 @@ impl WorkspaceStore {
     pub fn create_project(&mut self, name: &str, root_path: Option<String>) -> Result<ProjectRecord> {
         let name=name.trim();
         anyhow::ensure!(!name.is_empty(),Text::new("project.nameRequired"));
-        let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path:root_path.unwrap_or_default(),created_at:Utc::now()};
+        let root_path=root_path.map(|path|path.trim().to_string()).unwrap_or_default();
+        // Uma pasta é de um projeto só: dois projetos nela dividiriam o índice,
+        // o cache e a narração dos agentes sem que ninguém percebesse.
+        if !root_path.is_empty() {
+            let wanted=folder_key(&root_path);
+            let mut statement=self.connection.prepare("SELECT name,root_path FROM projects WHERE trim(root_path)<>''")?;
+            let folders=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if let Some((owner,_))=folders.into_iter().find(|(_,path)|folder_key(path)==wanted) { anyhow::bail!(Text::new("project.pathTaken").with("name",owner)); }
+        }
+        let project=ProjectRecord{id:Uuid::new_v4().to_string(),name:name.into(),root_path,created_at:Utc::now()};
         self.connection.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES(?1,?2,?3,?4)",params![project.id,project.name,project.root_path,project.created_at.to_rfc3339()])?;
         Ok(project)
     }
@@ -395,6 +405,10 @@ impl WorkspaceStore {
 
     pub fn database_path(&self) -> &Path {&self.path}
 
+    pub fn expertise(&self) -> Result<crate::expertise::Expertise> {crate::expertise::load(&self.connection)}
+
+    pub fn save_expertise(&mut self, level:&str) -> Result<crate::expertise::Expertise> {crate::expertise::save(&self.connection,level)}
+
     /// A conexão crua, para a fila de saída e a sincronização: é o único
     /// código de fora que fala SQL com o banco do usuário.
     pub fn record_usage(&self, entry:&crate::usage::Entry) -> Result<bool> {crate::usage::store::write(&self.connection,entry)}
@@ -544,6 +558,17 @@ fn new_chat_code()->String {
 }
 
 pub(crate) fn parse_time(value:&str)->Result<DateTime<Utc>>{Ok(DateTime::parse_from_rfc3339(value).with_context(||format!("invalid timestamp `{value}`"))?.with_timezone(&Utc))}
+
+/// A pasta como ela é comparada: o caminho real quando ela existe (atalhos e
+/// `..` resolvidos), sem barra no fim e, no Windows, sem diferença de
+/// maiúsculas nem de barra.
+fn folder_key(path:&str)->String {
+    let path=path.trim();
+    let real=fs::canonicalize(path).map(|real|real.display().to_string()).unwrap_or_else(|_|path.to_string());
+    let real=if cfg!(windows) { real.strip_prefix(r"\\?\").unwrap_or(&real).replace('\\',"/").to_lowercase() } else { real };
+    let trimmed=real.trim_end_matches('/');
+    if trimmed.is_empty() { "/".into() } else { trimmed.into() }
+}
 
 fn compact_title(input: &str) -> String {
     let mut title=input.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
@@ -963,6 +988,47 @@ mod tests {
         assert_eq!(store.chat_root(&chat.id).expect("raiz").expect("pasta do projeto"),PathBuf::from("/home/isaach/Arquivos/Meu Emissor"));
         assert!(store.chat_root(&loose.id).expect("raiz").is_none(),"projeto sem pasta não inventa caminho");
         assert!(store.chat_root("outro").is_err(),"chat que não existe não tem raiz");
+    }
+
+    /// O balão diz quem respondeu mesmo depois de o turno fechar: o último
+    /// `route` gravado vale, e o de antes do modo chega sem modo.
+    #[test]
+    fn an_answered_turn_remembers_who_answered_it() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let old=store.open_turn(&chat.id).expect("turno antigo");
+        store.record_beat(&old.id,"route",&serde_json::json!({"kind":"route","provider":"claude","model":"sonnet","reason":"x"})).expect("route antigo");
+        let turn=store.open_turn(&chat.id).expect("turno");
+        store.record_beat(&turn.id,"route",&serde_json::json!({"kind":"route","provider":"claude","model":"haiku","reason":"x","mode":"plan","agent":null})).expect("route");
+        store.record_beat(&turn.id,"route",&serde_json::json!({"kind":"route","provider":"codex","model":"gpt-5.5","reason":"x","mode":"build","agent":"developer"})).expect("route de novo");
+        store.append_exchange(&chat.id,&turn.id,"pedido","resposta").expect("exchange");
+        store.set_turn_status(&turn.id,TurnStatus::Answered).expect("fechado");
+
+        let turns=store.snapshot().expect("snapshot").chats[0].turns.clone();
+        let route=|id:&str|turns.iter().find(|view|view.id==id).and_then(|view|view.route.clone());
+        assert_eq!(route(&turn.id),Some(turns::TurnRoute{provider:"codex".into(),model:"gpt-5.5".into(),mode:Some("build".into()),agent:Some("developer".into())}));
+        assert_eq!(route(&old.id).map(|route|(route.model,route.mode)),Some(("sonnet".into(),None)));
+    }
+
+    #[test]
+    fn a_folder_belongs_to_a_single_project() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let folder=root.path().join("app");
+        fs::create_dir_all(folder.join("src")).expect("pasta");
+        let path=folder.display().to_string();
+        store.create_project("App",Some(path.clone())).expect("primeiro projeto");
+
+        for same in [path.clone(),format!("{path}/"),format!("  {path}  "),folder.join("src").join("..").display().to_string()] {
+            let error=store.create_project("Outro",Some(same.clone())).expect_err("a mesma pasta");
+            assert_eq!(error.downcast_ref::<Text>().map(|text|text.key.as_str()),Some("project.pathTaken"),"{same}");
+        }
+        assert_eq!(store.snapshot().expect("snapshot").projects.len(),1,"nenhum projeto a mais");
+        store.create_project("Fonte",Some(folder.join("src").display().to_string())).expect("subpasta é outra pasta");
+        store.create_project("Rascunho",None).expect("sem pasta");
+        store.create_project("Outro rascunho",Some("  ".into())).expect("pasta em branco é sem pasta");
     }
 
     #[test]
