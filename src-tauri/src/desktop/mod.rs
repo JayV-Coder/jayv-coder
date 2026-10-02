@@ -137,7 +137,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             projects::get_workspace,projects::create_project,projects::create_chat,projects::clear_chat,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::refresh_models,settings::check_agent,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,settings::save_expertise,
             system::system_status,
-            gate::gate_feed,
+            gate::gate_feed,gate::scoped_gate_feed,
             files::open_file,
             repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,
             usage::usage_report,usage::chat_usage,usage::refresh_quotas,

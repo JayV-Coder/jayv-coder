@@ -14,3 +14,13 @@ pub(crate) async fn gate_feed(workspace:State<'_,SharedWorkspace>,project_id:Opt
     let chats=workspace.chat_ids_for_project(&project_id).map_err(failure)?.into_iter().collect();
     workspace.gate_feed(Some(&chats)).map_err(failure)
 }
+
+/// A portaria de uma organização: só os chats dos projetos dela, ou só um
+/// desses chats. Sem projeto nenhum, o feed vem vazio (e não o da sessão
+/// inteira).
+#[tauri::command]
+pub(crate) async fn scoped_gate_feed(workspace:State<'_,SharedWorkspace>,project_ids:Vec<String>,chat_id:Option<String>)->Result<GateFeed,Text>{
+    let workspace=workspace.lock().await;
+    let chats=workspace.chat_ids_for_projects(&project_ids,chat_id.as_deref()).map_err(failure)?;
+    workspace.gate_feed(Some(&chats)).map_err(failure)
+}

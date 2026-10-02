@@ -39,6 +39,7 @@ export { InviteForm } from "./InviteForm";
 export { OrganizationMembers } from "./OrganizationMembers";
 export { OrganizationPolicy } from "./OrganizationPolicy";
 export { OrganizationProjects } from "./OrganizationProjects";
+export { OrganizationGate, OrganizationStats } from "./OrganizationDashboard";
 export { OrganizationRepositories } from "./OrganizationRepositories";
 export { ImportClonesDialog } from "./ImportClonesDialog";
 export { OrganizationSettings } from "./OrganizationSettings";
