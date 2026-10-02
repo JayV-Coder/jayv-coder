@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
  * telas de pátio. */
 export function ScrollPage({ children }: { children: ReactNode }) {
   return (
-    <div className="flex-1 overflow-auto p-6">
+    <div className="min-h-0 flex-1 overflow-auto p-6">
       <div className="mx-auto w-full max-w-[1080px]">{children}</div>
     </div>
   );
