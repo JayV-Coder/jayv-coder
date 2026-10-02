@@ -30,7 +30,7 @@
 
 ### Task 1: Migração e pgTAP (`supabase`)
 - [x] `tests/llm_policies.test.sql`: papéis, recusas, leitura, junção, `my_project_policies` com fork.
-- [x] `migrations/20261002121000_llm_policies.sql`: tabela, RLS, `set_llm_policy`, `clear_llm_policy`, `llm_policy_of`, `project_repository`, `my_project_policies`, traduções.
+- [x] `migrations/20261002210000_llm_policies.sql`: tabela, RLS, `set_llm_policy`, `clear_llm_policy`, `llm_policy_of`, `project_repository`, `my_project_policies`, traduções.
 - [x] Rodar as migrações e o pgTAP num Postgres 16 local com `auth` de mentira.
 
 ### Task 2: `policy.rs` (Rust, TDD)

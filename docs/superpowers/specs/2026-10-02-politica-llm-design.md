@@ -56,7 +56,7 @@ Sem nenhuma das duas, o projeto não tem política.
 
 ## Dados — repositório `supabase`
 
-Migração `20261002121000_llm_policies.sql`.
+Migração `20261002210000_llm_policies.sql`.
 
 `organization_llm_policies`:
 
