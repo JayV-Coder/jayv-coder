@@ -20,7 +20,7 @@ export function ProfileSetupPage({ profile }: { profile: AccountProfile }) {
   };
 
   return (
-    <div className="grid min-h-screen place-items-center px-6 py-10">
+    <div className="grid min-h-full place-items-center px-6 py-10">
       <div className="grid w-full max-w-2xl gap-6">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />
