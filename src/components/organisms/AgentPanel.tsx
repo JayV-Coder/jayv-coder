@@ -54,16 +54,15 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
 
       <SettingsSection title={t("agent.section.connection")} description={t("agent.section.connection.description")}>
         <div className="grid gap-5 sm:grid-cols-[1fr_220px]">
-          <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t("agent.command.hint")} error={problems.command && t(problems.command)}>
+          <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t("agent.command.locked")} error={problems.command && t(problems.command)}>
             <div className="flex gap-2">
               <Input
                 id={`${agent.id}-command`}
                 value={agent.command}
+                disabled
                 spellCheck={false}
                 className="font-mono"
                 aria-invalid={problems.command ? true : undefined}
-                onChange={(event) => updateAgent(agent.id, { command: event.target.value })}
-                onBlur={() => void checkAgent(agent.id)}
               />
               <Button variant="outline" disabled={probe === "checking" || !!problems.command} onClick={() => void checkAgent(agent.id)}>{t("agent.check")}</Button>
             </div>
