@@ -1,6 +1,7 @@
 import { SparklesIcon, WrenchIcon } from "lucide-react";
 import { closeChanges, showAllChanges, useChangelog, type ChangeKind, type Release } from "@/modules/changelog";
 import { useLocale, useT, type Key } from "@/modules/i18n";
+import { installUpdate } from "@/modules/updates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +15,12 @@ const GROUPS: { kind: ChangeKind; label: Key; Icon: typeof SparklesIcon; tone: s
  * Um grupo vazio não aparece. */
 function ReleaseNotes({ release, installed }: { release: Release; installed: boolean }) {
   const t = useT();
+  // Item de uma versão que este app ainda não conhece: sem a chave, vale o
+  // inglês que veio nas notas do release.
+  const say = (key: string, fallback?: string | null) => {
+    const text = t(key as Key);
+    return text === key && fallback ? fallback : text;
+  };
   const locale = useLocale();
   // A data é só o dia: lida como meio-dia UTC, não muda de dia em fuso nenhum.
   const day = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${release.date}T12:00:00Z`));
@@ -36,8 +43,8 @@ function ReleaseNotes({ release, installed }: { release: Release; installed: boo
             <ul className="grid gap-2.5">
               {items.map((item) => (
                 <li key={item.id} className="rounded-md border border-border bg-muted/40 px-3.5 py-2.5">
-                  <p className="text-sm font-medium text-foreground">{t(`whatsNew.item.${item.id}.title` as Key)}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{t(`whatsNew.item.${item.id}.detail` as Key)}</p>
+                  <p className="text-sm font-medium text-foreground">{say(`whatsNew.item.${item.id}.title`, item.title)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{say(`whatsNew.item.${item.id}.detail`, item.detail)}</p>
                 </li>
               ))}
             </ul>
@@ -49,19 +56,23 @@ function ReleaseNotes({ release, installed }: { release: Release; installed: boo
 }
 
 /** O que mudou: abre sozinha depois de uma atualização, com as versões que a
- * pessoa ainda não viu, e pelo botão "Novidades" com o histórico inteiro. */
+ * pessoa ainda não viu, pelo botão "Novidades" com o histórico inteiro, e pelo
+ * "O que muda" do aviso de atualização só com a versão nova, com o botão de
+ * atualizar. */
 export function WhatsNewDialog() {
   const t = useT();
-  const { open, current, previous, releases, all } = useChangelog();
+  const { open, current, previous, releases, all, upcoming } = useChangelog();
   if (!current) return null;
-  const description = previous
+  const description = upcoming
+    ? t("whatsNew.description.upcoming", { version: upcoming })
+    : previous
     ? t("whatsNew.description.updated", { previous, version: current })
     : all ? t("whatsNew.description") : t("whatsNew.description.installed", { version: current });
   return (
     <Dialog open={open} onOpenChange={(wanted) => { if (!wanted) closeChanges(); }}>
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle className="text-xl">{t("whatsNew.title", { version: current })}</DialogTitle>
+          <DialogTitle className="text-xl">{t("whatsNew.title", { version: upcoming ?? current })}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
@@ -71,7 +82,12 @@ export function WhatsNewDialog() {
 
         <DialogFooter>
           {!all && <Button variant="ghost" onClick={showAllChanges}>{t("whatsNew.showAll")}</Button>}
-          <Button onClick={closeChanges}>{t("whatsNew.done")}</Button>
+          {upcoming ? (
+            <>
+              <Button variant="ghost" onClick={closeChanges}>{t("whatsNew.done")}</Button>
+              <Button onClick={() => { closeChanges(); void installUpdate(); }}>{t("update.install")}</Button>
+            </>
+          ) : <Button onClick={closeChanges}>{t("whatsNew.done")}</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

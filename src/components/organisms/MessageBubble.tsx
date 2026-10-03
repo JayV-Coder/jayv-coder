@@ -111,7 +111,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   }
 
   return (
-    <article aria-label="JayV" className={cn("group/message overflow-hidden rounded-md border border-border bg-card", animate)}>
+    <article aria-label="JayV" className={cn("group/message min-w-0 overflow-hidden rounded-md border border-border bg-card", animate)}>
       <div className="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-secondary/50 px-3.5 py-1 text-caption text-dim">
         <span className="inline-flex items-center gap-1.5 font-semibold text-foreground">
           <span aria-hidden="true" className="text-[0.8125rem] leading-none">🤖</span>
@@ -124,7 +124,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
         )}
         {light && <span className="ms-auto"><Verdict light={light} /></span>}
       </div>
-      <div className="grid gap-1.5 px-3.5 pt-2.5 pb-2">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5 px-3.5 pt-2.5 pb-2">
         {route?.switched && (
           // O Jev tirou o chat do planejamento: uma linha diz por quê e, na
           // troca mais recente, deixa voltar.
@@ -139,7 +139,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
           </div>
         )}
         {(text || !pending) && (
-          <div className="grid gap-2">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
             {parts.map((part, index) => {
               const last = index === parts.length - 1;
               return (
@@ -147,7 +147,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
                   key={index}
                   data-aspect={light?.aspect}
                   className={cn(
-                    "leading-relaxed [overflow-wrap:anywhere]",
+                    "min-w-0 leading-relaxed [overflow-wrap:anywhere]",
                     // O que o agente disse no caminho: discreto, como a saída
                     // de uma ferramenta.
                     !last && "flex gap-2 text-small text-muted-foreground before:shrink-0 before:text-faint before:content-['↳']",
@@ -177,10 +177,10 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
                 {t(copied ? "chat.copied" : "chat.copy")}
               </Button>
             )}
-            {meta && <small className="tabular-nums">{meta}</small>}
+            {meta && <small className="ms-auto text-end tabular-nums">{meta}</small>}
           </div>
         )}
-        {pending && meta && <small className="block text-caption text-muted-foreground">{meta}</small>}
+        {pending && meta && <small className="block text-end text-caption text-muted-foreground">{meta}</small>}
       </div>
     </article>
   );
