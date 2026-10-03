@@ -145,6 +145,14 @@ export async function loadDetail(id: string) {
   });
 }
 
+/** Os repositórios da organização, para quem abre o chat dela fora da página
+ * da organização (a lista de projetos), onde o detalhe não está carregado. */
+export async function organizationRepositories(id: string): Promise<Repository[]> {
+  const { data, error } = await supabase.from("organization_repositories").select("id, provider, path, repo_key").eq("org_id", id).order("repo_key");
+  if (error) throw failure(error);
+  return (data ?? []).map((row) => ({ id: row.id, provider: row.provider as Provider, path: row.path, repoKey: row.repo_key }));
+}
+
 export function openOrganization(id: string, tab: OrganizationTab = "projects") {
   useOrganizations.setState({ openId: id, tab, detail: null });
   navigate("organization");

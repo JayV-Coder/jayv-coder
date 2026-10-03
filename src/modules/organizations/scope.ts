@@ -55,3 +55,37 @@ function ownLink(project: { orgId?: string | null }, organizations: { id: string
 export function projectOrgId(project: { id: string; orgId?: string | null }, links: Record<string, { orgId: string }>): string | null {
   return links[project.id]?.orgId ?? project.orgId ?? null;
 }
+
+/** O chat mais recente do projeto da organização (o que junta os repositórios
+ * dela) com pasta neste computador. Quando existe, o botão leva direto a ele
+ * em vez de abrir outro. */
+export function organizationChatOf<C extends { id: string; projectId: string; updatedAt: string }>(
+  data: { projects: { id: string; rootPath: string; orgId?: string | null }[]; chats: C[] },
+  orgId: string,
+): C | null {
+  const projects = new Set(data.projects.filter((project) => project.orgId === orgId && project.rootPath.trim()).map((project) => project.id));
+  return data.chats
+    .filter((chat) => projects.has(chat.projectId))
+    .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf())[0] ?? null;
+}
+
+/** O filtro da lista de projetos: tudo, só os pessoais ou só os das
+ * organizações (todas juntas). */
+export type ScopeFilter = "all" | "personal" | "organizations";
+
+/** Os blocos que o filtro e a busca deixam à vista. A busca olha nome, pasta e
+ * repositórios do projeto, sem diferenciar maiúsculas; com ela preenchida, os
+ * blocos sem nenhum projeto que combine somem. */
+export function filterScopeGroups<P extends { name: string; rootPath: string; repoKeys?: string[] }>(
+  groups: ScopeGroup<P>[],
+  filter: ScopeFilter,
+  query: string,
+): ScopeGroup<P>[] {
+  const scoped = groups.filter((group) => filter === "all" || (filter === "personal") === (group.scope.kind === "personal"));
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return scoped;
+  const matches = (project: P) => [project.name, project.rootPath, ...(project.repoKeys ?? [])].some((text) => text.toLocaleLowerCase().includes(needle));
+  return scoped
+    .map((group) => ({ ...group, projects: group.projects.filter(matches) }))
+    .filter((group) => group.projects.length > 0);
+}

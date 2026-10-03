@@ -49,13 +49,14 @@ let pending: Update | null = null;
  * a versão nova vira `available` (o aviso no topo e a notificação), e sem
  * rede ou numa build de desenvolvimento a falha fica calada. Pelo botão
  * (`announce`) a janela aparece desde a consulta, diz também "já está na mais
- * nova" e o erro, e a versão achada já se instala. */
+ * nova" e o erro, e a versão achada espera na janela a pessoa
+ * escolher entre atualizar agora ou depois: nada se instala sem ela mandar. */
 export async function checkForUpdate(announce = false) {
   const state = useUpdate.getState();
   // Uma atualização em curso não começa outra: o botão só reabre a janela.
   if (busy(state.phase)) { if (announce) useUpdate.setState({ open: true }); return; }
   if (!announce) { await checkQuietly(); return; }
-  if (pending) { await install(pending); return; }
+  if (pending) { offer(pending); return; }
   useUpdate.setState({ phase: "checking", open: true, error: null, failedAt: null, received: 0, total: null, next: null, notes: null, date: null });
   let update: Update | null;
   try {
@@ -66,7 +67,19 @@ export async function checkForUpdate(announce = false) {
     return;
   }
   if (!update) { useUpdate.setState({ phase: "latest" }); return; }
-  await install(update);
+  // A consulta silenciosa pode ter guardado outra enquanto esta esperava.
+  const previous = pending as Update | null;
+  if (previous && previous !== update) void previous.close().catch(() => undefined);
+  pending = update;
+  offer(update);
+}
+
+/** A versão achada na janela aberta, com o que muda, esperando a escolha. */
+function offer(update: Update) {
+  useUpdate.setState({
+    phase: "available", open: true, current: update.currentVersion, next: update.version,
+    notes: update.body?.trim() || null, date: update.date ?? null, error: null, failedAt: null, received: 0, total: null,
+  });
 }
 
 /** A consulta sem janela: não mexe na fase enquanto pergunta (o aviso do topo
@@ -95,7 +108,7 @@ async function checkQuietly() {
 }
 
 /** Instala a versão já achada (o botão do aviso e da janela); sem uma
- * guardada, consulta e instala. */
+ * guardada, consulta e mostra o que achou, para a pessoa escolher. */
 export async function installUpdate() {
   if (pending && !busy(useUpdate.getState().phase)) await install(pending);
   else await checkForUpdate(true);

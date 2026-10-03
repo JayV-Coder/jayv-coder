@@ -1,6 +1,7 @@
 import { commands, type FoundRepository } from "@/modules/core";
 import { navigate } from "@/modules/navigation";
-import { folderName, loadWorkspace } from "@/modules/workspace";
+import { chatsOf, folderName, loadWorkspace, openChat, useWorkspace } from "@/modules/workspace";
+import { organizationChatOf } from "./scope";
 
 /** Clona o repositório dentro da pasta; o núcleo já cria o projeto. */
 export async function cloneRepository(repoKey: string, folder: string) {
@@ -40,11 +41,21 @@ export async function pickFolder(title: string, defaultPath?: string | null): Pr
   return typeof chosen === "string" ? chosen : null;
 }
 
-/** Um chat novo no projeto da organização, cuja pasta é a da organização
- * neste computador: o agente enxerga todos os clones que estão nela. */
+/** O chat no projeto da organização, cuja pasta é a da organização neste
+ * computador: o agente enxerga todos os clones que estão nela. Quando o
+ * projeto já tem chat, volta para o mais recente em vez de abrir outro. */
 export async function openOrganizationChat(orgId: string, name: string, folder: string) {
   const project = await commands.organizationProject(orgId, name, folder);
-  const chat = await commands.createChat(project.id);
+  const chat = chatsOf(useWorkspace.getState().data, project.id)[0] ?? await commands.createChat(project.id);
   await loadWorkspace(chat.id);
   navigate("chat");
+}
+
+/** Vai direto ao chat da organização que já existe neste computador; `false`
+ * quando ainda não há nenhum e é preciso escolher a pasta. */
+export function resumeOrganizationChat(orgId: string): boolean {
+  const chat = organizationChatOf(useWorkspace.getState().data, orgId);
+  if (!chat) return false;
+  openChat(chat.id);
+  return true;
 }
