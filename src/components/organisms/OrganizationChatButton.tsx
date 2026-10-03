@@ -82,7 +82,7 @@ export function OrganizationChatButton({ organization, repositories, size, varia
       <Dialog open={folder !== null} onOpenChange={(open) => { if (!open) setFolder(null); }}>
         <DialogContent className="sm:max-w-[560px]">
           <DialogHeader>
-            <Eyebrow>{t("orgChat.open")}</Eyebrow>
+            <Eyebrow>{organization.name}</Eyebrow>
             <DialogTitle className="text-xl">{t("orgChat.title")}</DialogTitle>
             <DialogDescription>{t("orgChat.description", { org: organization.name })}</DialogDescription>
           </DialogHeader>

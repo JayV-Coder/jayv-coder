@@ -28,6 +28,7 @@ export const commands = {
   scanRepositories: (folder: string, keys: string[]) => invoke<FoundRepository[]>("scan_repositories", { folder, keys }),
   cloneRepository: (key: string, folder: string) => invoke<Project>("clone_repository", { key, folder }),
   folderRepoKeys: (path: string) => invoke<string[]>("folder_repo_keys", { path }),
+  repositoryStates: (folder: string) => invoke<RepositoryState[]>("repository_states", { folder }),
   systemStatus: () => invoke<SystemStatus>("system_status"),
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),
@@ -54,6 +55,13 @@ export const commands = {
 
 /** Um clone de repositório da organização achado numa pasta. */
 export interface FoundRepository { key: string; path: string }
+
+/** Um repositório dentro da pasta de um chat, com o que o `git status` diz.
+ * `relative` vazio é a própria pasta; `readable` falso, o git não respondeu. */
+export interface RepositoryState {
+  path: string; relative: string; key: string | null; branch: string | null; upstream: string | null;
+  ahead: number; behind: number; changed: number; readable: boolean;
+}
 
 /** O pedido das estatísticas: o escopo, o intervalo em ISO (aberto onde vier
  * vazio) e o fuso de quem lê, para que "hoje" seja o hoje dele. */

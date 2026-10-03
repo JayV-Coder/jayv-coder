@@ -10,6 +10,11 @@ export async function cloneRepository(repoKey: string, folder: string) {
   return project;
 }
 
+/** Os repositórios dentro da pasta do chat com o branch e o status de cada um. */
+export function repositoryStates(folder: string) {
+  return commands.repositoryStates(folder);
+}
+
 /** Os clones dos repositórios dentro da pasta. */
 export function scanFolder(folder: string, repoKeys: string[]) {
   return commands.scanRepositories(folder, repoKeys);

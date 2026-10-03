@@ -4,6 +4,7 @@ import { useConnection } from "@/modules/connection";
 import { TALLY, useGate } from "@/modules/gate";
 import { useT } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
+import { showUpdate, useUpdate } from "@/modules/updates";
 import { findProject, useWorkspace } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
 import { cn } from "@/lib/utils";
@@ -12,7 +13,8 @@ const GLYPH = { go: "✓", ask: "?", stop: "✕" } as const;
 
 /** A barra de status no pé da janela, como a de um terminal ou editor: se a
  * sincronização está em dia, a pasta do projeto aberto, a contagem da portaria
- * dele, o atalho da paleta e a versão instalada. */
+ * dele, o atalho da paleta, a versão nova quando há uma esperando e a
+ * versão instalada. */
 export function StatusBar() {
   const t = useT();
   const { link, pending, refusals } = useConnection();
@@ -21,6 +23,7 @@ export function StatusBar() {
   const tally = useGate((state) => state.feed.tally);
   const gateProject = useGate((state) => state.project?.id ?? null);
   const version = useChangelog((state) => state.current);
+  const next = useUpdate((state) => (state.phase === "available" ? state.next : null));
 
   // O que a sincronização deve fica em âmbar; em dia, uma luz verde só.
   const problem = link === "offline"
@@ -68,6 +71,16 @@ export function StatusBar() {
           <Kbd>{MOD}</Kbd><Kbd>K</Kbd>
           {t("palette.title")}
         </button>
+        {next && (
+          <button
+            type="button"
+            onClick={showUpdate}
+            title={t("update.banner.title", { version: next })}
+            className="rounded-xs px-1 tabular-nums text-primary outline-none hover:text-sidebar-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            ↑ v{next}
+          </button>
+        )}
         {version && (
           <button
             type="button"

@@ -32,3 +32,12 @@ pub(crate) async fn clone_repository(workspace:State<'_,SharedWorkspace>,key:Str
 pub(crate) async fn folder_repo_keys(path:String)->Result<Vec<String>,Text>{
     tauri::async_runtime::spawn_blocking(move ||crate::repo_keys::of_folder(&path)).await.map_err(Text::unexpected)
 }
+
+/// Os repositórios da pasta de um chat com o branch e o status de cada um: o
+/// painel do chat da organização.
+#[tauri::command]
+pub(crate) async fn repository_states(folder:String)->Result<Vec<checkout::RepositoryState>,Text>{
+    let folder=PathBuf::from(folder.trim());
+    if !folder.is_dir() {return Err(Text::new("repos.folder.missing").with("path",folder.display().to_string()));}
+    Ok(checkout::states(folder).await)
+}

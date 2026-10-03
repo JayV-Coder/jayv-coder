@@ -159,6 +159,84 @@ pub fn nested(folder:&Path)->Vec<String> {
     listed
 }
 
+/// Um repositório da pasta como o chat da organização o mostra: onde está, de
+/// que repositório é, o branch e o que o `git status` diz dele.
+#[derive(Debug,Clone,Default,PartialEq,Eq,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct RepositoryState{
+    pub path:String,
+    /// O caminho dentro da pasta (`backend/worker`); vazio quando a pasta é o
+    /// próprio repositório.
+    pub relative:String,
+    pub key:Option<String>,
+    /// Nulo com o HEAD solto (`detached`) ou num repositório sem commit.
+    pub branch:Option<String>,
+    /// O branch remoto que ele segue, quando segue algum.
+    pub upstream:Option<String>,
+    pub ahead:u32,
+    pub behind:u32,
+    /// Arquivos alterados, novos ou em conflito.
+    pub changed:u32,
+    /// Falso quando o `git` não respondeu: sem git instalado, pasta corrompida
+    /// ou que demorou demais.
+    pub readable:bool,
+}
+
+/// Quanto o `git status` de um repositório pode demorar: um repositório
+/// enorme num disco lento não segura o chat.
+const STATUS_LIMIT:Duration=Duration::from_secs(10);
+
+/// Lê a saída de `git status --porcelain=v2 --branch`.
+pub fn parse_status(output:&str,state:&mut RepositoryState) {
+    for line in output.lines() {
+        if let Some(head)=line.strip_prefix("# branch.head ") {
+            state.branch=(head!="(detached)").then(||head.to_string());
+        } else if let Some(upstream)=line.strip_prefix("# branch.upstream ") {
+            state.upstream=Some(upstream.to_string());
+        } else if let Some(counts)=line.strip_prefix("# branch.ab ") {
+            for part in counts.split_whitespace() {
+                if let Some(ahead)=part.strip_prefix('+') {state.ahead=ahead.parse().unwrap_or(0);}
+                if let Some(behind)=part.strip_prefix('-') {state.behind=behind.parse().unwrap_or(0);}
+            }
+        } else if matches!(line.split(' ').next(),Some("1"|"2"|"u"|"?")) {
+            state.changed+=1;
+        }
+    }
+}
+
+async fn status_of(mut state:RepositoryState)->RepositoryState {
+    let mut process=Command::new("git");
+    crate::providers::quiet(&mut process)
+        .args(["status","--porcelain=v2","--branch"]).current_dir(&state.path)
+        // Só lê: não trava o índice enquanto o agente está escrevendo nele.
+        .env("GIT_OPTIONAL_LOCKS","0").env("GIT_TERMINAL_PROMPT","0")
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let Ok(child)=process.spawn() else {return state};
+    if let Ok(Ok(output))=timeout(STATUS_LIMIT,child.wait_with_output()).await {
+        if output.status.success() {
+            parse_status(&String::from_utf8_lossy(&output.stdout),&mut state);
+            state.readable=true;
+        }
+    }
+    state
+}
+
+/// Os repositórios dentro de `folder` (a própria pasta, as filhas e as
+/// netas), cada um com o branch e o status, consultados ao mesmo tempo.
+pub async fn states(folder:PathBuf)->Vec<RepositoryState> {
+    let base=folder.clone();
+    let found=tokio::task::spawn_blocking(move ||repositories(&base)).await.unwrap_or_default();
+    let tasks:Vec<_>=found.into_iter().map(|(dir,keys)|{
+        let relative=dir.strip_prefix(&folder).unwrap_or(&dir).to_string_lossy().replace('\\',"/");
+        let state=RepositoryState{path:dir.display().to_string(),relative,key:keys.into_iter().next(),..Default::default()};
+        tokio::spawn(status_of(state))
+    }).collect();
+    let mut states=Vec::with_capacity(tasks.len());
+    for task in tasks {if let Ok(state)=task.await {states.push(state);}}
+    states.sort_by(|a,b|a.relative.cmp(&b.relative));
+    states
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +329,27 @@ mod tests {
         let target=target(&parent,"github.com/acme/api").unwrap();
         assert!(matches!(attempt(&origin.display().to_string(),&target).await.unwrap(),Attempt::Done));
         assert!(target.join(".git").is_dir());
+    }
+    #[test] fn the_status_reads_branch_counts_and_changes() {
+        let mut state=RepositoryState::default();
+        parse_status("# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 a b src/lib.rs\n? notes.txt\nu UU N... 1 2 3 4 a b c x.rs\n",&mut state);
+        assert_eq!((state.branch.as_deref(),state.upstream.as_deref(),state.ahead,state.behind,state.changed),(Some("main"),Some("origin/main"),2,1,3));
+        let mut loose=RepositoryState::default();
+        parse_status("# branch.oid abc\n# branch.head (detached)\n",&mut loose);
+        assert_eq!((loose.branch,loose.upstream,loose.changed),(None,None,0));
+    }
+
+    #[tokio::test] async fn the_states_come_from_each_clone() {
+        let root=tempfile::tempdir().unwrap();
+        let api=root.path().join("api");
+        fs::create_dir(&api).unwrap();
+        let git=|args:&[&str]|assert!(std::process::Command::new("git").args(args).current_dir(&api).output().unwrap().status.success());
+        git(&["init","--quiet","-b","main"]);
+        git(&["remote","add","origin","git@github.com:acme/api.git"]);
+        fs::write(api.join("README.md"),"x").unwrap();
+        let states=states(root.path().to_path_buf()).await;
+        assert_eq!(states.len(),1);
+        let state=&states[0];
+        assert_eq!((state.relative.as_str(),state.key.as_deref(),state.changed,state.readable),("api",Some("github.com/acme/api"),1,true));
     }
 }
