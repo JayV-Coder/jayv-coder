@@ -82,7 +82,7 @@ export async function loadSettings() {
     const [agents, core] = await Promise.all([commands.getSettings(), commands.getCoreSettings()]);
     apply(agents);
     applyCore(core);
-    for (const agent of AGENTS) void checkAgent(agent);
+    checkAllAgents();
   } catch (error) {
     reportError(error);
   }
@@ -166,6 +166,11 @@ export async function checkAgent(id: AgentId, quiet = false) {
 function sameProbe(a: ProbeState, b: ProbeState) {
   if (a === null || b === null || a === "checking" || b === "checking") return a === b;
   return a.path === b.path && a.version === b.version;
+}
+
+/** Confere todos os agentes agora (o botão da página Sistema). */
+export function checkAllAgents() {
+  for (const agent of AGENTS) void checkAgent(agent);
 }
 
 /** De quanto em quanto tempo a tela de configurações confere os agentes
@@ -274,6 +279,12 @@ export function connectSettings() {
     stop?.();
     stop = null;
     if (view === "profile") void loadCoreSnapshot();
+    // A página Sistema mostra se cada agente responde: confere ao abrir, sem
+    // reler a configuração quando ela já está carregada.
+    if (view === "status") {
+      if (useSettings.getState().loaded) checkAllAgents();
+      else void loadSettings();
+    }
     if (view !== "settings") return;
     void loadSettings();
     stop = watchAgents();
