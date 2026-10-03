@@ -320,12 +320,40 @@ impl AgentSettings {
         }
     }
 
+    /// A linha de comando do modo desenvolvimento. O agente roda sem terminal,
+    /// e ninguém responde ao pedido de aprovação dele: o que só se faz com
+    /// aprovação é negado. Então o que na configuração só lê sobe para o
+    /// degrau que escreve no projeto e nada além — o Claude para o
+    /// `acceptEdits`, o Codex para o `workspace-write` sem rede e o Copilot
+    /// para o `edits`. O que já escrevia fica como está, e o Cursor também: o
+    /// único degrau dele que escreve é o `--force`, que roda comandos sem
+    /// perguntar. Quem não quer escrita usa o modo planejamento, e a regra de
+    /// escrita do Jev em `deny` manda o pedido para ele.
+    pub fn build_args(&self)->Vec<String> {
+        match self.id {
+            AgentId::Claude=>{
+                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
+                if matches!(options.permission_mode.as_str(),"default"|"plan") { options.permission_mode="acceptEdits".into(); }
+                options.args()
+            }
+            AgentId::Codex=>{
+                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
+                if options.sandbox=="read-only" { options.sandbox="workspace-write".into(); options.network_access=false; }
+                options.args()
+            }
+            AgentId::Copilot=>{
+                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
+                if options.tool_access=="read" { options.tool_access="edits".into(); }
+                options.args()
+            }
+            AgentId::Cursor=>self.args(),
+        }
+    }
+
     /// A linha de comando do modo planejamento: as opções do desenvolvedor,
     /// com a escrita desligada. O Claude entra no `--permission-mode plan`, o
     /// Codex no sandbox `read-only` sem rede, o Copilot só lê e o Cursor entra
-    /// no `--mode plan`, sem `--force`. No modo build
-    /// valem as opções como estão: o Jev nunca dá ao agente mais do que a
-    /// configuração deu.
+    /// no `--mode plan`, sem `--force`.
     pub fn plan_args(&self)->Vec<String> {
         match self.id {
             AgentId::Claude=>ClaudeOptions{permission_mode:"plan".into(),..parse::<ClaudeOptions>(&self.options).unwrap_or_default()}.args(),
@@ -650,7 +678,7 @@ pub fn model_key(model:&AgentModel)->String { format!("{}/{}",model.agent.key(),
 /// Os provedores e modelos no formato que o orquestrador já entende.
 pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap<String,ModelConfig>) {
     let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),ProviderConfig{
-        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.args(),plan_args:agent.plan_args(),..ProviderConfig::default()
+        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.build_args(),plan_args:agent.plan_args(),..ProviderConfig::default()
     })).collect();
     let models=settings.models.iter().map(|model|(model_key(model),ModelConfig{
         enabled:model.enabled,provider:model.agent.key().into(),model:model.model.clone(),capabilities:model.capabilities.clone(),
@@ -1028,6 +1056,27 @@ mod tests {
         assert_eq!(legacy_effort(json!({"effort":"default"}))["effort"],AUTO_EFFORT);
     }
 
+    /// Sem terminal ninguém aprova nada: no modo desenvolvimento o que só lia
+    /// passa a escrever no projeto, sem ganhar comandos nem rede.
+    #[test] fn development_lets_every_agent_write_to_the_project() {
+        for options in [Value::Null,json!({"permissionMode":"default"}),json!({"permissionMode":"plan"})] {
+            let claude=agent(AgentId::Claude,options).build_args();
+            assert!(claude.windows(2).any(|pair|pair==["--permission-mode","acceptEdits"]),"{claude:?}");
+        }
+        for mode in ["auto","bypassPermissions","acceptEdits"] {
+            assert!(agent(AgentId::Claude,json!({"permissionMode":mode})).build_args().windows(2).any(|pair|pair==["--permission-mode",mode]),"{mode} fica");
+        }
+        let codex=agent(AgentId::Codex,json!({"sandbox":"read-only","networkAccess":true})).build_args();
+        assert!(codex.windows(2).any(|pair|pair==["--sandbox","workspace-write"]));
+        assert!(!codex.iter().any(|arg|arg.contains("network_access")),"subir para escrever não abre a rede");
+        let copilot=agent(AgentId::Copilot,Value::Null).build_args();
+        assert!(copilot.windows(2).any(|pair|pair==["--allow-tool","write"])&&!copilot.iter().any(|arg|arg=="--allow-all-tools"));
+        assert!(!agent(AgentId::Cursor,Value::Null).build_args().iter().any(|arg|arg=="--force"),"o Cursor não ganha comandos sem aprovação");
+        let (providers,_)=to_config(&settings(vec![agent(AgentId::Claude,Value::Null)]));
+        assert!(providers["claude"].args.windows(2).any(|pair|pair==["--permission-mode","acceptEdits"]));
+        assert!(providers["claude"].for_planning().args.windows(2).any(|pair|pair==["--permission-mode","plan"]));
+    }
+
     #[test] fn planning_runs_every_agent_read_only() {
         let claude=agent(AgentId::Claude,json!({"permissionMode":"bypassPermissions","effort":"high"})).plan_args();
         assert!(claude.windows(2).any(|pair|pair==["--permission-mode","plan"]));
@@ -1042,6 +1091,8 @@ mod tests {
         assert!(!copilot.iter().any(|arg|arg=="--allow-all-tools"||arg=="--allow-tool"));
         assert!(copilot.windows(2).any(|pair|pair==["--deny-tool","shell(rm)"]));
 
+        let (providers,_)=to_config(&settings(vec![agent(AgentId::Codex,json!({"sandbox":"danger-full-access"}))]));
+        assert!(providers["codex"].args.windows(2).any(|pair|pair==["--sandbox","danger-full-access"]),"o build não tira o que foi dado");
         let (providers,_)=to_config(&settings(vec![agent(AgentId::Codex,json!({"sandbox":"workspace-write"}))]));
         let codex=&providers["codex"];
         assert!(codex.args.windows(2).any(|pair|pair==["--sandbox","workspace-write"]),"o build usa o que foi configurado");
