@@ -388,6 +388,28 @@ mod tests {
         assert_ne!(paired_check.verdict,EntryVerdict::Block,"a portaria não barra o fluxo que ela própria mandou abrir");
     }
 
+    /// O caso que chegou do Isaac: no meio de um plano o agente perguntou se
+    /// ele já tinha saído do modo plano, e a resposta foi barrada como pedido
+    /// de funcionalidade. A resposta herda a passagem do pedido de origem; a
+    /// nota e os critérios continuam os que a portaria leu.
+    #[test] fn an_answer_inherits_the_pass_of_the_request_that_raised_the_question() {
+        use crate::{gatekeeper::{self,EntryVerdict},turns::{Turn,TurnStatus}};
+        let turn=Turn{id:"t3".into(),chat_id:"c1".into(),code:"XY4T9B·03".into(),ordinal:3,status:TurnStatus::Flying,created_at:chrono::Utc::now()};
+        let answer=i18n::for_model(&compose("Já saiu do modo plano?",Shape::Noul,&[],&[],Some("Ainda não, aviso quando sair")).expect("resposta"));
+        // A leitura que o Jev deu no caso real: funcionalidade, sem objetivo,
+        // sem onde e sem quando — 32 de 100.
+        let reading=gatekeeper::EntryReading{scope_score:1.0,goal_is_clear:0.1,says_where:0.0,says_when_done:0.0,bundles_requests:0.0};
+        let judged=gatekeeper::judge(&turn,&answer,&reading,"jev");
+        assert_eq!(judged.verdict,EntryVerdict::Block,"sozinha, a resposta não diz objetivo, onde nem quando: {}",judged.score);
+
+        let inherited=judged.clone().inherit(EntryVerdict::Pass);
+        assert_eq!(inherited.verdict,EntryVerdict::Pass,"o agente perguntou porque a portaria liberou o pedido");
+        assert_eq!(inherited.note,"entry.note.pass");
+        assert_eq!((inherited.score,&inherited.criteria),(judged.score,&judged.criteria),"o que a portaria leu não muda");
+        assert_eq!(judged.clone().inherit(EntryVerdict::Ask).verdict,EntryVerdict::Ask,"liberado com ressalva continua com ressalva");
+        assert_eq!(judged.clone().inherit(EntryVerdict::Block).verdict,EntryVerdict::Block,"nada herda um bloqueio para passar");
+    }
+
     /// O caso que motivou o formulário: o agente não conseguiu abrir o dele e
     /// mandou as perguntas numeradas, cada uma com as suas alternativas.
     #[test] fn several_closing_questions_become_one_form() {

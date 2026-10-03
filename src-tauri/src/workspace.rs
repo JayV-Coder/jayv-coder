@@ -489,7 +489,9 @@ impl WorkspaceStore {
 
     pub fn chat_of_turn(&self, turn_id:&str) -> Result<Option<String>> {turns::chat_of(&self.connection,turn_id)}
 
-    pub fn question_origin(&self, turn_id:&str) -> Result<Option<String>> {turns::question_origin(&self.connection,turn_id)}
+    pub fn question_origin(&self, turn_id:&str) -> Result<Vec<String>> {turns::question_origin(&self.connection,turn_id)}
+
+    pub fn question_verdict(&self, turn_id:&str) -> Result<Option<crate::gatekeeper::EntryVerdict>> {turns::question_verdict(&self.connection,turn_id)}
 
     /// Os agentes e modelos que a tela Configuração do LLM grava.
     pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
@@ -929,10 +931,45 @@ mod tests {
         let answer_turn=store.enqueue_prompt(&chat.id,"Resposta à pergunta «Qual provedor?»: Anthropic",None).expect("turno-resposta");
         assert!(store.settle_question(&question_turn.id,turns::QUESTION_ANSWERED,Some(&answer_turn.id)).expect("encerrar"));
 
-        assert_eq!(store.question_origin(&answer_turn.id).expect("origem").as_deref(),Some("Troque o provedor padrão em config.yaml"));
+        assert_eq!(store.question_origin(&answer_turn.id).expect("origem"),["Troque o provedor padrão em config.yaml"]);
         assert_eq!(store.chat_of_turn(&answer_turn.id).expect("chat").as_deref(),Some(chat.id.as_str()));
-        assert!(store.question_origin(&question_turn.id).expect("origem").is_none(),"o pedido original não responde a pergunta nenhuma");
+        assert!(store.question_origin(&question_turn.id).expect("origem").is_empty(),"o pedido original não responde a pergunta nenhuma");
         assert!(store.snapshot().expect("snapshot").chats.into_iter().find(|item|item.id==chat.id).expect("chat").question.is_none(),"respondida não trava mais a caixa");
+    }
+
+    /// O plano pergunta, o desenvolvedor responde, e o agente pergunta de novo:
+    /// a segunda pergunta nasceu num turno-resposta. A corrente tem de voltar
+    /// até o pedido de origem — parar na resposta anterior deixa a portaria
+    /// julgando "Resposta à pergunta…" sem assunto, e ela barra.
+    #[test]
+    fn a_follow_up_answer_walks_back_to_the_request_that_started_it() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let request=store.enqueue_prompt(&chat.id,"Planeje a troca do provedor padrão em config.yaml",None).expect("pedido");
+        store.append_answer(&chat.id,&request.id,"Qual provedor?").expect("resposta");
+        store.ask_question(&request.id,"single","Qual provedor?",&["Anthropic".into(),"OpenAI".into()],"jev").expect("pergunta");
+        let mut passed=crate::gatekeeper::judge(&request,"Planeje a troca do provedor padrão em config.yaml",&crate::gatekeeper::heuristic_entry("Planeje a troca do provedor padrão em config.yaml"),"local");
+        passed.verdict=crate::gatekeeper::EntryVerdict::Pass;
+        store.record_entry_check(&passed).expect("leitura da portaria");
+
+        let first=store.enqueue_prompt(&chat.id,"Resposta à pergunta «Qual provedor?»: Anthropic",None).expect("primeira resposta");
+        assert!(store.settle_question(&request.id,turns::QUESTION_ANSWERED,Some(&first.id)).expect("encerrar"));
+        store.append_answer(&chat.id,&first.id,"Já saiu do modo plano?").expect("resposta");
+        store.ask_question(&first.id,"noul","Já saiu do modo plano?",&[],"jev").expect("segunda pergunta");
+
+        let second=store.enqueue_prompt(&chat.id,"Resposta à pergunta «Já saiu do modo plano?»: Ainda não, aviso quando sair",None).expect("segunda resposta");
+        assert!(store.settle_question(&first.id,turns::QUESTION_ANSWERED,Some(&second.id)).expect("encerrar"));
+
+        assert_eq!(
+            store.question_origin(&second.id).expect("origem"),
+            ["Planeje a troca do provedor padrão em config.yaml","Resposta à pergunta «Qual provedor?»: Anthropic"],
+            "o pedido de origem abre a corrente, e a resposta anterior vem depois",
+        );
+        assert_eq!(store.question_verdict(&first.id).expect("veredito"),Some(crate::gatekeeper::EntryVerdict::Pass));
+        assert_eq!(store.question_verdict(&second.id).expect("veredito"),None,"a primeira resposta ainda não tem leitura gravada");
+        assert_eq!(store.question_verdict(&request.id).expect("veredito"),None,"o pedido de origem não responde a nada");
     }
 
     #[test]

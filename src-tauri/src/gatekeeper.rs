@@ -96,6 +96,19 @@ impl EntryCheck {
         lines.push(Text::new(&format!("gate.asks.{level}")));
         i18n::notice(&lines)
     }
+    /// A resposta a uma pergunta do agente herda a passagem do pedido que a
+    /// originou. O agente só pergunta depois de a portaria ter liberado esse
+    /// pedido, e barrar a resposta é barrar o fluxo que ela própria deixou
+    /// abrir — "ainda não, aviso quando sair" não é um pedido novo, é a
+    /// conversa continuando. A nota e os critérios continuam os de agora:
+    /// muda só o desfecho.
+    pub fn inherit(mut self,origin:EntryVerdict)->Self {
+        if self.verdict==EntryVerdict::Block&&origin.lets_through() {
+            self.verdict=origin;
+            self.note=format!("entry.note.{}",origin.as_str());
+        }
+        self
+    }
     /// A instrução que acompanha um pedido liberado com ressalva.
     pub fn clarifying_note(&self)->Option<String> {
         if self.verdict!=EntryVerdict::Ask {return None;}

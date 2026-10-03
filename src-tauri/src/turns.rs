@@ -451,12 +451,44 @@ pub fn previous_failing_criteria(connection:&Connection,turn_id:&str)->Result<Ve
     Ok(criteria.into_iter().filter(|criterion|criterion.band.is_some_and(|[from,to]|!(from..=to).contains(&criterion.percent))).map(|criterion|criterion.id).collect())
 }
 
-pub fn question_origin(connection:&Connection,turn_id:&str)->Result<Option<String>> {
-    Ok(connection.query_row(
-        "SELECT (SELECT m.content FROM messages m WHERE m.turn_id=q.turn_id AND m.role='user' ORDER BY m.created_at,m.id LIMIT 1)
-         FROM questions q WHERE q.answered_by=?1",
-        [turn_id],|row|row.get::<_,Option<String>>(0),
-    ).optional()?.flatten())
+/// Até onde a corrente de perguntas é seguida de volta. Um plano costuma
+/// perguntar duas ou três coisas seguidas; o limite só existe para um laço no
+/// banco não virar laço aqui.
+pub const ORIGIN_DEPTH:usize=8;
+
+/// O que o desenvolvedor disse até chegar a esta resposta, do pedido de origem
+/// à resposta anterior — vazio quando o turno não responde pergunta nenhuma.
+///
+/// A corrente é seguida até o começo: quando o agente pergunta de novo depois
+/// de uma resposta, a pergunta nova nasceu num turno-resposta, e parar ali
+/// deixaria a portaria julgando "Resposta à pergunta…" sem o pedido que deu
+/// assunto à conversa.
+pub fn question_origin(connection:&Connection,turn_id:&str)->Result<Vec<String>> {
+    let mut said=Vec::new();
+    let mut current=turn_id.to_string();
+    for _ in 0..ORIGIN_DEPTH {
+        let step:Option<(String,Option<String>)>=connection.query_row(
+            "SELECT q.turn_id,(SELECT m.content FROM messages m WHERE m.turn_id=q.turn_id AND m.role='user' ORDER BY m.created_at,m.id LIMIT 1)
+             FROM questions q WHERE q.answered_by=?1",
+            [&current],|row|Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        let Some((question_turn,content))=step else {break};
+        said.extend(content);
+        current=question_turn;
+    }
+    said.reverse();
+    Ok(said)
+}
+
+/// O veredito que a portaria deu ao turno que fez a pergunta respondida por
+/// `turn_id`. Se a pergunta existe, o modelo respondeu aquele turno — ele
+/// nunca foi barrado.
+pub fn question_verdict(connection:&Connection,turn_id:&str)->Result<Option<EntryVerdict>> {
+    let verdict:Option<String>=connection.query_row(
+        "SELECT e.verdict FROM questions q JOIN entry_checks e ON e.turn_id=q.turn_id WHERE q.answered_by=?1",
+        [turn_id],|row|row.get(0),
+    ).optional()?;
+    verdict.map(|verdict|EntryVerdict::parse(&verdict)).transpose()
 }
 
 /// Fecha a pergunta. Devolve `false` quando não havia nada pendente para fechar
