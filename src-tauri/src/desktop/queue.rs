@@ -4,11 +4,11 @@
 use super::events::*;
 use super::{DesktopState, QueueBell, SharedDesktopState, SharedWorkspace};
 use crate::sync::{Connectivity, Link};
-use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck};
+use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict};
 use crate::progress::{Beat, Debounce, Pulse};
 use crate::turns::{Turn, TurnStatus};
 use crate::i18n::{self, Text};
-use crate::{asking, jev, model, usage};
+use crate::{asking, jev, model, project_memory, search, usage};
 use std::{path::Path, time::Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -131,6 +131,12 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         return;
     }
     let project=state.orchestrator.rag.project_info();
+    let project_id=workspace.lock().await.chat_project(chat_id).unwrap_or(None);
+    let notes=match &project_id { Some(id)=>workspace.lock().await.project_notes(id).unwrap_or_default(), None=>vec![] };
+
+    // "Não funcionou": o pedido anterior deste chat não resolveu, ainda que
+    // a resposta tenha vindo inteira. O roteador aprende com isso.
+    if crate::router::is_complaint(prompt) { state.orchestrator.mark_last_failed(chat_id); }
 
     // Um turno-resposta é julgado — e enviado — em par com a pergunta que o
     // originou. Um `SIM` sozinho seria barrado por faltas que o pedido de origem
@@ -147,8 +153,9 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // não dependem uma da outra, e o pedido não espera uma depois da outra.
     // Se a portaria barrar, a leitura de roteamento é descartada.
     let routing=state.orchestrator.routes_with_jev().then(||state.orchestrator.routing_input_ahead(request,chat_id));
+    let covered=project_memory::covered(&notes);
     let (entry,routing)=tokio::join!(
-        entry_check(&project,turn,request,state.orchestrator.expertise),
+        entry_check(&project,turn,request,state.orchestrator.expertise,&covered),
         async { match &routing { Some(input)=>Some(jev::route(input).await.map_err(|error|error.to_string())), None=>None } },
     );
     {
@@ -180,6 +187,23 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     state.orchestrator.pending_brief=entry.refined_prompt(request);
     state.orchestrator.pending_routing=routing;
 
+    // A portaria cobrou, no pedido anterior, onde fica ou como conferir, e
+    // este pedido respondeu: a resposta vira nota do projeto, e a portaria
+    // não cobra de novo.
+    let mut notes=notes;
+    if let Some(project_id)=&project_id {
+        if learn_from_gate(workspace,project_id,turn,prompt,&entry).await { notes=workspace.lock().await.project_notes(project_id).unwrap_or(notes); }
+    }
+    state.orchestrator.project_notes=project_memory::notes_prompt(&notes);
+    state.orchestrator.pending_context=project_memory::recipe_for(&notes,prompt).map(project_memory::recipe_prompt).into_iter().collect();
+    if let Some(project_id)=&project_id {
+        match workspace.lock().await.recall(project_id,chat_id,prompt) {
+            Ok(Some(recall))=>{ usage::mark(usage::JevMark::count("answer_recalled",1)); state.orchestrator.pending_context.push(search::recall_prompt(&recall)); }
+            Ok(None)=>{}
+            Err(error)=>eprintln!("memória: a busca nas conversas falhou ({error:#})"),
+        }
+    }
+
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
     let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||i18n::notice(&[Text::new("turn.noAnswer")]));
     if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&assistant));}
@@ -193,6 +217,8 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         let _=workspace.set_turn_status(&turn.id,if result.result.is_some(){TurnStatus::Answered}else{TurnStatus::Failed});
     }
     for exit in &exits { usage::mark(usage::JevMark::count(format!("exit:{}",exit.verdict.as_str()),1)); }
+    // A portaria de saída segurou o que o modelo devolveu: não resolveu.
+    if exits.iter().any(|exit|exit.verdict==ExitVerdict::Held) { state.orchestrator.mark_last_failed(chat_id); }
     if !exits.is_empty(){let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits});}
     drop(state);
     if result.result.is_some() {enable_question(app,workspace,turn,&assistant).await;}
@@ -285,14 +311,33 @@ fn jev_reading(result:&model::ProcessResult)->String{format!("{} task, {} comple
 
 /// Pontua o pedido no Jev quando há credencial e nas heurísticas locais quando
 /// não há — ou quando a chamada falha, para que o portão nunca trave o envio.
-async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str,level:crate::expertise::Expertise)->EntryCheck {
+async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str,level:crate::expertise::Expertise,covered:&[String])->EntryCheck {
     if jev::is_configured() {
         match gatekeeper::evaluate_entry(input,&project.name,&project.languages).await {
-            Ok(reading)=>return gatekeeper::judge_for(turn,input,&reading,"jev",level),
+            Ok(reading)=>return gatekeeper::judge_for(turn,input,&gatekeeper::with_notes(reading,covered),"jev",level),
             Err(error)=>eprintln!("portaria: o Jev não respondeu, usando heurísticas locais ({error})"),
         }
     }
-    gatekeeper::judge_for(turn,input,&gatekeeper::heuristic_entry(input),asking::LOCAL_SOURCE,level)
+    gatekeeper::judge_for(turn,input,&gatekeeper::with_notes(gatekeeper::heuristic_entry(input),covered),asking::LOCAL_SOURCE,level)
+}
+
+/// Aprende com a portaria: o critério que segurou o pedido anterior do chat
+/// e que este pedido atendeu — com a frase que o atende — vira nota do
+/// projeto. Devolve se aprendeu alguma coisa.
+async fn learn_from_gate(workspace:&SharedWorkspace,project_id:&str,turn:&Turn,prompt:&str,entry:&EntryCheck)->bool {
+    let mut workspace=workspace.lock().await;
+    let failing=workspace.previous_failing_criteria(&turn.id).unwrap_or_default();
+    let met=|id:&str|entry.criteria.iter().any(|criterion|criterion.id==id&&!entry.failing().iter().any(|failing|failing.id==id));
+    let mut learned=false;
+    for criterion in gatekeeper::LEARNABLE_CRITERIA.iter().filter(|id|failing.iter().any(|failing|failing==*id)&&met(id)) {
+        let Some(sentence)=gatekeeper::evidence(prompt,criterion) else { continue };
+        match workspace.learn_project_note(project_id,criterion,&sentence) {
+            Ok(Some(_))=>{ usage::mark(usage::JevMark::count("note_learned",1)); learned=true; }
+            Ok(None)=>{}
+            Err(error)=>eprintln!("memória: não consegui guardar a nota aprendida ({error:#})"),
+        }
+    }
+    learned
 }
 
 fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {

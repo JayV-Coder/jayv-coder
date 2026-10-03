@@ -94,6 +94,12 @@ pub struct Orchestrator {
     /// em paralelo, para o pedido não esperar as duas idas uma depois da
     /// outra. `process` a consome uma vez; sem ela, o roteamento é pedido ali.
     pub pending_routing: Option<std::result::Result<jev::RoutingDecision,String>>,
+    /// As notas do projeto do chat, prontas para o prompt. Como a memória do
+    /// agente, vão só quando uma sessão começa: a sessão retomada já as leu.
+    pub project_notes: Option<String>,
+    /// O que vai junto só deste pedido — a receita que casou com ele, a
+    /// resposta que o projeto já tinha. `process` o consome uma vez.
+    pub pending_context: Vec<String>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
@@ -122,7 +128,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, pending_context:vec![], performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -176,6 +182,7 @@ impl Orchestrator {
         let normalized=user_input.trim().to_string();
         if normalized.starts_with("/why") {
             self.pending_routing=None;
+            self.pending_context.clear();
             let result=self.explanation_result(user_input,&normalized);
             if let Some(response)=&result.result { pulse.beat(Beat::Chunk{text:response.response.clone()}); }
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
@@ -183,6 +190,7 @@ impl Orchestrator {
         }
         self.memory.add_message(session_id,"user",normalized.clone());
         let brief=self.pending_brief.take();
+        let extras=std::mem::take(&mut self.pending_context);
         let gate_passed=self.pending_gate_passed.take().unwrap_or(true);
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
         let mode=select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise);
@@ -190,7 +198,7 @@ impl Orchestrator {
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
         let notes=mode_notes(&signals,mode);
-        let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)));
+        let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)))+extras.iter().map(|extra|estimate_tokens(extra)).sum::<usize>()+self.project_notes.as_deref().map_or(0,estimate_tokens);
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals,mode);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
         let mut selection=select_model(&self.config,&intent.intent,&complexity,&context,&self.performance);
@@ -210,7 +218,7 @@ impl Orchestrator {
         pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone()});
         pulse.beat(Beat::Running);
         let started=Instant::now();
-        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&complexity,&context,&selection,session_id,pulse).await;
+        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
         let resumed=execution.as_ref().is_ok_and(|(_,resumed)|*resumed);
         let execution=execution.map(|(response,_)|response);
         self.remember_agent_session(session_id,&selection,execution.as_ref().ok(),resumed);
@@ -219,7 +227,7 @@ impl Orchestrator {
             Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
         }
         let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(crate::i18n::notice(&[crate::i18n::failure(error)])),false) };
-        self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now() });
+        self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now(), chat:Some(session_id.to_string()) });
         let _=self.performance.save(&self.performance_path);
         self.last_decision=Some(decision.clone());
         ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy, model_selection:selection, result, validation:valid, decision, routing:signals, error }
@@ -336,14 +344,14 @@ impl Orchestrator {
     /// agente sabe retomar a sessão do chat, ela é retomada e o histórico não
     /// vai de novo; se a retomada falhar por causa da sessão, o pedido sai do
     /// zero, com o histórico. Devolve também se a sessão foi retomada.
-    async fn execute(&self,input:&str,complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool)> {
+    async fn execute(&self,input:&str,extras:&[String],complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool)> {
         let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
         let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
-        let user=task_message(input,&safe_context,provider.explores());
+        let user=std::iter::once(task_message(input,&safe_context,provider.explores())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
         let effort=Some(effort_for(complexity));
         if let Some(resume)=self.resumable_session(session_id,provider.as_ref(),selection) {
             let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
@@ -353,10 +361,18 @@ impl Orchestrator {
                 Err(error)=>eprintln!("sessão do agente: não retomou, começando outra ({error:#})"),
             }
         }
+        // Sessão nova: as notas do projeto entram uma vez, no começo dela.
+        let system=match &self.project_notes { Some(notes)=>format!("{system}\n{notes}"), None=>system };
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(short_history(self.memory.conversation(session_id)));
         messages.push(ChatMessage{role:"user".into(),content:user});
         Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false))
+    }
+
+    /// O pedido anterior deste chat não resolveu: a nota do modelo que o
+    /// atendeu cai, e o roteamento aprende com isso.
+    pub fn mark_last_failed(&mut self,session_id:&str) {
+        if self.performance.mark_failed(session_id) { let _=self.performance.save(&self.performance_path); }
     }
 
     /// O mesmo pedido mandado cru ao agente que o Jev escolheu, sem nada do

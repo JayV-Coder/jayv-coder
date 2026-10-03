@@ -438,6 +438,17 @@ pub fn chat_of(connection:&Connection,turn_id:&str)->Result<Option<String>> {
 /// O pedido que fez a pergunta nascer, quando este turno é a resposta dela.
 /// `None` quando o turno é pedido comum — e é esse `None` que mantém o caminho
 /// de sempre intacto.
+/// Os critérios que ficaram fora da faixa no pedido anterior do mesmo chat:
+/// o que a portaria cobrou por último ali.
+pub fn previous_failing_criteria(connection:&Connection,turn_id:&str)->Result<Vec<String>> {
+    let criteria:Option<String>=connection.query_row(
+        "SELECT e.criteria FROM turns current JOIN turns previous ON previous.chat_id=current.chat_id AND previous.ordinal<current.ordinal
+           JOIN entry_checks e ON e.turn_id=previous.id WHERE current.id=?1 ORDER BY previous.ordinal DESC LIMIT 1",
+        [turn_id],|row|row.get(0)).optional()?;
+    let criteria:Vec<crate::gatekeeper::Criterion>=criteria.map(|text|serde_json::from_str(&text).unwrap_or_default()).unwrap_or_default();
+    Ok(criteria.into_iter().filter(|criterion|criterion.band.is_some_and(|[from,to]|!(from..=to).contains(&criterion.percent))).map(|criterion|criterion.id).collect())
+}
+
 pub fn question_origin(connection:&Connection,turn_id:&str)->Result<Option<String>> {
     Ok(connection.query_row(
         "SELECT (SELECT m.content FROM messages m WHERE m.turn_id=q.turn_id AND m.role='user' ORDER BY m.created_at,m.id LIMIT 1)

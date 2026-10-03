@@ -23,7 +23,7 @@ pub struct SyncTable {
 }
 
 /// Em ordem de dependência: quem sobe primeiro é quem os outros apontam.
-pub const TABLES:[SyncTable;14]=[
+pub const TABLES:[SyncTable;15]=[
     SyncTable{name:"projects",key:&["id"],columns:&["id","name","created_at","repo_keys","org_id"]},
     SyncTable{name:"chats",key:&["id"],columns:&["id","code","project_id","title","named","created_at","updated_at"]},
     SyncTable{name:"turns",key:&["id"],columns:&["id","chat_id","ordinal","status","created_at"]},
@@ -40,6 +40,8 @@ pub const TABLES:[SyncTable;14]=[
     SyncTable{name:"quota_snapshots",key:&["id"],columns:&["id","agent","span","used_percent","resets_at","plan","captured_at","machine_id"]},
     // O que é da conta e não de um projeto: o nível do desenvolvedor.
     SyncTable{name:"account_settings",key:&["key"],columns:&["key","value","updated_at"]},
+    // A memória do projeto: notas e receitas, as mesmas em toda máquina.
+    SyncTable{name:"project_notes",key:&["id"],columns:&["id","project_id","kind","title","body","trigger","covers","source","created_at","updated_at"]},
     SyncTable{name:"jev_records",key:&["id"],columns:&["id","project_id","chat_id","turn_id","kind","amount","precision","created_at"]},
 ];
 
@@ -178,7 +180,10 @@ pub fn refusals(connection:&Connection)->Result<Refusals> {
                WHEN 'exit_checks' THEN (SELECT t.chat_id FROM exit_checks e JOIN turns t ON t.id=e.turn_id WHERE e.id=k)
                WHEN 'turn_events' THEN (SELECT t.chat_id FROM turn_events e JOIN turns t ON t.id=e.turn_id WHERE e.id=k)
              END AS chat,
-             CASE WHEN tbl='projects' THEN (SELECT id FROM projects WHERE id=k) END AS project
+             CASE tbl
+               WHEN 'projects' THEN (SELECT id FROM projects WHERE id=k)
+               WHEN 'project_notes' THEN (SELECT project_id FROM project_notes WHERE id=k)
+             END AS project
            FROM failed)
          SELECT chat,COALESCE((SELECT project_id FROM chats WHERE id=chat),project),COUNT(*) FROM owned GROUP BY 1,2",
     )?;

@@ -30,6 +30,8 @@ export { JevUsagePanel } from "./JevUsagePanel";
 export { UpdateDialog } from "./UpdateDialog";
 export { UpdateBanner } from "./UpdateBanner";
 export { WhatsNewDialog } from "./WhatsNewDialog";
+export { ProjectMemoryDialog } from "./ProjectMemoryDialog";
+export { ChatSearch } from "./ChatSearch";
 export { UsageTable } from "./UsageTable";
 export { ChatUsageBar } from "./ChatUsageBar";
 export { ProjectUsageLine } from "./ProjectUsageLine";

@@ -14,7 +14,7 @@ use crate::orchestrator::Orchestrator;
 use crate::sync::Connectivity;
 use crate::workspace::WorkspaceStore;
 use commands::session::{SessionState, SharedSession};
-use commands::{files, gate, prompts, repositories, session, settings, system, usage, workspace as projects};
+use commands::{files, gate, memory, prompts, repositories, session, settings, system, usage, workspace as projects};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::sync::{Mutex, Notify};
@@ -142,6 +142,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             files::open_file,
             repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,
             usage::usage_report,usage::chat_usage,usage::refresh_quotas,
+            memory::project_memory,memory::save_project_note,memory::delete_project_note,memory::search_chats,
         ])
         .run(tauri::generate_context!()).map_err(Into::into)
 }

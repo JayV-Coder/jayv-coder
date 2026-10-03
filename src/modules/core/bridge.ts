@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, Project,
-  QuotaView, SettingsSnapshot, SystemStatus, Turn, TurnUsage, UsageReport, UsageScope, WorkspaceData,
+  AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnUsage, UsageReport, UsageScope, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
 
@@ -45,6 +45,10 @@ export const commands = {
   usageReport: (query: UsageQuery) => invoke<UsageReport>("usage_report", { query }),
   chatUsage: (chatId: string) => invoke<TurnUsage[]>("chat_usage", { chatId }),
   refreshQuotas: () => invoke<QuotaStatus[]>("refresh_quotas"),
+  projectMemory: (projectId: string) => invoke<ProjectMemory>("project_memory", { projectId }),
+  saveProjectNote: (draft: NoteDraft) => invoke<ProjectMemory>("save_project_note", { draft }),
+  deleteProjectNote: (projectId: string, id: string) => invoke<ProjectMemory>("delete_project_note", { projectId, id }),
+  searchChats: (projectId: string, query: string) => invoke<SearchHit[]>("search_chats", { projectId, query }),
 };
 
 /** Um clone de repositório da organização achado numa pasta. */

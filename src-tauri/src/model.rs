@@ -124,6 +124,9 @@ pub struct PerformanceRecord {
     pub output_tokens: usize,
     pub estimated_cost: f64,
     pub timestamp: DateTime<Utc>,
+    /// O chat do pedido: é por ele que a reclamação do pedido seguinte acha
+    /// o registro a corrigir.
+    #[serde(default)] pub chat: Option<String>,
 }
 
 pub type JsonMap = HashMap<String, Value>;
