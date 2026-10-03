@@ -29,10 +29,12 @@ function Verdict({ light }: { light: NonNullable<ReturnType<typeof messageLight>
 }
 
 /** Uma mensagem dentro do bloco do turno, como um comando e a sua saída no
- * terminal. O pedido é a linha do prompt (`❯`), com a hora em cima; a resposta
- * vem logo abaixo, recuada, com quem a escreveu e o veredito da portaria. A
- * cor que a portaria deu pinta a margem do bloco (no `Timeline`) e, quando não
- * é verde, o veredito aparece escrito. */
+ * terminal. Cada lado tem o seu balão, para não haver dúvida de quem falou:
+ * o pedido é a linha do prompt (`❯`) num balão cheio, à direita, com a hora
+ * em cima; a resposta é uma janela de terminal — barra com 🤖 jayv, a rota e
+ * o veredito, e a saída embaixo. A cor que a portaria deu pinta a margem do
+ * bloco (no `Timeline`) e, quando não é verde, a borda do pedido e o veredito
+ * escrito. */
 export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onOpenFile, children }: {
   role: "user" | "assistant";
   content: string;
@@ -74,26 +76,32 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
 
   if (user) {
     return (
-      <article aria-label={t("chat.you")} className={cn("grid gap-1", animate)}>
-        <div className="flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
-          <span>{t("chat.you")}</span>
-          {at && <time dateTime={at}>{formatClock(at)}</time>}
-          {/* O pedido que passou limpo não precisa de veredito: só o que a
-              portaria barrou ou perguntou chama a atenção. */}
-          {tinted && <span className="ms-auto"><Verdict light={light} /></span>}
-        </div>
-        <div data-aspect={light?.aspect} className="flex gap-2.5 font-medium">
-          <span aria-hidden="true" className={cn("shrink-0 font-semibold text-go", tinted && "text-[var(--aspect)]")}>{tinted && light.aspect === "ask" ? "?" : "❯"}</span>
-          <div className="min-w-0 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
+      <article aria-label={t("chat.you")} className={cn("grid justify-items-end gap-1.5", animate)}>
+        <div
+          data-aspect={light?.aspect}
+          data-tinted={tinted || undefined}
+          className="grid w-fit max-w-[85%] min-w-[min(18rem,85%)] gap-1 rounded-md border border-border bg-secondary/60 px-3.5 pt-2 pb-2.5 data-[tinted]:border-[color-mix(in_srgb,var(--aspect)_55%,var(--border))]"
+        >
+          <div className="flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-caption text-dim">
+            <span className="font-semibold text-foreground">{t("chat.you")}</span>
+            {at && <time dateTime={at}>{formatClock(at)}</time>}
+            {/* O pedido que passou limpo não precisa de veredito: só o que a
+                portaria barrou ou perguntou chama a atenção. */}
+            {tinted && <span className="ms-auto"><Verdict light={light} /></span>}
+          </div>
+          <div className="flex gap-2.5 font-medium">
+            <span aria-hidden="true" className={cn("shrink-0 font-semibold text-go", tinted && "text-[var(--aspect)]")}>{tinted && light.aspect === "ask" ? "?" : "❯"}</span>
+            <div className="min-w-0 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
+          </div>
         </div>
         {children}
         {turn?.status === "failed" && onRetry && (
-          <div className="flex items-center gap-2.5 ps-[calc(1ch+0.625rem)]">
+          <div className="flex items-center gap-2.5">
+            <small className="text-caption text-muted-foreground">{t("chat.retry.note")}</small>
             <Button variant="outline" size="xs" title={t("chat.retry.title")} onClick={onRetry}>
               <RotateCcwIcon aria-hidden="true" />
               {t("chat.retry")}
             </Button>
-            <small className="text-caption text-muted-foreground">{t("chat.retry.note")}</small>
           </div>
         )}
       </article>
@@ -101,9 +109,12 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   }
 
   return (
-    <article aria-label="JayV" className={cn("group/message grid gap-1.5 ps-[calc(1ch+0.625rem)]", animate)}>
-      <div className="flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
-        <span className="text-foreground">jayv</span>
+    <article aria-label="JayV" className={cn("group/message overflow-hidden rounded-md border border-border bg-card", animate)}>
+      <div className="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-secondary/50 px-3.5 py-1 text-caption text-dim">
+        <span className="inline-flex items-center gap-1.5 font-semibold text-foreground">
+          <span aria-hidden="true" className="text-[0.8125rem] leading-none">🤖</span>
+          jayv
+        </span>
         {route && (
           <small data-mode={route.mode ?? undefined} title={routeHint(route)} className="min-w-0 truncate text-caption data-[mode=build]:text-success">
             {routeLabel(route)}
@@ -111,49 +122,51 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
         )}
         {light && <span className="ms-auto"><Verdict light={light} /></span>}
       </div>
-      {(text || !pending) && (
-        <div className="grid gap-2">
-          {parts.map((part, index) => {
-            const last = index === parts.length - 1;
-            return (
-              <div
-                key={index}
-                data-aspect={light?.aspect}
-                className={cn(
-                  "leading-relaxed [overflow-wrap:anywhere]",
-                  // O que o agente disse no caminho: discreto, como a saída
-                  // de uma ferramenta.
-                  !last && "flex gap-2 text-small text-muted-foreground before:shrink-0 before:text-faint before:content-['↳']",
-                  last && tinted && "text-[var(--aspect)]",
-                  pending && "whitespace-pre-wrap",
-                )}
+      <div className="grid gap-1.5 px-3.5 pt-2.5 pb-2">
+        {(text || !pending) && (
+          <div className="grid gap-2">
+            {parts.map((part, index) => {
+              const last = index === parts.length - 1;
+              return (
+                <div
+                  key={index}
+                  data-aspect={light?.aspect}
+                  className={cn(
+                    "leading-relaxed [overflow-wrap:anywhere]",
+                    // O que o agente disse no caminho: discreto, como a saída
+                    // de uma ferramenta.
+                    !last && "flex gap-2 text-small text-muted-foreground before:shrink-0 before:text-faint before:content-['↳']",
+                    last && tinted && "text-[var(--aspect)]",
+                    pending && "whitespace-pre-wrap",
+                  )}
+                >
+                  {pending ? part : <Markdown content={part} onOpenFile={onOpenFile} />}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {children}
+        {!pending && (meta || answer) && (
+          <div className="flex min-h-6 items-center gap-2 text-caption text-muted-foreground">
+            {answer && (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void copy()}
+                title={t(copied ? "chat.copied" : "chat.copy")}
+                className="h-5 text-caption font-normal text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100 data-[copied=true]:opacity-100"
+                data-copied={copied}
               >
-                {pending ? part : <Markdown content={part} onOpenFile={onOpenFile} />}
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {children}
-      {!pending && (meta || answer) && (
-        <div className="flex min-h-6 items-center gap-2 text-caption text-muted-foreground">
-          {answer && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => void copy()}
-              title={t(copied ? "chat.copied" : "chat.copy")}
-              className="h-5 text-caption font-normal text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100 data-[copied=true]:opacity-100"
-              data-copied={copied}
-            >
-              {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-              {t(copied ? "chat.copied" : "chat.copy")}
-            </Button>
-          )}
-          {meta && <small className="tabular-nums">{meta}</small>}
-        </div>
-      )}
-      {pending && meta && <small className="block text-caption text-muted-foreground">{meta}</small>}
+                {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+                {t(copied ? "chat.copied" : "chat.copy")}
+              </Button>
+            )}
+            {meta && <small className="tabular-nums">{meta}</small>}
+          </div>
+        )}
+        {pending && meta && <small className="block text-caption text-muted-foreground">{meta}</small>}
+      </div>
     </article>
   );
 }
