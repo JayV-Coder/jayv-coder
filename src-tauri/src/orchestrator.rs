@@ -43,6 +43,11 @@ const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folde
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
 /// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
 const FOCUS_NOTE:&str="Be brief: read only what the task needs, never reread what this conversation already holds, and do not re-plan.";
+/// A regra de código enxuto do modo build, nas duas forças do nível. O
+/// agente escreve menos — e cada linha que não escreve é token de saída e
+/// revisão poupados —, sem nunca tirar o que protege dado e gente.
+const LEAN_FULL_NOTE:&str="Write the least code that fully solves the task: check whether it must exist, then reuse the standard library, the platform or an installed dependency, and only then write new code. No speculative abstractions, options or files. Never drop input validation, error handling that prevents data loss, security or accessibility.";
+const LEAN_LITE_NOTE:&str="Prefer the simplest change that fully works. When the standard library, the platform or an installed dependency already covers part of the task, say so and use it. Never drop input validation, error handling, security or accessibility.";
 const MULTI_REPOSITORY_NOTE:&str="This folder holds several repositories of the same organization; keep each change inside the repository it belongs to and name it in the answer. REPOSITORIES:";
 pub const MODE_PLAN:&str="plan";
 pub const MODE_BUILD:&str="build";
@@ -97,6 +102,9 @@ pub struct Orchestrator {
     /// As notas do projeto do chat, prontas para o prompt. Como a memória do
     /// agente, vão só quando uma sessão começa: a sessão retomada já as leu.
     pub project_notes: Option<String>,
+    /// Se a regra de código enxuto vai junto no modo build (configuração da
+    /// conta, ligada por padrão).
+    pub lean_code: bool,
     /// O que vai junto só deste pedido — a receita que casou com ele, a
     /// resposta que o projeto já tinha. `process` o consome uma vez.
     pub pending_context: Vec<String>,
@@ -128,7 +136,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, pending_context:vec![], performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -197,7 +205,7 @@ impl Orchestrator {
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
-        let notes=mode_notes(&signals,mode);
+        let notes=format!("{}{}",mode_notes(&signals,mode),self.lean_note(mode).map(|note|format!("\n{note}")).unwrap_or_default());
         let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)))+extras.iter().map(|extra|estimate_tokens(extra)).sum::<usize>()+self.project_notes.as_deref().map_or(0,estimate_tokens);
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals,mode);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
@@ -282,6 +290,12 @@ impl Orchestrator {
         (IntentAnalysis{intent:decision.intent.clone(),scores,confidence:decision.intent_confidence},complexity,signals)
     }
 
+    /// A regra de código enxuto deste pedido: só no modo build, só com a
+    /// configuração ligada, na força do nível da conta.
+    fn lean_note(&self,mode:&str)->Option<&'static str> {
+        (self.lean_code&&mode==MODE_BUILD).then(||match self.expertise.lean() { crate::expertise::Lean::Lite=>LEAN_LITE_NOTE, crate::expertise::Lean::Full=>LEAN_FULL_NOTE })
+    }
+
     fn request_overhead(&self,input:&str,session_id:&str)->usize { estimate_tokens(SYSTEM_INSTRUCTIONS)+estimate_tokens(input)+self.history_tokens(session_id)+REQUEST_MARGIN }
     fn history_tokens(&self,session_id:&str)->usize { short_history(self.memory.conversation(session_id)).iter().map(|message|estimate_tokens(&message.content)).sum() }
 
@@ -289,6 +303,7 @@ impl Orchestrator {
         let mut context=if repository_context_wanted(signals){self.build_context(input,plan,budget,reserved)}else{Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),project:self.rag.project_info(),relevant_files:vec![],snippets:vec![],estimated_tokens:reserved,repository_context_skipped:true}};
         note_project(&mut context);
         note_routing(&mut context,signals,mode);
+        if let Some(note)=self.lean_note(mode) { context.system_instructions.push_str(&format!("\n{note}")); }
         if let Some(note)=self.pending_gate_note.take() { context.system_instructions.push_str(&format!("\n{note}")); }
         context
     }
@@ -856,6 +871,21 @@ mod tests {
         assert!(build.contains(BUILD_NOTE)&&!build.contains(TOOLS_NOTE)&&!build.contains(PLAN_NOTE));
         let plan=mode_notes(&jev(0.9,0.0),MODE_PLAN);
         assert!(plan.contains(PLAN_NOTE)&&plan.contains(TOOLS_NOTE));
+    }
+
+    #[test]
+    fn the_lean_rule_goes_only_with_build_and_follows_the_level() {
+        use crate::expertise::Expertise::{Architect, Starter};
+        let dir=repository(&[("lib.rs","pub fn run() {}".into())]);
+        let mut orchestrator=orchestrator(&dir);
+        assert_eq!(orchestrator.lean_note(MODE_BUILD),Some(LEAN_FULL_NOTE),"ligada por padrão, na força do nível médio");
+        assert_eq!(orchestrator.lean_note(MODE_PLAN),None,"plano não escreve código");
+        orchestrator.expertise=Starter;
+        assert_eq!(orchestrator.lean_note(MODE_BUILD),Some(LEAN_LITE_NOTE));
+        orchestrator.expertise=Architect;
+        orchestrator.lean_code=false;
+        assert_eq!(orchestrator.lean_note(MODE_BUILD),None);
+        assert!(estimate_tokens(LEAN_FULL_NOTE)<=90,"a regra custa {} tokens por pedido de build",estimate_tokens(LEAN_FULL_NOTE));
     }
 
     /// O mesmo agente, duas linhas de comando: a do modo escolhido é a que roda,

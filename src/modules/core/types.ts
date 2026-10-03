@@ -283,6 +283,8 @@ export interface CoreSnapshot {
   levels: LevelView[];
   /** O nível que o histórico da portaria sugere, ou nada. */
   suggestion: LevelSuggestion | null;
+  /** A regra de código enxuto no modo build. */
+  leanCode: boolean;
   confidenceRange: [number, number];
   budgetRange: [number, number];
   cacheTtlRange: [number, number];

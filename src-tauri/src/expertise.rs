@@ -52,12 +52,25 @@ impl Expertise {
     /// A confiança mínima do roteamento, para este nível.
     pub fn confidence(&self,configured:f64)->f64 { (configured+self.shift()).clamp(0.3,0.99) }
 
+    /// Quão forte vai a regra de código enxuto no modo build. Quem está
+    /// começando recebe a versão que aponta a saída mais simples sem cortar
+    /// nada por conta própria; dali para cima o agente corta o que sobra.
+    pub fn lean(&self)->Lean { match self { Self::Starter|Self::Junior=>Lean::Lite, _=>Lean::Full } }
+
     /// Se uma complexidade cabe no modo build deste nível.
     pub fn builds(&self,complexity:&str)->bool {
         let rank=|level:&str|crate::core_settings::COMPLEXITIES.iter().position(|known|*known==level);
         match (rank(complexity),rank(self.build_ceiling())) { (Some(asked),Some(ceiling))=>asked<=ceiling, _=>false }
     }
 }
+
+/// As duas forças da regra de código enxuto (a escada do "não escreva o que
+/// já existe"). Não há modo extremo: questionar o próprio requisito é do
+/// desenvolvedor, não do agente.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum Lean { Lite, Full }
+
+const LEAN_KEY:&str="lean_code";
 
 /// A tabela da conta: chave e valor, sincronizada como as outras.
 pub const SCHEMA:&str="CREATE TABLE IF NOT EXISTS account_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);";
@@ -76,6 +89,21 @@ pub fn save(connection:&Connection,level:&str)->Result<Expertise> {
         params![KEY,level.as_str(),chrono::Utc::now().to_rfc3339()],
     )?;
     Ok(level)
+}
+
+/// Se a regra de código enxuto vai junto no modo build. Ligada até alguém
+/// desligá-la na conta.
+pub fn load_lean(connection:&Connection)->Result<bool> {
+    let value:Option<String>=connection.query_row("SELECT value FROM account_settings WHERE key=?1",[LEAN_KEY],|row|row.get(0)).optional()?;
+    Ok(value.as_deref()!=Some("off"))
+}
+
+pub fn save_lean(connection:&Connection,enabled:bool)->Result<bool> {
+    connection.execute(
+        "INSERT INTO account_settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+        params![LEAN_KEY,if enabled {"on"} else {"off"},chrono::Utc::now().to_rfc3339()],
+    )?;
+    Ok(enabled)
 }
 
 /// Como os pedidos passaram pela portaria numa janela de dias.
@@ -180,5 +208,18 @@ mod tests {
         assert!(save(&connection,"guru").is_err());
         connection.execute("UPDATE account_settings SET value='guru'",[]).unwrap();
         assert_eq!(load(&connection).unwrap(),Expertise::Mid);
+    }
+
+    #[test] fn lean_code_is_on_until_turned_off_and_lighter_for_beginners() {
+        let connection=Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        assert!(load_lean(&connection).unwrap());
+        assert!(!save_lean(&connection,false).unwrap());
+        assert!(!load_lean(&connection).unwrap());
+        assert!(save_lean(&connection,true).unwrap() && load_lean(&connection).unwrap());
+        assert_eq!(Expertise::Starter.lean(),Lean::Lite);
+        assert_eq!(Expertise::Junior.lean(),Lean::Lite);
+        assert_eq!(Expertise::Mid.lean(),Lean::Full);
+        assert_eq!(Expertise::Architect.lean(),Lean::Full);
     }
 }
