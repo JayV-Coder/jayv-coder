@@ -75,6 +75,15 @@
   --chart-8: #7d7d78;
   --chart-grid: #e4e4de;
   --chart-axis: #777773;
+
+  /* as cores do código na resposta: as mesmas famílias dos gráficos, mais
+     fundas para ler sobre o fundo do bloco */
+  --code-keyword: #7a43b8;
+  --code-string: #2f7a3d;
+  --code-number: #96600a;
+  --code-type: #2f5f9e;
+  --code-fn: #1d6f68;
+  --code-comment: #696965;
 }
 
 .dark {
@@ -136,6 +145,13 @@
   --chart-8: #a0a09a;
   --chart-grid: #2a2b26;
   --chart-axis: #a0a09a;
+
+  --code-keyword: #c78bff;
+  --code-string: #7fd38a;
+  --code-number: #f0b44c;
+  --code-type: #84b2f5;
+  --code-fn: #5fd4c8;
+  --code-comment: #8e8f88;
 }
 
 @theme inline {
@@ -227,6 +243,12 @@
   --color-chart-6: var(--chart-6);
   --color-chart-7: var(--chart-7);
   --color-chart-8: var(--chart-8);
+  --color-code-keyword: var(--code-keyword);
+  --color-code-string: var(--code-string);
+  --color-code-number: var(--code-number);
+  --color-code-type: var(--code-type);
+  --color-code-fn: var(--code-fn);
+  --color-code-comment: var(--code-comment);
 
   --animate-pending-in: pending-in 0.2s ease-out both;
   --animate-pending-pulse: pending-pulse 1.5s ease-in-out infinite;
@@ -322,11 +344,22 @@
   .prose-answer li { margin: 2px 0; }
   .prose-answer a { color: var(--foreground); text-decoration: underline; text-decoration-color: var(--muted-foreground); text-underline-offset: 3px; }
   .prose-answer a:hover { text-decoration-color: var(--foreground); }
-  .prose-answer :not(pre) > code { padding: 0 4px; border-radius: 2px; background: var(--secondary); color: var(--foreground); font: inherit; }
+  .prose-answer :not(pre) > code { padding: 0 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--secondary); color: var(--foreground); font: inherit; font-size: 0.95em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
   .prose-answer blockquote { margin: 12px 0; padding: 2px 0 2px 2ch; border-left: 2px solid var(--border); color: var(--muted-foreground); white-space: pre-wrap; }
-  .prose-answer .file-ref { display: inline; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
-  .prose-answer .file-ref code { text-decoration: underline dotted var(--muted-foreground); text-underline-offset: 3px; }
-  .prose-answer .file-ref:hover code, .prose-answer .file-ref:focus-visible code { background: var(--border); }
+  /* O arquivo citado: a pasta apagada, o nome em destaque e a linha na cor da
+     informação, num selo só — o olho acha o arquivo sem ler o caminho inteiro. */
+  .prose-answer .file-ref { display: inline; padding: 1px 6px 1px 5px; border: 1px solid var(--border); border-radius: 3px; background: color-mix(in srgb, var(--secondary) 55%, transparent); font: inherit; font-size: 0.95em; color: var(--foreground); text-align: start; overflow-wrap: anywhere; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .prose-answer .file-ref svg { display: inline-block; width: 0.95em; height: 0.95em; margin-inline-end: 5px; vertical-align: -0.12em; color: var(--muted-foreground); }
+  .prose-answer .file-ref .file-dir { color: var(--dim); }
+  .prose-answer .file-ref .file-name { font-weight: 600; }
+  .prose-answer .file-ref .file-line { color: var(--info); }
+  .prose-answer button.file-ref { cursor: pointer; }
+  .prose-answer button.file-ref:hover, .prose-answer button.file-ref:focus-visible { border-color: var(--muted-foreground); background: var(--secondary); outline: none; }
+  .prose-answer button.file-ref:hover svg { color: var(--foreground); }
+  /* A lista que só cita arquivos vira uma lista de arquivos: um por linha,
+     sem o traço do Markdown na frente. */
+  .prose-answer ul.file-list { display: grid; gap: 4px; padding-left: 0; }
+  .prose-answer ul.file-list > li::before { content: none; }
   .prose-answer hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 }
 
