@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { View } from "@/modules/core";
 import { connectAuth, useAuth } from "@/modules/auth";
+import { announceChanges } from "@/modules/changelog";
 import { connectConnection } from "@/modules/connection";
 import { connectI18n, useT } from "@/modules/i18n";
 import { connectConversation } from "@/modules/conversation";
@@ -16,7 +17,7 @@ import { connectUpdates } from "@/modules/updates";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
-import { UpdateBanner, UpdateDialog } from "@/components/organisms";
+import { UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -68,6 +69,8 @@ export function App() {
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
     // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.
     void refreshQuotas();
+    // Depois de uma atualização, o que mudou desde a última versão vista.
+    void announceChanges();
   }, [status, userEmail]);
 
   const Page = PAGES[view];
@@ -91,6 +94,7 @@ export function App() {
         </div>
       </div>
       <UpdateDialog />
+      <WhatsNewDialog />
       <Toaster position="bottom-right" />
     </TooltipProvider>
   );

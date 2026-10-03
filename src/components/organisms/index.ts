@@ -29,6 +29,7 @@ export { UsageCharts } from "./UsageCharts";
 export { JevUsagePanel } from "./JevUsagePanel";
 export { UpdateDialog } from "./UpdateDialog";
 export { UpdateBanner } from "./UpdateBanner";
+export { WhatsNewDialog } from "./WhatsNewDialog";
 export { UsageTable } from "./UsageTable";
 export { ChatUsageBar } from "./ChatUsageBar";
 export { ProjectUsageLine } from "./ProjectUsageLine";
