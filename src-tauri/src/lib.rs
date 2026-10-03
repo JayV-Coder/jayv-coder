@@ -30,6 +30,7 @@ pub mod repo_keys;
 pub mod router;
 pub mod sandbox;
 pub mod search;
+pub mod symbols;
 pub mod sync;
 pub mod tools;
 pub mod turns;

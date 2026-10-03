@@ -26,6 +26,8 @@ const RESUMED_TURNS:usize=10;
 /// Linhas de definição por arquivo no mapa que vai aos agentes.
 const MAP_OUTLINE_LINES:usize=8;
 const MAP_LINE_CHARS:usize=140;
+/// Quantos vizinhos ("usa" / "usado por") cada arquivo mostra no mapa.
+const MAP_LINKS:usize=4;
 const MAP_NOTE:&str="RELEVANT FILES lists where the task most likely lives, with the definitions found there. Open only the files you need, with your own tools.";
 const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, no quotes, no trailing period, no explanation.";
 const TITLE_PROMPT_CHARS:usize=600;
@@ -366,7 +368,7 @@ impl Orchestrator {
         let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
-        let user=std::iter::once(task_message(input,&safe_context,provider.explores())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
+        let user=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
         let effort=Some(effort_for(complexity));
         if let Some(resume)=self.resumable_session(session_id,provider.as_ref(),selection) {
             let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
@@ -475,22 +477,37 @@ impl Orchestrator {
 /// O pedido como o modelo o lê. Um modelo por API não enxerga o disco e
 /// recebe os arquivos; um agente que explora o repositório recebe só o mapa —
 /// caminho e definições — e abre o que precisar.
-fn task_message(input:&str,context:&Context,explores:bool)->String {
+fn task_message(input:&str,context:&Context,explores:bool,symbols:&crate::symbols::SymbolIndex)->String {
     if context.snippets.is_empty() { return input.into(); }
     if explores {
-        let map=context.snippets.iter().map(|snippet|{
-            let outline=outline(&snippet.content);
-            if outline.is_empty() { format!("- {}",snippet.path) } else { format!("- {}\n{}",snippet.path,outline.iter().map(|line|format!("    {line}")).collect::<Vec<_>>().join("\n")) }
-        }).collect::<Vec<_>>().join("\n");
+        let map=context.snippets.iter().map(|snippet|map_entry(snippet,symbols)).collect::<Vec<_>>().join("\n");
         return format!("TASK:\n{input}\n\n{MAP_NOTE}\nRELEVANT FILES:\n{map}");
     }
     let files=context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
     format!("TASK:\n{input}\n\nREPOSITORY CONTEXT:\n{files}")
 }
 
+/// Um arquivo no mapa: o caminho, as definições com a linha onde estão e,
+/// quando o índice de símbolos conhece o arquivo, com quem ele se liga. Sem
+/// gramática para a linguagem, as definições saem das linhas do trecho.
+fn map_entry(snippet:&ContextSnippet,symbols:&crate::symbols::SymbolIndex)->String {
+    let mut lines=match symbols.definitions(&snippet.path) {
+        Some(definitions)=>definitions.iter().take(MAP_OUTLINE_LINES).map(|definition|format!("L{} {}",definition.line,definition.signature)).collect::<Vec<_>>(),
+        None=>outline(&snippet.content),
+    };
+    let linked=|label:&str,paths:Vec<&str>|(!paths.is_empty()).then(||{
+        let shown=paths.iter().take(MAP_LINKS).copied().collect::<Vec<_>>().join(", ");
+        let more=paths.len().saturating_sub(MAP_LINKS);
+        if more>0 { format!("{label}: {shown} (+{more})") } else { format!("{label}: {shown}") }
+    });
+    lines.extend(linked("uses",symbols.uses(&snippet.path)));
+    lines.extend(linked("used by",symbols.used_by(&snippet.path)));
+    if lines.is_empty() { format!("- {}",snippet.path) } else { format!("- {}\n{}",snippet.path,lines.iter().map(|line|format!("    {line}")).collect::<Vec<_>>().join("\n")) }
+}
+
 /// As linhas que declaram algo — função, tipo, classe, constante exportada —,
-/// em qualquer das linguagens comuns. É o bastante para o agente saber se o
-/// arquivo é o que procura sem precisar abri-lo.
+/// em qualquer das linguagens comuns. É a reserva das linguagens que o índice
+/// de símbolos não lê.
 fn outline(content:&str)->Vec<String> {
     const STARTS:[&str;24]=["fn ","pub fn ","pub(crate) fn ","async fn ","pub async fn ","struct ","pub struct ","enum ","pub enum ","trait ","pub trait ","impl ","def ","async def ","class ","function ","export ","interface ","type ","func ","public ","module ","const ","pub const "];
     content.lines().map(str::trim).filter(|line|STARTS.iter().any(|start|line.starts_with(start))).take(MAP_OUTLINE_LINES).map(|line|{
@@ -940,7 +957,7 @@ mod tests {
 
         orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
         let first=std::fs::read_to_string(prompts.path().join("stdin-0")).expect("o primeiro pedido abre uma sessão nova");
-        assert!(first.contains("RELEVANT FILES:\n- router.rs\n    fn route_request()"),"vai o mapa: {first}");
+        assert!(first.contains("RELEVANT FILES:\n- router.rs\n    L1 fn route_request()"),"vai o mapa, com a linha de cada definição: {first}");
         assert!(!first.contains("padding_value"),"o corpo do arquivo fica no disco, para o agente abrir se precisar");
         assert_eq!(orchestrator.memory.agent_session("chat").map(|kept|(kept.id.as_str(),kept.turns)),Some(("s-1",1)));
 
@@ -973,10 +990,23 @@ mod tests {
     }
 
     #[test]
+    fn the_agent_map_lists_definitions_of_the_whole_file_and_its_neighbours() {
+        let filler="// filler\n".repeat(2_000);
+        let dir=repository(&[("cache.rs",format!("pub struct Cache;\n{filler}pub fn invalidate_entries() {{}}\n")),("orchestrator.rs","fn run() { invalidate_entries(); }\n".into())]);
+        let orchestrator=orchestrator(&dir);
+        let context=Context{snippets:vec![ContextSnippet{path:"cache.rs".into(),content:"pub struct Cache;".into(),score:1.0}],..Default::default()};
+        let message=task_message("why?",&context,true,orchestrator.rag.symbols());
+        assert!(message.contains("    L1 pub struct Cache;"),"{message}");
+        assert!(message.contains("    L2002 pub fn invalidate_entries()"),"a definição depois do trecho entra: {message}");
+        assert!(message.contains("    used by: orchestrator.rs"),"{message}");
+    }
+
+    #[test]
     fn a_model_without_the_disk_gets_the_files_and_old_replies_come_back_short() {
         let context=Context{snippets:vec![ContextSnippet{path:"src/lib.rs".into(),content:"pub fn total() -> u32 { 1 }".into(),score:1.0}],..Default::default()};
-        assert!(task_message("why?",&context,false).contains("FILE: src/lib.rs\npub fn total() -> u32 { 1 }"));
-        assert!(task_message("why?",&context,true).contains("- src/lib.rs\n    pub fn total() -> u32"));
+        let none=crate::symbols::SymbolIndex::default();
+        assert!(task_message("why?",&context,false,&none).contains("FILE: src/lib.rs\npub fn total() -> u32 { 1 }"));
+        assert!(task_message("why?",&context,true,&none).contains("- src/lib.rs\n    pub fn total() -> u32"));
         let conversation=[ChatMessage{role:"user".into(),content:"q".repeat(3_000)},ChatMessage{role:"assistant".into(),content:"a".repeat(3_000)},ChatMessage{role:"user".into(),content:"now".into()}];
         let history=short_history(&conversation);
         assert_eq!(history.len(),2,"o pedido atual não entra no histórico");
