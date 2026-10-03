@@ -41,7 +41,7 @@ const NO_REPOSITORY_NOTE:&str="No repository files were supplied: this request d
 const TOOLS_NOTE:&str="This asks for commands to run or files to change, which this orchestrator cannot execute. Hand back the exact commands or edits for the developer to apply.";
 const DESTRUCTIVE_NOTE:&str="This would overwrite or remove existing work. State the exact effect and how to undo it before giving the change.";
 const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Answer with a concrete step-by-step plan (files, changes, how to verify) in the reply, not in a file. Do not claim that any file was changed.";
-const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it.";
+const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it. You run without a terminal: nobody can answer a permission prompt, change your permission mode or edit your settings files. If a write or command is denied, say exactly what was denied and that the developer can allow it in JayV under Settings > Agents; never offer to approve prompts, switch permission modes or edit .claude/settings.json, and never work around the denial with shell commands.";
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
 /// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
 const FOCUS_NOTE:&str="Be brief: read only what the task needs, never reread what this conversation already holds, and do not re-plan.";
@@ -195,6 +195,14 @@ impl Orchestrator {
         anyhow::ensure!(root.is_dir(),crate::i18n::Text::new("project.folderMissing").with("path",root.display().to_string()));
         self.workdir.focus(root.to_path_buf());
         self.rag.focus_on(root.to_path_buf(),&self.firewall)
+    }
+
+    /// Os agentes do modo: em build, os que escrevem no projeto — menos quando
+    /// a regra de escrita do Jev, ou a da organização por cima dela, é `deny`.
+    /// Aí o agente roda como no planejamento, e a regra vale também para o
+    /// que ele faria sozinho, não só para o que a resposta conta.
+    fn pool(&self,mode:&str)->&HashMap<String,Box<dyn Provider>> {
+        if mode==MODE_BUILD&&self.config.permissions.write!="deny" {&self.providers} else {&self.planners}
     }
 
     pub fn executable_provider_count(&self)->usize { self.providers.len() }
@@ -383,7 +391,7 @@ impl Orchestrator {
     /// vai de novo; se a retomada falhar por causa da sessão, o pedido sai do
     /// zero, com o histórico. Devolve também se a sessão foi retomada.
     async fn execute(&self,input:&str,extras:&[String],complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool)> {
-        let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
+        let pool=self.pool(&selection.mode);
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
         let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
@@ -421,7 +429,7 @@ impl Orchestrator {
     /// dele seguindo de um pedido para o outro —, e é contra isso que o
     /// `jayv bench` mede o JayV.
     pub async fn direct(&mut self,input:&str,session_id:&str,selection:&ModelSelection)->Result<ProviderResponse> {
-        let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
+        let pool=self.pool(&selection.mode);
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let resume=self.resumable_session(session_id,provider.as_ref(),selection);
         let mut messages=if resume.is_some() { vec![] } else { self.memory.conversation(session_id).to_vec() };
@@ -971,6 +979,13 @@ mod tests {
         let built=orchestrator.process("adicione um teste ao roteador",Some("build"),&Pulse::silent()).await;
         assert_eq!(built.result.as_ref().map(|answer|answer.response.trim()),Some("ran-build"));
         assert_eq!((built.model_selection.provider.as_str(),built.model_selection.model_name.as_str(),built.model_selection.mode.as_str(),built.model_selection.agent.as_deref()),("cli","modelo",MODE_BUILD,Some("developer")));
+
+        // A regra de escrita em `deny` vale para o agente também: ele roda com a
+        // linha que só lê, mesmo em build.
+        orchestrator.config.permissions.write="deny".into();
+        let denied=orchestrator.process("adicione outro teste ao roteador",Some("denied"),&Pulse::silent()).await;
+        assert_eq!(denied.result.as_ref().map(|answer|answer.response.trim()),Some("ran-plan"),"sem escrita, o agente não ganha a linha que escreve");
+        orchestrator.config.permissions.write="ask".into();
 
         orchestrator.pending_gate_passed=Some(false);
         let held=orchestrator.process("adicione um teste ao roteador",Some("held"),&Pulse::silent()).await;

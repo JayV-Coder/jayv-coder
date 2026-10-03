@@ -316,7 +316,7 @@ export const en = {
 
   "claude.permission": "Permissions",
   "claude.permission.default": "Ask before acting",
-  "claude.permission.default.hint": "Claude Code's default mode: sensitive actions ask for approval.",
+  "claude.permission.default.hint": "Claude Code's default mode: sensitive actions ask for approval. In Development mode JayV still lets it edit project files, since nobody can approve from the chat.",
   "claude.permission.plan": "Plan only",
   "claude.permission.plan.hint": "Reads and proposes a plan without changing files or running commands.",
   "claude.permission.acceptEdits": "Accept edits",
@@ -355,7 +355,7 @@ export const en = {
 
   "codex.sandbox": "Sandbox",
   "codex.sandbox.read-only": "Read only",
-  "codex.sandbox.read-only.hint": "Reads the project and answers without changing anything.",
+  "codex.sandbox.read-only.hint": "Reads the project and answers without changing anything. In Development mode JayV still lets it write to the project.",
   "codex.sandbox.workspace-write": "Write to the project",
   "codex.sandbox.workspace-write.hint": "Edits files inside the project; the rest of the system stays protected.",
   "codex.sandbox.danger-full-access": "Full access (dangerous)",
@@ -367,7 +367,7 @@ export const en = {
 
   "copilot.access": "Tool access",
   "copilot.access.read": "Read only",
-  "copilot.access.read.hint": "Answers without editing files or running commands.",
+  "copilot.access.read.hint": "Answers without editing files or running commands. In Development mode JayV still lets it edit files.",
   "copilot.access.edits": "May edit files",
   "copilot.access.edits.hint": "Writes files in the project; terminal commands stay blocked.",
   "copilot.access.all": "All tools (dangerous)",
@@ -1194,6 +1194,8 @@ export const en = {
   "whatsNew.item.readableButtons.detail": "Send answers, Send choice and Yes, in a question from the agent, had text the same color as the button. They are readable again in light and dark themes.",
   "whatsNew.item.readableCode.title": "Easier-to-read code and file paths",
   "whatsNew.item.readableCode.detail": "Code in answers is colored by kind (keywords, strings, numbers, comments), sits on a deeper background with line numbers in their own margin, and long blocks open collapsed. File paths, even when written without backticks, become a badge with the folder dimmed and the file name highlighted.",
+  "whatsNew.item.buildWrites.title": "Development mode edits files again",
+  "whatsNew.item.buildWrites.detail": "In Development mode the agent ran with every write denied, because it waited for an approval nobody could give from the chat. Claude Code now edits project files without asking, Codex writes inside the project and Copilot may edit files; commands still follow your settings. If Jev's write rule or your organization's is Deny, the agent stays read-only. The agent also stopped offering options the app does not have, such as approving a permission prompt.",
   "whatsNew.item.upcomingNotes.title": "What changes shows only the new version",
   "whatsNew.item.upcomingNotes.detail": "What changes, in the update notice, now opens What's new with only what the new version brings, and a button to update from there.",
   "whatsNew.item.chatFits.title": "Chat messages fit inside their bubble",
