@@ -45,13 +45,33 @@ export function filePath(text: string): string | null {
   return dot > 0 && FILE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase()) ? path : null;
 }
 
+/** Um caminho escrito solto no texto, sem crase: precisa de pelo menos uma
+ * barra, para `v0.42.0` ou `README.md` numa frase não virarem arquivo. A
+ * pontuação do fim da frase fica de fora. */
+const BARE_PATH = /(?<![\w@./~-])(?:\.{1,2}\/|~\/|\/)?[\w@.-]+(?:\/[\w@.-]+)+(?::\d+(?::\d+)?)?/g;
+
+function textWithPaths(text: string, out: Inline[]) {
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  BARE_PATH.lastIndex = 0;
+  while ((match = BARE_PATH.exec(text)) !== null) {
+    const token = match[0].replace(/[.,;:]+$/, "");
+    const path = filePath(token);
+    if (!path) continue;
+    if (match.index > cursor) out.push({ type: "text", text: text.slice(cursor, match.index) });
+    out.push({ type: "file", text: token, path });
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) out.push({ type: "text", text: text.slice(cursor) });
+}
+
 export function parseInline(text: string): Inline[] {
   const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
   const out: Inline[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
-    if (match.index > cursor) out.push({ type: "text", text: text.slice(cursor, match.index) });
+    if (match.index > cursor) textWithPaths(text.slice(cursor, match.index), out);
     const token = match[0];
     if (token.startsWith("**")) out.push({ type: "strong", text: token.slice(2, -2) });
     else if (token.startsWith("`")) {
@@ -65,7 +85,7 @@ export function parseInline(text: string): Inline[] {
     }
     cursor = pattern.lastIndex;
   }
-  if (cursor < text.length) out.push({ type: "text", text: text.slice(cursor) });
+  if (cursor < text.length) textWithPaths(text.slice(cursor), out);
   return out;
 }
 

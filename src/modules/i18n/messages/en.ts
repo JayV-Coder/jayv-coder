@@ -58,6 +58,9 @@ export const en = {
   "code.language": "code",
   "code.copy": "Copy",
   "code.copied": "Copied",
+  "code.lines": { one: "{count} line", other: "{count} lines" },
+  "code.expand": { one: "Show {count} more line", other: "Show {count} more lines" },
+  "code.collapse": "Show less",
 
   "layout.label": "Layout",
   "layout.grid": "Grid",
@@ -1174,6 +1177,8 @@ export const en = {
   "whatsNew.item.recentSteps.detail": "The in-progress strip above the message box shows the 3 most recent steps. A button opens the full list, and the next request starts collapsed again.",
   "whatsNew.item.readableButtons.title": "Readable answer buttons",
   "whatsNew.item.readableButtons.detail": "Send answers, Send choice and Yes, in a question from the agent, had text the same color as the button. They are readable again in light and dark themes.",
+  "whatsNew.item.readableCode.title": "Easier-to-read code and file paths",
+  "whatsNew.item.readableCode.detail": "Code in answers is colored by kind (keywords, strings, numbers, comments), sits on a deeper background with line numbers in their own margin, and long blocks open collapsed. File paths, even when written without backticks, become a badge with the folder dimmed and the file name highlighted.",
   "whatsNew.item.updateEvery15s.title": "Updates found within seconds",
   "whatsNew.item.updateEvery15s.detail": "JayV now looks for a new version every 15 seconds, with no setting to choose. When one is out, the notice appears at the top of every screen.",
   "whatsNew.item.translatedSteps.title": "Request steps in your language",
