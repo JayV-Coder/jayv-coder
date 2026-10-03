@@ -47,6 +47,10 @@ impl Grammar {
         }
     }
 
+    /// Quem pode chamar quem: TypeScript e JavaScript se importam; um nome
+    /// igual num arquivo de outra linguagem é coincidência, não ligação.
+    fn family(self)->u8 { match self { Self::Rust=>0, Self::Python=>1, Self::JavaScript|Self::TypeScript|Self::Tsx=>2, Self::Go=>3 } }
+
     fn language(self)->Language {
         match self {
             Self::Rust=>tree_sitter_rust::LANGUAGE.into(), Self::Python=>tree_sitter_python::LANGUAGE.into(),
@@ -118,7 +122,8 @@ pub fn extract(path:&str,content:&str)->Option<FileSymbols> {
 
 /// A linha onde a definição começa, sem o corpo.
 fn signature(content:&str,row:usize)->String {
-    let line=content.lines().nth(row).unwrap_or_default().trim().trim_end_matches(['{',' ',':']);
+    let line=content.lines().nth(row).unwrap_or_default().trim();
+    let line=line.split_once(" {").map_or(line,|(head,_)|head).trim_end_matches(['{',' ',':','=']);
     if line.chars().count()>SIGNATURE_CHARS { format!("{}…",line.chars().take(SIGNATURE_CHARS).collect::<String>()) } else { line.to_string() }
 }
 
@@ -157,7 +162,8 @@ impl SymbolIndex {
         for (path,(_,symbols)) in &self.files {
             for name in &symbols.references {
                 let Some(owners)=self.defined_in.get(name).filter(|owners|owners.len()<=AMBIGUOUS_DEFINITIONS) else { continue };
-                for owner in owners.iter().filter(|owner|*owner!=path) {
+                let family=Grammar::of(path).map(Grammar::family);
+                for owner in owners.iter().filter(|owner|*owner!=path&&Grammar::of(owner).map(Grammar::family)==family) {
                     self.uses.entry(path.clone()).or_default().insert(owner.clone());
                     self.used_by.entry(owner.clone()).or_default().insert(path.clone());
                 }
@@ -269,6 +275,8 @@ mod tests {
         index.update(&[file("src/store.rs","pub struct Store;\npub const LIMIT: u8 = 1;\npub fn save_all() {}\n"),file("src/user.rs","fn go(store: Store) { store.save_all(); }\n")]);
         assert!(index.uses("src/user.rs").is_empty(),"chamada de método não liga arquivos");
         assert_eq!(index.headline("src/store.rs",2),["Store","save_all"],"tipos e funções antes de constantes");
+        index.update(&[file("src/store.rs","pub fn save_all() {}\n"),file("web/save.ts","saveAll(); save_all();\n"),file("web/api.ts","export function saveAll() {}\n")]);
+        assert_eq!(index.uses("web/save.ts"),["web/api.ts"],"o mesmo nome em Rust não liga um arquivo TypeScript");
     }
 
     #[test]

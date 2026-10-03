@@ -18,6 +18,7 @@ pub mod jev;
 pub mod llm;
 pub mod local;
 pub mod lockdown;
+pub mod mcp;
 pub mod memory;
 pub mod model;
 pub mod orchestrator;

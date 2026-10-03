@@ -295,6 +295,8 @@ export const en = {
   "claude.persist.hint": "Keeps the history in Claude Code so it can be resumed later.",
   "claude.safe": "Safe mode",
   "claude.safe.hint": "Ignores project hooks, plugins and settings that could run code.",
+  "claude.symbols": "JayV symbol tools",
+  "claude.symbols.hint": "Lets Claude ask JayV's local symbol index where something is defined, who uses it and what a change affects, instead of searching the folder. The tool descriptions cost a few hundred tokens per session: run jayv bench to see whether they pay off in your project.",
 
   "tool.Bash": "Terminal (Bash)",
   "tool.Edit": "Edit files",

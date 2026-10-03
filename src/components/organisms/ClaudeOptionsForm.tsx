@@ -55,6 +55,7 @@ export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSet
       </FormField>
       <ToggleRow id="claude-persist" label={t("claude.persist")} hint={t("claude.persist.hint")} checked={options.persistSessions} onChange={(persistSessions) => set({ persistSessions })} />
       <ToggleRow id="claude-safe" label={t("claude.safe")} hint={t("claude.safe.hint")} checked={options.safeMode} onChange={(safeMode) => set({ safeMode })} />
+      <ToggleRow id="claude-symbols" label={t("claude.symbols")} hint={t("claude.symbols.hint")} checked={options.symbolTools ?? false} onChange={(symbolTools) => set({ symbolTools })} />
     </div>
   );
 }

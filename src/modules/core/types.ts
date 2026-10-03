@@ -178,6 +178,8 @@ export interface ClaudeOptions {
   appendSystemPrompt: string;
   persistSessions: boolean;
   safeMode: boolean;
+  /** As ferramentas do índice de símbolos do JayV (`jayv mcp`). */
+  symbolTools: boolean;
 }
 
 export interface CodexOptions {
