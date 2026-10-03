@@ -3,7 +3,7 @@ use crate::{
     context_engine::{optimize_for_budget, rank_fragments, ContextFragment},
     firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::{AgentSession, MemoryManager},
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
-    progress::{Beat, Pulse},
+    progress::{Beat, ModeSwitch, Pulse},
     providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
 };
 use anyhow::{anyhow, Result};
@@ -53,6 +53,13 @@ const LEAN_LITE_NOTE:&str="Prefer the simplest change that fully works. When the
 const MULTI_REPOSITORY_NOTE:&str="This folder holds several repositories of the same organization; keep each change inside the repository it belongs to and name it in the answer. REPOSITORIES:";
 pub const MODE_PLAN:&str="plan";
 pub const MODE_BUILD:&str="build";
+/// O chat sem modo fixo: o Jev escolhe planejamento ou build a cada pedido.
+pub const MODE_AUTO:&str="auto";
+/// O chat estava fixo em planejamento e o pedido é para implementar.
+pub const SWITCH_ASKED:&str="asked";
+/// No automático, o pedido para implementar veio de novo depois de um que
+/// ficou em planejamento.
+pub const SWITCH_REPEATED:&str="repeated";
 const REPOSITORY_CONTEXT_THRESHOLD:f64=0.5;
 const TOOLS_THRESHOLD:f64=0.5;
 const DESTRUCTIVE_THRESHOLD:f64=0.35;
@@ -110,6 +117,15 @@ pub struct Orchestrator {
     /// O que vai junto só deste pedido — a receita que casou com ele, a
     /// resposta que o projeto já tinha. `process` o consome uma vez.
     pub pending_context: Vec<String>,
+    /// O modo que o desenvolvedor fixou para o chat (`auto`, `plan` ou
+    /// `build`). `process` o consome uma vez; sem ele, vale o automático.
+    pub pending_work_mode: Option<String>,
+    /// A troca de modo que o Jev fez no último `process`, para quem chamou
+    /// gravar o modo novo no chat.
+    pub mode_switch: Option<ModeSwitch>,
+    /// Os chats cujo último pedido pedia para implementar e ficou em
+    /// planejamento no automático: o próximo pedido igual sai em build.
+    stuck_in_plan: HashSet<String>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
@@ -138,7 +154,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, stuck_in_plan:HashSet::new(), performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -190,6 +206,8 @@ impl Orchestrator {
     pub async fn process(&mut self,user_input:&str,session_id:Option<&str>,pulse:&Pulse)->ProcessResult {
         let session_id=session_id.unwrap_or("default");
         let normalized=user_input.trim().to_string();
+        let pinned=self.pending_work_mode.take().unwrap_or_else(||MODE_AUTO.into());
+        self.mode_switch=None;
         if normalized.starts_with("/why") {
             self.pending_routing=None;
             self.pending_context.clear();
@@ -203,7 +221,10 @@ impl Orchestrator {
         let extras=std::mem::take(&mut self.pending_context);
         let gate_passed=self.pending_gate_passed.take().unwrap_or(true);
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
-        let mode=select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise);
+        let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
+        let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,self.stuck_in_plan.contains(session_id));
+        if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { self.stuck_in_plan.insert(session_id.to_string()); } else { self.stuck_in_plan.remove(session_id); }
+        self.mode_switch=switched.clone();
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
@@ -225,7 +246,7 @@ impl Orchestrator {
             return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
         }
         let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
-        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone()});
+        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched});
         pulse.beat(Beat::Running);
         let started=Instant::now();
         let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
@@ -631,10 +652,34 @@ fn note_project(context:&mut Context){
 /// e cuja complexidade cabe no teto do nível. Todo o resto é planejamento:
 /// análise, revisão, segurança, conversa, pedido com ressalva.
 pub fn select_mode(intent:&str,complexity:&str,signals:&RoutingSignals,gate_passed:bool,level:crate::expertise::Expertise)->&'static str {
+    if asks_to_build(intent,signals,gate_passed,level) && level.builds(complexity) { MODE_BUILD } else { MODE_PLAN }
+}
+/// Se o pedido é para implementar: a portaria liberou, a intenção é escrever
+/// código, ele precisa agir na máquina e não apaga trabalho. É o que o build
+/// pede antes do teto do nível.
+pub fn asks_to_build(intent:&str,signals:&RoutingSignals,gate_passed:bool,level:crate::expertise::Expertise)->bool {
     let writes=matches!(intent,"code"|"refactor"|"test"|"frontend");
     let erases=signals.is_destructive.is_some_and(|probability|jev::RoutingDecision::holds(probability,level.destructive_threshold()));
-    if gate_passed && writes && tools_wanted(signals) && !erases && level.builds(complexity) { MODE_BUILD } else { MODE_PLAN }
+    gate_passed && writes && tools_wanted(signals) && !erases
 }
+/// O modo do pedido diante do que o chat fixou. Fixo em build, é build: foi o
+/// desenvolvedor quem escolheu. Fixo em planejamento, só um pedido para
+/// implementar tira o chat de lá, e quem tira é o Jev, avisando. No
+/// automático vale a escolha do Jev, menos quando o desenvolvedor insiste:
+/// o pedido anterior queria implementar e ficou em planejamento, este quer de
+/// novo, e ele sai em build em vez de prender o chat no plano.
+pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_before:bool)->(&'static str,Option<ModeSwitch>) {
+    let switch=|from:&str,reason:&str|Some(ModeSwitch{from:from.into(),reason:reason.into()});
+    match pinned {
+        MODE_BUILD=>(MODE_BUILD,None),
+        MODE_PLAN if wants_build=>(MODE_BUILD,switch(MODE_PLAN,SWITCH_ASKED)),
+        MODE_PLAN=>(MODE_PLAN,None),
+        _ if chosen==MODE_PLAN&&wants_build&&stuck_before=>(MODE_BUILD,switch(MODE_AUTO,SWITCH_REPEATED)),
+        _=>(chosen,None),
+    }
+}
+/// O modo como o chat o guarda, ou nada se o valor não é um dos três.
+pub fn work_mode(value:&str)->Option<&'static str> { [MODE_AUTO,MODE_PLAN,MODE_BUILD].into_iter().find(|mode|*mode==value) }
 /// As notas do roteamento mais a do modo. Em build o agente executa, então a
 /// nota de "devolva os comandos para o desenvolvedor" não vale.
 pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
@@ -936,6 +981,57 @@ mod tests {
         let reviewed=orchestrator.process("revise o roteador",Some("review"),&Pulse::silent()).await;
         assert_eq!(reviewed.result.as_ref().map(|answer|answer.response.trim()),Some("ran-plan"));
         assert_eq!(reviewed.model_selection.agent.as_deref(),Some("reviewer"));
+
+        // Fixo em build, a revisão também roda com a linha de build; fixo em
+        // planejamento, o pedido para implementar tira o chat de lá.
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        let pinned=orchestrator.process("revise o roteador",Some("pinned"),&Pulse::silent()).await;
+        assert_eq!((pinned.model_selection.mode.as_str(),orchestrator.mode_switch.as_ref()),(MODE_BUILD,None));
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_PLAN.into());
+        let freed=orchestrator.process("adicione um teste ao roteador",Some("planning"),&Pulse::silent()).await;
+        assert_eq!(freed.result.as_ref().map(|answer|answer.response.trim()),Some("ran-build"));
+        assert_eq!(orchestrator.mode_switch,Some(ModeSwitch{from:MODE_PLAN.into(),reason:SWITCH_ASKED.into()}));
+        let next=orchestrator.process("revise o roteador",Some("planning"),&Pulse::silent()).await;
+        assert_eq!((next.model_selection.mode.as_str(),orchestrator.mode_switch.as_ref()),(MODE_BUILD,None),"sem modo fixo no pedido, vale o do Jev");
+    }
+
+    #[test]
+    fn the_jev_takes_the_chat_out_of_planning_only_when_it_is_stuck() {
+        let asked=Some(ModeSwitch{from:MODE_PLAN.into(),reason:SWITCH_ASKED.into()});
+        let repeated=Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_REPEATED.into()});
+        assert_eq!(resolve_mode(MODE_BUILD,MODE_PLAN,false,false),(MODE_BUILD,None),"build fixo é escolha do desenvolvedor");
+        assert_eq!(resolve_mode(MODE_PLAN,MODE_BUILD,false,false),(MODE_PLAN,None),"planejar não sai do plano");
+        assert_eq!(resolve_mode(MODE_PLAN,MODE_PLAN,true,false),(MODE_BUILD,asked),"pedir para implementar sai, mesmo acima do teto do nível");
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_BUILD,true,false),(MODE_BUILD,None));
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,true,false),(MODE_PLAN,None),"a primeira vez fica com o Jev");
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,true,true),(MODE_BUILD,repeated),"a segunda vez não prende o chat");
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,false,true),(MODE_PLAN,None));
+        assert_eq!((work_mode("plan"),work_mode("build"),work_mode("auto"),work_mode("x")),(Some(MODE_PLAN),Some(MODE_BUILD),Some(MODE_AUTO),None));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn asking_to_build_twice_in_auto_leaves_planning() {
+        use crate::expertise::Expertise::Starter;
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),"cat >/dev/null; echo ran-build".into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo ran-plan".into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.expertise=Starter;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"medium",0.9)));
+        let first=orchestrator.process("implemente o cache do roteador",Some("chat"),&Pulse::silent()).await;
+        assert_eq!((first.model_selection.mode.as_str(),orchestrator.mode_switch.as_ref()),(MODE_PLAN,None),"o médio passa do teto de quem começa");
+        orchestrator.process("implemente o cache do roteador",Some("other"),&Pulse::silent()).await;
+        assert_eq!(orchestrator.mode_switch,None,"a insistência é por chat");
+        let second=orchestrator.process("pode implementar",Some("chat"),&Pulse::silent()).await;
+        assert_eq!(second.result.as_ref().map(|answer|answer.response.trim()),Some("ran-build"));
+        assert_eq!(orchestrator.mode_switch,Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_REPEATED.into()}));
     }
 
     /// O agente explora o repositório sozinho: recebe o mapa, não os arquivos,

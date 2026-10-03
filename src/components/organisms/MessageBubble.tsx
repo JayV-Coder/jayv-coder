@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { CheckIcon, CopyIcon, RotateCcwIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, RotateCcwIcon, Undo2Icon } from "lucide-react";
 import type { TurnView } from "@/modules/core";
 import { messageLight, routeHint, routeLabel, shownText } from "@/modules/conversation";
 import { formatClock, useT } from "@/modules/i18n";
@@ -35,7 +35,7 @@ function Verdict({ light }: { light: NonNullable<ReturnType<typeof messageLight>
  * o veredito, e a saída embaixo. A cor que a portaria deu pinta a margem do
  * bloco (no `Timeline`) e, quando não é verde, a borda do pedido e o veredito
  * escrito. */
-export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onOpenFile, children }: {
+export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onOpenFile, onUndoMode, children }: {
   role: "user" | "assistant";
   content: string;
   turn: TurnView | null;
@@ -49,6 +49,8 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   onRetry?: () => void;
   /** Abre um arquivo que a resposta citou. */
   onOpenFile?: (path: string) => void;
+  /** Devolve o chat ao modo de onde o Jev o tirou neste pedido. */
+  onUndoMode?: () => void;
   children?: ReactNode;
 }) {
   const t = useT();
@@ -123,6 +125,19 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
         {light && <span className="ms-auto"><Verdict light={light} /></span>}
       </div>
       <div className="grid gap-1.5 px-3.5 pt-2.5 pb-2">
+        {route?.switched && (
+          // O Jev tirou o chat do planejamento: uma linha diz por quê e, na
+          // troca mais recente, deixa voltar.
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-caption text-muted-foreground">
+            <span className="before:me-1.5 before:text-success before:content-['↻']">{t(route.switched.reason === "repeated" ? "mode.switched.repeated" : "mode.switched.asked")}</span>
+            {onUndoMode && (
+              <Button variant="outline" size="xs" title={t("mode.undo.hint", { name: t(`mode.${route.switched.from}`) })} onClick={onUndoMode}>
+                <Undo2Icon aria-hidden="true" />
+                {t("mode.undo")}
+              </Button>
+            )}
+          </div>
+        )}
         {(text || !pending) && (
           <div className="grid gap-2">
             {parts.map((part, index) => {

@@ -26,6 +26,11 @@ pub(crate) async fn clear_chat(state:State<'_,SharedDesktopState>,workspace:Stat
     Ok(())
 }
 
+/// Fixa o modo do chat: `auto`, `plan` ou `build`. Vale a partir do próximo
+/// pedido que a fila tirar, inclusive os que já estão esperando.
+#[tauri::command]
+pub(crate) async fn set_work_mode(workspace:State<'_,SharedWorkspace>,chat_id:String,mode:String)->Result<(),Text>{crate::desktop::require_session()?;workspace.lock().await.set_work_mode(&chat_id,&mode).map_err(failure)}
+
 #[tauri::command]
 pub(crate) async fn delete_chat(state:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<(),Text>{crate::desktop::require_session()?;
     let (mut state,mut workspace)=both(&state,&workspace).await;

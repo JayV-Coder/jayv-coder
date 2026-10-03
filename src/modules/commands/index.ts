@@ -1,8 +1,9 @@
 import { create } from "zustand";
+import type { WorkMode } from "@/modules/core";
 
 /** O que um atalho de teclado global faz. A tela decide como cumprir; aqui só
  * se reconhece a tecla. */
-export type Shortcut = "palette" | "projects" | "organizations" | "stats" | "system" | "settings" | "newChat" | "gate";
+export type Shortcut = "palette" | "projects" | "organizations" | "stats" | "system" | "settings" | "newChat" | "gate" | "workMode";
 
 interface KeyLike {
   key: string;
@@ -30,7 +31,23 @@ const BY_KEY: Record<string, Shortcut> = {
   ",": "settings",
   n: "newChat",
   g: "gate",
+  ".": "workMode",
 };
+
+/** Os comandos de modo que a caixa de mensagem entende, com os apelidos em
+ * português. */
+const MODE_COMMANDS: Record<string, WorkMode> = {
+  auto: "auto", plan: "plan", build: "build", planejar: "plan", planejamento: "plan", desenvolver: "build", desenvolvimento: "build",
+};
+
+/** `/plan`, `/build` ou `/auto` no começo do texto: o modo pedido e o que
+ * sobrou depois do comando (vazio quando o texto era só o comando). Outro
+ * texto, ou outra barra (`/why`), não é comando de modo. */
+export function modeCommand(text: string): { mode: WorkMode; rest: string } | null {
+  const match = /^\/(\p{L}+)(?:\s+([\s\S]*))?$/u.exec(text.trim());
+  const mode = match ? MODE_COMMANDS[match[1].toLowerCase()] : undefined;
+  return mode ? { mode, rest: (match?.[2] ?? "").trim() } : null;
+}
 
 /** O atalho que uma tecla pressionada pede, ou nada. Só vale com a tecla de
  * comando do sistema (⌘ no Mac, Ctrl no resto) e sem Alt nem Shift, para não

@@ -1,10 +1,13 @@
 import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
 import { ArrowUpIcon } from "lucide-react";
-import type { Chat } from "@/modules/core";
+import { WORK_MODES, type Chat, type WorkMode } from "@/modules/core";
 import { answerQuestion, answeringFor, sendPrompt, setDraft, useConversation } from "@/modules/conversation";
+import { notify } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
-import { MOD } from "@/modules/commands";
+import { MOD, modeCommand, shortcutText } from "@/modules/commands";
+import { setWorkMode } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
+import { SegmentedControl } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AskingPanel } from "./AskingPanel";
@@ -41,9 +44,21 @@ export function Composer({ chat }: { chat: Chat | null }) {
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
-    const value = draft.trim();
+    let value = draft.trim();
     if (!value || !chat) return;
     setDraft(chat.id, "");
+    // `/plan`, `/build` e `/auto` trocam o modo do chat; o que vier depois do
+    // comando segue como pedido, já no modo novo.
+    const command = !question ? modeCommand(value) : null;
+    if (command) {
+      await setWorkMode(chat.id, command.mode);
+      if (!command.rest) {
+        notify(t("mode.set", { name: t(`mode.${command.mode}`) }));
+        input.current?.focus();
+        return;
+      }
+      value = command.rest;
+    }
     // Com pergunta em aberto, o que foi escrito é a resposta dela: é o caminho
     // do `RESPONDER`, e o texto livre vale para qualquer tipo de pergunta.
     if (question && writing) await answerQuestion(question, chat.id, [], value);
@@ -84,8 +99,18 @@ export function Composer({ chat }: { chat: Chat | null }) {
               <span className="inline-flex items-center gap-1.5"><Kbd>↵</Kbd>{t(writing ? "composer.key.answer" : "composer.key.send")}</span>
               <span className="inline-flex items-center gap-1.5"><Kbd>⇧</Kbd><Kbd>↵</Kbd>{t("composer.key.newline")}</span>
               <span className="inline-flex items-center gap-1.5"><Kbd>{MOD}</Kbd><Kbd>K</Kbd>{t("palette.title")}</span>
+              {!question && <span className="inline-flex items-center gap-1.5"><Kbd>/plan</Kbd><Kbd>/build</Kbd><Kbd>/auto</Kbd>{t("composer.key.mode")}</span>}
             </small>
           )}
+        {chat && (
+          <SegmentedControl<WorkMode>
+            label={`${t("mode.label")} (${shortcutText("workMode")})`}
+            value={chat.workMode ?? "auto"}
+            options={WORK_MODES.map((mode) => ({ value: mode, label: t(`mode.${mode}`), hint: t(`mode.${mode}.hint`) }))}
+            onChange={(mode) => void setWorkMode(chat.id, mode)}
+            className="[&_button]:h-6 [&_button]:px-2"
+          />
+        )}
         {(!question || writing) && (
           <Button type="submit" size="icon-sm" disabled={!chat || !draft.trim()} aria-label={t("composer.send")} title={t("composer.send")}>
             <ArrowUpIcon aria-hidden="true" />

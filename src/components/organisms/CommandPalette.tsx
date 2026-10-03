@@ -7,7 +7,8 @@ import { navigate } from "@/modules/navigation";
 import { openOrganization, useOrganizations } from "@/modules/organizations";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
 import { openStats } from "@/modules/usage";
-import { chatTitle, chatsOf, createChat, findProject, leaveProject, openChat, openProject, recentChats, useWorkspace } from "@/modules/workspace";
+import { WORK_MODES } from "@/modules/core";
+import { chatTitle, chatsOf, createChat, findChat, findProject, leaveProject, nextWorkMode, openChat, openProject, recentChats, setWorkMode, useWorkspace } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
 import { cn } from "@/lib/utils";
 
@@ -35,9 +36,9 @@ function Marked({ text, positions }: { text: string; positions: number[] }) {
   return <>{parts}</>;
 }
 
-/** O que cada atalho global faz. Atalho de projeto sem projeto aberto não
- * faz nada. */
-function runShortcut(shortcut: Shortcut, projectId: string | null) {
+/** O que cada atalho global faz. Atalho de projeto sem projeto aberto, ou de
+ * chat sem chat aberto, não faz nada. */
+function runShortcut(shortcut: Shortcut, projectId: string | null, chatId: string | null) {
   switch (shortcut) {
     case "palette": togglePalette(); break;
     case "projects": leaveProject(); break;
@@ -47,6 +48,11 @@ function runShortcut(shortcut: Shortcut, projectId: string | null) {
     case "settings": navigate("settings"); break;
     case "newChat": if (projectId) void createChat(projectId); break;
     case "gate": if (projectId) navigate("gate"); break;
+    case "workMode": {
+      const chat = findChat(useWorkspace.getState().data, chatId);
+      if (chat) void setWorkMode(chat.id, nextWorkMode(chat.workMode ?? "auto"));
+      break;
+    }
   }
 }
 
@@ -71,7 +77,8 @@ export function CommandPalette() {
       const shortcut = shortcutFor(event);
       if (!shortcut) return;
       event.preventDefault();
-      runShortcut(shortcut, useWorkspace.getState().activeProjectId);
+      const { activeProjectId: projectId, activeChatId: chatId } = useWorkspace.getState();
+      runShortcut(shortcut, projectId, chatId);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -90,6 +97,13 @@ export function CommandPalette() {
         { id: "gate", group: "palette.group.project", label: t("nav.gate"), hint: project.name, shortcut: "gate", run: () => navigate("gate") },
         { id: "project-stats", group: "palette.group.project", label: t("nav.stats"), hint: project.name, run: () => openStats({ kind: "project", id: project.id }) },
       );
+      const chat = findChat(data, activeChatId);
+      if (chat) {
+        for (const mode of WORK_MODES) {
+          if (mode === (chat.workMode ?? "auto")) continue;
+          all.push({ id: `mode-${mode}`, group: "palette.group.project", label: t("palette.mode", { name: t(`mode.${mode}`) }), hint: t(`mode.${mode}.hint`), run: () => void setWorkMode(chat.id, mode) });
+        }
+      }
       for (const chat of recentChats(chatsOf(data, project.id), activeChatId)) {
         all.push({ id: `chat-${chat.id}`, group: "palette.group.chats", label: chatTitle(chat), run: () => openChat(chat.id) });
       }

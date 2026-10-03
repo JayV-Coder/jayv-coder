@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { bus, commands, onCore, type WorkspaceData } from "@/modules/core";
+import { bus, commands, onCore, WORK_MODES, type WorkMode, type WorkspaceData } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 import { navigate } from "@/modules/navigation";
 import { chatsOf, findProject } from "./selectors";
@@ -54,6 +54,27 @@ export function refreshWorkspace() {
 export function setLayout(layout: Layout) {
   localStorage.setItem(LAYOUT_KEY, layout);
   useWorkspace.setState({ layout });
+}
+
+/** Fixa o modo de trabalho do chat. A tela muda na hora; se o núcleo recusar,
+ * o modo volta ao que era e o erro aparece. */
+export async function setWorkMode(chatId: string, mode: WorkMode) {
+  const before = useWorkspace.getState().data.chats.find((chat) => chat.id === chatId)?.workMode ?? "auto";
+  const put = (workMode: WorkMode) => useWorkspace.setState((state) => ({
+    data: { ...state.data, chats: state.data.chats.map((chat) => (chat.id === chatId ? { ...chat, workMode } : chat)) },
+  }));
+  put(mode);
+  try {
+    await commands.setWorkMode(chatId, mode);
+  } catch (error) {
+    put(before);
+    reportError(error);
+  }
+}
+
+/** O próximo modo na ordem do seletor: automático, planejamento, desenvolvimento. */
+export function nextWorkMode(mode: WorkMode): WorkMode {
+  return WORK_MODES[(WORK_MODES.indexOf(mode) + 1) % WORK_MODES.length];
 }
 
 /** Entra no projeto: a grade de chats dele é a primeira coisa que aparece. */
