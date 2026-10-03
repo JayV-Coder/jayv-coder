@@ -255,6 +255,36 @@ fn regexes()->&'static (Regex,Regex,Regex,Regex,Regex) {
     ))
 }
 
+/// Os critérios da portaria que uma nota do projeto pode cobrir: dizem do
+/// projeto, não de um pedido só.
+pub const LEARNABLE_CRITERIA:[&str;2]=["says_when_done","says_where"];
+
+/// A frase do pedido que atende a um critério aprendível — onde fica, como
+/// conferir —, se houver uma. É o que vira nota do projeto quando o
+/// desenvolvedor a escreve depois de a portaria ter cobrado.
+pub fn evidence(prompt:&str,criterion:&str)->Option<String> {
+    static SENTENCES:OnceLock<Regex>=OnceLock::new();
+    let (place,done,..)=regexes();
+    let pattern=match criterion {"says_where"=>place,"says_when_done"=>done,_=>return None};
+    let sentences=SENTENCES.get_or_init(||Regex::new(r"[.!?](?:\s+|$)|\n").unwrap());
+    sentences.split(prompt).map(str::trim).find(|sentence|sentence.split_whitespace().count()>=2&&pattern.is_match(sentence)).map(|sentence|sentence.chars().take(EVIDENCE_CHARS).collect())
+}
+const EVIDENCE_CHARS:usize=300;
+
+/// A leitura com o que as notas do projeto já respondem: o critério coberto
+/// conta como dito, e a portaria não cobra de novo o que o projeto ensinou.
+pub fn with_notes(mut reading:EntryReading,covered:&[String])->EntryReading {
+    const COVERED:f64=0.82;
+    for criterion in covered {
+        match criterion.as_str() {
+            "says_when_done"=>reading.says_when_done=reading.says_when_done.max(COVERED),
+            "says_where"=>reading.says_where=reading.says_where.max(COVERED),
+            _=>{}
+        }
+    }
+    reading
+}
+
 /// Uma leitura só com o texto do pedido, para quando não há sessão
 /// está definida. Deliberadamente generosa: a portaria local não deve barrar
 /// mais que o Jev.

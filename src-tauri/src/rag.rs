@@ -81,6 +81,16 @@ const WINDOW_LINES:usize=40;
 const STOPWORDS:[&str;64]=["the","and","for","that","this","with","from","are","was","not","but","you","have","has","can","will","what","when","where","which","how","why","all","any","into","use","make","need","want","should","would","please",
     "como","para","que","uma","com","por","não","nao","mais","dos","das","isso","esse","essa","este","esta","quando","onde","qual","quais","ser","tem","está","sobre","fazer","faça","preciso","quero","todo","toda","pelo","pela"];
 
+/// As palavras que dizem do que um texto trata: as de [`tokenize`] sem as de
+/// ligação. É com elas que dois pedidos são comparados.
+pub fn terms(value:&str)->HashSet<String> { tokenize(value).into_iter().filter(|token|!STOPWORDS.contains(&token.as_str())).collect() }
+
+/// O quanto dois textos falam da mesma coisa, de 0 a 1 (Jaccard das palavras).
+pub fn similarity(left:&HashSet<String>,right:&HashSet<String>)->f64 {
+    let union=left.union(right).count();
+    if union==0 { 0.0 } else { left.intersection(right).count() as f64/union as f64 }
+}
+
 /// As palavras de um texto, em minúsculas. Um identificador entra inteiro e
 /// também partido (`fetchUserName` → `fetch`, `user`, `name`), para o pedido
 /// em palavras soltas achar o código que as junta.

@@ -162,6 +162,8 @@ impl WorkspaceStore {
         crate::usage::store::ensure(&connection)?;
         connection.execute_batch(crate::expertise::SCHEMA)?;
         connection.execute_batch(crate::policy::SCHEMA)?;
+        connection.execute_batch(crate::project_memory::SCHEMA)?;
+        crate::search::ensure(&connection)?;
         crate::local::outbox::install(&connection)?;
         turns::requeue_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
@@ -493,6 +495,18 @@ impl WorkspaceStore {
     pub fn chat_usage(&self, chat_id:&str) -> Result<Vec<crate::usage::store::TurnUsage>> {crate::usage::store::chat_turns(&self.connection,chat_id)}
 
     pub fn connection(&self) -> &Connection {&self.connection}
+
+    pub fn project_notes(&self, project_id:&str) -> Result<Vec<crate::project_memory::ProjectNote>> {crate::project_memory::notes(&self.connection,project_id)}
+    pub fn save_project_note(&mut self, draft:&crate::project_memory::NoteDraft) -> Result<crate::project_memory::ProjectNote> {crate::project_memory::save(&self.connection,draft)}
+    pub fn delete_project_note(&mut self, id:&str) -> Result<()> {crate::project_memory::delete(&self.connection,id)}
+    pub fn learn_project_note(&mut self, project_id:&str, criterion:&str, sentence:&str) -> Result<Option<crate::project_memory::ProjectNote>> {crate::project_memory::learn(&self.connection,project_id,criterion,sentence)}
+    pub fn repeated_requests(&self, project_id:&str) -> Result<Vec<crate::project_memory::RepeatedRequest>> {crate::project_memory::repeated_requests(&self.connection,project_id)}
+    pub fn search_chats(&self, project_id:&str, text:&str, limit:usize) -> Result<Vec<crate::search::SearchHit>> {crate::search::search(&self.connection,project_id,text,limit)}
+    pub fn recall(&self, project_id:&str, chat_id:&str, request:&str) -> Result<Option<crate::search::Recall>> {crate::search::recall(&self.connection,project_id,chat_id,request)}
+    /// Os critérios que seguraram o pedido anterior a este no mesmo chat.
+    pub fn previous_failing_criteria(&self, turn_id:&str) -> Result<Vec<String>> {turns::previous_failing_criteria(&self.connection,turn_id)}
+    /// Como os pedidos do desenvolvedor passaram pela portaria nos últimos dias.
+    pub fn gate_history(&self, days:i64) -> Result<crate::expertise::GateHistory> {crate::expertise::gate_history(&self.connection,days)}
 
     pub fn connection_mut(&mut self) -> &mut Connection {&mut self.connection}
 

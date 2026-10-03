@@ -23,7 +23,37 @@ impl PerformanceTracker {
     pub fn record(&mut self, record:PerformanceRecord) { self.records.push(record); if self.records.len()>MAX_RECORDS { self.records.remove(0); } }
     pub fn model_score(&self, model:&str)->Option<f64> { let items=self.records.iter().filter(|r|r.model_used==model).collect::<Vec<_>>(); if items.is_empty(){None}else{Some(items.iter().filter(|r|r.success).count() as f64/items.len() as f64)} }
     pub fn len(&self)->usize { self.records.len() }
-    fn shrunk_model_score(&self, model:&str)->Option<f64> { let items=self.records.iter().filter(|r|r.model_used==model).collect::<Vec<_>>(); if items.is_empty(){return None;} let successes=items.iter().filter(|r|r.success).count() as f64; Some((successes+HISTORICAL_PRIOR*HISTORICAL_PRIOR_SAMPLES)/(items.len() as f64+HISTORICAL_PRIOR_SAMPLES)) }
+    /// A nota do modelo, puxada para o meio enquanto há poucos registros. Com
+    /// registros bastantes do mesmo tipo de pedido, vale a nota naquele tipo:
+    /// o modelo que acerta revisão não é por isso o que acerta teste.
+    fn shrunk_model_score(&self, model:&str, intent:&str)->Option<f64> {
+        let all=self.records.iter().filter(|r|r.model_used==model).collect::<Vec<_>>();
+        if all.is_empty(){return None;}
+        let specific=all.iter().copied().filter(|r|r.task_type==intent).collect::<Vec<_>>();
+        let items=if specific.len()>=INTENT_SAMPLES {specific} else {all};
+        let successes=items.iter().filter(|r|r.success).count() as f64;
+        Some((successes+HISTORICAL_PRIOR*HISTORICAL_PRIOR_SAMPLES)/(items.len() as f64+HISTORICAL_PRIOR_SAMPLES))
+    }
+    /// O último pedido do chat não resolveu, ainda que a resposta tenha vindo
+    /// inteira: o desenvolvedor reclamou dela ou a portaria de saída a segurou.
+    /// Devolve se havia um sucesso a desfazer.
+    pub fn mark_failed(&mut self, chat:&str)->bool {
+        let Some(record)=self.records.iter_mut().rev().find(|record|record.chat.as_deref()==Some(chat)) else { return false };
+        std::mem::replace(&mut record.success,false)
+    }
+}
+
+/// Registros do mesmo tipo de pedido a partir dos quais a nota do tipo vale.
+const INTENT_SAMPLES:usize=3;
+
+/// O pedido que diz que a resposta anterior não resolveu: "não funcionou",
+/// "ainda dá erro", "that's wrong". Só vale em mensagem curta — um pedido
+/// longo que cita um erro é pedido novo, não reclamação.
+pub fn is_complaint(text:&str)->bool {
+    static COMPLAINT:std::sync::OnceLock<regex::Regex>=std::sync::OnceLock::new();
+    const WORDS:usize=40;
+    let pattern=COMPLAINT.get_or_init(||regex::Regex::new(r"(?i)\b(?:n[ãa]o funcionou|n[ãa]o funciona|n[ãa]o deu certo|n[ãa]o era isso|n[ãa]o resolveu|ainda (?:d[áa]|est[áa]|continua|n[ãa]o|falha|quebra)|continua (?:dando|com|quebrado|falhando)|deu erro|est[áa] errado|ficou errado|quebrou|doesn'?t work|didn'?t work|not working|still (?:fails|failing|broken|not|wrong|errors?)|that'?s wrong|is wrong|it broke|no funcion[óa]|sigue (?:fallando|sin)|est[áa] mal)\b").expect("complaint regex"));
+    text.split_whitespace().count()<=WORDS&&pattern.is_match(text)
 }
 
 fn effective_model_id<'a>(name:&'a str,model:&'a ModelConfig)->&'a str { if model.model.is_empty(){name}else{&model.model} }
@@ -60,7 +90,7 @@ pub fn select_model(config:&Config,intent:&str,complexity:&str,context:&Context,
     choices.sort_by(|a,b|b.2.total_cmp(&a.2).then_with(||a.0.cmp(b.0)));
     match choices.first() { Some((name,model,score))=>ModelSelection{model_name:effective_model_id(name,model).to_string(),provider:model.provider.clone(),estimated_tokens:context.estimated_tokens.min(budget),score:*score,reason:format!("{intent}/{complexity} wants a {} model; matched {} capabilities within {budget}-token budget",["local","small","mid-size","large"][wanted_tier(intent,complexity)],required.len()),..Default::default()}, None=>ModelSelection{model_name:"configuration".into(),provider:"jev".into(),estimated_tokens:context.estimated_tokens.min(budget),score:0.0,reason:"no configured model can satisfy this request".into(),..Default::default()} }
 }
-fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&Config,performance:&PerformanceTracker)->f64 { let mut score=1.0+tier_fit(model,wanted_tier(intent,complexity)); if config.jev.optimization.prefer_local && model.cost_class=="free" {score+=FREE_COST_BONUS;} if complexity=="complex" && model.capabilities.contains(&"reasoning".into()){score+=COMPLEX_REASONING_BONUS;} if model.speed=="fast" && matches!(complexity,"trivial"|"simple") {score+=FAST_SPEED_BONUS;} if config.jev.adaptive_routing.enabled { if let Some(historical)=performance.shrunk_model_score(effective_model_id(name,model)){score+=historical*HISTORICAL_WEIGHT;} } score }
+fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&Config,performance:&PerformanceTracker)->f64 { let mut score=1.0+tier_fit(model,wanted_tier(intent,complexity)); if config.jev.optimization.prefer_local && model.cost_class=="free" {score+=FREE_COST_BONUS;} if complexity=="complex" && model.capabilities.contains(&"reasoning".into()){score+=COMPLEX_REASONING_BONUS;} if model.speed=="fast" && matches!(complexity,"trivial"|"simple") {score+=FAST_SPEED_BONUS;} if config.jev.adaptive_routing.enabled { if let Some(historical)=performance.shrunk_model_score(effective_model_id(name,model),intent){score+=historical*HISTORICAL_WEIGHT;} } score }
 
 #[cfg(test)] mod tests {
     use super::*;
@@ -69,7 +99,7 @@ fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&
     /// Catálogo vazio: estes testes montam os modelos que querem avaliar.
     fn bare()->Config { Config{providers:Default::default(),models:Default::default(),..Config::default()} }
 
-    fn sample(model:&str,success:bool)->PerformanceRecord { PerformanceRecord{task_type:"code".into(),strategy_used:"direct".into(),model_used:model.into(),success,response_time_ms:12,input_tokens:8,output_tokens:16,estimated_cost:0.0,timestamp:Utc::now()} }
+    fn sample(model:&str,success:bool)->PerformanceRecord { PerformanceRecord{task_type:"code".into(),strategy_used:"direct".into(),model_used:model.into(),success,response_time_ms:12,input_tokens:8,output_tokens:16,estimated_cost:0.0,timestamp:Utc::now(),chat:None} }
     fn premium()->(Config,ModelConfig) { let mut config=bare(); let model=ModelConfig{enabled:true,provider:"anthropic".into(),model:"claude-sonnet-4-5".into(),capabilities:vec!["code".into(),"tools".into()],context_window:200_000,..Default::default()}; config.models.insert("coding-premium".into(),model.clone()); (config,model) }
 
     #[test]
@@ -159,7 +189,7 @@ fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&
         for index in 0..20 { tracker.record(sample("veteran-1",index<18)); }
         assert_eq!(tracker.model_score("newcomer-1"),Some(1.0));
         assert!(tracker.model_score("veteran-1").expect("history")<1.0);
-        assert!(tracker.shrunk_model_score("newcomer-1")<tracker.shrunk_model_score("veteran-1"));
+        assert!(tracker.shrunk_model_score("newcomer-1","code")<tracker.shrunk_model_score("veteran-1","code"));
         assert_eq!(select_model(&config,"general","trivial",&Context::default(),&tracker).model_name,"veteran-1");
         let newcomer=ModelConfig{model:"newcomer-1".into(),..template};
         let baseline=score_model("newcomer",&newcomer,"general","simple",&config,&PerformanceTracker::default());
@@ -214,5 +244,30 @@ fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&
         for record in oversized { tracker.record(record); }
         assert_eq!(tracker.len(),MAX_RECORDS);
         assert!(tracker.model_score("model-499").is_none());
+    }
+
+    #[test]
+    fn a_complaint_in_the_chat_turns_the_last_success_into_a_failure() {
+        let mut tracker=PerformanceTracker::default();
+        tracker.record(PerformanceRecord{chat:Some("chat-a".into()),..sample("model-a",true)});
+        tracker.record(PerformanceRecord{chat:Some("chat-b".into()),..sample("model-a",true)});
+        assert!(tracker.mark_failed("chat-a"));
+        assert!(!tracker.mark_failed("chat-a"),"já era falha");
+        assert!(!tracker.mark_failed("chat-c"));
+        assert_eq!(tracker.model_score("model-a"),Some(0.5));
+        assert!(is_complaint("não funcionou, ainda dá erro no build"));
+        assert!(is_complaint("That's wrong, it still fails"));
+        assert!(!is_complaint("adicione um teste para o roteador"));
+        assert!(!is_complaint(&format!("{} não funcionou",["palavra";50].join(" "))),"pedido longo é pedido novo");
+    }
+
+    #[test]
+    fn with_enough_history_of_one_kind_the_kind_decides() {
+        let mut tracker=PerformanceTracker::default();
+        for _ in 0..3 { tracker.record(PerformanceRecord{task_type:"test".into(),..sample("model-a",false)}); }
+        for _ in 0..6 { tracker.record(sample("model-a",true)); }
+        assert!(tracker.shrunk_model_score("model-a","test").unwrap()<0.5,"erra os testes, mesmo acertando o resto");
+        assert!(tracker.shrunk_model_score("model-a","code").unwrap()>0.5);
+        assert_eq!(tracker.shrunk_model_score("model-a","review"),tracker.shrunk_model_score("model-a","docs"),"sem histórico do tipo, vale o geral");
     }
 }

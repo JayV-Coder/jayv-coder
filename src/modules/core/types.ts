@@ -281,6 +281,8 @@ export interface CoreSnapshot {
   gate: GateParameters;
   expertise: Expertise;
   levels: LevelView[];
+  /** O nível que o histórico da portaria sugere, ou nada. */
+  suggestion: LevelSuggestion | null;
   confidenceRange: [number, number];
   budgetRange: [number, number];
   cacheTtlRange: [number, number];
@@ -344,3 +346,30 @@ export interface UsageReport {
 }
 
 export interface TurnUsage { turnId: string; inputTokens: number; outputTokens: number; costUsd: number | null; durationMs: number; estimated: boolean }
+
+/** Como os pedidos passaram pela portaria numa janela de dias. */
+export interface GateHistory { checks: number; passed: number; asked: number; blocked: number }
+export interface LevelSuggestion { level: Expertise; history: GateHistory; days: number }
+
+/** Uma nota ou receita da memória do projeto. */
+export type NoteKind = "note" | "recipe";
+export interface ProjectNote {
+  id: string;
+  projectId: string;
+  kind: NoteKind;
+  title: string;
+  body: string;
+  /** O pedido que leva a receita junto. */
+  trigger: string;
+  /** O critério da portaria que a nota responde, ou vazio. */
+  covers: string;
+  /** `manual`, `gate` (aprendida da portaria) ou `repeat` (de um pedido repetido). */
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface NoteDraft { id: string | null; projectId: string; kind: NoteKind; title: string; body: string; trigger: string }
+export interface RepeatedRequest { prompt: string; count: number }
+export interface ProjectMemory { notes: ProjectNote[]; repeated: RepeatedRequest[]; notesLimit: number; recipeLimit: number }
+/** Um chat achado pela busca; o trecho marca o que casou entre \u0002 e \u0003. */
+export interface SearchHit { chatId: string; title: string; role: string; snippet: string; at: string }

@@ -22,6 +22,18 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.35.0", date: "2026-10-03",
+    items: [
+      { kind: "feature", id: "projectNotes" },
+      { kind: "feature", id: "gateLearning" },
+      { kind: "feature", id: "routingFeedback" },
+      { kind: "feature", id: "levelSuggestion" },
+      { kind: "feature", id: "chatSearch" },
+      { kind: "feature", id: "answerRecall" },
+      { kind: "feature", id: "recipes" },
+    ],
+  },
+  {
     version: "0.34.0", date: "2026-10-03",
     items: [
       { kind: "feature", id: "agentSessionResume" },

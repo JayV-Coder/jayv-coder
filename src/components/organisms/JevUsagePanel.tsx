@@ -14,6 +14,8 @@ const WORK: [string, Key][] = [
   ["secret_redacted", "usage.jev.work.secretRedacted"],
   ["file_withheld", "usage.jev.work.fileWithheld"],
   ["session_resumed", "usage.jev.work.sessionResumed"],
+  ["note_learned", "usage.jev.work.noteLearned"],
+  ["answer_recalled", "usage.jev.work.answerRecalled"],
 ];
 // O contexto cortado pelo orçamento não entra: era texto que o próprio Jev
 // escolheu e depois tirou, não token que o modelo gastaria.
