@@ -1,7 +1,6 @@
 import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import { checkForUpdate, closeUpdate, installUpdate, isUpdateBusy, useUpdate, type UpdatePhase, type UpdateStep as Step } from "@/modules/updates";
-import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -20,13 +19,13 @@ function stepState(step: Step, phase: UpdatePhase, failedAt: Step | null): "done
 }
 
 /** A atualização acontecendo na frente de quem usa: de que versão para qual,
- * o que muda, cada passo com o seu estado e o download crescendo. Com a
+ * onde ver o que muda, cada passo com o seu estado e o download crescendo. Com a
  * versão nova achada, a janela pergunta antes: atualizar agora ou deixar para
  * depois. Só fecha quando não há nada no meio do caminho. */
 export function UpdateDialog() {
   const t = useT();
   const locale = useLocale();
-  const { open, phase, current, next, notes, received, total, error } = useUpdate();
+  const { open, phase, current, next, received, total, error } = useUpdate();
   const failedAt = useUpdate((state) => (state.phase === "failed" ? state.failedAt : null));
   const busy = isUpdateBusy(phase);
   const megabytes = (bytes: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(bytes / 1_048_576);
@@ -78,12 +77,12 @@ export function UpdateDialog() {
 
         {busy && phase !== "checking" && <p className="text-xs text-muted-foreground">{t(phase === "restarting" ? "update.restarting.note" : "update.keepOpen")}</p>}
 
-        {notes && (
+        {/* O corpo do release no GitHub são os assuntos dos commits, num idioma só;
+            a lista traduzida chega com a versão nova, na janela Novidades. */}
+        {next && (phase === "available" || busy) && (
           <div className="grid gap-1.5">
             <strong className="text-xs tracking-wider text-muted-foreground uppercase">{t("update.notes")}</strong>
-            <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-muted px-4 py-3 text-sm">
-              <Markdown content={notes} />
-            </div>
+            <p className="text-sm text-muted-foreground">{t("update.notes.after")}</p>
           </div>
         )}
 

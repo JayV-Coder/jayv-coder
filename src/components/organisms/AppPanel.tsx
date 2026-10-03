@@ -1,9 +1,9 @@
 import type { CoreSettings, CoreSnapshot } from "@/modules/core";
-import { formatSince, useT } from "@/modules/i18n";
+import { formatClock, useT } from "@/modules/i18n";
 import { showChanges } from "@/modules/changelog";
 import { updateCore } from "@/modules/settings";
-import { checkForUpdate, isUpdateBusy, setUpdateInterval, UPDATE_INTERVALS, useUpdate } from "@/modules/updates";
-import { FormField, LanguageSelect, OptionSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
+import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
+import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -18,12 +18,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   // clicar de novo só a traz de volta.
   const checking = useUpdate((state) => isUpdateBusy(state.phase));
   const check = () => checkForUpdate(true);
-  const every = useUpdate((state) => state.every);
   const checkedAt = useUpdate((state) => state.checkedAt);
-  const intervals = UPDATE_INTERVALS.map((minutes) => ({
-    value: String(minutes),
-    label: minutes < 60 ? t("app.updates.minutes", { count: minutes }) : t("app.updates.hours", { count: minutes / 60 }),
-  }));
 
   return (
     <div className="grid gap-5">
@@ -59,15 +54,9 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
             <Button variant="outline" disabled={checking} onClick={() => void check()}>{t(checking ? "app.checking" : "app.checkUpdates")}</Button>
           </div>
         )}>
-        <div className="grid gap-3">
-          <FormField label={t("app.updates.every")} htmlFor="app-update-every" hint={t("app.updates.everyHint")}>
-            <div className="max-w-60">
-              <OptionSelect id="app-update-every" value={String(every)} options={intervals} onChange={(value) => setUpdateInterval(Number(value))} />
-            </div>
-          </FormField>
-          <p className="text-xs text-muted-foreground">
-            {checkedAt ? t("app.updates.checkedAt", { at: formatSince(checkedAt) }) : t("app.updates.never")}
-          </p>
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <p>{t("app.updates.auto")}</p>
+          <p>{checkedAt ? t("app.updates.checkedAt", { at: formatClock(checkedAt) }) : t("app.updates.never")}</p>
         </div>
       </SettingsSection>
     </div>
