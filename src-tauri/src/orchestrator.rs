@@ -378,8 +378,10 @@ impl Orchestrator {
                 Err(error)=>eprintln!("sessão do agente: não retomou, começando outra ({error:#})"),
             }
         }
-        // Sessão nova: as notas do projeto entram uma vez, no começo dela.
+        // Sessão nova: as notas do projeto entram uma vez, no começo dela, e o
+        // agente que explora recebe também a planta do projeto.
         let system=match &self.project_notes { Some(notes)=>format!("{system}\n{notes}"), None=>system };
+        let system=match provider.explores().then(||crate::project_map::render(&self.rag)).flatten() { Some(map)=>format!("{system}\n\n{map}"), None=>system };
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(short_history(self.memory.conversation(session_id)));
         messages.push(ChatMessage{role:"user".into(),content:user});
@@ -968,6 +970,35 @@ mod tests {
 
         orchestrator.process("and the tests?",Some("other-chat"),&Pulse::silent()).await;
         assert_eq!(orchestrator.memory.agent_session("other-chat").map(|kept|kept.turns),Some(1),"outro chat, outra sessão");
+    }
+
+    /// A planta do projeto vai no começo da sessão do agente, e a sessão
+    /// retomada já a tem.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_project_map_goes_once_per_agent_session() {
+        let mut files=vec![("router.rs".to_string(),filler("route_request",3_000))];
+        files.extend((0..crate::project_map::MIN_FILES).map(|index|(format!("handler_{index}.rs"),format!("fn handle_{index}() {{ route_request(); }}"))));
+        let borrowed=files.iter().map(|(path,body)|(path.as_str(),body.clone())).collect::<Vec<_>>();
+        let dir=repository(&borrowed);
+        let prompts=tempfile::tempdir().expect("prompts");
+        let mut orchestrator=orchestrator(&dir);
+        let script=format!(r#"cat > "{}/stdin-$#"; echo '{{"type":"system","subtype":"init","session_id":"s-1"}}'; echo resposta"#,prompts.path().display());
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),script.clone(),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],plan_args:vec!["-c".into(),script,"agent".into(),"--resume".into(),crate::llm::RESUME.into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+
+        orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
+        let first=std::fs::read_to_string(prompts.path().join("stdin-0")).expect("sessão nova");
+        assert!(first.contains("PROJECT MAP")&&first.contains("- router.rs (used by 80)"),"a planta vai no começo da sessão: {first}");
+        orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
+        let second=std::fs::read_to_string(prompts.path().join("stdin-2")).expect("sessão retomada");
+        assert!(!second.contains("PROJECT MAP"),"a sessão retomada já tem a planta: {second}");
     }
 
     /// A leitura pedida junto com a portaria vale para o pedido, sem outra ida

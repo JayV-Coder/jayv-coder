@@ -21,6 +21,8 @@ const AMBIGUOUS_DEFINITIONS:usize=3;
 const SHORT_NAME:usize=3;
 /// Quanto de uma linha de definição vai como assinatura.
 const SIGNATURE_CHARS:usize=140;
+/// Os nós de acesso a membro das gramáticas (Rust, JS/TS, Python, Go).
+const MEMBER_ACCESS:[&str;4]=["field_expression","member_expression","attribute","selector_expression"];
 /// Arquivos maiores que isto não são analisados: quase sempre é código gerado.
 const PARSE_LIMIT:usize=400_000;
 
@@ -95,14 +97,18 @@ pub fn extract(path:&str,content:&str)->Option<FileSymbols> {
     let mut cursor=QueryCursor::new();
     let mut matches=cursor.matches(query,tree.root_node(),content.as_bytes());
     while let Some(found)=matches.next() {
-        let name=found.captures().iter().find(|capture|names[capture.index as usize]=="name").and_then(|capture|capture.node.utf8_text(content.as_bytes()).ok());
+        let named=found.captures().iter().find(|capture|names[capture.index as usize]=="name");
+        let name=named.and_then(|capture|capture.node.utf8_text(content.as_bytes()).ok());
+        // `x.len()`, `store.save()`: o nome do método não diz de que tipo ele
+        // é, e ligaria o arquivo a qualquer um que defina um `len`.
+        let method_call=named.and_then(|capture|capture.node.parent()).is_some_and(|parent|MEMBER_ACCESS.contains(&parent.kind()));
         let role=found.captures().iter().find_map(|capture|{ let label=names[capture.index as usize]; (label.starts_with("definition.")||label.starts_with("reference.")).then_some((label,capture.node)) });
         let (Some(name),Some((label,node)))=(name,role) else { continue };
         if let Some(kind)=label.strip_prefix("definition.") {
             let line=node.start_position().row;
             if !seen.insert((name.to_string(),line)) { continue; }
             symbols.definitions.push(Definition{name:name.into(),kind:kind.into(),line:line+1,signature:signature(content,line)});
-        } else if name.chars().count()>=SHORT_NAME {
+        } else if name.chars().count()>=SHORT_NAME&&!method_call {
             symbols.references.insert(name.to_string());
         }
     }
@@ -162,6 +168,19 @@ impl SymbolIndex {
     pub fn len(&self)->usize { self.files.len() }
     pub fn is_empty(&self)->bool { self.files.is_empty() }
     pub fn definitions(&self,path:&str)->Option<&[Definition]> { self.files.get(path).map(|(_,symbols)|symbols.definitions.as_slice()) }
+    /// Os nomes que mais dizem do arquivo: tipos primeiro, depois funções;
+    /// constantes e módulos por último.
+    pub fn headline(&self,path:&str,limit:usize)->Vec<&str> {
+        let rank=|kind:&str|match kind { "class"|"interface"|"type"|"enum"=>0, "function"|"method"|"macro"=>1, _=>2 };
+        let mut definitions=self.definitions(path).unwrap_or_default().iter().collect::<Vec<_>>();
+        definitions.sort_by_key(|definition|(rank(&definition.kind),definition.line));
+        let mut names=Vec::new();
+        for definition in definitions {
+            if names.len()==limit { break; }
+            if !names.contains(&definition.name.as_str()) { names.push(definition.name.as_str()); }
+        }
+        names
+    }
     pub fn terms(&self,path:&str)->Option<&HashSet<String>> { self.terms.get(path) }
     /// Os arquivos que definem o que este usa.
     pub fn uses(&self,path:&str)->Vec<&str> { self.uses.get(path).map(|set|set.iter().map(String::as_str).collect()).unwrap_or_default() }
@@ -247,6 +266,9 @@ mod tests {
         assert_eq!(index.references("run"),["src/queue.rs"]);
         assert_eq!(index.hubs(1),[("src/cache.rs",1)]);
         assert!(index.terms("src/cache.rs").expect("termos").contains("invalidate"));
+        index.update(&[file("src/store.rs","pub struct Store;\npub const LIMIT: u8 = 1;\npub fn save_all() {}\n"),file("src/user.rs","fn go(store: Store) { store.save_all(); }\n")]);
+        assert!(index.uses("src/user.rs").is_empty(),"chamada de método não liga arquivos");
+        assert_eq!(index.headline("src/store.rs",2),["Store","save_all"],"tipos e funções antes de constantes");
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub mod model;
 pub mod orchestrator;
 pub mod policy;
 pub mod progress;
+pub mod project_map;
 pub mod project_memory;
 pub mod providers;
 pub mod rag;
