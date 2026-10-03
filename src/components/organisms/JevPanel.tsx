@@ -1,7 +1,10 @@
-import { COMPLEXITIES, type CoreSettings, type CoreSnapshot, type Permission } from "@/modules/core";
+import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
+import { COMPLEXITIES, type AgentId, type CoreSettings, type CoreSnapshot, type Permission } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { updateCore } from "@/modules/settings";
+import { AGENTS, AGENT_LABELS, updateCore } from "@/modules/settings";
+import { AgentIcon } from "@/components/atoms";
 import { FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const THRESHOLDS = ["0.5", "0.55", "0.6", "0.65", "0.7", "0.75", "0.8", "0.85", "0.9", "0.95"];
@@ -31,6 +34,7 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
             <OptionSelect id="jev-confidence" value={String(core.confidenceThreshold)} onChange={(value) => updateCore({ confidenceThreshold: Number(value) })}
               options={[...new Set([...THRESHOLDS, String(core.confidenceThreshold)])].map((value) => ({ value, label: percent(Number(value)) }))} />
           </FormField>
+          <AgentOrderField order={core.agentOrder} />
         </div>
       </SettingsSection>
 
@@ -93,5 +97,39 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
         </dl>
       </SettingsSection>
     </div>
+  );
+}
+
+/** Quem ganha quando dois agentes empatam na nota: espalhados entre os chats,
+ * ou na ordem escolhida aqui. A ordem guarda os quatro agentes. */
+function AgentOrderField({ order }: { order: AgentId[] }) {
+  const t = useT();
+  const ordered = order.length > 0;
+  const full = [...order, ...AGENTS.filter((agent) => !order.includes(agent))];
+  const move = (index: number, step: -1 | 1) => {
+    const next = [...full];
+    [next[index], next[index + step]] = [next[index + step], next[index]];
+    updateCore({ agentOrder: next });
+  };
+  return (
+    <FormField label={t("jev.agentOrder")} htmlFor="jev-agent-order" hint={t("jev.agentOrder.hint")}>
+      <div className="grid gap-2">
+        <OptionSelect id="jev-agent-order" value={ordered ? "order" : "spread"} onChange={(mode) => updateCore({ agentOrder: mode === "order" ? full : [] })}
+          options={[{ value: "spread", label: t("jev.agentOrder.spread") }, { value: "order", label: t("jev.agentOrder.order") }]} />
+        {ordered && (
+          <ol className="grid gap-1">
+            {full.map((agent, index) => (
+              <li key={agent} className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
+                <span className="w-4 text-muted-foreground">{index + 1}</span>
+                <AgentIcon agent={agent} className="size-4" />
+                <span className="flex-1">{AGENT_LABELS[agent]}</span>
+                <Button size="icon-sm" variant="ghost" disabled={index === 0} onClick={() => move(index, -1)} aria-label={t("jev.agentOrder.up", { agent: AGENT_LABELS[agent] })}><ArrowUpIcon /></Button>
+                <Button size="icon-sm" variant="ghost" disabled={index === full.length - 1} onClick={() => move(index, 1)} aria-label={t("jev.agentOrder.down", { agent: AGENT_LABELS[agent] })}><ArrowDownIcon /></Button>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </FormField>
   );
 }

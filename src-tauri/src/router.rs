@@ -80,7 +80,9 @@ fn tier_fit(model:&ModelConfig,wanted:usize)->f64 {
     }
 }
 
-/// Como desempatar modelos com a mesma nota. Sem nada, vale o nome, para a
+/// Como desempatar modelos com a mesma nota. Primeiro vale a ordem de
+/// preferência dos agentes, quando a pessoa definiu uma
+/// (`jev.agent_order`). Sem nada, vale o nome, para a
 /// mesma pergunta cair sempre no mesmo modelo. Com o chat, o agente que ele já
 /// usa ganha o empate (a sessão dele é retomada) e, num chat novo, a ordem dos
 /// empatados sai de uma mistura do chat com o nome: chats diferentes se
@@ -110,7 +112,9 @@ pub fn rank_models(config:&Config,intent:&str,complexity:&str,context:&Context,p
     let rounded=|score:f64|(score*1e6).round() as i64;
     let stays=|model:&ModelConfig|match tiebreak.sticky { Some((provider,id))=>(model.provider!=provider,effective_model_id("",model)!=id), None=>(true,true) };
     let order=|name:&str|if tiebreak.seed.is_empty() {0} else {mix(tiebreak.seed,name)};
-    choices.sort_by(|a,b|rounded(b.2).cmp(&rounded(a.2)).then_with(||stays(a.1).cmp(&stays(b.1))).then_with(||order(a.0).cmp(&order(b.0))).then_with(||a.0.cmp(b.0)));
+    // Agente fora da lista vem depois dos listados.
+    let preferred=|model:&ModelConfig|config.jev.agent_order.iter().position(|agent|*agent==model.provider).unwrap_or(usize::MAX);
+    choices.sort_by(|a,b|rounded(b.2).cmp(&rounded(a.2)).then_with(||preferred(a.1).cmp(&preferred(b.1))).then_with(||stays(a.1).cmp(&stays(b.1))).then_with(||order(a.0).cmp(&order(b.0))).then_with(||a.0.cmp(b.0)));
     choices.into_iter().map(|(name,model,score)|ModelSelection{model_name:effective_model_id(name,model).to_string(),provider:model.provider.clone(),estimated_tokens:context.estimated_tokens.min(budget),score,reason:format!("{intent}/{complexity} wants a {} model; matched {} capabilities within {budget}-token budget",["local","small","mid-size","large"][wanted_tier(intent,complexity)],required.len()),..Default::default()}).collect()
 }
 
@@ -336,6 +340,21 @@ fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&
             assert_eq!(ranked[0].provider,"codex");
             assert_eq!(ranked.len(),4,"os outros ficam como plano B");
         }
+    }
+
+    /// A ordem que a pessoa definiu decide o empate antes da sessão do chat
+    /// e da mistura; quem ficou fora da lista vem depois dos listados.
+    #[test] fn the_preferred_order_decides_ties() {
+        let mut config=four_agents();
+        config.jev.agent_order=vec!["cursor".into(),"codex".into()];
+        for seed in ["a","b","c","d"] {
+            let ranked=rank_models(&config,"code","medium",&Context::default(),&PerformanceTracker::default(),&Tiebreak{sticky:Some(("claude","sonnet")),seed});
+            assert_eq!((ranked[0].provider.as_str(),ranked[1].provider.as_str()),("cursor","codex"));
+            assert_eq!(ranked[2].provider,"claude","fora da lista, a sessão do chat ainda desempata");
+        }
+        config.models.get_mut("cursor/auto").expect("auto").cost_class="high".into();
+        let ranked=rank_models(&config,"general","trivial",&Context::default(),&PerformanceTracker::default(),&Tiebreak::default());
+        assert_eq!(ranked[0].provider,"codex","a preferência não passa por cima do porte");
     }
 
     /// O desempate nunca passa por cima da nota: o porte certo continua
