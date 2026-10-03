@@ -22,6 +22,14 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.42.0", date: "2026-10-03",
+    items: [
+      { kind: "feature", id: "chatBubbles" },
+      { kind: "feature", id: "recentSteps" },
+      { kind: "fix", id: "readableButtons" },
+    ],
+  },
+  {
     version: "0.41.1", date: "2026-10-03",
     items: [
       { kind: "fix", id: "translationsComplete" },

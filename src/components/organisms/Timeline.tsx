@@ -120,7 +120,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
                   <section
                     key={block.key}
                     data-aspect={blockAspect(turn) ?? undefined}
-                    className="relative grid gap-2.5 border-b border-border py-3.5 ps-5 pe-1 before:absolute before:inset-y-0 before:start-0 before:w-[3px] data-[aspect]:before:bg-[var(--aspect)] data-[aspect=stop]:bg-[color-mix(in_srgb,var(--stop)_5%,transparent)]"
+                    className="relative grid gap-3 border-b border-border py-3.5 ps-5 pe-1 before:absolute before:inset-y-0 before:start-0 before:w-[3px] data-[aspect]:before:bg-[var(--aspect)] data-[aspect=stop]:bg-[color-mix(in_srgb,var(--stop)_5%,transparent)]"
                   >
                     {block.messages.map(({ message, index }) => (
                       <MessageBubble
