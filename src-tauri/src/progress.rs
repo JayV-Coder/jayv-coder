@@ -32,6 +32,9 @@ pub enum Beat {
     /// `build` — e o papel que o Jev deu ao agente. `switched` vem quando o
     /// Jev tirou o chat do modo em que estava, para o balão dizer e desfazer.
     Route{provider:String,model:String,reason:String,mode:String,agent:Option<String>,#[serde(skip_serializing_if="Option::is_none")] switched:Option<ModeSwitch>},
+    /// O agente não conseguiu começar e o pedido passou ao próximo: quem
+    /// falhou e por quê (um aviso do i18n).
+    Fallback{provider:String,error:String},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -43,7 +46,7 @@ impl Beat {
     pub fn kind(&self)->&'static str {
         match self {
             Self::Gate{..}=>"gate", Self::Read{..}=>"read", Self::Context{..}=>"context",
-            Self::Route{..}=>"route", Self::Running=>"running", Self::Agent{..}=>"agent",
+            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Running=>"running", Self::Agent{..}=>"agent",
             Self::Chunk{..}=>"chunk", Self::Done{..}=>"done", Self::Failed{..}=>"failed",
         }
     }

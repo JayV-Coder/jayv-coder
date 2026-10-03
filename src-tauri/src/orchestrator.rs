@@ -4,7 +4,7 @@ use crate::{
     firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::{AgentSession, MemoryManager},
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
     progress::{Beat, ModeSwitch, Pulse},
-    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
+    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{configuration_selection, rank_models, required_capabilities, PerformanceTracker, Tiebreak},
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -177,7 +177,8 @@ impl Orchestrator {
     }
 
     pub fn use_llm(&mut self,settings:&crate::llm::LlmSettings) {
-        let (providers,models)=crate::llm::to_config(settings);
+        let (mut providers,models)=crate::llm::to_config(settings);
+        set_aside_missing(&mut providers,|command|crate::llm::locate(command).is_some());
         self.providers=build_providers(&providers,&self.workdir);
         self.planners=build_planners(&providers,&self.workdir);
         self.config.providers=providers;
@@ -240,7 +241,10 @@ impl Orchestrator {
         let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)))+extras.iter().map(|extra|estimate_tokens(extra)).sum::<usize>()+self.project_notes.as_deref().map_or(0,estimate_tokens);
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals,mode);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
-        let mut selection=select_model(&self.config,&intent.intent,&complexity,&context,&self.performance);
+        // O agente que o chat já usa desempata: a sessão dele é retomada.
+        let sticky=self.memory.agent_session(session_id).map(|kept|(kept.provider.clone(),kept.model.clone()));
+        let ranked=rank_models(&self.config,&intent.intent,&complexity,&context,&self.performance,&Tiebreak{sticky:sticky.as_ref().map(|(provider,model)|(provider.as_str(),model.as_str())),seed:session_id});
+        let mut selection=ranked.first().cloned().unwrap_or_else(||configuration_selection(&self.config,&complexity,&context));
         selection.mode=mode.into();
         selection.agent=self.agents.for_intent(&intent.intent).map(|agent|agent.name.clone());
         if let Some(guidance)=self.configuration_guidance(&selection) {
@@ -253,11 +257,25 @@ impl Orchestrator {
             self.last_decision=Some(decision.clone());
             return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
         }
-        let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
-        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched});
+        pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
         pulse.beat(Beat::Running);
         let started=Instant::now();
-        let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
+        let mut execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
+        // Plano B: o agente que nem conseguiu começar (não instalado, sem
+        // login, sem cota) passa a vez ao próximo da lista que é de outro
+        // agente. Quem já trabalhou um pouco e falhou não passa: o próximo
+        // encontraria o projeto pela metade.
+        let mut tried=vec![selection.provider.clone()];
+        while let Err(error)=&execution {
+            if started.elapsed()>FALLBACK_WINDOW || !could_not_start(error) { break; }
+            let Some(next)=ranked.iter().find(|candidate|!tried.contains(&candidate.provider)&&self.pool(mode).contains_key(&candidate.provider)) else { break };
+            pulse.beat(Beat::Fallback{provider:selection.provider.clone(),error:crate::i18n::notice(&[crate::i18n::failure(anyhow!("{error:#}"))])});
+            selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..next.clone()};
+            tried.push(selection.provider.clone());
+            pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
+            execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
+        }
+        let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
         let resumed=execution.as_ref().is_ok_and(|(_,resumed)|*resumed);
         let execution=execution.map(|(response,_)|response);
         self.remember_agent_session(session_id,&selection,execution.as_ref().ok(),resumed);
@@ -558,6 +576,21 @@ fn short_history(conversation:&[ChatMessage])->Vec<ChatMessage> {
 
 /// A falha que vem da sessão retomada — apagada, de outra pasta, expirada —, e
 /// não do pedido: com ela, vale começar outra sessão.
+/// Até quando depois da largada uma falha ainda conta como "não começou".
+const FALLBACK_WINDOW:std::time::Duration=std::time::Duration::from_secs(30);
+
+/// O agente falhou antes de trabalhar: não está instalado, não abriu, ou
+/// recusou de cara por login, chave ou cota.
+pub fn could_not_start(error:&anyhow::Error)->bool {
+    static REFUSAL:std::sync::OnceLock<regex::Regex>=std::sync::OnceLock::new();
+    let refusal=REFUSAL.get_or_init(||regex::Regex::new(r"(?i)not logged in|log ?in|sign ?in|authenticat|unauthori[sz]ed|api key|credential|quota|rate.?limit|usage limit|credit|billing|subscription|\b(?:401|402|403|429)\b").expect("refusal regex"));
+    error.chain().filter_map(|cause|cause.downcast_ref::<Text>()).any(|text|match text.key.as_str() {
+        "provider.notInstalled"|"provider.start"=>true,
+        "provider.failed"=>matches!(text.params.get("reason"),Some(crate::i18n::Param::Plain(reason)) if refusal.is_match(reason)),
+        _=>false,
+    })
+}
+
 fn lost_session(error:&anyhow::Error)->bool {
     let text=format!("{error:#}").to_lowercase();
     ["session","conversation"].iter().any(|word|text.contains(word))
@@ -695,6 +728,16 @@ pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
     let notes=if mode==MODE_BUILD { notes.replace(&format!("\n{TOOLS_NOTE}"),"") } else { notes };
     format!("{notes}\n{}\n{FOCUS_NOTE}",if mode==MODE_BUILD {BUILD_NOTE} else {PLAN_NOTE})
 }
+/// O agente ligado cujo programa não está neste computador sai da disputa,
+/// desde que outro ligado esteja: assim o Jev não o escolhe para depois falhar.
+/// Sozinho, ele fica, e o pedido diz que falta instalá-lo.
+fn set_aside_missing(providers:&mut HashMap<String,crate::config::ProviderConfig>,installed:impl Fn(&str)->bool) {
+    let missing:Vec<String>=providers.iter().filter(|(_,provider)|provider.enabled&&provider.kind=="cli"&&provider.command.as_deref().is_some_and(|command|!installed(command))).map(|(name,_)|name.clone()).collect();
+    if providers.values().filter(|provider|provider.enabled).count()>missing.len() {
+        for name in missing { if let Some(provider)=providers.get_mut(&name) { provider.enabled=false; } }
+    }
+}
+
 fn build_planners(configs:&HashMap<String,crate::config::ProviderConfig>,workdir:&Workdir)->HashMap<String,Box<dyn Provider>> {
     build_providers(&configs.iter().map(|(name,config)|(name.clone(),config.for_planning())).collect(),workdir)
 }
@@ -958,6 +1001,52 @@ mod tests {
         orchestrator.lean_code=false;
         assert_eq!(orchestrator.lean_note(MODE_BUILD),None);
         assert!(estimate_tokens(LEAN_FULL_NOTE)<=90,"a regra custa {} tokens por pedido de build",estimate_tokens(LEAN_FULL_NOTE));
+    }
+
+    /// O agente escolhido que não consegue começar passa a vez ao próximo de
+    /// outro agente; o que falha trabalhando não passa.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_agent_that_cannot_start_hands_the_request_to_the_next() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let script=|body:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),format!("cat >/dev/null; {body}")],plan_args:vec!["-c".into(),format!("cat >/dev/null; {body}")],..Default::default()};
+        let model=|provider:&str,cost:&str|crate::config::ModelConfig{enabled:true,provider:provider.into(),model:format!("{provider}-model"),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:cost.into(),speed:"medium".into(),context_window:200_000};
+        let use_agents=|orchestrator:&mut Orchestrator,first:crate::config::ProviderConfig|{
+            let providers=HashMap::from([("first".to_string(),first),("second".to_string(),script("echo do segundo"))]);
+            // O primeiro é do porte que o pedido simples pede: ganha na nota.
+            let models=HashMap::from([("first/m".to_string(),model("first","low")),("second/m".to_string(),model("second","medium"))]);
+            orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+            orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+            orchestrator.config.providers=providers;
+            orchestrator.config.models=models;
+            orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        };
+
+        use_agents(&mut orchestrator,crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("jayv-agent-that-is-not-installed".into()),..Default::default()});
+        let missing=orchestrator.process("adicione um teste ao roteador",Some("missing"),&Pulse::silent()).await;
+        assert_eq!(missing.result.as_ref().map(|answer|answer.response.trim()),Some("do segundo"));
+        assert_eq!(missing.model_selection.provider,"second");
+        assert_eq!(missing.decision.model_provider,"second");
+
+        use_agents(&mut orchestrator,script("echo 'Error: not logged in. Run /login' >&2; exit 1"));
+        let logged_out=orchestrator.process("adicione um teste ao roteador",Some("logged-out"),&Pulse::silent()).await;
+        assert_eq!(logged_out.model_selection.provider,"second","sem login o agente nem começa");
+
+        use_agents(&mut orchestrator,script("echo 'error[E0425]: cannot find value' >&2; exit 1"));
+        let broken=orchestrator.process("adicione um teste ao roteador",Some("broken"),&Pulse::silent()).await;
+        assert!(broken.error.is_some(),"a falha de quem trabalhou fica com ele");
+        assert_eq!(broken.model_selection.provider,"first");
+    }
+
+    #[test] fn a_missing_agent_steps_aside_only_when_another_is_there() {
+        let cli=|command:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some(command.into()),..Default::default()};
+        let mut both=HashMap::from([("claude".to_string(),cli("claude")),("codex".to_string(),cli("codex"))]);
+        set_aside_missing(&mut both,|command|command=="claude");
+        assert!(both["claude"].enabled && !both["codex"].enabled);
+        let mut alone=HashMap::from([("codex".to_string(),cli("codex"))]);
+        set_aside_missing(&mut alone,|_|false);
+        assert!(alone["codex"].enabled,"sozinho ele fica, e o pedido diz que falta instalá-lo");
     }
 
     /// O mesmo agente, duas linhas de comando: a do modo escolhido é a que roda,

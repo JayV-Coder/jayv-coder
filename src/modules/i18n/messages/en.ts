@@ -155,6 +155,7 @@ export const en = {
   "intent.test": "Tests",
   "beat.done": "Done in {latency} ms — {input} input tokens, {output} output",
   "beat.failed": "Failed: {error}",
+  "beat.fallback": "{agent} could not start ({error}); the next agent takes over",
   "beat.dismissed": "Question ignored: {prompt}",
 
   "verdict.entry.pass": "passed",
@@ -1194,6 +1195,10 @@ export const en = {
   "whatsNew.item.readableButtons.detail": "Send answers, Send choice and Yes, in a question from the agent, had text the same color as the button. They are readable again in light and dark themes.",
   "whatsNew.item.readableCode.title": "Easier-to-read code and file paths",
   "whatsNew.item.readableCode.detail": "Code in answers is colored by kind (keywords, strings, numbers, comments), sits on a deeper background with line numbers in their own margin, and long blocks open collapsed. File paths, even when written without backticks, become a badge with the folder dimmed and the file name highlighted.",
+  "whatsNew.item.fairRouting.title": "Jev uses every agent you configured",
+  "whatsNew.item.fairRouting.detail": "When two models of the same size scored the same, the one first in alphabetical order won, so with Claude Code, Codex, Copilot and Cursor turned on every request went to Claude Code. Now a chat keeps the agent it is already using, and new chats are spread among the tied agents. A model that was never tried also starts with an average score instead of losing to any model with one success, so Jev learns which agent does best in each kind of request.",
+  "whatsNew.item.agentFallback.title": "If the chosen agent cannot start, the next one answers",
+  "whatsNew.item.agentFallback.detail": "When the agent Jev picked is not installed, cannot open, or refuses right away for lack of login, key or quota, the request goes to the next agent on the list and the reply says so. An agent that fails after it has started working keeps the failure, so another one does not pick up a half-changed project. An enabled agent that is not installed on this computer also leaves the choice, as long as another enabled agent is.",
   "tray.open": "Open JayV",
   "tray.quit": "Quit JayV",
   "tray.updateTo": "Update to JayV {version}",
