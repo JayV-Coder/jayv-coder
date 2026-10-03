@@ -28,7 +28,7 @@ export function ChatCard({ chat, onOpen, onDelete }: { chat: Chat; onOpen: () =>
         </ConfirmAction>
       )}
     >
-      <span className="text-lg font-semibold tracking-tight break-words">{chatTitle(chat)}</span>
+      <span className="text-lg font-semibold break-words">{chatTitle(chat)}</span>
       <span className="text-xs text-muted-foreground">{t("chat.createdAt", { date: formatSince(chat.createdAt) })}</span>
       <GatePass pass={lastGatePass(feed, chat.id)} />
       <span className={cn("text-sm leading-relaxed text-muted-foreground", !said && "text-muted-foreground italic")}>

@@ -11,7 +11,7 @@ export function ChatPage() {
   return (
     <>
       <Timeline chat={chat} project={project} />
-      <div className="mx-auto w-full max-w-3xl flex-none px-6 pb-4">
+      <div className="mx-auto w-full max-w-4xl flex-none px-5 pb-3">
         <Composer chat={chat} />
         {chat && <ChatUsageBar chatId={chat.id} />}
       </div>

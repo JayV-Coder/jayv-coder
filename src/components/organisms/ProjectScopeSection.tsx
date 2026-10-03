@@ -25,7 +25,7 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
           <Icon className="size-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <h3 id={`scope-${group.key}`} className="flex flex-wrap items-baseline gap-2 text-h4 font-semibold tracking-tight">
+          <h3 id={`scope-${group.key}`} className="flex flex-wrap items-baseline gap-2 text-h4 font-semibold">
             <span className="break-words">{personal ? t("projects.personal.title") : group.name}</span>
             {group.slug && <span className="font-mono text-caption font-normal text-muted-foreground">@{group.slug}</span>}
             <span className="font-mono text-caption font-normal text-muted-foreground tabular-nums">{t("projects.count", { count })}</span>

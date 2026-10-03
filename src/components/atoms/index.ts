@@ -11,3 +11,4 @@ export { LoadingNote } from "./LoadingNote";
 export { Flag } from "./Flag";
 export { UserAvatar } from "./UserAvatar";
 export { ProviderIcon, PROVIDER_NAMES } from "./ProviderIcon";
+export { Kbd } from "./Kbd";

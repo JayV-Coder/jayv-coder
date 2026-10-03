@@ -3,11 +3,15 @@ import { ArrowUpIcon } from "lucide-react";
 import type { Chat } from "@/modules/core";
 import { answerQuestion, answeringFor, sendPrompt, setDraft, useConversation } from "@/modules/conversation";
 import { useT } from "@/modules/i18n";
+import { MOD } from "@/modules/commands";
+import { Kbd } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { AskingPanel } from "./AskingPanel";
 import { PendingBanner } from "./PendingBanner";
 
-/** A caixa de enviar mensagem. É o banco que escolhe o traje dela: sem
+/** A caixa de enviar mensagem, como o prompt de um terminal: `❯`, o cursor
+ * verde-limão e os atalhos à vista embaixo. É o banco que escolhe o traje dela: sem
  * pergunta em aberto, a caixa de sempre; com pergunta, o painel da pergunta e
  * o texto travado até o desenvolvedor pedir para escrever.
  *
@@ -55,9 +59,11 @@ export function Composer({ chat }: { chat: Chat | null }) {
   };
 
   return (
-    <form onSubmit={submit} className="overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+    <form onSubmit={submit} className="overflow-hidden rounded-md border border-border bg-card font-mono transition-[border-color,box-shadow] focus-within:border-accent focus-within:ring-3 focus-within:ring-accent/25">
       <PendingBanner chat={chat} />
       {chat && question && <AskingPanel chat={chat} question={question} />}
+      <div className="flex items-start">
+      <span aria-hidden="true" className={cn("ps-3.5 pt-3 font-semibold text-go", locked && "text-faint")}>❯</span>
       <textarea
         ref={input}
         rows={1}
@@ -66,12 +72,22 @@ export function Composer({ chat }: { chat: Chat | null }) {
         onChange={(event) => chat && setDraft(chat.id, event.target.value)}
         onKeyDown={onKeyDown}
         placeholder={t(!question ? "composer.placeholder.open" : writing ? "composer.placeholder.writing" : "composer.placeholder.locked")}
-        className="block max-h-[220px] min-h-12 w-full resize-none bg-transparent px-4 pt-3.5 pb-1 leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+        className="block max-h-[220px] min-h-11 w-full resize-none bg-transparent ps-2.5 pe-4 pt-3 pb-1 text-sm leading-relaxed caret-accent outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
       />
-      <div className="flex items-center gap-3 py-2 pe-2 ps-4">
-        <small className="me-auto text-caption text-muted-foreground">{t(!question ? "composer.hint.open" : writing ? "composer.hint.writing" : "composer.hint.locked")}</small>
+      </div>
+      <div className="flex items-center gap-3 border-t border-dashed border-border py-1.5 pe-1.5 ps-3.5">
+        {/* Os atalhos à vista, como no prompt do Warp. */}
+        {locked
+          ? <small className="me-auto text-caption text-muted-foreground">{t("composer.hint.locked")}</small>
+          : (
+            <small className="me-auto flex flex-wrap items-center gap-x-3.5 gap-y-1 text-caption text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5"><Kbd>↵</Kbd>{t(writing ? "composer.key.answer" : "composer.key.send")}</span>
+              <span className="inline-flex items-center gap-1.5"><Kbd>⇧</Kbd><Kbd>↵</Kbd>{t("composer.key.newline")}</span>
+              <span className="inline-flex items-center gap-1.5"><Kbd>{MOD}</Kbd><Kbd>K</Kbd>{t("palette.title")}</span>
+            </small>
+          )}
         {(!question || writing) && (
-          <Button type="submit" size="icon-sm" disabled={!chat || !draft.trim()} aria-label={t("composer.send")} title={t("composer.send")} className="rounded-lg">
+          <Button type="submit" size="icon-sm" disabled={!chat || !draft.trim()} aria-label={t("composer.send")} title={t("composer.send")}>
             <ArrowUpIcon aria-hidden="true" />
           </Button>
         )}

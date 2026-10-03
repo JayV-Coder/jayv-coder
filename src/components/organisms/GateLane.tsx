@@ -17,9 +17,9 @@ export function GateLane({ icon, title, description, count, waiting, empty, chil
   const waitingText = t("gate.lane.waiting");
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_1fr] [&+&]:border-t [&+&]:border-rail-2 xl:[&+&]:border-t-0 xl:[&+&]:border-s">
-      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-[11px] gap-y-0.5 border-b border-rail-2 bg-panel px-[22px] py-[13px]">
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-[11px] gap-y-0.5 border-b border-rail-2 bg-sidebar px-[22px] py-2.5">
         <span className="row-span-2 size-[19px] text-muted-foreground">{icon}</span>
-        <h2 className="text-h4 font-semibold tracking-wide text-foreground">{title}</h2>
+        <h2 className="text-h4 font-semibold text-foreground">{title}</h2>
         <span className={cn("font-gate-mono text-xs whitespace-nowrap text-faint", waiting && "animate-gate-wait text-foreground motion-reduce:animate-none")}>
           {waiting ? (counted ? `${waitingText} · ${counted}` : waitingText) : counted}
         </span>

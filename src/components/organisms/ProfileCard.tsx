@@ -32,7 +32,7 @@ export function ProfileCard({ email, account, profile, expertise }: { email: str
       <div className="flex flex-wrap items-end gap-5 px-7 pb-6">
         <UserAvatar name={name} src={profile?.avatarUrl} className="-mt-10 size-[84px] border-4 border-card text-h1" />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-h2 font-semibold tracking-tight">{name}</h2>
+          <h2 className="truncate text-h2 font-semibold">{name}</h2>
           {(account?.username || email) && (
             <p className="truncate text-sm text-muted-foreground">
               {account?.username && <span className="font-mono text-foreground/80">@{account.username}</span>}
