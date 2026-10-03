@@ -110,13 +110,18 @@ export function connectLive() {
       // Um pedido novo começou a olhar a pasta: a lista recomeça.
       if (!file) return { chats: { ...state.chats, [chatId]: { turnId, files: [] } }, selected: { ...state.selected, [chatId]: null } };
       const files = withChange(current?.turnId === turnId ? current.files : [], file);
+      // O temporário que sumiu sai da lista sem abrir o painel nem roubar a vez.
+      if (file.kind === "discarded") {
+        const selected = state.selected[chatId] === file.path ? { ...state.selected, [chatId]: null } : state.selected;
+        return { chats: { ...state.chats, [chatId]: { turnId, files } }, selected };
+      }
       return {
         chats: { ...state.chats, [chatId]: { turnId, files } },
         panel: chatId in state.panel ? state.panel : { ...state.panel, [chatId]: true },
         selected: state.follow || !state.selected[chatId] ? { ...state.selected, [chatId]: file.path } : state.selected,
       };
     });
-    if (file) followInEditor(chatId, file);
+    if (file && file.kind !== "discarded") followInEditor(chatId, { ...file, kind: file.kind });
   });
   return () => void off.then((unlisten) => unlisten());
 }

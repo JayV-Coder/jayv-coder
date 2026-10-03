@@ -37,13 +37,13 @@ export function StatsToolbar() {
   return (
     <div className="mb-6 flex flex-wrap items-end gap-3">
       {!activeProjectId && (
-        <label className="grid min-w-[200px] gap-1 text-xs text-muted-foreground">
+        <label className="grid w-64 max-w-full gap-1 text-xs text-muted-foreground">
           {t("usage.scope.project")}
           <OptionSelect value={projectId ?? (scope.kind === "chat" ? scope.id : ALL)} options={projects} onChange={pickProject} />
         </label>
       )}
       {chats.length > 0 && (
-        <label className="grid min-w-[200px] gap-1 text-xs text-muted-foreground">
+        <label className="grid w-64 max-w-full gap-1 text-xs text-muted-foreground">
           {t("usage.scope.chat")}
           <OptionSelect value={scope.kind === "chat" ? scope.id : ALL} options={chats} onChange={pickChat} />
         </label>

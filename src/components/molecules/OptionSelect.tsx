@@ -4,7 +4,9 @@ export interface Option<V extends string> { value: V; label: string; hint?: stri
 
 /** Uma escolha dentro de uma lista fechada: nada que o núcleo não aceite chega
  * a ser digitado. Na lista, a explicação fica embaixo do nome; no campo fechado,
- * ao lado dele, numa linha só. */
+ * ao lado dele, numa linha só. A lista aberta tem largura máxima: um nome
+ * comprido (o título de um chat) é cortado com reticências e aparece inteiro
+ * ao passar o mouse, em vez de esticar a lista pela tela. */
 export function OptionSelect<V extends string>({ id, value, options, onChange, disabled, invalid, label }: {
   id?: string; value: V; options: Option<V>[]; onChange: (value: V) => void; disabled?: boolean; invalid?: boolean;
   /** O nome lido pelo leitor de tela quando não há `<label>` apontando para o campo. */
@@ -23,9 +25,11 @@ export function OptionSelect<V extends string>({ id, value, options, onChange, d
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent className="max-w-[min(24rem,var(--radix-select-content-available-width))]">
         {options.map((option) => (
-          <SelectItem key={option.value} value={option.value} disabled={option.disabled} description={option.hint}>{option.label}</SelectItem>
+          <SelectItem key={option.value} value={option.value} disabled={option.disabled} description={option.hint} title={option.label} className="[&>span:last-child]:min-w-0">
+            <span className="block truncate">{option.label}</span>
+          </SelectItem>
         ))}
       </SelectContent>
     </Select>
