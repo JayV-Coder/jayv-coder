@@ -4,7 +4,7 @@ const check = vi.fn();
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: () => check() }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 
-const { checkForUpdate, closeUpdate, dismissUpdate, useUpdate } = await import("./index");
+const { checkForUpdate, closeUpdate, dismissUpdate, installUpdate, useUpdate } = await import("./index");
 
 const release = (version: string) => ({
   currentVersion: "1.0.0", version, body: "notes", date: null,
@@ -42,11 +42,32 @@ describe("checkForUpdate", () => {
     expect(useUpdate.getState()).toMatchObject({ phase: "available", next: "1.1.0", error: null });
   });
 
-  it("o botão instala a versão já achada", async () => {
+  it("o botão de procurar mostra a versão achada e espera a escolha", async () => {
+    const update = release("1.1.0");
+    check.mockResolvedValue(update);
+    await checkForUpdate(true);
+    expect(useUpdate.getState()).toMatchObject({ phase: "available", open: true, next: "1.1.0" });
+    expect(update.download).not.toHaveBeenCalled();
+    closeUpdate();
+    expect(useUpdate.getState()).toMatchObject({ phase: "available", open: false });
+    expect(update.download).not.toHaveBeenCalled();
+  });
+
+  it("a versão já achada também só reabre a janela, sem instalar", async () => {
     const update = release("1.1.0");
     check.mockResolvedValue(update);
     await checkForUpdate();
     await checkForUpdate(true);
+    expect(useUpdate.getState()).toMatchObject({ phase: "available", open: true });
+    expect(update.download).not.toHaveBeenCalled();
+  });
+
+  it("atualizar agora instala a versão já achada", async () => {
+    const update = release("1.1.0");
+    check.mockResolvedValue(update);
+    await checkForUpdate();
+    await checkForUpdate(true);
+    await installUpdate();
     expect(update.download).toHaveBeenCalled();
     expect(update.install).toHaveBeenCalled();
     expect(useUpdate.getState().phase).toBe("restarting");

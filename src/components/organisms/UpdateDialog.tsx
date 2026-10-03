@@ -20,8 +20,9 @@ function stepState(step: Step, phase: UpdatePhase, failedAt: Step | null): "done
 }
 
 /** A atualização acontecendo na frente de quem usa: de que versão para qual,
- * o que muda, cada passo com o seu estado e o download crescendo. Só fecha
- * quando não há nada no meio do caminho. */
+ * o que muda, cada passo com o seu estado e o download crescendo. Com a
+ * versão nova achada, a janela pergunta antes: atualizar agora ou deixar para
+ * depois. Só fecha quando não há nada no meio do caminho. */
 export function UpdateDialog() {
   const t = useT();
   const locale = useLocale();
@@ -43,22 +44,24 @@ export function UpdateDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        <ol className="grid gap-2.5" aria-live="polite">
-          {STEPS.map((step) => {
-            const state = stepState(step, phase, failedAt);
-            return (
-              <li key={step} data-state={state} className="flex items-center gap-2.5 text-sm text-muted-foreground data-[state=active]:text-foreground data-[state=done]:text-foreground data-[state=failed]:text-destructive">
-                <span className="grid size-5 place-items-center">
-                  {state === "done" && <CheckIcon aria-hidden="true" className="size-4 text-success" />}
-                  {state === "active" && <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />}
-                  {state === "failed" && <XIcon aria-hidden="true" className="size-4" />}
-                  {state === "waiting" && <span aria-hidden="true" className="size-1.5 rounded-full bg-muted-foreground/50" />}
-                </span>
-                {t(`update.step.${step}` as Key)}
-              </li>
-            );
-          })}
-        </ol>
+        {phase === "available" ? <p className="text-sm">{t("update.available.ask")}</p> : (
+          <ol className="grid gap-2.5" aria-live="polite">
+            {STEPS.map((step) => {
+              const state = stepState(step, phase, failedAt);
+              return (
+                <li key={step} data-state={state} className="flex items-center gap-2.5 text-sm text-muted-foreground data-[state=active]:text-foreground data-[state=done]:text-foreground data-[state=failed]:text-destructive">
+                  <span className="grid size-5 place-items-center">
+                    {state === "done" && <CheckIcon aria-hidden="true" className="size-4 text-success" />}
+                    {state === "active" && <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />}
+                    {state === "failed" && <XIcon aria-hidden="true" className="size-4" />}
+                    {state === "waiting" && <span aria-hidden="true" className="size-1.5 rounded-full bg-muted-foreground/50" />}
+                  </span>
+                  {t(`update.step.${step}` as Key)}
+                </li>
+              );
+            })}
+          </ol>
+        )}
 
         {(phase === "downloading" || (failedAt === "downloading" && received > 0)) && (
           <div className="grid gap-1.5">

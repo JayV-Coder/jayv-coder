@@ -24,13 +24,13 @@ export function OrganizationPage() {
   if (!organization) {
     return (
       <ScrollPage>
-        <Button variant="ghost" onClick={() => navigate("organizations")}>← {t("nav.organizations")}</Button>
+        <Button variant="ghost" onClick={() => navigate("organizations")}>← {t("org.back")}</Button>
       </ScrollPage>
     );
   }
 
   const tab = (value: string, Icon: typeof UsersIcon, key: Key) => (
-    <TabsTrigger value={value} className="flex-none gap-2.5 px-4 py-2">
+    <TabsTrigger value={value} className="flex-none gap-2">
       <Icon className="size-4" />
       <span>{t(key)}</span>
     </TabsTrigger>
@@ -38,22 +38,24 @@ export function OrganizationPage() {
 
   return (
     <ScrollPage>
-      <PageHeading eyebrow={t("nav.organizations")} title={organization.name}
+      <PageHeading back={{ label: t("org.back"), onClick: () => navigate("organizations") }} title={organization.name}
         description={<span className="flex items-center gap-2"><span className="font-mono">@{organization.slug}</span><Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge></span>}>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => navigate("organizations")}>{t("org.back")}</Button>
-          <OrganizationChatButton organization={organization} detail={detail} />
-        </div>
+        <OrganizationChatButton organization={organization} repositories={detail?.repositories ?? null} />
+        <Button variant={current === "settings" ? "secondary" : "outline"} size="icon" aria-label={t("org.tab.settings")} title={t("org.tab.settings")}
+          aria-pressed={current === "settings"} onClick={() => setOrganizationTab("settings")}>
+          <SettingsIcon />
+        </Button>
       </PageHeading>
       <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} className="gap-5">
-        <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
+        {/* As configurações saíram das abas para o ícone ao lado do chat: seis
+            abas cabem sem rolar de lado, e numa janela estreita quebram linha. */}
+        <TabsList className="h-auto w-full flex-wrap justify-start">
           {tab("projects", FolderKanbanIcon, "org.tab.projects")}
           {tab("stats", ChartColumnIcon, "org.tab.stats")}
           {tab("gate", DoorOpenIcon, "org.tab.gate")}
           {tab("members", UsersIcon, "org.tab.members")}
           {tab("repositories", FolderGit2Icon, "org.tab.repositories")}
           {tab("policy", ShieldCheckIcon, "org.tab.policy")}
-          {tab("settings", SettingsIcon, "org.tab.settings")}
         </TabsList>
         <TabsContent value="projects"><OrganizationProjects orgId={organization.id} /></TabsContent>
         <TabsContent value="stats"><OrganizationStats orgId={organization.id} /></TabsContent>

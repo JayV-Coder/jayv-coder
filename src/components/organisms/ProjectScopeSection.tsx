@@ -8,10 +8,12 @@ import { EmptyText } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { OrganizationChatButton } from "./OrganizationChatButton";
 import { ProjectCard } from "./ProjectCard";
 
 /** Um bloco da lista de projetos: os pessoais ou os de uma organização, com o
- * cabeçalho dizendo de quem são e o caminho para a organização. */
+ * cabeçalho dizendo de quem são, o caminho para a organização e o agente em
+ * todos os repositórios dela. */
 export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Project>; layout: Layout }) {
   const t = useT();
   const data = useWorkspace((state) => state.data);
@@ -34,7 +36,10 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
         </div>
         {group.role && <Badge variant="outline">{t(`org.role.${group.role}` as Key)}</Badge>}
         {!personal && group.role && (
-          <Button variant="ghost" size="sm" onClick={() => void openOrganization(group.key).catch(reportError)}>{t("projects.org.open")}</Button>
+          <>
+            <Button variant="ghost" size="sm" onClick={() => void openOrganization(group.key).catch(reportError)}>{t("projects.org.open")}</Button>
+            <OrganizationChatButton organization={{ id: group.key, name: group.name }} size="sm" variant="outline" />
+          </>
         )}
       </header>
       {count === 0

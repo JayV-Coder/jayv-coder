@@ -1,24 +1,41 @@
-import { useState } from "react";
-import { MessagesSquareIcon } from "lucide-react";
+import { useState, type ComponentProps } from "react";
+import { FolderTreeIcon } from "lucide-react";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import {
-  chatReach, openOrganizationChat, organizationFolder, pickFolder, rememberOrganizationFolder, type Organization, type OrganizationDetail,
+  chatReach, openOrganizationChat, organizationFolder, organizationRepositories, pickFolder, rememberOrganizationFolder, resumeOrganizationChat,
+  type Repository,
 } from "@/modules/organizations";
 import { useWorkspace } from "@/modules/workspace";
 import { Eyebrow, PathText } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-/** O chat da organização: um chat com a pasta da organização como raiz, que
- * enxerga todos os clones dela de uma vez. Antes de abrir, mostra o que entra
- * e o que fica de fora. */
-export function OrganizationChatButton({ organization, detail }: { organization: Organization; detail: OrganizationDetail | null }) {
+/** O chat em todos os repositórios da organização: um chat com a pasta da
+ * organização como raiz, que enxerga todos os clones dela de uma vez. Quando
+ * esse chat já existe neste computador, o botão leva direto a ele; senão,
+ * antes de abrir, mostra o que entra e o que fica de fora. Na página da
+ * organização os repositórios já vêm carregados; na lista de projetos, são
+ * buscados no clique. */
+export function OrganizationChatButton({ organization, repositories, size, variant }: {
+  organization: { id: string; name: string };
+  repositories?: Repository[] | null;
+  size?: ComponentProps<typeof Button>["size"];
+  variant?: ComponentProps<typeof Button>["variant"];
+}) {
   const t = useT();
   const [folder, setFolder] = useState<string | null>(null);
+  const [fetched, setFetched] = useState<Repository[] | null>(null);
   const [busy, setBusy] = useState(false);
   const projects = useWorkspace((state) => state.data.projects);
-  const reach = folder && detail ? chatReach(detail.repositories, projects, folder) : null;
+  const loaded = repositories ?? fetched;
+  const reach = folder && loaded ? chatReach(loaded, projects, folder) : null;
+
+  const open = async () => {
+    if (resumeOrganizationChat(organization.id)) return;
+    if (!repositories) setFetched(await organizationRepositories(organization.id));
+    await choose(false);
+  };
 
   const choose = async (ask: boolean) => {
     const known = organizationFolder(organization.id);
@@ -58,8 +75,8 @@ export function OrganizationChatButton({ organization, detail }: { organization:
 
   return (
     <>
-      <Button disabled={!detail} onClick={() => void choose(false).catch(reportError)}>
-        <MessagesSquareIcon className="size-4" />
+      <Button size={size} variant={variant} disabled={repositories === null} onClick={() => void open().catch(reportError)}>
+        <FolderTreeIcon className="size-4" />
         {t("orgChat.open")}
       </Button>
       <Dialog open={folder !== null} onOpenChange={(open) => { if (!open) setFolder(null); }}>
