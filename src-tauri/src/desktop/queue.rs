@@ -10,7 +10,7 @@ use crate::turns::{Turn, TurnStatus};
 use crate::i18n::{self, Text};
 use crate::{asking, jev, model, project_memory, search, usage};
 use std::{path::Path, time::Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 
 /// O atendente da fila: um pedido de cada vez, na ordem em que chegaram, até
@@ -131,6 +131,14 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         fail_turn(workspace,chat_id,turn,error).await;
         return;
     }
+    // Daqui até o fim do pedido, a pasta do chat é olhada a cada segundo e a
+    // tela vê cada arquivo que o agente mexer. O vigia para sozinho quando
+    // este atendimento termina, por qualquer caminho.
+    let chat_root=workspace.lock().await.chat_root(chat_id).unwrap_or(None);
+    let _live=chat_root.map(|root|{
+        let live=app.state::<super::live::SharedLive>().inner().clone();
+        super::live::watch(app,&live,chat_id,&turn.id,root,crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone()))
+    });
     let project=state.orchestrator.rag.project_info();
     let project_id=workspace.lock().await.chat_project(chat_id).unwrap_or(None);
     let notes=match &project_id { Some(id)=>workspace.lock().await.project_notes(id).unwrap_or_default(), None=>vec![] };

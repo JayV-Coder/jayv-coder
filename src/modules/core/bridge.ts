@@ -29,6 +29,10 @@ export const commands = {
   cloneRepository: (key: string, folder: string) => invoke<Project>("clone_repository", { key, folder }),
   folderRepoKeys: (path: string) => invoke<string[]>("folder_repo_keys", { path }),
   repositoryStates: (folder: string) => invoke<RepositoryState[]>("repository_states", { folder }),
+  liveFiles: (chatId: string) => invoke<LiveList>("live_files", { chatId }),
+  liveFile: (chatId: string, path: string) => invoke<LiveFile | null>("live_file", { chatId, path }),
+  editors: () => invoke<string[]>("editors"),
+  openInEditor: (chatId: string, path: string, line: number, editor: string) => invoke<void>("open_in_editor", { chatId, path, line, editor }),
   systemStatus: () => invoke<SystemStatus>("system_status"),
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),
@@ -63,6 +67,15 @@ export interface RepositoryState {
   ahead: number; behind: number; changed: number; readable: boolean;
 }
 
+/** Um arquivo que mudou durante o último pedido do chat; `at` em ms. */
+export interface LiveChange { path: string; kind: "created" | "modified" | "removed"; at: number }
+export interface LiveList { turnId: string | null; running: boolean; files: LiveChange[] }
+/** O antes (como estava quando o pedido começou) e o agora de um arquivo.
+ * `beforeKnown` falso: pasta sem git, sem como saber o antes. */
+export interface LiveFile {
+  path: string; before: string | null; after: string | null; beforeKnown: boolean; hidden: boolean; binary: boolean; tooLarge: boolean;
+}
+
 /** O pedido das estatísticas: o escopo, o intervalo em ISO (aberto onde vier
  * vazio) e o fuso de quem lê, para que "hoje" seja o hoje dele. */
 export interface UsageQuery { scope: UsageScope; from: string | null; to: string | null; utcOffsetMinutes: number }
@@ -86,6 +99,7 @@ export interface CoreEvents {
   "chat-renamed": { chatId: string; title: string };
   "turn-beat": { chatId: string; turnId: string; seq: number; kind: string; detail: Record<string, unknown> };
   "turn-chunk": { chatId: string; turnId: string; text: string };
+  "live-file": { chatId: string; turnId: string; file: LiveChange | null };
   "gate-entry": { check: EntryCheck };
   "gate-exit": { checks: ExitCheck[] };
   "link-changed": { link: Link };

@@ -2,7 +2,8 @@ import { clearChat } from "@/modules/conversation";
 import { useT } from "@/modules/i18n";
 import { useNavigation } from "@/modules/navigation";
 import { chatTitle, findChat, findProject, useWorkspace } from "@/modules/workspace";
-import { EraserIcon } from "lucide-react";
+import { EraserIcon, FileDiffIcon } from "lucide-react";
+import { setLivePanel, useLive } from "@/modules/live";
 import { ConfirmAction } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 
@@ -14,6 +15,8 @@ export function AppHeader() {
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const chat = findChat(data, activeChatId);
   const project = findProject(data, activeProjectId);
+  const changed = useLive((state) => (activeChatId ? state.chats[activeChatId]?.files.length ?? 0 : 0));
+  const liveOpen = useLive((state) => (activeChatId ? state.panel[activeChatId] === true : false));
   if (view !== "chat" && view !== "status" && view !== "stats" && view !== "settings" && view !== "profile") return null;
 
   const eyebrow = view === "chat" ? t("header.project", { name: project?.name ?? "" }) : view === "status" || view === "stats" ? t("header.observability") : view === "profile" ? t("header.account") : t("header.preferences");
@@ -28,7 +31,16 @@ export function AppHeader() {
         <h1 aria-current="page" className="truncate text-body font-medium">{title}</h1>
       </nav>
       {view === "chat" && chat && (
-        // Limpar apaga o histórico inteiro e não se desfaz: pede confirmação.
+        <div className="flex flex-none items-center gap-1">
+        {project?.rootPath.trim() && (
+          <Button variant={liveOpen ? "secondary" : "ghost"} size="sm" aria-pressed={liveOpen} className="text-muted-foreground" title={t("live.toggle.hint")}
+            onClick={() => setLivePanel(chat.id, !liveOpen)}>
+            <FileDiffIcon aria-hidden="true" />
+            {t("live.toggle")}
+            {changed > 0 && <span className="tabular-nums text-foreground">{changed}</span>}
+          </Button>
+        )}
+        {/* Limpar apaga o histórico inteiro e não se desfaz: pede confirmação. */}
         <ConfirmAction
           title={t("chat.clear.title")}
           description={t("chat.clear.description", { title: chatTitle(chat) })}
@@ -40,6 +52,7 @@ export function AppHeader() {
             {t("header.clearChat")}
           </Button>
         </ConfirmAction>
+        </div>
       )}
     </header>
   );

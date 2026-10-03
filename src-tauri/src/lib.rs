@@ -15,6 +15,7 @@ pub mod gatekeeper;
 pub mod graph;
 pub mod i18n;
 pub mod jev;
+pub mod live_files;
 pub mod llm;
 pub mod local;
 pub mod lockdown;
