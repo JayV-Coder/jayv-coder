@@ -33,6 +33,7 @@ export const commands = {
   liveFiles: (chatId: string) => invoke<LiveList>("live_files", { chatId }),
   liveFile: (chatId: string, path: string) => invoke<LiveFile | null>("live_file", { chatId, path }),
   editors: () => invoke<string[]>("editors"),
+  setTrayLabels: (labels: TrayLabels) => invoke<void>("set_tray_labels", { labels }),
   openInEditor: (chatId: string, path: string, line: number, editor: string) => invoke<void>("open_in_editor", { chatId, path, line, editor }),
   systemStatus: () => invoke<SystemStatus>("system_status"),
   getSettings: () => invoke<SettingsSnapshot>("get_settings"),
@@ -70,6 +71,9 @@ export interface RepositoryState {
 
 /** Um arquivo que mudou durante o último pedido do chat; `at` em ms. */
 export interface LiveChange { path: string; kind: "created" | "modified" | "removed"; at: number }
+/** O aviso de um arquivo: `discarded` é o que nasceu e sumiu durante o pedido
+ * (um temporário) e sai da lista. */
+export interface LiveNotice { path: string; kind: LiveChange["kind"] | "discarded"; at: number }
 export interface LiveList { turnId: string | null; running: boolean; files: LiveChange[] }
 /** O antes (como estava quando o pedido começou) e o agora de um arquivo.
  * `beforeKnown` falso: pasta sem git, sem como saber o antes. */
@@ -82,6 +86,11 @@ export interface LiveFile {
 export interface UsageQuery { scope: UsageScope; from: string | null; to: string | null; utcOffsetMinutes: number }
 /** O resultado de reler o limite de um agente: vazio quando leu. */
 export interface QuotaStatus { agent: string; problem: Text | null }
+
+/** O texto do menu da bandeja, no idioma da tela. */
+export interface TrayLabels {
+  open: string; newChat: string; projects: string; organizations: string; stats: string; system: string; settings: string; update: string; quit: string; tooltip: string;
+}
 
 /** A sessão que o núcleo aceitou. */
 export interface SessionView { userId: string; email: string | null; expiresAt: number }
@@ -100,7 +109,9 @@ export interface CoreEvents {
   "chat-renamed": { chatId: string; title: string };
   "turn-beat": { chatId: string; turnId: string; seq: number; kind: string; detail: Record<string, unknown> };
   "turn-chunk": { chatId: string; turnId: string; text: string };
-  "live-file": { chatId: string; turnId: string; file: LiveChange | null };
+  "live-file": { chatId: string; turnId: string; file: LiveNotice | null };
+  "tray-action": { action: string };
+  "update-found": { version: string };
   "gate-entry": { check: EntryCheck };
   "gate-exit": { checks: ExitCheck[] };
   "link-changed": { link: Link };

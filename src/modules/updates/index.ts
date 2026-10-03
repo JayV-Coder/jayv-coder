@@ -1,6 +1,7 @@
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
+import { onCore } from "@/modules/core";
 
 /** Em que pé está a atualização. `available` é a versão nova achada sozinha,
  * esperando a pessoa mandar instalar (o aviso no topo e a notificação).
@@ -32,8 +33,9 @@ interface UpdateState {
   checkedAt: string | null;
 }
 
-/** De quanto em quanto tempo o app aberto pergunta de novo: fixo, sem
- * escolha, para a versão nova aparecer logo depois de publicada. */
+/** A consulta ao voltar para a janela não se repete em menos que isto: quem
+ * pergunta de tempos em tempos é o núcleo (`tray::watch_updates`), que segue
+ * perguntando com a janela escondida na bandeja. */
 export const RECHECK_MS = 15_000;
 
 export const useUpdate = create<UpdateState>(() => ({
@@ -50,7 +52,8 @@ const busy = (phase: UpdatePhase) => phase === "checking" || phase === "download
 let pending: Update | null = null;
 
 /** Pergunta ao repositório de releases se há versão nova. Ao abrir o
- * aplicativo e a cada `RECHECK_MS` (`announce` falso) nada se instala sozinho:
+ * aplicativo, quando o núcleo acha versão nova e ao voltar para a janela
+ * (`announce` falso) nada se instala sozinho:
  * a versão nova vira `available` (o aviso no topo e a notificação), e sem
  * rede ou numa build de desenvolvimento a falha fica calada. Pelo botão
  * (`announce`) a janela aparece desde a consulta, diz também "já está na mais
@@ -132,22 +135,31 @@ export function dismissUpdate() {
   useUpdate.setState((state) => ({ dismissed: state.next }));
 }
 
-/** Consulta ao abrir e de novo a cada `RECHECK_MS`. Uma consulta que ainda
- * não voltou não ganha outra por cima, e ao voltar a rede (o computador
- * acordou, o Wi-Fi voltou) consulta logo. */
+/** Consulta ao abrir, quando o núcleo avisa que achou versão nova, ao voltar
+ * a rede (o computador acordou, o Wi-Fi voltou) e ao voltar para a janela.
+ * Quem pergunta de tempos em tempos é o núcleo: os relógios da tela param
+ * quando a janela vai para a bandeja. Uma consulta que ainda não voltou não
+ * ganha outra por cima. */
 export function connectUpdates() {
   let asking = false;
+  let last = 0;
   const ask = () => {
     if (asking) return;
     asking = true;
+    last = Date.now();
     void checkForUpdate().finally(() => { asking = false; });
   };
+  const back = () => { if (document.visibilityState === "visible" && Date.now() - last >= RECHECK_MS) ask(); };
   ask();
-  const timer = setInterval(ask, RECHECK_MS);
+  const off = onCore("update-found", ask);
   window.addEventListener("online", ask);
+  window.addEventListener("focus", back);
+  document.addEventListener("visibilitychange", back);
   return () => {
-    clearInterval(timer);
+    void off.then((unlisten) => unlisten());
     window.removeEventListener("online", ask);
+    window.removeEventListener("focus", back);
+    document.removeEventListener("visibilitychange", back);
   };
 }
 

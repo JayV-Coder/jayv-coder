@@ -8,6 +8,7 @@ pub mod commands;
 pub mod events;
 mod live;
 mod queue;
+mod tray;
 
 use crate::cloud::remote::{Backend, Remote};
 use crate::local::global::GlobalCache;
@@ -100,7 +101,8 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         // Primeiro de todos: o segundo processo — aberto pelo link do login —
         // entrega a URL a este e sai antes de subir qualquer outra coisa.
         .plugin(tauri_plugin_single_instance::init(|app,_args,_cwd|{
-            if let Some(window)=app.get_webview_window("main") {let _=window.unminimize(); let _=window.set_focus();}
+            // Escondida na bandeja ou minimizada, a janela volta para a frente.
+            tray::show_main(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -109,6 +111,8 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         .plugin(tauri_plugin_process::init())
         .manage(desk).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
         .manage(live::SharedLive::default())
+        .manage(tray::TrayReady::default())
+        .on_window_event(tray::on_window_event)
         .setup(move |app|{
             // Em desenvolvimento e no AppImage o esquema `jayv://` não vem do
             // instalador: registra na partida. Falhar só desliga o login pelo
@@ -118,6 +122,8 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
                 if let Err(error)=app.deep_link().register_all() {eprintln!("deep link: {error}");}
             }
             let handle=app.handle().clone();
+            tray::install(&handle);
+            tauri::async_runtime::spawn(tray::watch_updates(handle.clone()));
             let desk=app.state::<SharedDesktopState>().inner().clone();
             let workspace=app.state::<SharedWorkspace>().inner().clone();
             let bell=app.state::<QueueBell>().inner().clone();
@@ -145,9 +151,17 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             live::live_files,live::live_file,live::editors,live::open_in_editor,
             repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,repositories::repository_states,
             usage::usage_report,usage::chat_usage,usage::refresh_quotas,
+            tray::set_tray_labels,
             memory::project_memory,memory::save_project_note,memory::delete_project_note,memory::search_chats,
         ])
-        .run(tauri::generate_context!()).map_err(Into::into)
+        .build(tauri::generate_context!())?
+        .run(|_app,_event|{
+            // No macOS, clicar no ícone do Dock com a janela escondida a traz
+            // de volta.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen{..}=_event {tray::show_main(_app);}
+        });
+    Ok(())
 }
 
 #[cfg(test)]
