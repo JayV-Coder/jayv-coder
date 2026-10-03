@@ -253,6 +253,17 @@ export async function saveExpertise(level: Expertise) {
   }
 }
 
+/** A regra de código enxuto vale na hora, como o nível. */
+export async function saveLeanCode(enabled: boolean) {
+  try {
+    const coreSnapshot = await commands.saveLeanCode(enabled);
+    useSettings.setState({ coreSnapshot });
+    notify(t(enabled ? "expertise.lean.on" : "expertise.lean.off"));
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 export function discardChanges() {
   void loadSettings();
 }

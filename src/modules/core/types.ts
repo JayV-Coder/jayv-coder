@@ -178,6 +178,8 @@ export interface ClaudeOptions {
   appendSystemPrompt: string;
   persistSessions: boolean;
   safeMode: boolean;
+  /** As ferramentas do índice de símbolos do JayV (`jayv mcp`). */
+  symbolTools: boolean;
 }
 
 export interface CodexOptions {
@@ -283,6 +285,8 @@ export interface CoreSnapshot {
   levels: LevelView[];
   /** O nível que o histórico da portaria sugere, ou nada. */
   suggestion: LevelSuggestion | null;
+  /** A regra de código enxuto no modo build. */
+  leanCode: boolean;
   confidenceRange: [number, number];
   budgetRange: [number, number];
   cacheTtlRange: [number, number];

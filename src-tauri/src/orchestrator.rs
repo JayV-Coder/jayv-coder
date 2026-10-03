@@ -26,6 +26,8 @@ const RESUMED_TURNS:usize=10;
 /// Linhas de definição por arquivo no mapa que vai aos agentes.
 const MAP_OUTLINE_LINES:usize=8;
 const MAP_LINE_CHARS:usize=140;
+/// Quantos vizinhos ("usa" / "usado por") cada arquivo mostra no mapa.
+const MAP_LINKS:usize=4;
 const MAP_NOTE:&str="RELEVANT FILES lists where the task most likely lives, with the definitions found there. Open only the files you need, with your own tools.";
 const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, no quotes, no trailing period, no explanation.";
 const TITLE_PROMPT_CHARS:usize=600;
@@ -43,6 +45,11 @@ const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folde
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
 /// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
 const FOCUS_NOTE:&str="Be brief: read only what the task needs, never reread what this conversation already holds, and do not re-plan.";
+/// A regra de código enxuto do modo build, nas duas forças do nível. O
+/// agente escreve menos — e cada linha que não escreve é token de saída e
+/// revisão poupados —, sem nunca tirar o que protege dado e gente.
+const LEAN_FULL_NOTE:&str="Write the least code that fully solves the task: check whether it must exist, then reuse the standard library, the platform or an installed dependency, and only then write new code. No speculative abstractions, options or files. Never drop input validation, error handling that prevents data loss, security or accessibility.";
+const LEAN_LITE_NOTE:&str="Prefer the simplest change that fully works. When the standard library, the platform or an installed dependency already covers part of the task, say so and use it. Never drop input validation, error handling, security or accessibility.";
 const MULTI_REPOSITORY_NOTE:&str="This folder holds several repositories of the same organization; keep each change inside the repository it belongs to and name it in the answer. REPOSITORIES:";
 pub const MODE_PLAN:&str="plan";
 pub const MODE_BUILD:&str="build";
@@ -97,6 +104,9 @@ pub struct Orchestrator {
     /// As notas do projeto do chat, prontas para o prompt. Como a memória do
     /// agente, vão só quando uma sessão começa: a sessão retomada já as leu.
     pub project_notes: Option<String>,
+    /// Se a regra de código enxuto vai junto no modo build (configuração da
+    /// conta, ligada por padrão).
+    pub lean_code: bool,
     /// O que vai junto só deste pedido — a receita que casou com ele, a
     /// resposta que o projeto já tinha. `process` o consome uma vez.
     pub pending_context: Vec<String>,
@@ -128,7 +138,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, pending_context:vec![], performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -197,7 +207,7 @@ impl Orchestrator {
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
-        let notes=mode_notes(&signals,mode);
+        let notes=format!("{}{}",mode_notes(&signals,mode),self.lean_note(mode).map(|note|format!("\n{note}")).unwrap_or_default());
         let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)))+extras.iter().map(|extra|estimate_tokens(extra)).sum::<usize>()+self.project_notes.as_deref().map_or(0,estimate_tokens);
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals,mode);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
@@ -282,6 +292,12 @@ impl Orchestrator {
         (IntentAnalysis{intent:decision.intent.clone(),scores,confidence:decision.intent_confidence},complexity,signals)
     }
 
+    /// A regra de código enxuto deste pedido: só no modo build, só com a
+    /// configuração ligada, na força do nível da conta.
+    fn lean_note(&self,mode:&str)->Option<&'static str> {
+        (self.lean_code&&mode==MODE_BUILD).then(||match self.expertise.lean() { crate::expertise::Lean::Lite=>LEAN_LITE_NOTE, crate::expertise::Lean::Full=>LEAN_FULL_NOTE })
+    }
+
     fn request_overhead(&self,input:&str,session_id:&str)->usize { estimate_tokens(SYSTEM_INSTRUCTIONS)+estimate_tokens(input)+self.history_tokens(session_id)+REQUEST_MARGIN }
     fn history_tokens(&self,session_id:&str)->usize { short_history(self.memory.conversation(session_id)).iter().map(|message|estimate_tokens(&message.content)).sum() }
 
@@ -289,6 +305,7 @@ impl Orchestrator {
         let mut context=if repository_context_wanted(signals){self.build_context(input,plan,budget,reserved)}else{Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),project:self.rag.project_info(),relevant_files:vec![],snippets:vec![],estimated_tokens:reserved,repository_context_skipped:true}};
         note_project(&mut context);
         note_routing(&mut context,signals,mode);
+        if let Some(note)=self.lean_note(mode) { context.system_instructions.push_str(&format!("\n{note}")); }
         if let Some(note)=self.pending_gate_note.take() { context.system_instructions.push_str(&format!("\n{note}")); }
         context
     }
@@ -351,7 +368,7 @@ impl Orchestrator {
         let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
-        let user=std::iter::once(task_message(input,&safe_context,provider.explores())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
+        let user=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
         let effort=Some(effort_for(complexity));
         if let Some(resume)=self.resumable_session(session_id,provider.as_ref(),selection) {
             let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
@@ -361,8 +378,10 @@ impl Orchestrator {
                 Err(error)=>eprintln!("sessão do agente: não retomou, começando outra ({error:#})"),
             }
         }
-        // Sessão nova: as notas do projeto entram uma vez, no começo dela.
+        // Sessão nova: as notas do projeto entram uma vez, no começo dela, e o
+        // agente que explora recebe também a planta do projeto.
         let system=match &self.project_notes { Some(notes)=>format!("{system}\n{notes}"), None=>system };
+        let system=match provider.explores().then(||crate::project_map::render(&self.rag)).flatten() { Some(map)=>format!("{system}\n\n{map}"), None=>system };
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(short_history(self.memory.conversation(session_id)));
         messages.push(ChatMessage{role:"user".into(),content:user});
@@ -460,22 +479,37 @@ impl Orchestrator {
 /// O pedido como o modelo o lê. Um modelo por API não enxerga o disco e
 /// recebe os arquivos; um agente que explora o repositório recebe só o mapa —
 /// caminho e definições — e abre o que precisar.
-fn task_message(input:&str,context:&Context,explores:bool)->String {
+fn task_message(input:&str,context:&Context,explores:bool,symbols:&crate::symbols::SymbolIndex)->String {
     if context.snippets.is_empty() { return input.into(); }
     if explores {
-        let map=context.snippets.iter().map(|snippet|{
-            let outline=outline(&snippet.content);
-            if outline.is_empty() { format!("- {}",snippet.path) } else { format!("- {}\n{}",snippet.path,outline.iter().map(|line|format!("    {line}")).collect::<Vec<_>>().join("\n")) }
-        }).collect::<Vec<_>>().join("\n");
+        let map=context.snippets.iter().map(|snippet|map_entry(snippet,symbols)).collect::<Vec<_>>().join("\n");
         return format!("TASK:\n{input}\n\n{MAP_NOTE}\nRELEVANT FILES:\n{map}");
     }
     let files=context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
     format!("TASK:\n{input}\n\nREPOSITORY CONTEXT:\n{files}")
 }
 
+/// Um arquivo no mapa: o caminho, as definições com a linha onde estão e,
+/// quando o índice de símbolos conhece o arquivo, com quem ele se liga. Sem
+/// gramática para a linguagem, as definições saem das linhas do trecho.
+fn map_entry(snippet:&ContextSnippet,symbols:&crate::symbols::SymbolIndex)->String {
+    let mut lines=match symbols.definitions(&snippet.path) {
+        Some(definitions)=>definitions.iter().take(MAP_OUTLINE_LINES).map(|definition|format!("L{} {}",definition.line,definition.signature)).collect::<Vec<_>>(),
+        None=>outline(&snippet.content),
+    };
+    let linked=|label:&str,paths:Vec<&str>|(!paths.is_empty()).then(||{
+        let shown=paths.iter().take(MAP_LINKS).copied().collect::<Vec<_>>().join(", ");
+        let more=paths.len().saturating_sub(MAP_LINKS);
+        if more>0 { format!("{label}: {shown} (+{more})") } else { format!("{label}: {shown}") }
+    });
+    lines.extend(linked("uses",symbols.uses(&snippet.path)));
+    lines.extend(linked("used by",symbols.used_by(&snippet.path)));
+    if lines.is_empty() { format!("- {}",snippet.path) } else { format!("- {}\n{}",snippet.path,lines.iter().map(|line|format!("    {line}")).collect::<Vec<_>>().join("\n")) }
+}
+
 /// As linhas que declaram algo — função, tipo, classe, constante exportada —,
-/// em qualquer das linguagens comuns. É o bastante para o agente saber se o
-/// arquivo é o que procura sem precisar abri-lo.
+/// em qualquer das linguagens comuns. É a reserva das linguagens que o índice
+/// de símbolos não lê.
 fn outline(content:&str)->Vec<String> {
     const STARTS:[&str;24]=["fn ","pub fn ","pub(crate) fn ","async fn ","pub async fn ","struct ","pub struct ","enum ","pub enum ","trait ","pub trait ","impl ","def ","async def ","class ","function ","export ","interface ","type ","func ","public ","module ","const ","pub const "];
     content.lines().map(str::trim).filter(|line|STARTS.iter().any(|start|line.starts_with(start))).take(MAP_OUTLINE_LINES).map(|line|{
@@ -858,6 +892,21 @@ mod tests {
         assert!(plan.contains(PLAN_NOTE)&&plan.contains(TOOLS_NOTE));
     }
 
+    #[test]
+    fn the_lean_rule_goes_only_with_build_and_follows_the_level() {
+        use crate::expertise::Expertise::{Architect, Starter};
+        let dir=repository(&[("lib.rs","pub fn run() {}".into())]);
+        let mut orchestrator=orchestrator(&dir);
+        assert_eq!(orchestrator.lean_note(MODE_BUILD),Some(LEAN_FULL_NOTE),"ligada por padrão, na força do nível médio");
+        assert_eq!(orchestrator.lean_note(MODE_PLAN),None,"plano não escreve código");
+        orchestrator.expertise=Starter;
+        assert_eq!(orchestrator.lean_note(MODE_BUILD),Some(LEAN_LITE_NOTE));
+        orchestrator.expertise=Architect;
+        orchestrator.lean_code=false;
+        assert_eq!(orchestrator.lean_note(MODE_BUILD),None);
+        assert!(estimate_tokens(LEAN_FULL_NOTE)<=90,"a regra custa {} tokens por pedido de build",estimate_tokens(LEAN_FULL_NOTE));
+    }
+
     /// O mesmo agente, duas linhas de comando: a do modo escolhido é a que roda,
     /// e o balão sabe qual agente, modelo, modo e papel atenderam.
     #[cfg(unix)]
@@ -910,7 +959,7 @@ mod tests {
 
         orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
         let first=std::fs::read_to_string(prompts.path().join("stdin-0")).expect("o primeiro pedido abre uma sessão nova");
-        assert!(first.contains("RELEVANT FILES:\n- router.rs\n    fn route_request()"),"vai o mapa: {first}");
+        assert!(first.contains("RELEVANT FILES:\n- router.rs\n    L1 fn route_request()"),"vai o mapa, com a linha de cada definição: {first}");
         assert!(!first.contains("padding_value"),"o corpo do arquivo fica no disco, para o agente abrir se precisar");
         assert_eq!(orchestrator.memory.agent_session("chat").map(|kept|(kept.id.as_str(),kept.turns)),Some(("s-1",1)));
 
@@ -921,6 +970,35 @@ mod tests {
 
         orchestrator.process("and the tests?",Some("other-chat"),&Pulse::silent()).await;
         assert_eq!(orchestrator.memory.agent_session("other-chat").map(|kept|kept.turns),Some(1),"outro chat, outra sessão");
+    }
+
+    /// A planta do projeto vai no começo da sessão do agente, e a sessão
+    /// retomada já a tem.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_project_map_goes_once_per_agent_session() {
+        let mut files=vec![("router.rs".to_string(),filler("route_request",3_000))];
+        files.extend((0..crate::project_map::MIN_FILES).map(|index|(format!("handler_{index}.rs"),format!("fn handle_{index}() {{ route_request(); }}"))));
+        let borrowed=files.iter().map(|(path,body)|(path.as_str(),body.clone())).collect::<Vec<_>>();
+        let dir=repository(&borrowed);
+        let prompts=tempfile::tempdir().expect("prompts");
+        let mut orchestrator=orchestrator(&dir);
+        let script=format!(r#"cat > "{}/stdin-$#"; echo '{{"type":"system","subtype":"init","session_id":"s-1"}}'; echo resposta"#,prompts.path().display());
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),script.clone(),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],plan_args:vec!["-c".into(),script,"agent".into(),"--resume".into(),crate::llm::RESUME.into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+
+        orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
+        let first=std::fs::read_to_string(prompts.path().join("stdin-0")).expect("sessão nova");
+        assert!(first.contains("PROJECT MAP")&&first.contains("- router.rs (used by 80)"),"a planta vai no começo da sessão: {first}");
+        orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
+        let second=std::fs::read_to_string(prompts.path().join("stdin-2")).expect("sessão retomada");
+        assert!(!second.contains("PROJECT MAP"),"a sessão retomada já tem a planta: {second}");
     }
 
     /// A leitura pedida junto com a portaria vale para o pedido, sem outra ida
@@ -943,10 +1021,23 @@ mod tests {
     }
 
     #[test]
+    fn the_agent_map_lists_definitions_of_the_whole_file_and_its_neighbours() {
+        let filler="// filler\n".repeat(2_000);
+        let dir=repository(&[("cache.rs",format!("pub struct Cache;\n{filler}pub fn invalidate_entries() {{}}\n")),("orchestrator.rs","fn run() { invalidate_entries(); }\n".into())]);
+        let orchestrator=orchestrator(&dir);
+        let context=Context{snippets:vec![ContextSnippet{path:"cache.rs".into(),content:"pub struct Cache;".into(),score:1.0}],..Default::default()};
+        let message=task_message("why?",&context,true,orchestrator.rag.symbols());
+        assert!(message.contains("    L1 pub struct Cache;"),"{message}");
+        assert!(message.contains("    L2002 pub fn invalidate_entries()"),"a definição depois do trecho entra: {message}");
+        assert!(message.contains("    used by: orchestrator.rs"),"{message}");
+    }
+
+    #[test]
     fn a_model_without_the_disk_gets_the_files_and_old_replies_come_back_short() {
         let context=Context{snippets:vec![ContextSnippet{path:"src/lib.rs".into(),content:"pub fn total() -> u32 { 1 }".into(),score:1.0}],..Default::default()};
-        assert!(task_message("why?",&context,false).contains("FILE: src/lib.rs\npub fn total() -> u32 { 1 }"));
-        assert!(task_message("why?",&context,true).contains("- src/lib.rs\n    pub fn total() -> u32"));
+        let none=crate::symbols::SymbolIndex::default();
+        assert!(task_message("why?",&context,false,&none).contains("FILE: src/lib.rs\npub fn total() -> u32 { 1 }"));
+        assert!(task_message("why?",&context,true,&none).contains("- src/lib.rs\n    pub fn total() -> u32"));
         let conversation=[ChatMessage{role:"user".into(),content:"q".repeat(3_000)},ChatMessage{role:"assistant".into(),content:"a".repeat(3_000)},ChatMessage{role:"user".into(),content:"now".into()}];
         let history=short_history(&conversation);
         assert_eq!(history.len(),2,"o pedido atual não entra no histórico");
