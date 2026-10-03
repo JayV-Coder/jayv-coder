@@ -136,7 +136,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             session::set_session,session::clear_session,session::connection_status,session::get_locales,session::get_translations,
             prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,
             projects::get_workspace,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::delete_chat,projects::delete_project,
-            settings::get_settings,settings::save_settings,settings::refresh_models,settings::check_agent,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,settings::save_expertise,
+            settings::get_settings,settings::save_settings,settings::refresh_models,settings::check_agent,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,settings::save_expertise,settings::save_lean_code,
             system::system_status,
             gate::gate_feed,gate::scoped_gate_feed,
             files::open_file,

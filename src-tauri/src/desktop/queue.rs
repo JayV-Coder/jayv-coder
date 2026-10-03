@@ -116,6 +116,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
     // computador pela sincronização, vale já para o próximo.
     state.orchestrator.expertise=workspace.lock().await.expertise().unwrap_or_default();
+    state.orchestrator.lean_code=workspace.lock().await.lean_code().unwrap_or(true);
 
     // A política de LLM do projeto vem antes da pasta: ela pode mudar a
     // privacidade, e o índice da pasta é lido com o firewall já certo.

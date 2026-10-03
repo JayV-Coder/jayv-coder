@@ -34,6 +34,7 @@ export const commands = {
   getCoreSettings: () => invoke<CoreSnapshot>("get_core_settings"),
   saveCoreSettings: (settings: CoreSettings) => invoke<CoreSnapshot>("save_core_settings", { settings }),
   saveExpertise: (level: Expertise) => invoke<CoreSnapshot>("save_expertise", { level }),
+  saveLeanCode: (enabled: boolean) => invoke<CoreSnapshot>("save_lean_code", { enabled }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
   checkAgent: (command: string) => invoke<AgentProbe>("check_agent", { command }),
   refreshModels: (agent: AgentId) => invoke<ModelsRefresh>("refresh_models", { agent }),

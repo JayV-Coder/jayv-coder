@@ -1,4 +1,4 @@
-use crate::{firewall::ContextFirewall, model::{ContextSnippet, ProjectInfo}};
+use crate::{firewall::ContextFirewall, model::{ContextSnippet, ProjectInfo}, symbols::SymbolIndex};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,9 +15,9 @@ pub struct IndexedFile { pub path: String, pub language: String, pub hash: Strin
 pub const DEFAULT_BUDGET: u64 = 48 * 1024 * 1024;
 
 #[derive(Debug)]
-pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, repository_hash: String, budget: u64, indexed: bool, repositories: Vec<String> }
+pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, repository_hash: String, budget: u64, indexed: bool, repositories: Vec<String>, symbols: SymbolIndex }
 impl RepositoryRag {
-    pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false, repositories:vec![] } }
+    pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false, repositories:vec![], symbols:SymbolIndex::default() } }
     pub fn with_budget(mut self, budget: u64) -> Self { self.budget=budget; self }
     pub fn index(&mut self, firewall: &ContextFirewall) -> Result<usize> {
         self.files.clear();
@@ -37,6 +37,7 @@ impl RepositoryRag {
         self.files.sort_by(|a,b| a.path.cmp(&b.path));
         let hashes = self.files.iter().map(|f| format!("{}:{}",f.path,f.hash)).collect::<Vec<_>>().join("|");
         self.repository_hash=hex::encode(Sha256::digest(hashes.as_bytes()));
+        self.symbols.update(&self.files);
         Ok(self.files.len())
     }
     /// Os arquivos que mais têm a ver com o pedido. Cada palavra pesa pelo quão
@@ -52,8 +53,10 @@ impl RepositoryRag {
             let overlap=weights.iter().filter(|(token,_)|file.tokens.contains(*token)).map(|(_,weight)|weight).sum::<f64>();
             let path=file.path.to_lowercase();
             let path_bonus=weights.iter().filter(|(token,_)|path.contains(*token)).map(|(_,weight)|weight*1.5).sum::<f64>();
+            // Um nome que o arquivo define vale mais do que um que ele só cita.
+            let defined=self.symbols.terms(&file.path).map_or(0.0,|terms|weights.iter().filter(|(token,_)|terms.contains(*token)).map(|(_,weight)|weight*DEFINITION_WEIGHT).sum::<f64>());
             let kind=if file.language=="Markdown" {DOCUMENTATION_WEIGHT} else {1.0};
-            (file,(overlap+path_bonus)*kind)
+            (file,(overlap+path_bonus+defined)*kind)
         }).filter(|(_,s)|*s>0.0).collect::<Vec<_>>();
         scored.sort_by(|a,b| b.1.total_cmp(&a.1).then_with(||a.0.path.cmp(&b.0.path)));
         scored.into_iter().take(limit).map(|(f,score)| ContextSnippet { path:f.path.clone(), content:best_window(&f.content,&weights,SNIPPET_CHARS), score }).collect()
@@ -70,12 +73,18 @@ impl RepositoryRag {
     pub fn repository_hash(&self) -> &str { &self.repository_hash }
     pub fn file_hashes(&self) -> BTreeMap<String,String> { self.files.iter().map(|f|(f.path.clone(),f.hash.clone())).collect() }
     pub fn len(&self) -> usize { self.files.len() }
+    /// O índice de símbolos dos arquivos lidos.
+    pub fn symbols(&self) -> &SymbolIndex { &self.symbols }
+    /// Os caminhos indexados, em ordem.
+    pub fn paths(&self) -> impl Iterator<Item=&str> { self.files.iter().map(|file|file.path.as_str()) }
 }
 
 pub(crate) fn allowed_entry(entry:&DirEntry)->bool { let name=entry.file_name().to_string_lossy(); !matches!(name.as_ref(),".git"|"target"|"node_modules"|"dist"|"build"|"__pycache__"|".jev"|".jev_cache"|".jev_performance.json") }
-fn language_for(path:&Path)->Option<&'static str> { match path.extension()?.to_str()?.to_lowercase().as_str() { "rs"=>Some("Rust"),"py"=>Some("Python"),"js"|"mjs"|"cjs"=>Some("JavaScript"),"ts"|"tsx"=>Some("TypeScript"),"html"=>Some("HTML"),"css"=>Some("CSS"),"json"=>Some("JSON"),"yaml"|"yml"=>Some("YAML"),"toml"=>Some("TOML"),"md"=>Some("Markdown"),"sh"=>Some("Shell"),_=>None } }
+fn language_for(path:&Path)->Option<&'static str> { match path.extension()?.to_str()?.to_lowercase().as_str() { "rs"=>Some("Rust"),"py"=>Some("Python"),"js"|"mjs"|"cjs"=>Some("JavaScript"),"ts"|"tsx"=>Some("TypeScript"),"go"=>Some("Go"),"html"=>Some("HTML"),"css"=>Some("CSS"),"json"=>Some("JSON"),"yaml"|"yml"=>Some("YAML"),"toml"=>Some("TOML"),"md"=>Some("Markdown"),"sh"=>Some("Shell"),_=>None } }
 const SNIPPET_CHARS:usize=12_000;
 const DOCUMENTATION_WEIGHT:f64=0.5;
+/// Peso de uma palavra do pedido que está no nome de algo que o arquivo define.
+const DEFINITION_WEIGHT:f64=2.0;
 const WINDOW_LINES:usize=40;
 /// Palavras de ligação, em inglês e em português, que casam com qualquer arquivo.
 const STOPWORDS:[&str;64]=["the","and","for","that","this","with","from","are","was","not","but","you","have","has","can","will","what","when","where","which","how","why","all","any","into","use","make","need","want","should","would","please",

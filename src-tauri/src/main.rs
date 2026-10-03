@@ -28,6 +28,8 @@ enum Commands {
     Version,
     /// Runs a script of requests (one per line) through JayV and straight to the agent JayV picked, and compares the tokens each side was charged.
     Bench { script:PathBuf },
+    /// Serves the repository symbol index over MCP (stdio), for coding agents.
+    Mcp,
 }
 
 /// Guarda o erro que impediu o aplicativo de mesa de abrir. Falhar aqui não
@@ -60,7 +62,8 @@ fn attach_parent_console() {
 
 fn main()->Result<()> {
     #[cfg(windows)]
-    if std::env::args_os().skip(1).any(|arg|!arg.to_string_lossy().starts_with("jayv://")) { attach_parent_console(); }
+    // O `mcp` fala pelos canos que o agente abriu: nada de console por cima.
+    if std::env::args_os().nth(1).is_none_or(|first|first!="mcp") && std::env::args_os().skip(1).any(|arg|!arg.to_string_lossy().starts_with("jayv://")) { attach_parent_console(); }
     let cli=parse(std::env::args_os()).unwrap_or_else(|error|error.exit());
     let desktop=cli.command.is_none();
     let result=run(cli);
@@ -74,6 +77,7 @@ fn run(cli:Cli)->Result<()> {
         None=>run_desktop(config_path,root),
         Some(Commands::Status)=>{let orchestrator=orchestrator(config_path.clone(),root)?;println!("JayV {}",env!("CARGO_PKG_VERSION"));println!("Status: operational");println!("Configuration: {}",config_path.display());println!("Providers: {}",orchestrator.executable_provider_count());println!("Models: {}",orchestrator.executable_model_count());println!("Indexed files: {}",orchestrator.rag.len());Ok(())},
         Some(Commands::Index)=>{let orchestrator=Orchestrator::new(config_path,root)?;println!("Indexed {} files",orchestrator.rag.len());Ok(())},
+        Some(Commands::Mcp)=>{let orchestrator=Orchestrator::new(config_path,root)?;jayv_lib::mcp::serve(orchestrator.rag,orchestrator.firewall)},
         Some(Commands::Version)=>{println!("JayV v{}",env!("CARGO_PKG_VERSION"));Ok(())},
         Some(Commands::Bench{script})=>{
             let prompts=fs::read_to_string(&script).with_context(||format!("cannot read {}",script.display()))?.lines().map(str::trim).filter(|line|!line.is_empty()&&!line.starts_with('#')).map(String::from).collect::<Vec<_>>();

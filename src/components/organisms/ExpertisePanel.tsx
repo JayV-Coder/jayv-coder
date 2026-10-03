@@ -1,10 +1,11 @@
 import type { CoreSnapshot, Expertise } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { saveExpertise } from "@/modules/settings";
+import { saveExpertise, saveLeanCode } from "@/modules/settings";
 import { SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
@@ -60,6 +61,16 @@ export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
           );
         })}
       </RadioGroup>
+      <Label
+        htmlFor="expertise-lean"
+        className="mt-3 grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 rounded-md border border-border px-3.5 py-3 font-normal hover:bg-secondary"
+      >
+        <Switch id="expertise-lean" checked={snapshot.leanCode} onCheckedChange={(enabled) => void saveLeanCode(enabled)} className="mt-0.5" />
+        <span className="grid gap-1">
+          <strong className="text-sm">{t("expertise.lean")}</strong>
+          <span className="text-xs text-muted-foreground">{t("expertise.lean.hint")}</span>
+        </span>
+      </Label>
     </SettingsSection>
   );
 }

@@ -101,8 +101,10 @@ pub struct ClaudeOptions {
     pub append_system_prompt:String,
     pub persist_sessions:bool,
     pub safe_mode:bool,
+    /// Dá ao Claude as ferramentas do índice de símbolos do JayV (`jayv mcp`).
+    pub symbol_tools:bool,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -204,8 +206,23 @@ impl ClaudeOptions {
         // novo. Sem elas não há o que retomar.
         if self.persist_sessions { args.extend(["--resume".to_string(),RESUME.to_string()]); } else { args.push("--no-session-persistence".into()); }
         if self.safe_mode { args.push("--safe-mode".into()); }
+        // O índice de símbolos do próprio JayV, como servidor MCP só de
+        // leitura: o Claude pergunta onde algo mora em vez de varrer a pasta.
+        // Desligado por padrão — as definições das ferramentas custam tokens em
+        // toda sessão, e o `jayv bench` diz se se pagam no projeto.
+        if self.symbol_tools { if let Some(config)=symbol_server_config() { args.extend(["--mcp-config".to_string(),config,"--allowedTools".to_string(),SYMBOL_SERVER_TOOLS.to_string()]); } }
         args
     }
+}
+
+/// As ferramentas do servidor `jayv` no Claude, liberadas sem pergunta: só leem.
+const SYMBOL_SERVER_TOOLS:&str="mcp__jayv";
+
+/// A configuração MCP que sobe este mesmo executável como `jayv mcp`. O agente
+/// roda na pasta do projeto, e o servidor indexa a pasta onde nasce.
+fn symbol_server_config()->Option<String> {
+    let executable=std::env::current_exe().ok()?;
+    Some(serde_json::json!({"mcpServers":{"jayv":{"command":executable.display().to_string(),"args":["mcp"]}}}).to_string())
 }
 
 impl CodexOptions {
@@ -956,6 +973,19 @@ mod tests {
         assert!(validate(&wrong).is_err());
         let right=settings(vec![agent(AgentId::Claude,json!({"fallbackModel":"sonnet"}))]);
         assert!(validate(&right).is_ok());
+    }
+
+    #[test] fn the_symbol_tools_are_opt_in_and_start_this_executable_as_mcp() {
+        let plain=agent(AgentId::Claude,json!({})).args();
+        assert!(!plain.iter().any(|arg|arg=="--mcp-config"),"desligado por padrão");
+        let args=agent(AgentId::Claude,json!({"symbolTools":true})).args();
+        let at=args.iter().position(|arg|arg=="--mcp-config").expect("liga o servidor");
+        let config:Value=serde_json::from_str(&args[at+1]).expect("json");
+        assert_eq!(config["mcpServers"]["jayv"]["args"],json!(["mcp"]));
+        assert_eq!(config["mcpServers"]["jayv"]["command"],std::env::current_exe().unwrap().display().to_string());
+        assert!(args.windows(2).any(|pair|pair==["--allowedTools",SYMBOL_SERVER_TOOLS]));
+        let plan=agent(AgentId::Claude,json!({"symbolTools":true})).plan_args();
+        assert!(plan.iter().any(|arg|arg=="--mcp-config"),"só leem: valem no plano também");
     }
 
     #[test] fn claude_always_speaks_stream_json() {

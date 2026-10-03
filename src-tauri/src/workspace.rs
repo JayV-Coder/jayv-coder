@@ -486,6 +486,10 @@ impl WorkspaceStore {
 
     pub fn save_expertise(&mut self, level:&str) -> Result<crate::expertise::Expertise> {crate::expertise::save(&self.connection,level)}
 
+    pub fn lean_code(&self) -> Result<bool> {crate::expertise::load_lean(&self.connection)}
+
+    pub fn save_lean_code(&mut self, enabled:bool) -> Result<bool> {crate::expertise::save_lean(&self.connection,enabled)}
+
     /// A conexão crua, para a fila de saída e a sincronização: é o único
     /// código de fora que fala SQL com o banco do usuário.
     pub fn record_usage(&self, entry:&crate::usage::Entry) -> Result<bool> {crate::usage::store::write(&self.connection,entry)}
