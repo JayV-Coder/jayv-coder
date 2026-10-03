@@ -151,8 +151,10 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // originou. Um `SIM` sozinho seria barrado por faltas que o pedido de origem
     // já tinha suprido, e o modelo receberia uma palavra sem assunto. O que a
     // portaria pontua é exatamente o que chega ao modelo.
-    let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or(None);
-    let paired=origin.map(|origin|asking::pair(&i18n::for_model(&origin),prompt));
+    // A corrente inteira vai junto: numa pergunta feita depois de outra
+    // resposta, só a resposta anterior não diz qual era o pedido.
+    let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or_default();
+    let paired=(!origin.is_empty()).then(||asking::pair(&origin.iter().map(|said|i18n::for_model(said)).collect::<Vec<_>>().join("\n\n"),prompt));
     let request=paired.as_deref().unwrap_or(prompt);
     // O `process` torna a anotar o pedido na memória da sessão, e ele já está
     // no banco desde o envio: sem esta poda o modelo receberia a mesma linha
@@ -163,10 +165,18 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // Se a portaria barrar, a leitura de roteamento é descartada.
     let routing=state.orchestrator.routes_with_jev().then(||state.orchestrator.routing_input_ahead(request,chat_id));
     let covered=project_memory::covered(&notes);
-    let (entry,routing)=tokio::join!(
+    let (mut entry,routing)=tokio::join!(
         entry_check(&project,turn,request,state.orchestrator.expertise,&covered),
         async { match &routing { Some(input)=>Some(jev::route(input).await.map_err(|error|error.to_string())), None=>None } },
     );
+    // Responder ao agente não é pedir de novo: a resposta herda a passagem
+    // do pedido que levantou a pergunta.
+    if paired.is_some() {
+        // Sem leitura gravada (um turno de antes da portaria), vale o que a
+        // pergunta prova: o modelo respondeu aquele pedido.
+        let origin=workspace.lock().await.question_verdict(&turn.id).ok().flatten().unwrap_or(EntryVerdict::Pass);
+        entry=entry.inherit(origin);
+    }
     {
         let mut workspace=workspace.lock().await;
         let _=workspace.record_entry_check(&entry);
