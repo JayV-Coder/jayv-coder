@@ -1,7 +1,7 @@
 use crate::{
     agents::AgentRegistry, cache::SemanticCache, config::Config,
     context_engine::{optimize_for_budget, rank_fragments, ContextFragment},
-    firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::MemoryManager,
+    firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::{AgentSession, MemoryManager},
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
     progress::{Beat, Pulse},
     providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{required_capabilities, select_model, PerformanceTracker},
@@ -16,6 +16,17 @@ const TRUNCATION_MARKER:&str="\n[CONTEXT_TRUNCATED]";
 const PERFORMANCE_FILE:&str=".jev_performance.json";
 const DEFAULT_BUDGET:usize=12_000;
 const HISTORY_MESSAGES:usize=6;
+/// Uma resposta antiga do modelo volta no histórico só até aqui: o pedido novo
+/// precisa do assunto, não do código inteiro que já foi entregue.
+const HISTORY_REPLY_CHARS:usize=1_500;
+const HISTORY_CUT:&str="\n[EARLIER REPLY SHORTENED]";
+/// Quantos pedidos uma sessão de agente atende antes de começar outra: cada
+/// volta relê a conversa inteira, e uma sessão longa demais volta a sair cara.
+const RESUMED_TURNS:usize=10;
+/// Linhas de definição por arquivo no mapa que vai aos agentes.
+const MAP_OUTLINE_LINES:usize=8;
+const MAP_LINE_CHARS:usize=140;
+const MAP_NOTE:&str="RELEVANT FILES lists where the task most likely lives, with the definitions found there. Open only the files you need, with your own tools.";
 const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, no quotes, no trailing period, no explanation.";
 const TITLE_PROMPT_CHARS:usize=600;
 const REQUEST_MARGIN:usize=120;
@@ -31,7 +42,7 @@ const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Answer with a concret
 const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it.";
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
 /// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
-const FOCUS_NOTE:&str="Be brief: REPOSITORY CONTEXT is current, never reread it; read only what the task needs; do not re-plan.";
+const FOCUS_NOTE:&str="Be brief: read only what the task needs, never reread what this conversation already holds, and do not re-plan.";
 const MULTI_REPOSITORY_NOTE:&str="This folder holds several repositories of the same organization; keep each change inside the repository it belongs to and name it in the answer. REPOSITORIES:";
 pub const MODE_PLAN:&str="plan";
 pub const MODE_BUILD:&str="build";
@@ -79,6 +90,10 @@ pub struct Orchestrator {
     /// `use_core` com as configurações já restritas) a marca aqui, para a
     /// orientação dizer quem barrou o pedido.
     pub policy_scope: Option<String>,
+    /// A leitura de roteamento do Jev pedida junto com a portaria de entrada,
+    /// em paralelo, para o pedido não esperar as duas idas uma depois da
+    /// outra. `process` a consome uma vez; sem ela, o roteamento é pedido ali.
+    pub pending_routing: Option<std::result::Result<jev::RoutingDecision,String>>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
@@ -107,7 +122,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -160,6 +175,7 @@ impl Orchestrator {
         let session_id=session_id.unwrap_or("default");
         let normalized=user_input.trim().to_string();
         if normalized.starts_with("/why") {
+            self.pending_routing=None;
             let result=self.explanation_result(user_input,&normalized);
             if let Some(response)=&result.result { pulse.beat(Beat::Chunk{text:response.response.clone()}); }
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
@@ -181,7 +197,7 @@ impl Orchestrator {
         selection.mode=mode.into();
         selection.agent=self.agents.for_intent(&intent.intent).map(|agent|agent.name.clone());
         if let Some(guidance)=self.configuration_guidance(&selection) {
-            let response=ProviderResponse { response:guidance, input_tokens:0, output_tokens:0, model:"configuration".into(), provider:"jev".into(), latency_ms:0 };
+            let response=ProviderResponse { response:guidance, input_tokens:0, output_tokens:0, model:"configuration".into(), provider:"jev".into(), latency_ms:0, session:None };
             pulse.beat(Beat::Chunk{text:response.response.clone()});
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
             self.memory.add_message(session_id,"assistant",i18n::for_model(&response.response));
@@ -195,6 +211,9 @@ impl Orchestrator {
         pulse.beat(Beat::Running);
         let started=Instant::now();
         let execution=self.execute(brief.as_deref().unwrap_or(&normalized),&complexity,&context,&selection,session_id,pulse).await;
+        let resumed=execution.as_ref().is_ok_and(|(_,resumed)|*resumed);
+        let execution=execution.map(|(response,_)|response);
+        self.remember_agent_session(session_id,&selection,execution.as_ref().ok(),resumed);
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
             Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
@@ -206,12 +225,14 @@ impl Orchestrator {
         ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy, model_selection:selection, result, validation:valid, decision, routing:signals, error }
     }
 
-    async fn decide_routing(&self,input:&str,session_id:&str)->(IntentAnalysis,String,RoutingSignals) {
+    async fn decide_routing(&mut self,input:&str,session_id:&str)->(IntentAnalysis,String,RoutingSignals) {
+        let ahead=self.pending_routing.take();
         match &self.routing_mode {
             RoutingMode::Local=>local_routing(input,None),
             RoutingMode::Fixed(decision)=>self.jev_routing(decision),
             RoutingMode::Failed(error)=>local_routing(input,Some(error.clone())),
             RoutingMode::Auto=>{
+                if let Some(ahead)=ahead { return match ahead { Ok(decision)=>self.jev_routing(&decision), Err(error)=>local_routing(input,Some(error)) }; }
                 if !jev::is_configured() { return local_routing(input,None); }
                 match jev::route(&self.routing_input(input,session_id)).await {
                     Ok(decision)=>self.jev_routing(&decision),
@@ -221,9 +242,19 @@ impl Orchestrator {
         }
     }
 
-    pub fn routing_input(&self,input:&str,session_id:&str)->jev::RoutingInput {
+    pub fn routing_input(&self,input:&str,session_id:&str)->jev::RoutingInput { self.routing_input_after(input,session_id,1) }
+
+    /// O mesmo estado, montado antes de o pedido entrar na memória do chat —
+    /// quando o roteamento é pedido junto com a portaria.
+    pub fn routing_input_ahead(&self,input:&str,session_id:&str)->jev::RoutingInput { self.routing_input_after(input,session_id,0) }
+
+    /// Quer o Jev a leitura de roteamento deste pedido? Só no modo automático
+    /// e com credencial; nos outros modos ela não é pedida.
+    pub fn routes_with_jev(&self)->bool { matches!(self.routing_mode,RoutingMode::Auto)&&jev::is_configured() }
+
+    fn routing_input_after(&self,input:&str,session_id:&str,current:usize)->jev::RoutingInput {
         let project=self.rag.project_info();
-        let turns=self.memory.conversation(session_id).iter().rev().skip(1).take(ROUTING_TURNS).rev().map(|message|format!("{}: {}",message.role,message.content.chars().take(ROUTING_TURN_CHARS).collect::<String>())).collect::<Vec<_>>();
+        let turns=self.memory.conversation(session_id).iter().rev().skip(current).take(ROUTING_TURNS).rev().map(|message|format!("{}: {}",message.role,message.content.chars().take(ROUTING_TURN_CHARS).collect::<String>())).collect::<Vec<_>>();
         jev::RoutingInput::new(input).with_project(project.name,project.languages).with_candidate_files(self.rag.search(input,ROUTING_CANDIDATES).into_iter().map(|snippet|snippet.path).collect()).with_recent_turns(turns)
     }
 
@@ -244,7 +275,7 @@ impl Orchestrator {
     }
 
     fn request_overhead(&self,input:&str,session_id:&str)->usize { estimate_tokens(SYSTEM_INSTRUCTIONS)+estimate_tokens(input)+self.history_tokens(session_id)+REQUEST_MARGIN }
-    fn history_tokens(&self,session_id:&str)->usize { self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).map(|message|estimate_tokens(&message.content)).sum() }
+    fn history_tokens(&self,session_id:&str)->usize { short_history(self.memory.conversation(session_id)).iter().map(|message|estimate_tokens(&message.content)).sum() }
 
     fn assemble_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize,signals:&RoutingSignals,mode:&str)->Context {
         let mut context=if repository_context_wanted(signals){self.build_context(input,plan,budget,reserved)}else{Context{system_instructions:SYSTEM_INSTRUCTIONS.into(),project:self.rag.project_info(),relevant_files:vec![],snippets:vec![],estimated_tokens:reserved,repository_context_skipped:true}};
@@ -256,12 +287,9 @@ impl Orchestrator {
 
     fn build_context(&mut self,input:&str,plan:&[String],budget:usize,reserved:usize)->Context {
         let mut context=self.retrieve_context(input,plan);
-        let before=context.snippets.iter().map(snippet_tokens).sum::<usize>();
+        // O corte do orçamento não conta como economia: o que ele tira é o que
+        // a própria busca pôs, e o agente lê do disco o que faltar.
         let pruned=prune_to_budget(&mut context,budget.saturating_sub(reserved));
-        // O que o corte do orçamento deixou de mandar ao modelo. É estimativa:
-        // a conta é a mesma caracteres ÷ 4 do orçamento.
-        let after=context.snippets.iter().map(snippet_tokens).sum::<usize>();
-        if pruned && before>after { crate::usage::mark(crate::usage::JevMark::saved("context",(before-after) as u64)); }
         context.estimated_tokens=reserved+context.snippets.iter().map(snippet_tokens).sum::<usize>();
         if pruned||context.snippets.iter().any(|snippet|snippet.content.contains("_REDACTED]")) { note_removal(&mut context); }
         context
@@ -283,12 +311,14 @@ impl Orchestrator {
 
     /// Batiza o chat. O modelo recebe o pedido junto com a leitura de intenção
     /// do Jev e devolve só o título; nenhum arquivo do repositório entra nessa
-    /// chamada, ela vê apenas o que o desenvolvedor já digitou. Sem modelo
-    /// executável, ou com resposta que não serve como título, devolve nada e o
-    /// resumo local que já está no banco continua valendo.
+    /// chamada, ela vê apenas o que o desenvolvedor já digitou. Só um modelo
+    /// por API batiza: um agente de linha de comando abriria uma sessão inteira
+    /// — prompt de sistema, ferramentas, leitura da pasta — por seis palavras.
+    /// Sem modelo assim, ou com resposta que não serve como título, devolve
+    /// nada e o resumo local que já está no banco continua valendo.
     pub async fn name_chat(&self,prompt:&str,intent:&str)->Option<String> {
         // O batismo não mexe em nada: vai sempre pelos agentes em somente leitura.
-        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.planners.contains_key(&model.provider)).collect();
+        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.planners.get(&model.provider).is_some_and(|provider|!provider.explores())).collect();
         usable.sort_by(|(left,_),(right,_)|left.cmp(right));
         let (_,model)=usable.first()?;
         let provider=self.planners.get(&model.provider)?;
@@ -300,19 +330,69 @@ impl Orchestrator {
         clean_title(&provider.chat_with_effort(&messages,&model.model,Some(effort_for("trivial")),&Pulse::silent()).await.ok()?.response)
     }
 
-    async fn execute(&self,input:&str,complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
+    /// Manda o pedido ao modelo escolhido. Um agente que explora o repositório
+    /// recebe o mapa dos arquivos, não os arquivos: ele os abre por conta
+    /// própria, e mandar os dois era pagar a leitura duas vezes. Quando o
+    /// agente sabe retomar a sessão do chat, ela é retomada e o histórico não
+    /// vai de novo; se a retomada falhar por causa da sessão, o pedido sai do
+    /// zero, com o histórico. Devolve também se a sessão foi retomada.
+    async fn execute(&self,input:&str,complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool)> {
         let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
         let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
-        let repository_context=safe_context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
-        let user=if repository_context.is_empty(){input.into()}else{format!("TASK:\n{input}\n\nREPOSITORY CONTEXT:\n{repository_context}")};
+        let user=task_message(input,&safe_context,provider.explores());
+        let effort=Some(effort_for(complexity));
+        if let Some(resume)=self.resumable_session(session_id,provider.as_ref(),selection) {
+            let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
+            match provider.chat_turn(&messages,&selection.model_name,effort,Some(&resume),pulse).await {
+                Ok(response)=>return Ok((response,true)),
+                Err(error) if !lost_session(&error)=>return Err(error),
+                Err(error)=>eprintln!("sessão do agente: não retomou, começando outra ({error:#})"),
+            }
+        }
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
-        messages.extend(self.memory.conversation(session_id).iter().rev().skip(1).take(HISTORY_MESSAGES).rev().cloned());
+        messages.extend(short_history(self.memory.conversation(session_id)));
         messages.push(ChatMessage{role:"user".into(),content:user});
-        provider.chat_with_effort(&messages,&selection.model_name,Some(effort_for(complexity)),pulse).await
+        Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false))
+    }
+
+    /// O mesmo pedido mandado cru ao agente que o Jev escolheu, sem nada do
+    /// Jev no caminho: nem contexto, nem nota, nem esforço, nem histórico
+    /// enxuto. É como o desenvolvedor usaria o agente sozinho — com a sessão
+    /// dele seguindo de um pedido para o outro —, e é contra isso que o
+    /// `jayv bench` mede o JayV.
+    pub async fn direct(&mut self,input:&str,session_id:&str,selection:&ModelSelection)->Result<ProviderResponse> {
+        let pool=if selection.mode==MODE_BUILD {&self.providers} else {&self.planners};
+        let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
+        let resume=self.resumable_session(session_id,provider.as_ref(),selection);
+        let mut messages=if resume.is_some() { vec![] } else { self.memory.conversation(session_id).to_vec() };
+        messages.push(ChatMessage{role:"user".into(),content:input.into()});
+        let response=provider.chat_turn(&messages,&selection.model_name,None,resume.as_deref(),&Pulse::silent()).await?;
+        self.memory.add_message(session_id,"user",input);
+        self.memory.add_message(session_id,"assistant",response.response.clone());
+        self.remember_agent_session(session_id,selection,Some(&response),resume.is_some());
+        Ok(response)
+    }
+
+    /// A sessão do agente que este chat pode retomar: a do mesmo agente, do
+    /// mesmo modelo e da mesma pasta, enquanto não chegou ao teto de pedidos.
+    fn resumable_session(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->Option<String> {
+        if !provider.resumes() { return None; }
+        let kept=self.memory.agent_session(session_id)?;
+        (kept.provider==selection.provider&&kept.model==selection.model_name&&kept.root==self.rag.project_info().root&&kept.turns<RESUMED_TURNS).then(||kept.id.clone())
+    }
+
+    /// Guarda (ou esquece) a sessão que o agente acabou de usar, para o pedido
+    /// seguinte do chat retomá-la.
+    fn remember_agent_session(&mut self,session_id:&str,selection:&ModelSelection,response:Option<&ProviderResponse>,resumed:bool) {
+        let resumes=self.providers.get(&selection.provider).is_some_and(|provider|provider.resumes());
+        let Some(id)=response.and_then(|response|response.session.clone()).filter(|_|resumes) else { self.memory.forget_agent_session(session_id); return };
+        let turns=if resumed { self.memory.agent_session(session_id).map_or(0,|kept|kept.turns)+1 } else { 1 };
+        if resumed { crate::usage::mark(crate::usage::JevMark::count("session_resumed",1)); }
+        self.memory.keep_agent_session(session_id,AgentSession{provider:selection.provider.clone(),model:selection.model_name.clone(),root:self.rag.project_info().root,id,turns});
     }
 
     fn without_local_only(&self,context:&Context)->Context {
@@ -353,7 +433,7 @@ impl Orchestrator {
     fn explanation_result(&self,user_input:&str,normalized:&str)->ProcessResult {
         let explained=self.last_decision.as_ref().map(|d|Text::new("explain.last").with("model",&d.model_name).with("provider",&d.model_provider).with("files",d.context_files_count).with("tokens",d.estimated_tokens)).unwrap_or_else(||Text::new("explain.none"));
         let response=i18n::notice(&[explained]);
-        let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
+        let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0,session:None}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
         ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into(),..Default::default()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
     }
 }
@@ -361,6 +441,49 @@ impl Orchestrator {
 /// O que o firewall fez num contexto recém-lido: arquivos retidos e valores
 /// trocados por `[…_REDACTED]`. Só na leitura nova — o contexto que sai do
 /// cache já foi contado quando entrou nele.
+/// O pedido como o modelo o lê. Um modelo por API não enxerga o disco e
+/// recebe os arquivos; um agente que explora o repositório recebe só o mapa —
+/// caminho e definições — e abre o que precisar.
+fn task_message(input:&str,context:&Context,explores:bool)->String {
+    if context.snippets.is_empty() { return input.into(); }
+    if explores {
+        let map=context.snippets.iter().map(|snippet|{
+            let outline=outline(&snippet.content);
+            if outline.is_empty() { format!("- {}",snippet.path) } else { format!("- {}\n{}",snippet.path,outline.iter().map(|line|format!("    {line}")).collect::<Vec<_>>().join("\n")) }
+        }).collect::<Vec<_>>().join("\n");
+        return format!("TASK:\n{input}\n\n{MAP_NOTE}\nRELEVANT FILES:\n{map}");
+    }
+    let files=context.snippets.iter().map(|s|format!("FILE: {}\n{}",s.path,s.content)).collect::<Vec<_>>().join("\n\n");
+    format!("TASK:\n{input}\n\nREPOSITORY CONTEXT:\n{files}")
+}
+
+/// As linhas que declaram algo — função, tipo, classe, constante exportada —,
+/// em qualquer das linguagens comuns. É o bastante para o agente saber se o
+/// arquivo é o que procura sem precisar abri-lo.
+fn outline(content:&str)->Vec<String> {
+    const STARTS:[&str;24]=["fn ","pub fn ","pub(crate) fn ","async fn ","pub async fn ","struct ","pub struct ","enum ","pub enum ","trait ","pub trait ","impl ","def ","async def ","class ","function ","export ","interface ","type ","func ","public ","module ","const ","pub const "];
+    content.lines().map(str::trim).filter(|line|STARTS.iter().any(|start|line.starts_with(start))).take(MAP_OUTLINE_LINES).map(|line|{
+        let line=line.trim_end_matches(['{',' ']);
+        if line.chars().count()>MAP_LINE_CHARS { format!("{}…",line.chars().take(MAP_LINE_CHARS).collect::<String>()) } else { line.to_string() }
+    }).collect()
+}
+
+/// As últimas mensagens antes do pedido atual (que é a última da conversa),
+/// com as respostas antigas do modelo encurtadas.
+fn short_history(conversation:&[ChatMessage])->Vec<ChatMessage> {
+    conversation.iter().rev().skip(1).take(HISTORY_MESSAGES).rev().map(|message|{
+        if message.role!="assistant"||message.content.chars().count()<=HISTORY_REPLY_CHARS { return message.clone(); }
+        ChatMessage{role:message.role.clone(),content:format!("{}{HISTORY_CUT}",message.content.chars().take(HISTORY_REPLY_CHARS).collect::<String>())}
+    }).collect()
+}
+
+/// A falha que vem da sessão retomada — apagada, de outra pasta, expirada —, e
+/// não do pedido: com ela, vale começar outra sessão.
+fn lost_session(error:&anyhow::Error)->bool {
+    let text=format!("{error:#}").to_lowercase();
+    ["session","conversation"].iter().any(|word|text.contains(word))
+}
+
 fn mark_firewall(retrieved:usize,filtered:&Context) {
     let withheld=retrieved.saturating_sub(filtered.snippets.len());
     if withheld>0 { crate::usage::mark(crate::usage::JevMark::count("file_withheld",withheld as u64)); }
@@ -748,6 +871,71 @@ mod tests {
         let reviewed=orchestrator.process("revise o roteador",Some("review"),&Pulse::silent()).await;
         assert_eq!(reviewed.result.as_ref().map(|answer|answer.response.trim()),Some("ran-plan"));
         assert_eq!(reviewed.model_selection.agent.as_deref(),Some("reviewer"));
+    }
+
+    /// O agente explora o repositório sozinho: recebe o mapa, não os arquivos,
+    /// e o segundo pedido do chat retoma a sessão do primeiro sem reenviar a
+    /// conversa.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_exploring_agent_gets_the_file_map_and_resumes_the_chat_session() {
+        let dir=repository(&[("router.rs",filler("route_request",3_000))]);
+        let prompts=tempfile::tempdir().expect("prompts");
+        let mut orchestrator=orchestrator(&dir);
+        let script=format!(r#"cat > "{}/stdin-$#"; echo '{{"type":"system","subtype":"init","session_id":"s-1"}}'; echo resposta"#,prompts.path().display());
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),script.clone(),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],plan_args:vec!["-c".into(),script,"agent".into(),"--resume".into(),crate::llm::RESUME.into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+
+        orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
+        let first=std::fs::read_to_string(prompts.path().join("stdin-0")).expect("o primeiro pedido abre uma sessão nova");
+        assert!(first.contains("RELEVANT FILES:\n- router.rs\n    fn route_request()"),"vai o mapa: {first}");
+        assert!(!first.contains("padding_value"),"o corpo do arquivo fica no disco, para o agente abrir se precisar");
+        assert_eq!(orchestrator.memory.agent_session("chat").map(|kept|(kept.id.as_str(),kept.turns)),Some(("s-1",1)));
+
+        orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
+        let second=std::fs::read_to_string(prompts.path().join("stdin-2")).expect("o segundo pedido retoma a sessão (--resume s-1)");
+        assert!(!second.contains("explain how route_request works"),"a sessão já tem a conversa: {second}");
+        assert_eq!(orchestrator.memory.agent_session("chat").map(|kept|kept.turns),Some(2));
+
+        orchestrator.process("and the tests?",Some("other-chat"),&Pulse::silent()).await;
+        assert_eq!(orchestrator.memory.agent_session("other-chat").map(|kept|kept.turns),Some(1),"outro chat, outra sessão");
+    }
+
+    /// A leitura pedida junto com a portaria vale para o pedido, sem outra ida
+    /// ao Jev, e só para ele.
+    #[tokio::test]
+    async fn the_routing_read_alongside_the_gate_is_used_once() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        orchestrator.routing_mode=RoutingMode::Auto;
+        orchestrator.memory.add_message("chat","user","earlier");
+        let ahead=orchestrator.routing_input_ahead("now",  "chat");
+        orchestrator.memory.add_message("chat","user","now");
+        assert_eq!(ahead.recent_turns,orchestrator.routing_input("now","chat").recent_turns,"o mesmo estado, antes de o pedido entrar na memória");
+        orchestrator.pending_routing=Some(Ok(routed("test",0.93,"simple",0.9)));
+        let (intent,_,signals)=orchestrator.decide_routing("now","chat").await;
+        assert_eq!((intent.intent.as_str(),signals.source.as_str()),("test",SOURCE_JEV));
+        assert!(orchestrator.pending_routing.is_none());
+        orchestrator.pending_routing=Some(Err("offline".into()));
+        assert_eq!(orchestrator.decide_routing("now","chat").await.2.source,SOURCE_FALLBACK);
+    }
+
+    #[test]
+    fn a_model_without_the_disk_gets_the_files_and_old_replies_come_back_short() {
+        let context=Context{snippets:vec![ContextSnippet{path:"src/lib.rs".into(),content:"pub fn total() -> u32 { 1 }".into(),score:1.0}],..Default::default()};
+        assert!(task_message("why?",&context,false).contains("FILE: src/lib.rs\npub fn total() -> u32 { 1 }"));
+        assert!(task_message("why?",&context,true).contains("- src/lib.rs\n    pub fn total() -> u32"));
+        let conversation=[ChatMessage{role:"user".into(),content:"q".repeat(3_000)},ChatMessage{role:"assistant".into(),content:"a".repeat(3_000)},ChatMessage{role:"user".into(),content:"now".into()}];
+        let history=short_history(&conversation);
+        assert_eq!(history.len(),2,"o pedido atual não entra no histórico");
+        assert_eq!(history[0].content.len(),3_000,"o que o desenvolvedor escreveu vai inteiro");
+        assert!(history[1].content.ends_with(HISTORY_CUT)&&history[1].content.len()<HISTORY_REPLY_CHARS+HISTORY_CUT.len()+1);
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod asking;
+pub mod bench;
 pub mod cache;
 pub mod checkpoint;
 pub mod checkout;

@@ -22,6 +22,20 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.34.0", date: "2026-10-03",
+    items: [
+      { kind: "feature", id: "agentSessionResume" },
+      { kind: "feature", id: "agentFileMap" },
+      { kind: "feature", id: "parallelJev" },
+      { kind: "feature", id: "promptCache" },
+      { kind: "feature", id: "benchCommand" },
+      { kind: "fix", id: "honestSavings" },
+      { kind: "fix", id: "titleWithoutAgent" },
+      { kind: "fix", id: "betterRetrieval" },
+      { kind: "fix", id: "shortHistory" },
+    ],
+  },
+  {
     version: "0.33.0", date: "2026-10-03",
     items: [
       { kind: "feature", id: "whatsNew" },

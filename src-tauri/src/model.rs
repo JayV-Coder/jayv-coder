@@ -82,6 +82,9 @@ pub struct ProviderResponse {
     pub model: String,
     pub provider: String,
     pub latency_ms: u128,
+    /// A sessão do agente que atendeu, quando ele diz qual é: é ela que o
+    /// pedido seguinte do mesmo chat retoma.
+    #[serde(default)] pub session: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

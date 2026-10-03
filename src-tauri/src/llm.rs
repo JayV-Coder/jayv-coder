@@ -144,6 +144,9 @@ const CLAUDE_PERMISSIONS:[&str;5]=["default","plan","acceptEdits","auto","bypass
 pub const AUTO_EFFORT:&str="auto";
 /// O argumento que vira o esforço escolhido pelo Jev.
 pub const EFFORT:&str="{effort}";
+/// O lugar da sessão do agente a retomar. Sem sessão, o argumento sai junto
+/// da flag que o anuncia, como o `{effort}`.
+pub const RESUME:&str="{resume}";
 const CLAUDE_EFFORTS:[&str;6]=["auto","low","medium","high","xhigh","max"];
 /// A ferramenta do Claude que abre um formulário no terminal interativo.
 const INTERACTIVE_ONLY_TOOL:&str="AskUserQuestion";
@@ -196,7 +199,10 @@ impl ClaudeOptions {
         let blocked=[INTERACTIVE_ONLY_TOOL.to_string()].into_iter().chain(self.blocked_tools.iter().cloned()).collect::<Vec<_>>();
         args.extend(["--disallowed-tools".to_string(),blocked.join(",")]);
         if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
-        if !self.persist_sessions { args.push("--no-session-persistence".into()); }
+        // Com as sessões guardadas, o pedido seguinte do mesmo chat retoma a
+        // sessão do anterior: o agente já leu o que leu e não explora tudo de
+        // novo. Sem elas não há o que retomar.
+        if self.persist_sessions { args.extend(["--resume".to_string(),RESUME.to_string()]); } else { args.push("--no-session-persistence".into()); }
         if self.safe_mode { args.push("--safe-mode".into()); }
         args
     }
@@ -958,6 +964,8 @@ mod tests {
         assert!(!args.iter().any(|arg|arg=="--no-session-persistence"),"guardar sessões é o padrão");
         let forgetful=agent(AgentId::Claude,json!({"persistSessions":false})).args();
         assert!(forgetful.iter().any(|arg|arg=="--no-session-persistence"));
+        assert!(args.windows(2).any(|pair|pair==["--resume",RESUME]),"com sessões guardadas, o pedido seguinte retoma a do chat");
+        assert!(!forgetful.iter().any(|arg|arg=="--resume"),"sem sessão guardada não há o que retomar");
         assert!(args.windows(2).any(|pair|pair==["--permission-mode","plan"]));
         assert!(args.windows(2).any(|pair|pair==["--max-budget-usd","2.50"]));
     }

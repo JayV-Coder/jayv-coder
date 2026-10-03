@@ -21,7 +21,14 @@ fn orchestrator(config_path:PathBuf,root:PathBuf)->Result<Orchestrator> {
 #[command(name="jayv",version,about="JayV — Tauri desktop and Rust CLI")]
 struct Cli { #[arg(short,long,global=true)] config:Option<PathBuf>, #[arg(long,global=true,default_value=".")] root:PathBuf, #[command(subcommand)] command:Option<Commands> }
 #[derive(Debug,Subcommand)]
-enum Commands { Status, Run { #[arg(required=true,num_args=1..)] task:Vec<String> }, Index, Version }
+enum Commands {
+    Status,
+    Run { #[arg(required=true,num_args=1..)] task:Vec<String> },
+    Index,
+    Version,
+    /// Runs a script of requests (one per line) through JayV and straight to the agent JayV picked, and compares the tokens each side was charged.
+    Bench { script:PathBuf },
+}
 
 /// Guarda o erro que impediu o aplicativo de mesa de abrir. Falhar aqui não
 /// pode esconder o erro original, então qualquer problema de escrita é ignorado.
@@ -68,6 +75,12 @@ fn run(cli:Cli)->Result<()> {
         Some(Commands::Status)=>{let orchestrator=orchestrator(config_path.clone(),root)?;println!("JayV {}",env!("CARGO_PKG_VERSION"));println!("Status: operational");println!("Configuration: {}",config_path.display());println!("Providers: {}",orchestrator.executable_provider_count());println!("Models: {}",orchestrator.executable_model_count());println!("Indexed files: {}",orchestrator.rag.len());Ok(())},
         Some(Commands::Index)=>{let orchestrator=Orchestrator::new(config_path,root)?;println!("Indexed {} files",orchestrator.rag.len());Ok(())},
         Some(Commands::Version)=>{println!("JayV v{}",env!("CARGO_PKG_VERSION"));Ok(())},
+        Some(Commands::Bench{script})=>{
+            let prompts=fs::read_to_string(&script).with_context(||format!("cannot read {}",script.display()))?.lines().map(str::trim).filter(|line|!line.is_empty()&&!line.starts_with('#')).map(String::from).collect::<Vec<_>>();
+            anyhow::ensure!(!prompts.is_empty(),"{} has no requests",script.display());
+            let runtime=tokio::runtime::Runtime::new()?;
+            runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,root)?;let comparison=jayv_lib::bench::compare(&mut orchestrator,&prompts).await?;println!("{}",jayv_lib::bench::report(&comparison));Ok(())})
+        },
         Some(Commands::Run{task})=>{let runtime=tokio::runtime::Runtime::new()?;runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,root)?;let result=orchestrator.process(&task.join(" "),Some("cli"),&jayv_lib::progress::Pulse::silent()).await;if let Some(response)=result.result{println!("{}",response.response);Ok(())}else{Err(anyhow::anyhow!(result.error.unwrap_or_else(||"task failed".into())))}})},
     }
 }
