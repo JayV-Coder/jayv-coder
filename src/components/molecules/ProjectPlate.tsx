@@ -26,7 +26,7 @@ export function ProjectPlate({ project }: { project: Project }) {
             {t("project.scope.personal")}
           </span>
         )}
-      <strong title={project.name} className="block text-sm leading-tight font-semibold tracking-tight break-words text-foreground">{project.name}</strong>
+      <strong title={project.name} className="block text-sm leading-tight font-semibold break-words text-foreground">{project.name}</strong>
       {project.rootPath
         ? <PathText title={project.rootPath} className="mt-1 font-mono text-caption leading-snug text-muted-foreground">{project.rootPath}</PathText>
         : <span title={t("project.noFolder.title")} className="mt-1 block text-caption text-muted-foreground">{t("common.noFolder")}</span>}

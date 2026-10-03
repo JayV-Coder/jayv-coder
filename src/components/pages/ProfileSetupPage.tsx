@@ -24,7 +24,7 @@ export function ProfileSetupPage({ profile }: { profile: AccountProfile }) {
       <div className="grid w-full max-w-2xl gap-6">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />
-          <h1 className="text-h3 font-semibold tracking-tight">{t("profile.setup.title")}</h1>
+          <h1 className="text-h3 font-semibold">{t("profile.setup.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("profile.setup.description")}</p>
         </div>
         <ProfileForm initial={initial} busy={busy} submitLabel={t("profile.save")} onSubmit={(draft) => run(() => saveProfile(draft))}

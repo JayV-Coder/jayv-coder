@@ -40,7 +40,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
       <div className="flex flex-wrap items-center gap-4 rounded-xl border border-border/60 bg-card/40 px-6 py-5">
         <AgentIcon agent={agent.id} className="size-11 shrink-0" />
         <div className="min-w-0 flex-1">
-          <h3 className="text-xl font-semibold tracking-tight">{AGENT_NAMES[agent.id]}</h3>
+          <h3 className="text-xl font-semibold">{AGENT_NAMES[agent.id]}</h3>
           <p className="text-sm text-muted-foreground">{t(`agent.${agent.id}.tagline`)}</p>
         </div>
         <label htmlFor={`${agent.id}-enabled`} className="flex items-center gap-3">

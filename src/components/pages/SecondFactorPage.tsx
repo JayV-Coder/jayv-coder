@@ -35,7 +35,7 @@ export function SecondFactorPage() {
       <form onSubmit={submit} className="grid w-full max-w-sm gap-4">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />
-          <h1 className="text-h3 font-semibold tracking-tight">{t("auth.secondFactor.title")}</h1>
+          <h1 className="text-h3 font-semibold">{t("auth.secondFactor.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("auth.secondFactor.description")}</p>
         </div>
         <FormField label={t("auth.secondFactor.code")} htmlFor="second-factor-code" hint={email ?? undefined}>

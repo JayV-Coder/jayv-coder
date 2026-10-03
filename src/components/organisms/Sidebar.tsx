@@ -3,7 +3,7 @@ import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { BrandMark, LogoIcon, UserAvatar } from "@/components/atoms";
-import { ChatRow, ConnectionNote, NavItem, ProjectPlate } from "@/components/molecules";
+import { ChatRow, NavItem, ProjectPlate } from "@/components/molecules";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/modules/auth";
 import { useProfile } from "@/modules/profile";
@@ -35,22 +35,22 @@ export function Sidebar() {
       <div className="flex items-center gap-2.5 px-1.5 pb-5">
         <BrandMark />
         <div className="flex flex-col">
-          <strong className="text-sm font-semibold tracking-tight">JayV</strong>
+          <strong className="text-sm font-semibold">JayV</strong>
           <small className="text-caption text-sidebar-muted">{t("brand.tagline")}</small>
         </div>
       </div>
 
       {!project ? (
         <nav className="grid gap-0.5">
-          <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
-          <NavItem active={view === "organizations" || view === "organization"} mark={<Building2Icon />} onClick={() => navigate("organizations")}>
+          <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+          <NavItem active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>
             <span className="flex-1">{t("nav.organizations")}</span>
             {invites > 0 && (
               <span title={t("org.invites.count", { count: invites })} className="rounded-md bg-accent px-1.5 font-mono text-caption font-semibold text-accent-foreground tabular-nums">{invites}</span>
             )}
           </NavItem>
-          <NavItem active={view === "stats"} mark={<ChartColumnIcon />} onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
-          <NavItem active={view === "status"} mark={<ActivityIcon />} onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
+          <NavItem active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
+          <NavItem active={view === "status"} mark={<ActivityIcon />} shortcut="system" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
         </nav>
       ) : (
         <div className="flex min-h-0 flex-col">
@@ -67,6 +67,7 @@ export function Sidebar() {
           <NavItem
             active={view === "gate"}
             className="mb-1"
+            shortcut="gate"
             mark={<LogoIcon className="size-[18px] [&_.logo-halo]:stroke-ask [&_.logo-lamp]:fill-ask" />}
             onClick={() => navigate("gate")}
           >
@@ -90,7 +91,6 @@ export function Sidebar() {
       {/* A conta abre o perfil; o sino, as notificações; a engrenagem, as
           configurações — o idioma mora lá dentro. */}
       <div className="mt-auto grid gap-2 border-t border-sidebar-border pt-3">
-        <ConnectionNote />
         <div className="flex items-center gap-1.5">
           <button
             type="button"

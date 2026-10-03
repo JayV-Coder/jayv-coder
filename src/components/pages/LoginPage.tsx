@@ -64,7 +64,7 @@ export function LoginPage() {
       <div className="grid w-full max-w-sm gap-6">
         <div className="grid justify-items-center gap-3 text-center">
           <BrandMark />
-          <h1 className="text-h3 font-semibold tracking-tight">{title}</h1>
+          <h1 className="text-h3 font-semibold">{title}</h1>
           <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
         <form onSubmit={submit} className="grid gap-4">
