@@ -2,6 +2,12 @@ use crate::model::ChatMessage;
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// A sessão do agente que atende um chat. O pedido seguinte a retoma enquanto
+/// for o mesmo agente, o mesmo modelo e a mesma pasta, e até `turns` chegar ao
+/// teto: uma sessão longa demais volta a ficar cara, mesmo lida do cache.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentSession { pub provider: String, pub model: String, pub root: String, pub id: String, pub turns: usize }
+
 #[derive(Debug, Default)]
 pub struct MemoryManager {
     working: HashMap<String, Value>,
@@ -9,6 +15,7 @@ pub struct MemoryManager {
     project: HashMap<String, Value>,
     semantic: HashMap<String, Value>,
     conversations: HashMap<String, Vec<ChatMessage>>,
+    agent_sessions: HashMap<String, AgentSession>,
 }
 
 impl MemoryManager {
@@ -35,7 +42,11 @@ impl MemoryManager {
         self.working.clear();
         self.session.clear();
         self.conversations.remove(session_id);
+        self.agent_sessions.remove(session_id);
     }
+    pub fn agent_session(&self, session_id: &str) -> Option<&AgentSession> { self.agent_sessions.get(session_id) }
+    pub fn keep_agent_session(&mut self, session_id: &str, session: AgentSession) { self.agent_sessions.insert(session_id.to_string(), session); }
+    pub fn forget_agent_session(&mut self, session_id: &str) { self.agent_sessions.remove(session_id); }
     pub fn session_messages(&self) -> usize { self.conversations.values().map(Vec::len).sum() }
 }
 
@@ -51,7 +62,9 @@ mod tests {
 
         assert_eq!(memory.conversation("chat-a")[0].content,"A");
         assert_eq!(memory.conversation("chat-b")[0].content,"B");
+        memory.keep_agent_session("chat-a",AgentSession{provider:"claude".into(),model:"sonnet".into(),root:"/repo".into(),id:"s-1".into(),turns:1});
         memory.clear_session("chat-a");
+        assert!(memory.agent_session("chat-a").is_none(),"limpar o chat esquece a sessão do agente");
         assert!(memory.conversation("chat-a").is_empty());
         assert_eq!(memory.session_messages(),1);
     }

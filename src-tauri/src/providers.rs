@@ -29,6 +29,20 @@ pub trait Provider: Send + Sync {
     async fn chat_with_effort(&self, messages:&[ChatMessage], model:&str, _effort:Option<&str>, pulse:&Pulse) -> Result<ProviderResponse> {
         self.chat_stream(messages,model,pulse).await
     }
+
+    /// Se o provedor procura sozinho no repositório. O agente de linha de
+    /// comando abre os arquivos que precisa; mandar os arquivos inteiros no
+    /// pedido só o faz pagar por eles duas vezes.
+    fn explores(&self) -> bool { false }
+
+    /// Se o provedor sabe retomar a sessão de um pedido anterior.
+    fn resumes(&self) -> bool { false }
+
+    /// Um pedido do chat, retomando a sessão `resume` quando o provedor sabe.
+    /// Quem não sabe conversa como sempre e ignora a sessão.
+    async fn chat_turn(&self, messages:&[ChatMessage], model:&str, effort:Option<&str>, _resume:Option<&str>, pulse:&Pulse) -> Result<ProviderResponse> {
+        self.chat_with_effort(messages,model,effort,pulse).await
+    }
 }
 
 /// A pasta que os agentes de linha de comando enxergam. Eles leem o
@@ -147,7 +161,7 @@ fn jitter(span:u64)->u64 { if span==0 {return 0;} SystemTime::now().duration_sin
 
 /// O que uma resposta rendeu: o texto e a conta dos tokens.
 #[derive(Debug,Default,PartialEq)]
-struct Harvest { text:String, input_tokens:usize, output_tokens:usize }
+struct Harvest { text:String, input_tokens:usize, output_tokens:usize, cache_read_tokens:usize, cache_write_tokens:usize }
 
 /// Um erro que já não pode ser repetido. A tentativa seguinte só é honesta
 /// enquanto nada foi dito.
@@ -175,6 +189,10 @@ fn read_event(kind:&HttpKind,line:&str,harvest:&mut Harvest)->Option<String> {
     let event=serde_json::from_str::<Value>(data).ok()?;
     let tokens=|pointer:&str|event.pointer(pointer).and_then(Value::as_u64).map(|value|value as usize);
     if let Some(input)=tokens("/usage/input_tokens").or_else(||tokens("/message/usage/input_tokens")).or_else(||tokens("/usage/prompt_tokens")) { harvest.input_tokens=input; }
+    // O que o cache de prompt serviu e o que gravou nele: a Anthropic diz no
+    // `message_start`, a OpenAI dentro de `prompt_tokens_details`.
+    if let Some(read)=tokens("/message/usage/cache_read_input_tokens").or_else(||tokens("/usage/cache_read_input_tokens")).or_else(||tokens("/usage/prompt_tokens_details/cached_tokens")) { harvest.cache_read_tokens=read; }
+    if let Some(written)=tokens("/message/usage/cache_creation_input_tokens").or_else(||tokens("/usage/cache_creation_input_tokens")) { harvest.cache_write_tokens=written; }
     if let Some(output)=tokens("/usage/output_tokens").or_else(||tokens("/message/usage/output_tokens")).or_else(||tokens("/usage/completion_tokens")) { harvest.output_tokens=output; }
     match kind {
         HttpKind::OpenAi=>event.pointer("/choices/0/delta/content").and_then(Value::as_str).map(str::to_string),
@@ -183,6 +201,17 @@ fn read_event(kind:&HttpKind,line:&str,harvest:&mut Harvest)->Option<String> {
             event.pointer("/delta/text").and_then(Value::as_str).map(str::to_string)
         }
     }
+}
+
+/// As mensagens da conversa para a Anthropic, com a penúltima marcada para o
+/// cache de prompt: o histórico até ali é o mesmo do pedido anterior, e só a
+/// mensagem nova é entrada cheia. Sem histórico, nada a marcar.
+fn cached_history(chat:&[&ChatMessage])->Value {
+    let mark=chat.len().checked_sub(2);
+    Value::Array(chat.iter().enumerate().map(|(index,message)|{
+        if Some(index)==mark { json!({"role":message.role,"content":[{"type":"text","text":message.content,"cache_control":{"type":"ephemeral"}}]}) }
+        else { json!({"role":message.role,"content":message.content}) }
+    }).collect())
 }
 
 enum HttpKind { OpenAi, Anthropic }
@@ -202,11 +231,15 @@ impl HttpProvider {
                 text:body.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or_default().to_string(),
                 input_tokens:body.pointer("/usage/prompt_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
                 output_tokens:body.pointer("/usage/completion_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                cache_read_tokens:body.pointer("/usage/prompt_tokens_details/cached_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                cache_write_tokens:0,
             },
             HttpKind::Anthropic=>Harvest{
                 text:body.pointer("/content/0/text").and_then(Value::as_str).unwrap_or_default().to_string(),
                 input_tokens:body.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
                 output_tokens:body.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                cache_read_tokens:body.pointer("/usage/cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                cache_write_tokens:body.pointer("/usage/cache_creation_input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
             },
         }
     }
@@ -232,7 +265,11 @@ impl HttpProvider {
                 let base=self.config.base_url.as_deref().unwrap_or("https://api.anthropic.com/v1").trim_end_matches('/');
                 let system=messages.iter().find(|m|m.role=="system").map(|m|m.content.clone()).unwrap_or_default();
                 let chat=messages.iter().filter(|m|m.role!="system").collect::<Vec<_>>();
-                let mut payload=json!({"model":model,"max_tokens":4096,"system":system,"messages":chat});
+                // O sistema e o contexto do repositório se repetem a cada pedido
+                // do chat: marcados para o cache de prompt, a partir do segundo
+                // pedido eles custam a leitura do cache, não a entrada cheia.
+                let system=json!([{"type":"text","text":system,"cache_control":{"type":"ephemeral"}}]);
+                let mut payload=json!({"model":model,"max_tokens":4096,"system":system,"messages":cached_history(&chat)});
                 if flowing { payload["stream"]=json!(true); }
                 (format!("{base}/messages"),payload)
             }
@@ -245,11 +282,13 @@ impl HttpProvider {
         let reported=harvest.input_tokens>0||harvest.output_tokens>0;
         crate::usage::spend(crate::usage::Spend{
             input_tokens:if reported {harvest.input_tokens as u64} else {0},
+            cache_read_tokens:harvest.cache_read_tokens as u64,
+            cache_write_tokens:harvest.cache_write_tokens as u64,
             output_tokens:if reported {harvest.output_tokens as u64} else {crate::usage::estimate(&harvest.text)},
             duration_ms:started.elapsed().as_millis() as u64,
             ..crate::usage::Spend::new(format!("http:{}",self.name),model,if reported {crate::usage::Precision::Reported} else {crate::usage::Precision::Estimated})
         });
-        ProviderResponse{response:harvest.text,input_tokens:harvest.input_tokens,output_tokens:harvest.output_tokens,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()}
+        ProviderResponse{response:harvest.text,input_tokens:harvest.input_tokens,output_tokens:harvest.output_tokens,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis(),session:None}
     }
 
     fn ask(&self,url:&str,payload:&Value)->reqwest::RequestBuilder {
@@ -463,7 +502,11 @@ impl CliProvider {
     ///
     /// O esforço que o Jev escolheu entra no lugar de `{effort}`; sem ele, o
     /// argumento sai junto da flag que o anuncia e o agente usa o seu padrão.
-    fn args(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
+    #[cfg(test)] fn args(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> { self.args_resuming(model,effort,None,prompt,usage_file) }
+
+    /// A linha de comando retomando a sessão `resume`. Sem sessão, o lugar
+    /// dela sai junto da flag que o anuncia — como o esforço.
+    fn args_resuming(&self,model:&str,effort:Option<&str>,resume:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
         let inline=self.inline_for(prompt);
         let mut args=Vec::new();
         let mut given=self.config.args.iter().peekable();
@@ -472,6 +515,10 @@ impl CliProvider {
             if !inline && given.peek().is_some_and(|next|next.as_str()==PROMPT) { given.next(); continue; }
             if arg=="--fallback-model" {
                 if let Some(reserve)=given.next().filter(|reserve|reserve.as_str()!=model) { args.extend([arg.clone(),reserve.clone()]); }
+                continue;
+            }
+            if arg==crate::llm::RESUME {
+                match resume { Some(session)=>args.push(session.to_string()), None=>{ if args.last().is_some_and(|flag:&String|flag.starts_with('-')) { args.pop(); } } }
                 continue;
             }
             if arg.contains(crate::llm::EFFORT) {
@@ -485,7 +532,7 @@ impl CliProvider {
 
     /// O agente aberto, com as três pontas na mão. Um só arranque para as duas
     /// conversas: a que espera o fim e a que acompanha.
-    fn open(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
+    fn open(&self,model:&str,effort:Option<&str>,resume:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
         // O caminho achado, com extensão: no Windows `claude` sozinho não
         // abre o `claude.cmd` do npm. Sem caminho nenhum, o agente não está
@@ -495,7 +542,7 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
-        process.args(lead).args(self.args(model,effort,prompt,usage_file)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        process.args(lead).args(self.args_resuming(model,effort,resume,prompt,usage_file)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
@@ -551,15 +598,27 @@ impl Provider for CliProvider {
     }
 
     async fn chat_with_effort(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
+        self.chat_turn(messages,model,effort,None,pulse).await
+    }
+
+    fn explores(&self)->bool { true }
+    fn resumes(&self)->bool { self.config.args.iter().any(|arg|arg==crate::llm::RESUME) }
+
+    async fn chat_turn(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,resume:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
+        let resume=resume.filter(|_|self.resumes());
         let prompt=Self::prompt(messages);
         let started=Instant::now();
         let usage_file=std::env::temp_dir().join(format!("jayv-usage-{}.json",uuid::Uuid::new_v4()));
         let mut meter=crate::usage::Meter::new(&self.name,model,self.config.command.as_deref().unwrap_or(&self.name));
-        let mut child=self.open(model,effort,&prompt,&usage_file)?;
-        if let Some(mut stdin)=child.stdin.take() { stdin.write_all(prompt.as_bytes()).await?; }
+        let mut child=self.open(model,effort,resume,&prompt,&usage_file)?;
+        // O agente que sai antes de ler o pedido — falha de modelo, de login —
+        // fecha a ponta dele; o motivo vem na saída e no código de saída, não
+        // num "Broken pipe" daqui.
+        if let Some(mut stdin)=child.stdin.take() { match stdin.write_all(prompt.as_bytes()).await { Err(error) if error.kind()!=std::io::ErrorKind::BrokenPipe=>return Err(error.into()), _=>{} } }
         let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).lines();
         let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).lines();
         let (mut response,mut complaint,mut refused)=(String::new(),String::new(),None::<String>);
+        let mut session=None::<String>;
         let (mut talking,mut grumbling)=(true,true);
         let silence=self.silence();
         while talking||grumbling {
@@ -570,7 +629,7 @@ impl Provider for CliProvider {
                 tokio::select! {
                     line=talk.next_line(),if talking=>match line.context("CLI provider returned non-UTF-8 output")? {
                         None=>talking=false,
-                        Some(line)=>if let Some(reason)={ meter.read(&line); refusal(&line) } { refused=Some(reason); } else if let Some(beat)=classify(&line) {
+                        Some(line)=>if let Some(reason)={ meter.read(&line); if let Some(id)=session_of(&line) { session=Some(id); } refusal(&line) } { refused=Some(reason); } else if let Some(beat)=classify(&line) {
                             if let Beat::Chunk{text}=&beat {
                                 // Cada mensagem inteira do agente fica no seu balão.
                                 if whole_message(&line)&&!response.trim().is_empty() {
@@ -615,9 +674,16 @@ impl Provider for CliProvider {
         // A conta vai mesmo na falha: o agente que recusou no fim já gastou.
         let (input,output)=settle_meter(meter,&prompt,&response,!failed,&usage_file);
         if failed { return Err(self.failure(Some(status),refused,&complaint,&response)); }
-        Ok(ProviderResponse{response,input_tokens:input as usize,output_tokens:output as usize,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis()})
+        Ok(ProviderResponse{response,input_tokens:input as usize,output_tokens:output as usize,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis(),session})
     }
 }
+/// A sessão que o agente anuncia na própria saída: o `session_id` do Claude
+/// (no `init` e no `result`) e o `thread_id` do Codex (`thread.started`).
+fn session_of(line:&str)->Option<String> {
+    let event=serde_json::from_str::<Value>(line.trim()).ok()?;
+    ["session_id","thread_id"].iter().find_map(|key|event.get(key).and_then(Value::as_str)).map(str::trim).filter(|id|!id.is_empty()).map(str::to_string)
+}
+
 /// Fecha a conta da execução com o que o agente gravou no arquivo de uso, se
 /// gravou, e apaga o arquivo.
 fn settle_meter(meter:crate::usage::Meter,prompt:&str,response:&str,success:bool,usage_file:&std::path::Path)->(u64,u64) {
@@ -748,6 +814,24 @@ mod tests {
         assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ola\"}}",&mut gathered),Some("ola".into()));
         assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}",&mut gathered),None);
         assert_eq!((gathered.input_tokens,gathered.output_tokens),(9,4));
+        assert_eq!(read_event(&HttpKind::Anthropic,"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9,\"cache_read_input_tokens\":800,\"cache_creation_input_tokens\":40}}}",&mut gathered),None);
+        assert_eq!((gathered.cache_read_tokens,gathered.cache_write_tokens),(800,40));
+    }
+
+    /// O sistema e o histórico até a penúltima mensagem vão marcados para o
+    /// cache de prompt da Anthropic; a mensagem nova não.
+    #[test] fn the_anthropic_request_marks_the_repeated_prefix_for_the_prompt_cache() {
+        let provider=HttpProvider::anthropic("anthropic".into(),config("anthropic"));
+        let messages=[
+            ChatMessage{role:"system".into(),content:"instructions".into()},
+            ChatMessage{role:"user".into(),content:"first".into()},
+            ChatMessage{role:"assistant".into(),content:"answer".into()},
+            ChatMessage{role:"user".into(),content:"second".into()},
+        ];
+        let (_,payload)=provider.compose(&messages,"claude-sonnet-5-5",false);
+        assert_eq!(payload.pointer("/system/0/cache_control/type").and_then(Value::as_str),Some("ephemeral"));
+        assert_eq!(payload.pointer("/messages/1/content/0/cache_control/type").and_then(Value::as_str),Some("ephemeral"));
+        assert_eq!(payload.pointer("/messages/2/content").and_then(Value::as_str),Some("second"),"a mensagem nova vai sem marca");
     }
 
     /// Comentário, batida de coração e despedida não são resposta. Tratá-los
@@ -888,6 +972,26 @@ mod tests {
     /// Um pedido com histórico e contexto estoura a linha de comando: 32.767
     /// caracteres no Windows (erro 206), 128 KB por argumento no Linux. Ele vai
     /// pela entrada padrão, e o `-p` sai junto com o lugar do pedido.
+    /// O pedido seguinte do chat retoma a sessão do anterior; sem sessão, a
+    /// flag sai junto com o lugar dela e o agente abre uma sessão nova.
+    #[test] fn the_next_request_resumes_the_agent_session_of_the_chat() {
+        let provider=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--print".into(),"--resume".into(),crate::llm::RESUME.into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
+        assert!(provider.resumes());
+        assert!(provider.explores());
+        assert_eq!(provider.args_resuming("sonnet",None,Some("abc-123"),"oi",std::path::Path::new("u.json")),["--print","--resume","abc-123","--model","sonnet"]);
+        assert_eq!(provider.args_resuming("sonnet",None,None,"oi",std::path::Path::new("u.json")),["--print","--model","sonnet"]);
+        let plain=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["exec".into()],..config("cli")},workdir:Workdir::default()};
+        assert!(!plain.resumes(),"agente sem o lugar da sessão não retoma");
+    }
+
+    #[test] fn the_session_is_read_from_what_the_agent_announces() {
+        assert_eq!(session_of(r#"{"type":"system","subtype":"init","session_id":"s-1"}"#).as_deref(),Some("s-1"));
+        assert_eq!(session_of(r#"{"type":"result","session_id":"s-2","result":"ok"}"#).as_deref(),Some("s-2"));
+        assert_eq!(session_of(r#"{"type":"thread.started","thread_id":"t-9"}"#).as_deref(),Some("t-9"));
+        assert_eq!(session_of("texto puro"),None);
+        assert_eq!(session_of(r#"{"type":"result","session_id":""}"#),None);
+    }
+
     #[test] fn a_long_request_goes_through_stdin_instead_of_the_argument() {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("copilot".into()),args:vec!["-p".into(),"{prompt}".into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         let long="x".repeat(INLINE_LIMIT+1);

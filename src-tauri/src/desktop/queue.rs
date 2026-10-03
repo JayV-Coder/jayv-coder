@@ -139,7 +139,18 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or(None);
     let paired=origin.map(|origin|asking::pair(&i18n::for_model(&origin),prompt));
     let request=paired.as_deref().unwrap_or(prompt);
-    let entry=entry_check(&project,turn,request,state.orchestrator.expertise).await;
+    // O `process` torna a anotar o pedido na memória da sessão, e ele já está
+    // no banco desde o envio: sem esta poda o modelo receberia a mesma linha
+    // duas vezes no histórico.
+    if let Err(error)=forget_pending_prompt(&mut state,workspace,chat_id).await {eprintln!("fila: histórico da sessão desalinhado ({error})");}
+    // A portaria e o roteamento do Jev saem juntos: são duas idas à rede que
+    // não dependem uma da outra, e o pedido não espera uma depois da outra.
+    // Se a portaria barrar, a leitura de roteamento é descartada.
+    let routing=state.orchestrator.routes_with_jev().then(||state.orchestrator.routing_input_ahead(request,chat_id));
+    let (entry,routing)=tokio::join!(
+        entry_check(&project,turn,request,state.orchestrator.expertise),
+        async { match &routing { Some(input)=>Some(jev::route(input).await.map_err(|error|error.to_string())), None=>None } },
+    );
     {
         let mut workspace=workspace.lock().await;
         let _=workspace.record_entry_check(&entry);
@@ -167,11 +178,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     state.orchestrator.pending_gate_note=entry.clarifying_note();
     state.orchestrator.pending_gate_passed=Some(entry.verdict==EntryVerdict::Pass);
     state.orchestrator.pending_brief=entry.refined_prompt(request);
-
-    // O `process` torna a anotar o pedido na memória da sessão, e ele já está
-    // no banco desde o envio: sem esta poda o modelo receberia a mesma linha
-    // duas vezes no histórico.
-    if let Err(error)=forget_pending_prompt(&mut state,workspace,chat_id).await {eprintln!("fila: histórico da sessão desalinhado ({error})");}
+    state.orchestrator.pending_routing=routing;
 
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
     let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||i18n::notice(&[Text::new("turn.noAnswer")]));

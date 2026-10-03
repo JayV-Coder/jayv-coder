@@ -1,5 +1,6 @@
 import type { CoreSettings, CoreSnapshot } from "@/modules/core";
 import { useT } from "@/modules/i18n";
+import { showChanges } from "@/modules/changelog";
 import { updateCore } from "@/modules/settings";
 import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
@@ -46,7 +47,12 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
       </SettingsSection>
 
       <SettingsSection title={t("app.section.version")} description={t("app.version", { version: snapshot.version })}
-        action={<Button variant="outline" disabled={checking} onClick={() => void check()}>{t(checking ? "app.checking" : "app.checkUpdates")}</Button>}>
+        action={(
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={() => void showChanges()}>{t("app.whatsNew")}</Button>
+            <Button variant="outline" disabled={checking} onClick={() => void check()}>{t(checking ? "app.checking" : "app.checkUpdates")}</Button>
+          </div>
+        )}>
         <p className="text-xs text-muted-foreground">{t("app.updates.hint")}</p>
       </SettingsSection>
     </div>
