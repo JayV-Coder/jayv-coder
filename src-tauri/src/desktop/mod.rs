@@ -140,7 +140,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             system::system_status,
             gate::gate_feed,gate::scoped_gate_feed,
             files::open_file,
-            repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,
+            repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,repositories::repository_states,
             usage::usage_report,usage::chat_usage,usage::refresh_quotas,
             memory::project_memory,memory::save_project_note,memory::delete_project_note,memory::search_chats,
         ])

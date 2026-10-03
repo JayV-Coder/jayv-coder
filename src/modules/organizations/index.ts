@@ -10,6 +10,7 @@ export * from "./checkout";
 export * from "./local";
 export * from "./filter";
 export * from "./dashboard";
+export * from "./repositories";
 
 import type { Role } from "./rules";
 import { connectDashboard } from "./dashboard";
@@ -151,6 +152,22 @@ export async function organizationRepositories(id: string): Promise<Repository[]
   const { data, error } = await supabase.from("organization_repositories").select("id, provider, path, repo_key").eq("org_id", id).order("repo_key");
   if (error) throw failure(error);
   return (data ?? []).map((row) => ({ id: row.id, provider: row.provider as Provider, path: row.path, repoKey: row.repo_key }));
+}
+
+/** Os repositórios da organização e as políticas dela, para o painel do chat
+ * da organização. Sem rede (ou sem a migração), volta vazio: o painel mostra
+ * só o que o git diz. */
+export async function organizationRules(orgId: string): Promise<{ repositories: Repository[]; policies: StoredPolicy[] }> {
+  try {
+    const [repositories, policies] = await Promise.all([
+      organizationRepositories(orgId),
+      supabase.from("organization_llm_policies").select("*").eq("org_id", orgId)
+        .then(({ data, error }) => (error ? [] : (data ?? []).map((row) => storedPolicy(row as Row)))),
+    ]);
+    return { repositories, policies };
+  } catch {
+    return { repositories: [], policies: [] };
+  }
 }
 
 export function openOrganization(id: string, tab: OrganizationTab = "projects") {
