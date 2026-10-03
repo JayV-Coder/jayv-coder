@@ -60,6 +60,7 @@ export interface TurnRoute {
   /** Vazio nos turnos narrados antes de o modo existir. */
   mode: RouteMode | null;
   agent: string | null;
+  switched?: ModeSwitch | null;
 }
 
 export interface Question {
@@ -82,6 +83,20 @@ export interface Chat {
   question: Question | null;
   createdAt: string;
   updatedAt: string;
+  /** O modo fixado no chat: `auto` deixa o Jev escolher a cada pedido. */
+  workMode: WorkMode;
+}
+
+/** O modo de trabalho do chat: o Jev escolhe, só planejamento ou desenvolvimento. */
+export type WorkMode = "auto" | RouteMode;
+export const WORK_MODES: WorkMode[] = ["auto", "plan", "build"];
+
+/** O Jev tirou o chat do modo em que ele estava: de onde e por quê. */
+export interface ModeSwitch {
+  from: "auto" | "plan";
+  /** `asked`: estava em planejamento e o pedido é para implementar;
+   * `repeated`: no automático, o pedido para implementar veio de novo. */
+  reason: "asked" | "repeated";
 }
 
 export interface WorkspaceData {

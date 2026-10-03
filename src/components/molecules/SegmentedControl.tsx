@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export interface SegmentedOption<T extends string> { value: T; label: string; icon?: ReactNode }
+export interface SegmentedOption<T extends string> { value: T; label: string; icon?: ReactNode; hint?: string }
 
 /** Um grupo de botões em que um só fica marcado: a superfície neutra por
  * fora, o escolhido em relevo por dentro. */
@@ -19,7 +19,7 @@ export function SegmentedControl<T extends string>({ label, value, options, onCh
           key={option.value}
           type="button"
           aria-pressed={value === option.value}
-          title={option.label}
+          title={option.hint ?? option.label}
           onClick={() => onChange(option.value)}
           className={cn(
             "flex h-7 items-center gap-1.5 rounded-sm border border-transparent px-2.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",

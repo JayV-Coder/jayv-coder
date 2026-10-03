@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fuzzyMatch, shortcutFor } from "./index";
+import { fuzzyMatch, modeCommand, shortcutFor } from "./index";
 
 const key = (value: string, extra: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; isComposing: boolean }> = {}) =>
   ({ key: value, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...extra });
@@ -38,5 +38,32 @@ describe("fuzzyMatch", () => {
     const tight = fuzzyMatch("set", "Settings")!.score;
     const loose = fuzzyMatch("set", "Select theme")!.score;
     expect(tight).toBeGreaterThan(loose);
+  });
+});
+
+describe("modeCommand", () => {
+  it("entende os três modos e os apelidos em português", () => {
+    expect(modeCommand("/plan")).toEqual({ mode: "plan", rest: "" });
+    expect(modeCommand("  /BUILD ")).toEqual({ mode: "build", rest: "" });
+    expect(modeCommand("/auto")).toEqual({ mode: "auto", rest: "" });
+    expect(modeCommand("/planejar")?.mode).toBe("plan");
+    expect(modeCommand("/desenvolver")?.mode).toBe("build");
+  });
+
+  it("separa o pedido que vem junto do comando", () => {
+    expect(modeCommand("/build adicione o teste do roteador\ne rode")).toEqual({ mode: "build", rest: "adicione o teste do roteador\ne rode" });
+  });
+
+  it("deixa passar o que não é comando de modo", () => {
+    expect(modeCommand("/why")).toBeNull();
+    expect(modeCommand("planeje /plan")).toBeNull();
+    expect(modeCommand("/planning")).toBeNull();
+    expect(modeCommand("/")).toBeNull();
+  });
+});
+
+describe("atalho de modo", () => {
+  it("Ctrl+. troca o modo do chat", () => {
+    expect(shortcutFor(key(".", { ctrlKey: true }), false)).toBe("workMode");
   });
 });

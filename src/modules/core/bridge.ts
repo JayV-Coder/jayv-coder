@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
-  ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnUsage, UsageReport, UsageScope, WorkspaceData,
+  ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
 
@@ -15,6 +15,7 @@ export const commands = {
   organizationProject: (orgId: string, name: string, folder: string) => invoke<Project>("organization_project", { orgId, name, folder }),
   createChat: (projectId: string, title: string | null = null) => invoke<Chat>("create_chat", { projectId, title }),
   clearChat: (chatId: string) => invoke<void>("clear_chat", { chatId }),
+  setWorkMode: (chatId: string, mode: WorkMode) => invoke<void>("set_work_mode", { chatId, mode }),
   deleteChat: (chatId: string) => invoke<void>("delete_chat", { chatId }),
   deleteProject: (projectId: string) => invoke<void>("delete_project", { projectId }),
   enqueuePrompt: (input: string, sessionId: string, turnId: string | null = null) =>

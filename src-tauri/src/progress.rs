@@ -12,6 +12,13 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+/// O Jev trocou o modo do chat por conta própria: de onde ele saiu (`auto`
+/// ou `plan`) e por quê (`asked`: o chat estava em planejamento e o pedido é
+/// para implementar; `repeated`: no automático, o desenvolvedor pediu para
+/// implementar de novo e o pedido anterior tinha ficado em planejamento).
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,serde::Deserialize)]
+pub struct ModeSwitch { pub from:String, pub reason:String }
+
 /// Um sinal de vida do turno. O `Chunk` é a resposta crescendo; os outros são
 /// etapas com nome próprio, e é por isso que cada um vira uma linha no log
 /// enquanto o `Chunk` vira texto acumulado.
@@ -22,8 +29,9 @@ pub enum Beat {
     Read{intent:String,complexity:String,source:String},
     Context{files:usize,tokens:usize},
     /// Quem atende: o agente (CLI), o modelo dele, o modo — `plan` ou
-    /// `build` — e o papel que o Jev deu ao agente.
-    Route{provider:String,model:String,reason:String,mode:String,agent:Option<String>},
+    /// `build` — e o papel que o Jev deu ao agente. `switched` vem quando o
+    /// Jev tirou o chat do modo em que estava, para o balão dizer e desfazer.
+    Route{provider:String,model:String,reason:String,mode:String,agent:Option<String>,#[serde(skip_serializing_if="Option::is_none")] switched:Option<ModeSwitch>},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -143,13 +151,16 @@ mod tests {
     /// Cada etapa se descreve sozinha no JSON: a tela desenha a linha sem um
     /// formato por tipo de evento.
     #[test] fn the_detail_carries_its_own_kind() {
-        let beat=Beat::Route{provider:"claude".into(),model:"claude-sonnet-4-5".into(),reason:"melhor pontuação".into(),mode:"plan".into(),agent:Some("reviewer".into())};
+        let beat=Beat::Route{provider:"claude".into(),model:"claude-sonnet-4-5".into(),reason:"melhor pontuação".into(),mode:"plan".into(),agent:Some("reviewer".into()),switched:None};
         let detail=beat.detail();
         assert_eq!(detail["kind"],"route");
         assert_eq!(detail["model"],"claude-sonnet-4-5");
         assert_eq!(detail["mode"],"plan");
         assert_eq!(detail["agent"],"reviewer");
         assert_eq!(beat.kind(),"route");
+        assert!(detail.get("switched").is_none(),"sem troca, o campo nem aparece");
+        let switched=Beat::Route{provider:"claude".into(),model:"sonnet".into(),reason:String::new(),mode:"build".into(),agent:None,switched:Some(ModeSwitch{from:"plan".into(),reason:"asked".into()})}.detail();
+        assert_eq!(switched["switched"]["from"],"plan");
     }
 
     /// Muitos pedaços pequenos e nenhum tempo decorrido dão uma escrita só. Era
