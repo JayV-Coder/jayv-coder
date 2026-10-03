@@ -129,6 +129,10 @@ fn repositories(folder:&Path)->Vec<(PathBuf,Vec<String>)> {
     found
 }
 
+/// As pastas de repositório dentro de `folder` (ela mesma, as filhas e as
+/// netas), sem descer dentro de um repositório.
+pub fn repository_dirs(folder:&Path)->Vec<PathBuf> {repositories(folder).into_iter().map(|(dir,_)|dir).collect()}
+
 /// Os clones dos repositórios `wanted` dentro de `folder`. Cada chave aparece
 /// uma vez, no clone mais raso.
 pub fn scan(folder:&Path,wanted:&[String])->Vec<FoundRepository> {

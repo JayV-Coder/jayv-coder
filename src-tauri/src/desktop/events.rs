@@ -15,6 +15,9 @@ pub const BEAT_EVENT:&str="turn-beat";
 /// Um pedaço da resposta. Vai para a tela a cada chegada e para o disco com
 /// folga: são dois ritmos diferentes de propósito.
 pub const CHUNK_EVENT:&str="turn-chunk";
+/// Um arquivo da pasta do chat mudou durante o pedido (ou, com `file` nulo,
+/// um pedido novo começou a olhar a pasta).
+pub const LIVE_EVENT:&str="live-file";
 /// A conexão com o Supabase mudou: online, offline, sessão vencida, sem login.
 pub const LINK_EVENT:&str="link-changed";
 /// Chegaram idiomas ou traduções novos no cache.
@@ -68,3 +71,7 @@ pub struct UsageEvent{pub project_id:Option<String>,pub chat_id:Option<String>}
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct QuotaEvent{pub quota:crate::usage::Quota,pub crossed:Option<u8>}
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct LiveEvent{pub chat_id:String,pub turn_id:String,pub file:Option<crate::live_files::Change>}

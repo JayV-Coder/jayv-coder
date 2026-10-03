@@ -6,6 +6,7 @@
 mod books;
 pub mod commands;
 pub mod events;
+mod live;
 mod queue;
 
 use crate::cloud::remote::{Backend, Remote};
@@ -107,6 +108,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(desk).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
+        .manage(live::SharedLive::default())
         .setup(move |app|{
             // Em desenvolvimento e no AppImage o esquema `jayv://` não vem do
             // instalador: registra na partida. Falhar só desliga o login pelo
@@ -140,6 +142,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             system::system_status,
             gate::gate_feed,gate::scoped_gate_feed,
             files::open_file,
+            live::live_files,live::live_file,live::editors,live::open_in_editor,
             repositories::scan_repositories,repositories::clone_repository,repositories::folder_repo_keys,repositories::repository_states,
             usage::usage_report,usage::chat_usage,usage::refresh_quotas,
             memory::project_memory,memory::save_project_note,memory::delete_project_note,memory::search_chats,
