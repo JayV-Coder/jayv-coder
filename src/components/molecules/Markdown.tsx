@@ -1,28 +1,55 @@
 import { Fragment, useMemo } from "react";
+import { FileCodeIcon } from "lucide-react";
 import { parseMarkdown, type Inline } from "@/modules/conversation";
 import { useT } from "@/modules/i18n";
 import { CodeBlock } from "./CodeBlock";
 
 type OpenFile = (path: string) => void;
 
-function Inlines({ items, onOpenFile }: { items: Inline[]; onOpenFile?: OpenFile }) {
+/** O caminho em três partes: a pasta, o nome e o `:linha` do fim. */
+function pathParts(text: string) {
+  const line = text.match(/(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$/)?.[0] ?? "";
+  const path = line ? text.slice(0, -line.length) : text;
+  const slash = path.lastIndexOf("/");
+  return { dir: path.slice(0, slash + 1), name: path.slice(slash + 1), line };
+}
+
+/** O arquivo citado na resposta, como selo: pasta apagada, nome em destaque.
+ * Com `onOpenFile`, abre o arquivo no app do sistema. */
+function FileRef({ text, path, onOpenFile }: { text: string; path: string; onOpenFile?: OpenFile }) {
   const t = useT();
+  const { dir, name, line } = pathParts(text);
+  const body = (
+    <>
+      <FileCodeIcon aria-hidden="true" />
+      {dir && <span className="file-dir">{dir}</span>}
+      <span className="file-name">{name}</span>
+      {line && <span className="file-line">{line}</span>}
+    </>
+  );
+  return onOpenFile
+    ? <button type="button" className="file-ref" title={t("chat.openFile", { path })} onClick={() => onOpenFile(path)}>{body}</button>
+    : <span className="file-ref" title={path}>{body}</span>;
+}
+
+/** O item de lista que não diz nada além de um arquivo. */
+const onlyFile = (items: Inline[]) => items.some((item) => item.type === "file") && items.every((item) => item.type === "file" || (item.type === "text" && !item.text.trim()));
+
+function Inlines({ items, onOpenFile }: { items: Inline[]; onOpenFile?: OpenFile }) {
   return items.map((item, index) => {
     switch (item.type) {
       case "strong": return <strong key={index}>{item.text}</strong>;
       case "code": return <code key={index}>{item.text}</code>;
-      case "file": return onOpenFile
-        ? <button key={index} type="button" className="file-ref" title={t("chat.openFile", { path: item.path })} onClick={() => onOpenFile(item.path)}><code>{item.text}</code></button>
-        : <code key={index}>{item.text}</code>;
+      case "file": return <FileRef key={index} text={item.text} path={item.path} onOpenFile={onOpenFile} />;
       case "link": return <a key={index} href={item.href} target="_blank" rel="noreferrer">{item.text}</a>;
       default: return <Fragment key={index}>{item.text}</Fragment>;
     }
   });
 }
 
-/** A resposta do modelo, montada bloco a bloco a partir do Markdown. Com
- * `onOpenFile`, os caminhos citados em `código` viram botões que abrem o
- * arquivo. */
+/** A resposta do modelo, montada bloco a bloco a partir do Markdown. Os
+ * caminhos citados, em `código` ou soltos no texto, viram selos de arquivo; com
+ * `onOpenFile`, cada selo abre o arquivo. */
 export function Markdown({ content, onOpenFile }: { content: string; onOpenFile?: OpenFile }) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   return (
@@ -36,7 +63,8 @@ export function Markdown({ content, onOpenFile }: { content: string; onOpenFile?
           case "paragraph": return <p key={index}><Inlines items={block.inline} onOpenFile={onOpenFile} /></p>;
           case "list": {
             const Tag = block.ordered ? "ol" : "ul";
-            return <Tag key={index}>{block.items.map((item, at) => <li key={at}><Inlines items={item} onOpenFile={onOpenFile} /></li>)}</Tag>;
+            const files = !block.ordered && block.items.every(onlyFile);
+            return <Tag key={index} className={files ? "file-list" : undefined}>{block.items.map((item, at) => <li key={at}><Inlines items={item} onOpenFile={onOpenFile} /></li>)}</Tag>;
           }
           case "quote": return <blockquote key={index}><Inlines items={block.inline} onOpenFile={onOpenFile} /></blockquote>;
           case "rule": return <hr key={index} />;
