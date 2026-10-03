@@ -329,7 +329,12 @@
   }
 
   /* A resposta do modelo, em Markdown já montado. */
-  .prose-answer { @apply leading-relaxed; }
+  /* Nada da resposta passa da borda do balão: palavra, link ou caminho sem
+     espaço quebra onde for preciso; tabela e bloco de código rolam por dentro. */
+  .prose-answer { @apply leading-relaxed; min-width: 0; overflow-wrap: anywhere; }
+  .prose-answer table { overflow-wrap: normal; }
+  .prose-answer td { min-width: 12ch; }
+  .prose-answer th, .prose-answer td .file-ref, .prose-answer td :not(pre) > code { white-space: nowrap; }
   .prose-answer > :first-child { margin-top: 0; }
   .prose-answer > :last-child { margin-bottom: 0; }
   .prose-answer p { white-space: pre-wrap; margin: 0 0 12px; }

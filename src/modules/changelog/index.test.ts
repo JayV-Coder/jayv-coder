@@ -3,7 +3,7 @@ import { en } from "@/modules/i18n/messages/en";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
 
-const { RELEASES, compareVersions, releasesUpTo, unseenReleases } = await import("./index");
+const { RELEASES, compareVersions, releaseFromNotes, releasesUpTo, unseenReleases } = await import("./index");
 
 const release = (version: string) => ({ version, date: "2026-10-02", items: [] });
 const history = [release("1.2.0"), release("1.1.1"), release("1.1.0"), release("1.0.0")];
@@ -53,5 +53,24 @@ describe("RELEASES", () => {
         expect(Object.keys(en)).toContain(`whatsNew.item.${id}.detail`);
       }
     }
+  });
+});
+
+describe("releaseFromNotes", () => {
+  it("lê as novidades que o release.yml põe nas notas, com o inglês de cada item", async () => {
+    const { createRequire } = await import("node:module");
+    const { whatsNewComment } = createRequire(import.meta.url)("../../../.github/scripts/whats-new.cjs");
+    const notes = `Instaladores do JayV.\n\n<!-- source: abc -->\n${whatsNewComment()}`;
+    const found = releaseFromNotes(notes);
+    expect(found?.version).toBe(RELEASES[0].version);
+    expect(found?.items.map((item) => item.id)).toEqual(RELEASES[0].items.map((item) => item.id));
+    const first = RELEASES[0].items[0];
+    expect(found?.items[0].title).toBe(en[`whatsNew.item.${first.id}.title` as keyof typeof en]);
+  });
+
+  it("notas sem o trecho, ou com ele quebrado, não dão nada", () => {
+    expect(releaseFromNotes("- v0.1: coisas")).toBeNull();
+    expect(releaseFromNotes("<!-- whats-new: bm9wZQ== -->")).toBeNull();
+    expect(releaseFromNotes(null)).toBeNull();
   });
 });

@@ -38,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.release.outputs.result }}
+      body: ${{ steps.release.outputs.body }}
     steps:
       # O histórico inteiro: as notas saem do `git log` entre dois releases.
       - uses: actions/checkout@v4
@@ -94,7 +95,11 @@ jobs:
               ...(changes.length ? changes : ["- Nenhuma mudança registrada."]),
               "",
               `<!-- source: ${context.sha} -->`,
+              // As novidades desta versão para a janela "Novidades" do app
+              // instalado, que as mostra antes de atualizar.
+              require("./.github/scripts/whats-new.cjs").whatsNewComment(),
             ].join("\n");
+            core.setOutput("body", body);
 
             if (found) {
               core.notice(`Atualizando os instaladores e as notas do release ${tag}.`);
@@ -168,6 +173,9 @@ jobs:
           owner: ${{ env.RELEASES_OWNER }}
           repo: ${{ env.RELEASES_REPO }}
           releaseId: ${{ needs.prepare.outputs.release_id }}
+          # As notas do `latest.json` são o corpo do release, com as novidades
+          # desta versão que o app lê antes de atualizar.
+          releaseBody: ${{ needs.prepare.outputs.body }}
           tauriScript: npm run tauri
           args: ${{ matrix.args }}
 

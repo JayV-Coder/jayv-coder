@@ -11,6 +11,10 @@ export interface ReleaseItem {
   kind: ChangeKind;
   /** Pedaço da chave do i18n: `whatsNew.item.<id>.title` / `.detail`. */
   id: string;
+  /** O inglês do item, quando ele vem de uma versão que este app ainda não
+   * conhece (as notas do release novo): vale enquanto a chave não existe. */
+  title?: string | null;
+  detail?: string | null;
 }
 
 export interface Release {
@@ -21,6 +25,13 @@ export interface Release {
 }
 
 export const RELEASES: Release[] = [
+  {
+    version: "0.44.2", date: "2026-10-03",
+    items: [
+      { kind: "fix", id: "upcomingNotes" },
+      { kind: "fix", id: "chatFits" },
+    ],
+  },
   {
     version: "0.44.1", date: "2026-10-03",
     items: [
