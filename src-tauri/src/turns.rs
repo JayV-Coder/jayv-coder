@@ -276,6 +276,8 @@ pub struct TurnRoute {
     pub model:String,
     #[serde(default)] pub mode:Option<String>,
     #[serde(default)] pub agent:Option<String>,
+    /// O Jev trocou o modo do chat neste pedido.
+    #[serde(default,skip_serializing_if="Option::is_none")] pub switched:Option<crate::progress::ModeSwitch>,
 }
 
 /// Uma linha da narração do turno, como a tela a lê.

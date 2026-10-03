@@ -56,7 +56,13 @@ pub struct ChatRecord {
     pub question: Option<QuestionView>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// O modo que o desenvolvedor fixou para o chat: `auto` (o Jev escolhe a
+    /// cada pedido), `plan` ou `build`. Fica só nesta máquina.
+    #[serde(default="auto_mode")]
+    pub work_mode: String,
 }
+
+fn auto_mode()->String { crate::orchestrator::MODE_AUTO.into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all="camelCase")]
@@ -154,6 +160,7 @@ impl WorkspaceStore {
         crate::llm::ensure(&connection)?;
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
+        ensure_chat_work_mode(&connection)?;
         ensure_turn_partial(&connection)?;
         ensure_turn_local(&connection)?;
         ensure_message_uid(&connection)?;
@@ -181,12 +188,12 @@ impl WorkspaceStore {
         };
         let projects=project_rows.into_iter().map(|(id,name,root_path,created_at,keys,org_id)|Ok(ProjectRecord{id,name,root_path,created_at:parse_time(&created_at)?,repo_keys:serde_json::from_str(&keys).unwrap_or_default(),org_id})).collect::<Result<Vec<_>>>()?;
         let chat_rows={
-            let mut statement=self.connection.prepare("SELECT id,code,project_id,title,created_at,updated_at FROM chats ORDER BY updated_at DESC,id")?;
-            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+            let mut statement=self.connection.prepare("SELECT id,code,project_id,title,created_at,updated_at,work_mode FROM chats ORDER BY updated_at DESC,id")?;
+            statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let mut chats=Vec::with_capacity(chat_rows.len());
-        for (id,code,project_id,title,created_at,updated_at) in chat_rows {
-            chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?});
+        for (id,code,project_id,title,created_at,updated_at,work_mode) in chat_rows {
+            chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode});
         }
         Ok(WorkspaceData{projects,chats})
     }
@@ -267,7 +274,7 @@ impl WorkspaceStore {
         anyhow::ensure!(self.project_exists(project_id)?,Text::new("project.notFound"));
         let now=Utc::now();
         let title=title.unwrap_or_default().trim().to_string();
-        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title,messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now};
+        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title,messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now,work_mode:auto_mode()};
         self.connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",params![chat.id,chat.code,chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
         Ok(chat)
     }
@@ -375,6 +382,19 @@ impl WorkspaceStore {
     pub fn rename_chat(&mut self, chat_id: &str, title: &str) -> Result<()> {
         let title=compact_title(title);
         anyhow::ensure!(self.connection.execute("UPDATE chats SET title=?1,named=1 WHERE id=?2",params![title,chat_id])?>0,Text::new("chat.notFound"));
+        Ok(())
+    }
+
+    /// O modo fixado no chat; chat sem modo gravado fica no automático.
+    pub fn work_mode(&self, chat_id: &str) -> Result<String> {
+        Ok(self.connection.query_row("SELECT work_mode FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).optional()?.unwrap_or_else(auto_mode))
+    }
+
+    /// Fixa o modo do chat. Como o título, não mexe no `updated_at`: trocar
+    /// de modo não é conversa e não reordena a lista.
+    pub fn set_work_mode(&mut self, chat_id: &str, mode: &str) -> Result<()> {
+        let mode=crate::orchestrator::work_mode(mode).with_context(||format!("unknown work mode `{mode}`"))?;
+        anyhow::ensure!(self.connection.execute("UPDATE chats SET work_mode=?1 WHERE id=?2",params![mode,chat_id])?>0,Text::new("chat.notFound"));
         Ok(())
     }
 
@@ -643,6 +663,15 @@ fn ensure_project_repo_keys(connection:&Connection)->Result<()> {
 fn ensure_project_org(connection:&Connection)->Result<()> {
     if connection.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name='org_id'")?.exists([])? {return Ok(());}
     connection.execute_batch("ALTER TABLE projects ADD COLUMN org_id TEXT")?;
+    Ok(())
+}
+
+/// O modo do chat nos bancos antigos: todo chat que já existia segue no
+/// automático, que era o único jeito antes.
+fn ensure_chat_work_mode(connection:&Connection)->Result<()> {
+    if !connection.prepare("SELECT 1 FROM pragma_table_info('chats') WHERE name='work_mode'")?.exists([])? {
+        connection.execute_batch("ALTER TABLE chats ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'auto'")?;
+    }
     Ok(())
 }
 
@@ -1200,7 +1229,7 @@ mod tests {
 
         let turns=store.snapshot().expect("snapshot").chats[0].turns.clone();
         let route=|id:&str|turns.iter().find(|view|view.id==id).and_then(|view|view.route.clone());
-        assert_eq!(route(&turn.id),Some(turns::TurnRoute{provider:"codex".into(),model:"gpt-5.5".into(),mode:Some("build".into()),agent:Some("developer".into())}));
+        assert_eq!(route(&turn.id),Some(turns::TurnRoute{provider:"codex".into(),model:"gpt-5.5".into(),mode:Some("build".into()),agent:Some("developer".into()),switched:None}));
         assert_eq!(route(&old.id).map(|route|(route.model,route.mode)),Some(("sonnet".into(),None)));
     }
 
@@ -1257,6 +1286,20 @@ mod tests {
         assert_eq!(renamed.updated_at,moment,"rebatizar não é movimento de conversa");
         assert!(store.rename_chat("chat-que-não-existe","Título").is_err());
         assert_eq!(saved.chats[0].id,newer.id,"o chat mais recente continua no topo");
+    }
+
+    #[test]
+    fn a_chat_keeps_the_work_mode_it_was_given() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        assert_eq!((chat.work_mode.as_str(),store.work_mode(&chat.id).expect("modo").as_str()),("auto","auto"));
+        store.set_work_mode(&chat.id,"plan").expect("plan");
+        assert_eq!(store.snapshot().expect("snapshot").chats[0].work_mode,"plan");
+        assert!(store.set_work_mode(&chat.id,"sprint").is_err(),"só os três modos");
+        assert!(store.set_work_mode("chat-que-não-existe","build").is_err());
+        assert_eq!(store.work_mode(&chat.id).expect("modo"),"plan");
     }
 
 }

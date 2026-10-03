@@ -4,7 +4,7 @@ import type { Aspect, Chat, Message, Project, TurnView } from "@/modules/core";
 import { messageLight, sendPrompt, useConversation } from "@/modules/conversation";
 import { useLocale, useT } from "@/modules/i18n";
 import { formatCost, formatDuration, formatTokens, useUsage } from "@/modules/usage";
-import { openFile, openTurns } from "@/modules/workspace";
+import { openFile, openTurns, setWorkMode } from "@/modules/workspace";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MessageBubble } from "./MessageBubble";
@@ -76,6 +76,10 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
   const sent = chat?.messages.filter((message) => message.role === "user").length ?? 0;
   const blocks = blocksOf(chat?.messages ?? [], turns);
   const grouped = new Set(blocks.map((block) => block.turn?.id).filter(Boolean));
+  // Só a troca de modo mais recente do Jev pode ser desfeita, e só enquanto o
+  // chat continua no modo em que ela o deixou.
+  const lastSwitch = [...(chat?.turns ?? [])].reverse().find((turn) => turn.route?.switched);
+  const undoable = chat?.workMode === "build" ? lastSwitch?.id : undefined;
 
   const toBottom = (smooth = false) => {
     const element = scroller.current;
@@ -131,6 +135,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
                         turn={turn}
                         meta={message.role === "assistant" && message.turnId ? meta(message.turnId) : undefined}
                         onRetry={turn ? () => retry(turn.id) : undefined}
+                        onUndoMode={chat && turn && turn.id === undoable && turn.route?.switched ? () => void setWorkMode(chat.id, turn.route?.switched?.from ?? "auto") : undefined}
                         onOpenFile={project?.rootPath ? (path) => void openFile(chat.id, path) : undefined}
                       />
                     ))}

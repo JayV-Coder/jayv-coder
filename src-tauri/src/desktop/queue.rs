@@ -213,7 +213,15 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         }
     }
 
+    // O modo do chat é lido agora, na vez do pedido: trocar de modo com
+    // pedidos na fila vale para eles também.
+    state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
+    // O Jev tirou o chat do planejamento: o chat fica em build até o
+    // desenvolvedor desfazer ou escolher outro modo.
+    if state.orchestrator.mode_switch.take().is_some() {
+        if let Err(error)=workspace.lock().await.set_work_mode(chat_id,crate::orchestrator::MODE_BUILD) {eprintln!("modo: não consegui gravar a troca do Jev ({error:#})");}
+    }
     let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||i18n::notice(&[Text::new("turn.noAnswer")]));
     if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&assistant));}
     // Só a resposta do modelo passa pelo portão de saída; um aviso de falha

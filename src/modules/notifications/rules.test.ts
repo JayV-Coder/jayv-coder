@@ -3,7 +3,7 @@ import type { Chat, TurnStatus } from "@/modules/core";
 import { emptyMemory, targetOf, timeAgo, turnEvents, type AppNotification } from "./rules";
 
 const chat = (id: string, turns: [string, TurnStatus][], question: string | null = null): Chat => ({
-  id, code: id, projectId: "p1", title: "", messages: [], createdAt: "", updatedAt: "",
+  id, code: id, projectId: "p1", title: "", messages: [], createdAt: "", updatedAt: "", workMode: "auto",
   turns: turns.map(([turnId, status]) => ({ id: turnId, code: turnId, status, entry: null, exit: null, partial: null, activity: [], route: null })),
   question: question ? { turnId: question, code: "q1", kind: "single", prompt: "", options: [], source: "", status: "open" } : null,
 });
