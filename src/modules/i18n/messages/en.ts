@@ -1155,4 +1155,12 @@ export const en = {
   "whatsNew.item.answerRecall.detail": "When a request is nearly identical to one already answered in another chat of the same project, the earlier answer goes along, shortened, and the agent starts from it instead of exploring and answering everything again. Each time this happens shows up in the Jev panel.",
   "whatsNew.item.recipes.title": "Recipes for requests you repeat",
   "whatsNew.item.recipes.detail": "Project memory shows the requests you have made three or more times and lets you turn them into a recipe: your procedure for that kind of request. The recipe goes along only when a request looks like it, so it adds nothing to the others.",
+  "whatsNew.item.leanCode.title": "Less code in build mode",
+  "whatsNew.item.leanCode.detail": "In build mode the agent now checks whether the code needs to exist and reuses what the language, the platform or an installed library already does before writing anything new. Validation, error handling, security and accessibility are never cut. Starter and Junior get a lighter version, and you can turn it off under Your level.",
+  "whatsNew.item.symbolIndex.title": "A symbol index of your project",
+  "whatsNew.item.symbolIndex.detail": "JayV now reads where each function, type and class is defined in Rust, TypeScript, JavaScript, Python and Go files, on your computer and without spending tokens. The file map sent to agents lists the definitions of the whole file with their line, and which files each one uses or is used by, and file search gives more weight to names a file defines.",
+  "whatsNew.item.projectMap.title": "A project map at the start of each agent session",
+  "whatsNew.item.projectMap.detail": "In projects with 80 files or more, an agent that starts a new session gets a short map built from the symbol index: the main folders, the files most others depend on and the entry points. A resumed session already has it and does not get it again.",
+  "whatsNew.item.symbolTools.title": "Symbol tools for Claude Code (optional)",
+  "whatsNew.item.symbolTools.detail": "A new option in the Claude Code settings lets Claude ask JayV's symbol index where something is defined, who uses it and what a change affects, instead of searching the folder. It is off by default because the tool descriptions cost tokens in every session; run jayv bench to see whether it pays off in your project.",
 } satisfies Record<string, Message>;
