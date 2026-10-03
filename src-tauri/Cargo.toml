@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.44.3"
+version = "0.45.0"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -37,7 +37,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
 streaming-iterator = "0.1.9"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
@@ -68,9 +68,11 @@ tauri-plugin-dialog = "2.8.0"
 [dev-dependencies]
 tempfile = "3"
 
-# O binário de produção sai sem a tabela de símbolos e com o código otimizado
-# de ponta a ponta: fica menor e bem mais difícil de ler num desmontador.
+# O binário de produção sai sem a tabela de símbolos e otimizado entre crates
+# (LTO "thin"). O LTO completo com uma unidade de código só deixava o binário
+# uns 20% menor, mas era feito numa thread só: compilar o `jayv` levava mais de
+# 5 minutos no Windows do CI, e a versão nova demorava isso a mais para chegar
+# a quem já tem o app.
 [profile.release]
 strip = true
-lto = true
-codegen-units = 1
+lto = "thin"

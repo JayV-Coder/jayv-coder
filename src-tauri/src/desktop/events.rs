@@ -18,6 +18,10 @@ pub const CHUNK_EVENT:&str="turn-chunk";
 /// Um arquivo da pasta do chat mudou durante o pedido (ou, com `file` nulo,
 /// um pedido novo começou a olhar a pasta).
 pub const LIVE_EVENT:&str="live-file";
+/// Um item do menu da bandeja que leva a uma tela (ver `tray`).
+pub const TRAY_EVENT:&str="tray-action";
+/// O núcleo achou uma versão nova no repositório de releases.
+pub const UPDATE_EVENT:&str="update-found";
 /// A conexão com o Supabase mudou: online, offline, sessão vencida, sem login.
 pub const LINK_EVENT:&str="link-changed";
 /// Chegaram idiomas ou traduções novos no cache.
@@ -75,3 +79,11 @@ pub struct QuotaEvent{pub quota:crate::usage::Quota,pub crossed:Option<u8>}
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct LiveEvent{pub chat_id:String,pub turn_id:String,pub file:Option<crate::live_files::Change>}
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct TrayAction{pub action:String}
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct UpdateFound{pub version:String}

@@ -21,12 +21,17 @@ use std::{collections::{BTreeSet, HashMap}, fs, path::{Path, PathBuf}, process::
 pub const MAX_BYTES:u64=1024*1024;
 /// Quanto conteúdo da largada uma sessão guarda, somando todos os arquivos.
 const BASELINE_BUDGET:usize=20*1024*1024;
+/// Até quanto tempo depois da gravação a impressão do conteúdo é conferida.
+const RECENT:std::time::Duration=std::time::Duration::from_secs(5);
 /// O teto da varredura de uma pasta sem git.
 const PLAIN_LIMIT:usize=20_000;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize)]
 #[serde(rename_all="lowercase")]
-pub enum ChangeKind{Created,Modified,Removed}
+pub enum ChangeKind{Created,Modified,Removed,
+    /// Saiu da lista: nasceu e sumiu durante o pedido. Só aparece no aviso à
+    /// tela, nunca na lista guardada.
+    Discarded}
 
 /// Um arquivo que mudou durante o pedido. `path` é relativo à pasta do chat,
 /// com `/`; `at` é a última mudança, em milissegundos desde 1970.
@@ -60,6 +65,21 @@ fn stamp(path:&Path)->Stamp {
     Some((meta.modified().unwrap_or(UNIX_EPOCH),meta.len()))
 }
 
+/// A impressão do conteúdo de um arquivo pequeno gravado há pouco. Sistemas de
+/// arquivos de relógio grosso (FAT, pastas de rede, o `/mnt/c` do WSL) deixam a
+/// data igual entre duas gravações seguidas; com o mesmo tamanho, só o
+/// conteúdo diz que o arquivo mudou.
+fn fingerprint(path:&Path,stamp:Stamp)->Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let (modified,size)=stamp?;
+    let recent=SystemTime::now().duration_since(modified).map(|age|age<RECENT).unwrap_or(true);
+    if !recent || size>MAX_BYTES {return None;}
+    let bytes=fs::read(path).ok()?;
+    let mut hasher=std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Some(hasher.finish())
+}
+
 fn now_ms()->i64 {SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed|elapsed.as_millis() as i64).unwrap_or(0)}
 
 fn git(dir:&Path)->Command {
@@ -86,13 +106,16 @@ pub fn parse_porcelain(output:&[u8])->Vec<String> {
     paths
 }
 
-struct Repo{dir:PathBuf,head:Option<String>}
+/// Um repositório olhado. `within` é a pasta do chat quando ela fica dentro
+/// do repositório (um projeto aberto numa subpasta): só o que está nela conta.
+struct Repo{dir:PathBuf,head:Option<String>,within:Option<PathBuf>}
 
 impl Repo {
     fn dirty(&self)->Vec<PathBuf> {
         let Ok(output)=git(&self.dir).args(["status","--porcelain=v1","-z","--untracked-files=all"]).output() else {return vec![]};
         if !output.status.success() {return vec![];}
-        parse_porcelain(&output.stdout).into_iter().map(|path|self.dir.join(path)).collect()
+        parse_porcelain(&output.stdout).into_iter().map(|path|self.dir.join(path))
+            .filter(|path|self.within.as_ref().is_none_or(|within|path.starts_with(within))).collect()
     }
 
     /// O conteúdo do arquivo no commit da largada; `None` quando ele não
@@ -116,6 +139,21 @@ fn head_of(dir:&Path)->Option<String> {
     output.status.success().then(||String::from_utf8_lossy(&output.stdout).trim().to_string()).filter(|head|!head.is_empty())
 }
 
+/// O repositório em volta de uma pasta que não é a raiz dele: o projeto
+/// aberto numa subpasta (`apps/web` de um monorepo). O `git status` lista os
+/// caminhos a partir da raiz do repositório, então a raiz é a pasta do chat
+/// subindo tantos níveis quantos o `--show-prefix` disser, escrita do mesmo
+/// jeito que a pasta do chat.
+fn enclosing(folder:&Path)->Option<Repo> {
+    let output=git(folder).args(["rev-parse","--show-prefix"]).stdout(Stdio::piped()).output().ok()?;
+    if !output.status.success() {return None;}
+    let prefix=String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let depth=prefix.split('/').filter(|part|!part.is_empty()).count();
+    if depth==0 {return None;}
+    let dir=folder.ancestors().nth(depth)?.to_path_buf();
+    Some(Repo{head:head_of(&dir),dir,within:Some(folder.to_path_buf())})
+}
+
 fn skipped(name:&str)->bool {name.starts_with('.')||matches!(name,"node_modules"|"target"|"vendor"|"dist"|"build"|"__pycache__")}
 
 /// O que um pedido mudou na pasta do chat, desde a largada.
@@ -128,6 +166,8 @@ pub struct Session{
     started:SystemTime,
     baseline:HashMap<PathBuf,Baseline>,
     seen:HashMap<PathBuf,Stamp>,
+    /// A impressão do conteúdo dos arquivos da lista gravados há pouco.
+    prints:HashMap<PathBuf,u64>,
     changes:Vec<Change>,
     pub running:bool,
     firewall:ContextFirewall,
@@ -137,8 +177,9 @@ impl Session {
     /// A largada: os repositórios da pasta, o HEAD de cada um e o conteúdo dos
     /// arquivos que já estavam alterados antes do pedido.
     pub fn start(turn_id:&str,folder:&Path,firewall:ContextFirewall)->Self {
-        let repos:Vec<Repo>=crate::checkout::repository_dirs(folder).into_iter().map(|dir|{let head=head_of(&dir);Repo{dir,head}}).collect();
-        let mut session=Session{turn_id:turn_id.into(),folder:folder.to_path_buf(),repos,started:SystemTime::now()-std::time::Duration::from_secs(1),baseline:HashMap::new(),seen:HashMap::new(),changes:vec![],running:true,firewall};
+        let mut repos:Vec<Repo>=crate::checkout::repository_dirs(folder).into_iter().map(|dir|{let head=head_of(&dir);Repo{dir,head,within:None}}).collect();
+        if repos.is_empty() {repos.extend(enclosing(folder));}
+        let mut session=Session{turn_id:turn_id.into(),folder:folder.to_path_buf(),repos,started:SystemTime::now()-std::time::Duration::from_secs(1),baseline:HashMap::new(),seen:HashMap::new(),prints:HashMap::new(),changes:vec![],running:true,firewall};
         let mut budget=BASELINE_BUDGET;
         for path in session.repos.iter().flat_map(Repo::dirty) {
             let found=stamp(&path);
@@ -195,11 +236,24 @@ impl Session {
                 None if !self.repos.is_empty()=>None,
                 None=>Some(None),
             };
-            if before==Some(found) {continue;}
+            let print=self.prints.contains_key(&path).then(||fingerprint(&path,found)).flatten();
+            if before==Some(found) && (print.is_none() || self.prints.get(&path)==print.as_ref()) {continue;}
             if before.is_none() && self.repo_of(&path).is_none() {continue;}
             self.seen.insert(path.clone(),found);
-            let kind=if found.is_none() {ChangeKind::Removed} else if self.existed_at_start(&path) {ChangeKind::Modified} else {ChangeKind::Created};
-            let change=Change{path:self.relative(&path),kind,at:now_ms()};
+            let existed=self.existed_at_start(&path);
+            let relative=self.relative(&path);
+            // Nasceu e sumiu durante o pedido (o arquivo temporário de uma
+            // gravação atômica, um rascunho apagado): no fim, nada mudou.
+            if found.is_none() && !existed {
+                if self.changes.iter().any(|item|item.path==relative) {
+                    self.changes.retain(|item|item.path!=relative);
+                    fresh.push(Change{path:relative,kind:ChangeKind::Discarded,at:now_ms()});
+                }
+                continue;
+            }
+            let kind=if found.is_none() {ChangeKind::Removed} else if existed {ChangeKind::Modified} else {ChangeKind::Created};
+            let change=Change{path:relative,kind,at:now_ms()};
+            match print.or_else(||fingerprint(&path,found)) {Some(print)=>{self.prints.insert(path.clone(),print);} None=>{self.prints.remove(&path);}}
             self.changes.retain(|item|item.path!=change.path);
             self.changes.insert(0,change.clone());
             fresh.push(change);
@@ -344,6 +398,49 @@ mod tests {
         assert_eq!(session.poll().len(),1);
         let view=session.view("prod.env").unwrap();
         assert!(view.hidden && view.after.is_none());
+    }
+
+    #[test] fn a_project_in_a_subfolder_of_the_repository_uses_git() {
+        let root=repo();
+        fs::create_dir_all(root.path().join("apps/web")).unwrap();
+        fs::write(root.path().join("apps/web/page.ts"),"old\n").unwrap();
+        run(root.path(),&["add","."]);
+        run(root.path(),&["-c","user.email=a@b.c","-c","user.name=a","commit","--quiet","-m","web"]);
+        let folder=root.path().join("apps/web");
+        let mut session=open(&folder);
+        fs::write(folder.join("page.ts"),"new\n").unwrap();
+        fs::write(root.path().join("lib.rs"),"fora da pasta\n").unwrap();
+        let changes=session.poll();
+        assert_eq!(changes.iter().map(|change|(change.path.as_str(),change.kind)).collect::<Vec<_>>(),[("page.ts",ChangeKind::Modified)]);
+        let view=session.view("page.ts").unwrap();
+        assert!(view.before_known,"dentro do repositório o antes vem do git");
+        assert_eq!(view.before.as_deref(),Some("old\n"));
+    }
+
+    #[test] fn a_file_created_and_removed_during_the_request_leaves_the_list() {
+        let root=repo();
+        let mut session=open(root.path());
+        fs::write(root.path().join("lib.rs.tmp"),"rascunho").unwrap();
+        assert_eq!(session.poll().len(),1);
+        fs::rename(root.path().join("lib.rs.tmp"),root.path().join("lib.rs")).unwrap();
+        let mut seen:Vec<(String,ChangeKind)>=session.poll().into_iter().map(|change|(change.path,change.kind)).collect();
+        seen.sort();
+        assert_eq!(seen,[("lib.rs".into(),ChangeKind::Modified),("lib.rs.tmp".into(),ChangeKind::Discarded)]);
+        assert_eq!(session.changes().iter().map(|change|change.path.as_str()).collect::<Vec<_>>(),["lib.rs"]);
+    }
+
+    #[test] fn a_rewrite_with_the_same_date_and_size_is_seen() {
+        let root=repo();
+        let mut session=open(root.path());
+        let path=root.path().join("lib.rs");
+        fs::write(&path,"fn b() {}\n").unwrap();
+        let first=fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(session.poll().len(),1);
+        // Um sistema de arquivos de relógio grosso: a data não anda.
+        fs::write(&path,"fn c() {}\n").unwrap();
+        fs::File::options().write(true).open(&path).unwrap().set_modified(first).unwrap();
+        assert_eq!(session.poll().len(),1,"o conteúdo mudou mesmo com data e tamanho iguais");
+        assert!(session.poll().is_empty());
     }
 
     #[test] fn a_plain_folder_is_scanned_by_date() {

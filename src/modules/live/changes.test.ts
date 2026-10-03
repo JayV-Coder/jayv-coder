@@ -12,4 +12,12 @@ describe("withChange", () => {
       { path: "a.rs", kind: "modified", at: 1 },
     ]);
   });
+
+  it("drops a file that was created and removed during the request", () => {
+    const files = [
+      { path: "a.rs.tmp", kind: "created" as const, at: 1 },
+      { path: "a.rs", kind: "modified" as const, at: 2 },
+    ];
+    expect(withChange(files, { path: "a.rs.tmp", kind: "discarded", at: 3 })).toEqual([{ path: "a.rs", kind: "modified", at: 2 }]);
+  });
 });

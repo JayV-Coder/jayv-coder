@@ -30,25 +30,24 @@ impl Drop for LiveWatch {
 fn locked(live:&SharedLive)->std::sync::MutexGuard<'_,HashMap<String,Session>> {live.lock().unwrap_or_else(|poisoned|poisoned.into_inner())}
 
 /// Começa a olhar a pasta do chat para este pedido. A sessão anterior do chat
-/// dá lugar à nova, e a tela recebe o aviso de recomeço (`file` nulo).
-pub(crate) fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&str,folder:PathBuf,firewall:ContextFirewall)->LiveWatch {
+/// dá lugar à nova, e a tela recebe o aviso de recomeço (`file` nulo). Volta só
+/// depois da largada registrada: o agente só sai depois disso, e o que ele
+/// gravar logo no começo não se confunde com o que já estava alterado antes.
+pub(crate) async fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&str,folder:PathBuf,firewall:ContextFirewall)->LiveWatch {
     let stop=Arc::new(AtomicBool::new(false));
-    let (app,live,chat_id,turn_id,flag)=(app.clone(),live.clone(),chat_id.to_string(),turn_id.to_string(),stop.clone());
-    tauri::async_runtime::spawn(async move {
-        let started={
-            let (chat,turn,folder)=(chat_id.clone(),turn_id.clone(),folder.clone());
-            tauri::async_runtime::spawn_blocking(move ||Session::start(&turn,&folder,firewall)).await.ok().map(|session|(chat,session))
-        };
-        let Some((chat,session))=started else {return};
-        {
-            let mut sessions=locked(&live);
-            sessions.insert(chat.clone(),session);
-            if sessions.len()>KEPT {
-                let idle:Vec<String>=sessions.iter().filter(|(id,session)|**id!=chat && !session.running).map(|(id,_)|id.clone()).collect();
-                for id in idle.into_iter().take(sessions.len()-KEPT) {sessions.remove(&id);}
-            }
+    let (app,live,chat,turn_id,flag)=(app.clone(),live.clone(),chat_id.to_string(),turn_id.to_string(),stop.clone());
+    let turn=turn_id.clone();
+    let Ok(session)=tauri::async_runtime::spawn_blocking(move ||Session::start(&turn,&folder,firewall)).await else {return LiveWatch{stop}};
+    {
+        let mut sessions=locked(&live);
+        sessions.insert(chat.clone(),session);
+        if sessions.len()>KEPT {
+            let idle:Vec<String>=sessions.iter().filter(|(id,session)|**id!=chat && !session.running).map(|(id,_)|id.clone()).collect();
+            for id in idle.into_iter().take(sessions.len()-KEPT) {sessions.remove(&id);}
         }
-        let _=app.emit(LIVE_EVENT,LiveEvent{chat_id:chat.clone(),turn_id:turn_id.clone(),file:None});
+    }
+    let _=app.emit(LIVE_EVENT,LiveEvent{chat_id:chat.clone(),turn_id:turn_id.clone(),file:None});
+    tauri::async_runtime::spawn(async move {
         loop {
             let last=flag.load(Ordering::SeqCst);
             let (live2,chat2,turn2)=(live.clone(),chat.clone(),turn_id.clone());

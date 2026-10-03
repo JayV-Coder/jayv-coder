@@ -60,13 +60,13 @@ function DashboardToolbar({ orgId, withPeriod }: { orgId: string; withPeriod: bo
 
   return (
     <div className="mb-6 flex flex-wrap items-end gap-3">
-      <label className="grid min-w-[200px] gap-1 text-xs text-muted-foreground">
+      <label className="grid w-64 max-w-full gap-1 text-xs text-muted-foreground">
         {t("usage.scope.project")}
         <OptionSelect value={filter.projectId ?? ALL} options={projectOptions}
           onChange={(value) => setDashboardFilter({ projectId: value === ALL ? null : value, chatId: null })} />
       </label>
       {chatOptions.length > 0 && (
-        <label className="grid min-w-[200px] gap-1 text-xs text-muted-foreground">
+        <label className="grid w-64 max-w-full gap-1 text-xs text-muted-foreground">
           {t("usage.scope.chat")}
           <OptionSelect value={filter.chatId ?? ALL} options={chatOptions}
             onChange={(value) => setDashboardFilter({ projectId: filter.projectId, chatId: value === ALL ? null : value })} />
