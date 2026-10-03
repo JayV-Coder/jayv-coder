@@ -21,6 +21,10 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
       // O `reason` é diagnóstico do roteador, em inglês: não vai para a linha.
       return t("beat.routed", { route: said });
     }
+    case "fallback": {
+      const provider = String(d.provider ?? "");
+      return t("beat.fallback", { agent: provider in AGENT_LABELS ? AGENT_LABELS[provider as AgentId] : provider, error: shownText(String(d.error ?? "")) });
+    }
     case "running": return t("beat.running");
     case "agent": return agentLine(String(d.line ?? ""));
     case "done": return t("beat.done", { latency: d.latencyMs ?? 0, input: d.inputTokens ?? 0, output: d.outputTokens ?? 0 });

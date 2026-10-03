@@ -20,6 +20,12 @@ describe("beatLine", () => {
     const line = beatLine("route", { provider: "claude", model: "sonnet", reason: "code/medium wants a capable model" });
     expect(line).not.toContain("wants");
   });
+
+  it("says which agent could not start before the next one takes over", () => {
+    const line = beatLine("fallback", { provider: "codex", error: "Codex is not installed" });
+    expect(line).toContain("Codex");
+    expect(line).toContain("next agent");
+  });
 });
 
 describe("agentLine", () => {
