@@ -14,19 +14,58 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
       const word = GATE_WORDS[String(d.verdict)];
       return t("beat.gate", { verdict: word ? t(word) : String(d.verdict), score: d.score ?? "", demand: d.demand ?? "" });
     }
-    case "read": return t("beat.read", { intent: d.intent ?? "", complexity: d.complexity ?? "", source: sourceLabel(String(d.source ?? "")) });
+    case "read": return t("beat.read", { intent: word(INTENT_WORDS, d.intent), complexity: word(COMPLEXITY_WORDS, d.complexity), source: sourceLabel(String(d.source ?? "")) });
     case "context": return t("beat.context", { count: d.files ?? 0, tokens: d.tokens ?? 0 });
     case "route": {
       const said = routeLabel({ provider: String(d.provider ?? ""), model: String(d.model ?? ""), mode: (d.mode as RouteMode | undefined) ?? null, agent: (d.agent as string | undefined) ?? null });
-      return `${t("beat.routed", { route: said })}${d.reason ? ` — ${d.reason}` : ""}`;
+      // O `reason` é diagnóstico do roteador, em inglês: não vai para a linha.
+      return t("beat.routed", { route: said });
     }
     case "running": return t("beat.running");
-    case "agent": return String(d.line ?? "");
+    case "agent": return agentLine(String(d.line ?? ""));
     case "done": return t("beat.done", { latency: d.latencyMs ?? 0, input: d.inputTokens ?? 0, output: d.outputTokens ?? 0 });
     case "failed": return t("beat.failed", { error: shownText(String(d.error ?? "")) });
     case "dismissed": return t("beat.dismissed", { prompt: d.prompt ?? "" });
     default: return null;
   }
+}
+
+const INTENT_WORDS: Record<string, Key> = {
+  analysis: "intent.analysis", code: "intent.code", frontend: "intent.frontend", general: "intent.general",
+  refactor: "intent.refactor", review: "intent.review", security: "intent.security", test: "intent.test",
+};
+const COMPLEXITY_WORDS: Record<string, Key> = {
+  trivial: "complexity.trivial", simple: "complexity.simple", medium: "complexity.medium", complex: "complexity.complex",
+};
+
+/** O identificador gravado dito no idioma de quem lê; um desconhecido sai como veio. */
+function word(words: Record<string, Key>, value: unknown) {
+  const id = String(value ?? "");
+  return words[id] ? t(words[id]) : id;
+}
+
+/** O que o Codex chama cada item, quando ele não traz comando. */
+const ITEM_WORDS: Record<string, Key> = {
+  reasoning: "beat.agent.thinking", file_change: "beat.agent.editing", agent_message: "beat.agent.writing",
+  todo_list: "beat.agent.planning", web_search: "beat.agent.searching",
+};
+
+/** A etapa de um agente de linha de comando. O núcleo grava o tipo do evento e
+ * a ferramenta (`assistant: Read`, `system: init`, `item.started: ls`); aqui
+ * isso vira uma frase. O nome da ferramenta ou o comando é dado do agente e
+ * fica como veio. */
+export function agentLine(line: string): string | null {
+  if (!line) return null;
+  const at = line.indexOf(": ");
+  const kind = at < 0 ? line : line.slice(0, at);
+  const detail = at < 0 ? "" : line.slice(at + 2).trim();
+  if (kind === "system") return t("beat.agent.started");
+  if (kind === "result") return t("beat.agent.finished");
+  if (kind === "user") return t("beat.agent.toolResult");
+  if (ITEM_WORDS[detail]) return t(ITEM_WORDS[detail]);
+  // O Cursor manda a ferramenta como chave: `readToolCall`, `writeToolCall`.
+  const tool = detail.replace(/ToolCall$/, "");
+  return tool ? t("beat.agent.tool", { tool }) : t("beat.agent.working");
 }
 
 const MODE_WORDS: Record<RouteMode, Key> = { plan: "route.mode.plan", build: "route.mode.build" };

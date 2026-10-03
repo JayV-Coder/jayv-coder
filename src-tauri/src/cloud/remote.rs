@@ -116,9 +116,18 @@ impl Remote {
         self.get(self.request(Method::GET,"locales").query(&[("select","id,name,rtl,position"),("order","position.asc")]).build()).await
     }
 
+    /// Todas as traduções do idioma, em páginas. O PostgREST do Supabase
+    /// devolve no máximo 1000 linhas por consulta (`max_rows`), e um idioma já
+    /// passa disso: sem paginar, as chaves mais novas ficavam de fora e a tela
+    /// caía no inglês embutido.
     pub async fn translations(&self,locale:&str)->Result<BTreeMap<String,Value>,RemoteError> {
         #[derive(Deserialize)] struct Row{key:String,value:Value}
-        let rows:Vec<Row>=self.get(self.request(Method::GET,"translations").query(&[("select","key,value"),("locale",&format!("eq.{locale}"))]).build()).await?;
+        let rows:Vec<Row>=all_pages(|offset|async move {
+            let offset=offset.to_string();
+            let limit=PAGE.to_string();
+            self.get(self.request(Method::GET,"translations")
+                .query(&[("select","key,value"),("locale",&format!("eq.{locale}")),("order","key.asc"),("limit",&limit),("offset",&offset)]).build()).await
+        }).await?;
         Ok(rows.into_iter().map(|row|(row.key,row.value)).collect())
     }
 
@@ -127,6 +136,25 @@ impl Remote {
         let rows:Vec<Row>=self.get(self.request(Method::GET,"jev_parameters").query(&[("select","key,value")]).build()).await?;
         Ok(rows.into_iter().map(|row|(row.key,row.value)).collect())
     }
+}
+
+/// O tamanho de cada página pedida ao PostgREST.
+const PAGE:usize=1000;
+/// Um teto para nunca girar para sempre se o servidor repetir páginas.
+const MAX_PAGES:usize=100;
+
+/// Pede página atrás de página até vir uma vazia. Não para numa página menor
+/// que `PAGE`: o servidor pode ter um `max_rows` menor que o pedido, e a
+/// página cheia dele seria confundida com a última.
+pub(crate) async fn all_pages<T,F,Fut>(mut fetch:F)->Result<Vec<T>,RemoteError>
+where F:FnMut(usize)->Fut, Fut:std::future::Future<Output=Result<Vec<T>,RemoteError>> {
+    let mut rows=Vec::new();
+    for _ in 0..MAX_PAGES {
+        let page=fetch(rows.len()).await?;
+        if page.is_empty() {break;}
+        rows.extend(page);
+    }
+    Ok(rows)
 }
 
 #[async_trait]
@@ -178,6 +206,21 @@ mod tests {
     use crate::local::outbox::table;
 
     fn remote()->Remote { Remote::with_base(reqwest::Client::new(),"https://exemplo.supabase.co/",PUBLISHABLE_KEY,Some("jwt".into())) }
+
+    #[tokio::test] async fn pages_continue_past_a_server_cap_until_one_comes_back_empty() {
+        // 2500 linhas e um servidor que corta em 1000: três páginas e a vazia.
+        let all:Vec<usize>=(0..2500).collect();
+        let mut asked=vec![];
+        let rows=all_pages(|offset|{
+            asked.push(offset);
+            let page:Vec<usize>=all.iter().copied().skip(offset).take(1000).collect();
+            async move {Ok::<_,RemoteError>(page)}
+        }).await.unwrap();
+        assert_eq!(rows.len(),2500);
+        assert_eq!(asked,[0,1000,2000,2500]);
+        let small=all_pages(|offset|{let page:Vec<usize>=all.iter().copied().skip(offset).take(300).collect(); async move {Ok::<_,RemoteError>(page)}}).await.unwrap();
+        assert_eq!(small.len(),2500,"um max_rows menor que a página não para no meio");
+    }
 
     fn query(request:&Request)->Vec<(String,String)> { request.url().query_pairs().map(|(key,value)|(key.into_owned(),value.into_owned())).collect() }
 

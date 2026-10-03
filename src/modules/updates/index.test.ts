@@ -4,7 +4,7 @@ const check = vi.fn();
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: () => check() }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 
-const { checkForUpdate, closeUpdate, dismissUpdate, installUpdate, setUpdateInterval, storedInterval, useUpdate } = await import("./index");
+const { checkForUpdate, closeUpdate, dismissUpdate, installUpdate, useUpdate } = await import("./index");
 
 const release = (version: string) => ({
   currentVersion: "1.0.0", version, body: "notes", date: null,
@@ -74,18 +74,7 @@ describe("checkForUpdate", () => {
   });
 });
 
-describe("setUpdateInterval", () => {
-  it("keeps only the offered intervals and remembers the choice", () => {
-    const saved = new Map<string, string>();
-    vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) });
-    setUpdateInterval(60);
-    expect(useUpdate.getState().every).toBe(60);
-    expect(storedInterval()).toBe(60);
-    setUpdateInterval(7);
-    expect(useUpdate.getState().every).toBe(60);
-    vi.unstubAllGlobals();
-  });
-
+describe("checkedAt", () => {
   it("records when a check answered", async () => {
     check.mockReset();
     check.mockResolvedValue(null);

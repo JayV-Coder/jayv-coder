@@ -28,32 +28,17 @@ interface UpdateState {
   /** A versão cujo aviso no topo a pessoa fechou: a mesma não volta a
    * aparecer até reabrir o app; uma mais nova, sim. */
   dismissed: string | null;
-  /** De quantos em quantos minutos o app aberto pergunta de novo. */
-  every: number;
   /** Quando a última consulta voltou com resposta (ISO), com ou sem versão nova. */
   checkedAt: string | null;
 }
 
-/** As escolhas de "procurar a cada", em minutos. O release pode sair com o
- * JayV aberto o dia todo; 30 minutos é o padrão. */
-export const UPDATE_INTERVALS = [15, 30, 60, 240] as const;
-export const DEFAULT_INTERVAL = 30;
-const INTERVAL_KEY = "jayv.updates.every";
-
-/** O intervalo escolhido neste computador; um valor fora da lista volta ao
- * padrão. */
-export function storedInterval(): number {
-  try {
-    const value = Number(localStorage.getItem(INTERVAL_KEY));
-    return (UPDATE_INTERVALS as readonly number[]).includes(value) ? value : DEFAULT_INTERVAL;
-  } catch {
-    return DEFAULT_INTERVAL;
-  }
-}
+/** De quanto em quanto tempo o app aberto pergunta de novo: fixo, sem
+ * escolha, para a versão nova aparecer logo depois de publicada. */
+export const RECHECK_MS = 15_000;
 
 export const useUpdate = create<UpdateState>(() => ({
   phase: "idle", open: false, current: null, next: null, notes: null, date: null, received: 0, total: null, error: null, failedAt: null, dismissed: null,
-  every: storedInterval(), checkedAt: null,
+  checkedAt: null,
 }));
 
 const answered = () => new Date().toISOString();
@@ -65,7 +50,7 @@ const busy = (phase: UpdatePhase) => phase === "checking" || phase === "download
 let pending: Update | null = null;
 
 /** Pergunta ao repositório de releases se há versão nova. Ao abrir o
- * aplicativo e a cada intervalo escolhido (`announce` falso) nada se instala sozinho:
+ * aplicativo e a cada `RECHECK_MS` (`announce` falso) nada se instala sozinho:
  * a versão nova vira `available` (o aviso no topo e a notificação), e sem
  * rede ou numa build de desenvolvimento a falha fica calada. Pelo botão
  * (`announce`) a janela aparece desde a consulta, diz também "já está na mais
@@ -147,38 +132,22 @@ export function dismissUpdate() {
   useUpdate.setState((state) => ({ dismissed: state.next }));
 }
 
-/** Troca o "procurar a cada" e o guarda neste computador; o relógio
- * recomeça com o intervalo novo. */
-export function setUpdateInterval(minutes: number) {
-  if (!(UPDATE_INTERVALS as readonly number[]).includes(minutes)) return;
-  try {
-    localStorage.setItem(INTERVAL_KEY, String(minutes));
-  } catch {
-    // Sem armazenamento, vale até fechar o app.
-  }
-  useUpdate.setState({ every: minutes });
-}
-
-/** Consulta ao abrir e de novo a cada intervalo escolhido. Ao voltar a rede
- * (o computador acordou, o Wi-Fi voltou), consulta logo, se a última
- * resposta já passou do intervalo. */
+/** Consulta ao abrir e de novo a cada `RECHECK_MS`. Uma consulta que ainda
+ * não voltou não ganha outra por cima, e ao voltar a rede (o computador
+ * acordou, o Wi-Fi voltou) consulta logo. */
 export function connectUpdates() {
-  void checkForUpdate();
-  let timer = setInterval(() => void checkForUpdate(), useUpdate.getState().every * 60_000);
-  const unsubscribe = useUpdate.subscribe((state, previous) => {
-    if (state.every === previous.every) return;
-    clearInterval(timer);
-    timer = setInterval(() => void checkForUpdate(), state.every * 60_000);
-  });
-  const online = () => {
-    const { checkedAt, every } = useUpdate.getState();
-    if (!checkedAt || Date.now() - new Date(checkedAt).valueOf() >= every * 60_000) void checkForUpdate();
+  let asking = false;
+  const ask = () => {
+    if (asking) return;
+    asking = true;
+    void checkForUpdate().finally(() => { asking = false; });
   };
-  window.addEventListener("online", online);
+  ask();
+  const timer = setInterval(ask, RECHECK_MS);
+  window.addEventListener("online", ask);
   return () => {
     clearInterval(timer);
-    unsubscribe();
-    window.removeEventListener("online", online);
+    window.removeEventListener("online", ask);
   };
 }
 
