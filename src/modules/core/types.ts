@@ -252,6 +252,7 @@ export interface KnownModel {
   contextWindow: number;
   costClass: CostClass;
   speed: Speed;
+  capabilities: Capability[];
 }
 
 export type Permission = "allow" | "ask" | "deny";
@@ -267,6 +268,9 @@ export interface CoreSettings {
   cacheTtl: number;
   exitRules: { read: Permission; write: Permission; shell: Permission };
   privacy: { deny: string[]; localOnly: string[]; redactSecrets: boolean };
+  /** Os agentes na ordem de preferência para desempatar; vazia, os empatados
+   * se espalham entre os chats. */
+  agentOrder: AgentId[];
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */

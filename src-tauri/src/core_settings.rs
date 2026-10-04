@@ -42,6 +42,9 @@ pub struct CoreSettings {
     pub cache_ttl:u64,
     pub exit_rules:ExitRules,
     pub privacy:Privacy,
+    /// Os agentes na ordem de preferência para desempatar. Vazia, os
+    /// empatados se espalham entre os chats.
+    #[serde(default)] pub agent_order:Vec<String>,
 }
 
 impl CoreSettings {
@@ -55,6 +58,7 @@ impl CoreSettings {
             cache_ttl:config.jev.context.cache_ttl,
             exit_rules:ExitRules{read:config.permissions.read.clone(),write:config.permissions.write.clone(),shell:config.permissions.shell.clone()},
             privacy:Privacy{deny:config.privacy.deny.clone(),local_only:config.privacy.local_only.clone(),redact_secrets:config.privacy.redact_secrets},
+            agent_order:config.jev.agent_order.clone(),
         }
     }
 
@@ -71,6 +75,7 @@ impl CoreSettings {
         config.privacy.deny=self.privacy.deny.clone();
         config.privacy.local_only=self.privacy.local_only.clone();
         config.privacy.redact_secrets=self.privacy.redact_secrets;
+        config.jev.agent_order=self.agent_order.clone();
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,
@@ -92,6 +97,12 @@ impl CoreSettings {
         }
         self.privacy.deny=patterns(&self.privacy.deny)?;
         self.privacy.local_only=patterns(&self.privacy.local_only)?;
+        let mut order:Vec<String>=Vec::new();
+        for agent in &self.agent_order {
+            if !crate::llm::AgentId::ALL.iter().any(|known|known.key()==agent) { bail!(Text::new("core.agentOrder").with("agent",agent)); }
+            if !order.contains(agent) { order.push(agent.clone()); }
+        }
+        self.agent_order=order;
         Ok(self)
     }
 }
@@ -137,12 +148,26 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         wanted.confidence_threshold=0.8;
         wanted.exit_rules.write="allow".into();
         wanted.privacy.deny=vec![" .env ".into(),"".into(),".env".into(),"*.pem".into()];
+        wanted.agent_order=vec!["codex".into(),"claude".into(),"codex".into()];
         let saved=save(&connection,&wanted).expect("save");
         assert_eq!(saved.privacy.deny,vec![".env","*.pem"]);
+        assert_eq!(saved.agent_order,vec!["codex","claude"]);
         assert_eq!(load(&connection,&CoreSettings::from_config(&Config::default())).expect("load"),saved);
         let mut config=Config::default();
         saved.apply(&mut config);
         assert_eq!((config.jev.adaptive_routing.confidence_threshold,config.permissions.write.as_str()),(0.8,"allow"));
+        assert_eq!(config.jev.agent_order,vec!["codex","claude"]);
+    }
+
+    /// O que foi gravado antes da ordem de preferência ainda abre, sem ordem.
+    #[test] fn settings_saved_before_the_agent_order_still_load() {
+        let connection=memory();
+        let mut old=serde_json::to_value(CoreSettings::from_config(&Config::default())).expect("json");
+        old.as_object_mut().expect("objeto").remove("agentOrder");
+        old["confidenceThreshold"]=serde_json::json!(0.8);
+        connection.execute("INSERT INTO app_metadata(key,value) VALUES(?1,?2)",params![KEY,old.to_string()]).expect("grava");
+        let loaded=load(&connection,&CoreSettings::from_config(&Config::default())).expect("load");
+        assert_eq!((loaded.confidence_threshold,loaded.agent_order.len()),(0.8,0));
     }
 
     #[test] fn values_outside_the_ranges_never_reach_the_database() {
@@ -153,5 +178,6 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         assert_eq!(key(CoreSettings{budgets,..base.clone()}),"core.budget");
         assert_eq!(key(CoreSettings{exit_rules:ExitRules{shell:"maybe".into(),..base.exit_rules.clone()},..base.clone()}),"core.permission");
         assert_eq!(key(CoreSettings{privacy:Privacy{deny:vec!["[".into()],..base.privacy.clone()},..base.clone()}),"core.patternInvalid");
+        assert_eq!(key(CoreSettings{agent_order:vec!["gemini".into()],..base.clone()}),"core.agentOrder");
     }
 }

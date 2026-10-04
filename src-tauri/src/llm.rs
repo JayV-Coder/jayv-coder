@@ -401,22 +401,31 @@ impl AgentSettings {
 /// ao escolhê-lo.
 #[derive(Debug,Clone,Serialize,PartialEq)]
 #[serde(rename_all="camelCase")]
-pub struct KnownModel { pub id:String, pub label:String, pub context_window:usize, pub cost_class:String, pub speed:String }
+pub struct KnownModel { pub id:String, pub label:String, pub context_window:usize, pub cost_class:String, pub speed:String, pub capabilities:Vec<String> }
 
 impl KnownModel {
-    /// Custo e velocidade saem do nome: o CLI não os diz. A família pequena é
-    /// barata e rápida; a grande, cara e lenta; o resto fica no meio.
+    /// Custo, velocidade e capacidades saem do nome: o CLI não os diz. A
+    /// família pequena é barata, rápida e não conta como raciocínio; a grande,
+    /// cara e lenta; o resto fica no meio. Os `o1`/`o3`/`o4` da OpenAI são de
+    /// raciocínio, e só a versão `mini` deles é pequena.
     fn named(agent:AgentId,id:&str,label:Option<String>,context_window:Option<usize>)->Self {
         let lower=id.to_ascii_lowercase();
         let has=|words:&[&str]|words.iter().any(|word|lower.contains(word));
         let (cost_class,mut speed)=if has(&["haiku","mini","flash","luna","nano","lite"]) {("low","fast")}
-            else if has(&["opus","max","astra","best","-pro"]) {("high","slow")}
+            else if has(&["opus","max","astra","best","-pro"])||reasoning_series(&lower) {("high","slow")}
             else if has(&["fable"]) {("high","medium")}
             else {("medium","medium")};
         if lower.ends_with("-fast") { speed="fast"; }
         let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000, AgentId::Cursor=>200_000 }});
-        Self{id:id.into(),label:label.unwrap_or_else(||id.into()),context_window:context.clamp(CONTEXT_RANGE.0,CONTEXT_RANGE.1),cost_class:cost_class.into(),speed:speed.into()}
+        let capabilities=if cost_class=="low" {strings(&["chat","code","tools"])} else {strings(&CAPABILITIES)};
+        Self{id:id.into(),label:label.unwrap_or_else(||id.into()),context_window:context.clamp(CONTEXT_RANGE.0,CONTEXT_RANGE.1),cost_class:cost_class.into(),speed:speed.into(),capabilities}
     }
+}
+
+/// `o1`, `o3`, `o4`… sozinhos ou com sufixo (`o3-2025`), mas não `gpt-4o`.
+fn reasoning_series(lower:&str)->bool {
+    let mut chars=lower.chars();
+    chars.next()==Some('o') && chars.next().is_some_and(|digit|digit.is_ascii_digit()) && chars.next().is_none_or(|next|next=='-')
 }
 
 /// Os modelos que vêm de fábrica, para a máquina em que o agente ainda não
@@ -436,7 +445,7 @@ fn starter_models(agent:AgentId)->Vec<AgentModel> {
 }
 
 fn fresh_model(agent:AgentId,known:&KnownModel)->AgentModel {
-    AgentModel{agent,model:known.id.clone(),enabled:true,capabilities:strings(&CAPABILITIES),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
+    AgentModel{agent,model:known.id.clone(),enabled:true,capabilities:known.capabilities.clone(),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
 }
 
 /// O que o último `/model` de cada agente devolveu nesta execução do app.
@@ -447,7 +456,7 @@ static DISCOVERED:std::sync::LazyLock<std::sync::Mutex<HashMap<AgentId,Vec<Known
 pub fn catalog(agent:AgentId,settings:&LlmSettings)->Vec<KnownModel> {
     if let Some(found)=DISCOVERED.lock().ok().and_then(|cache|cache.get(&agent).cloned()) { return found; }
     settings.models.iter().filter(|model|model.agent==agent).map(|model|KnownModel{
-        id:model.model.clone(),label:model.model.clone(),context_window:model.context_window,cost_class:model.cost_class.clone(),speed:model.speed.clone(),
+        id:model.model.clone(),label:model.model.clone(),context_window:model.context_window,cost_class:model.cost_class.clone(),speed:model.speed.clone(),capabilities:model.capabilities.clone(),
     }).collect()
 }
 
@@ -863,6 +872,19 @@ mod tests {
         assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["sonnet","opus","haiku","best","sonnet[1m]","opusplan"],"`default` não é um modelo");
         assert_eq!(found[4].context_window,1_000_000);
         assert_eq!((found[2].cost_class.as_str(),found[2].speed.as_str()),("low","fast"));
+    }
+
+    /// O modelo pequeno nasce sem raciocínio, para não ganhar o bônus de
+    /// pedido complexo nem disputar análise com os grandes; a série `o` da
+    /// OpenAI é de raciocínio, e o `gpt-4o` não é dela.
+    #[test] fn new_models_get_the_capabilities_of_their_family() {
+        let caps=|id:&str|KnownModel::named(AgentId::Codex,id,None,None);
+        assert!(!caps("haiku").capabilities.contains(&"reasoning".to_string()));
+        assert!(caps("sonnet").capabilities.contains(&"reasoning".to_string()));
+        assert_eq!(caps("o3").cost_class,"high");
+        assert_eq!(caps("o4-mini").cost_class,"low");
+        assert_eq!(caps("gpt-4o").cost_class,"medium");
+        assert_eq!(fresh_model(AgentId::Claude,&caps("haiku")).capabilities,["chat","code","tools"]);
     }
 
     #[test] fn codex_lists_only_what_its_model_picker_shows() {

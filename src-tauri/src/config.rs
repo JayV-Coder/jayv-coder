@@ -21,8 +21,11 @@ pub struct JevConfig {
     #[serde(default)] pub optimization: OptimizationConfig,
     #[serde(default)] pub adaptive_routing: AdaptiveConfig,
     #[serde(default)] pub context: ContextConfig,
+    /// Os agentes na ordem de preferência para desempatar (`claude`,
+    /// `codex`…). Vazia, os empatados se espalham entre os chats.
+    #[serde(default)] pub agent_order: Vec<String>,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default() } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![] } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {

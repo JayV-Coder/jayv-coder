@@ -138,7 +138,7 @@ export function addModel(agent: AgentId) {
   const taken = new Set(models.filter((model) => model.agent === agent).map((model) => model.model));
   const known = catalog[agent].find((model) => !taken.has(model.id));
   const model: ModelDraft = {
-    uid: uid(), agent, enabled: true, capabilities: ["chat", "code", "reasoning", "tools"],
+    uid: uid(), agent, enabled: true, capabilities: known?.capabilities ?? ["chat", "code", "reasoning", "tools"],
     model: known?.id ?? "", contextWindow: known?.contextWindow ?? 128000, costClass: known?.costClass ?? "medium", speed: known?.speed ?? "medium",
   };
   useSettings.setState({ models: [...models, model] });
