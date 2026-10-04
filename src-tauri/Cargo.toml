@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.52.0"
+version = "0.52.1"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -45,6 +45,8 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+similar = "2"
 streaming-iterator = "0.1.9"
 tree-sitter = "0.27.0"
 tree-sitter-go = "0.25.0"
@@ -68,13 +70,14 @@ jayv-code = { path = "crates/jayv-code" }
 jayv-memory = { path = "crates/jayv-memory" }
 jayv-workspace = { path = "crates/jayv-workspace" }
 jayv-live = { path = "crates/jayv-live" }
+jayv-orchestration = { path = "crates/jayv-orchestration" }
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive"] }
 dirs.workspace = true
 dotenvy.workspace = true
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util.workspace = true
 globset.workspace = true
 hex.workspace = true
 jsonwebtoken.workspace = true
@@ -85,7 +88,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
-similar = "2"
+similar.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"

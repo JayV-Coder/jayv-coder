@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.52.0"
+version = "0.52.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2119,6 +2119,7 @@ dependencies = [
  "jayv-jev",
  "jayv-live",
  "jayv-memory",
+ "jayv-orchestration",
  "jayv-orgs",
  "jayv-plans",
  "jayv-store",
@@ -2269,6 +2270,30 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "jayv-orchestration"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "jayv-agents",
+ "jayv-base",
+ "jayv-code",
+ "jayv-jev",
+ "jayv-live",
+ "jayv-memory",
+ "jayv-store",
+ "jayv-workspace",
+ "regex",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "tokio",
  "uuid",
 ]
 

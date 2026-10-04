@@ -1328,6 +1328,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.coreOrchestration.title": "The whole core in separate parts",
+  "whatsNew.item.coreOrchestration.detail": "An internal change with no difference in use: Jev's orchestration, which takes the request, builds the context, picks the agent and reviews the result, became the last part of its own in the core. Every layer is now built and tested separately.",
   "whatsNew.item.coreWorkspaceLive.title": "Projects, chats and Live in separate parts",
   "whatsNew.item.coreWorkspaceLive.detail": "An internal change with no difference in use: projects, chats and the request queue, and also the Live panel, became parts of their own in the core, built and tested separately.",
   "whatsNew.item.coreCodeMemory.title": "Code index and memory in separate parts",
