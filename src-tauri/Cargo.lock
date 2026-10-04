@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2112,6 +2112,8 @@ dependencies = [
  "futures-util",
  "globset",
  "hex",
+ "jayv-base",
+ "jayv-store",
  "jsonwebtoken",
  "regex",
  "reqwest 0.12.28",
@@ -2141,6 +2143,40 @@ dependencies = [
  "tree-sitter-typescript",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "jayv-base"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dotenvy",
+ "globset",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "jayv-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "jayv-base",
+ "jsonwebtoken",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

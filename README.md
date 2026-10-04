@@ -58,9 +58,10 @@ The app calls Jev through the `jev` Edge Function of the Supabase project (`POST
 - `src-tauri/src/providers.rs`: OpenAI, Anthropic, OpenAI-compatible, and subprocess CLI providers.
 - `src-tauri/src/workspace.rs`: durable projects, chats, titles, and message histories.
 - `src-tauri/src/rag.rs`: repository indexing and lexical retrieval.
-- `src-tauri/src/firewall.rs`: deny/local-only policy and secret redaction.
+- `src-tauri/crates/jayv-base/src/firewall.rs`: deny/local-only policy and secret redaction.
 - `src-tauri/src/graph.rs`, `agents.rs`, `context_engine.rs`: execution graph, specialist selection, context forks, and value scoring.
-- `src-tauri/src/tools.rs`, `sandbox.rs`, `checkpoint.rs`: permission-aware tools, constrained subprocess workspace, and durable task checkpoints.
+- `src-tauri/src/tools.rs`, `sandbox.rs`: permission-aware tools and constrained subprocess workspace.
+- `src-tauri/crates/`: the core layers that are already their own crates — `jayv-base` (i18n, config, context model, locked-down HTTP client, firewall, turn progress) and `jayv-store` (local SQLite, sync outbox, context cache, task checkpoints). The layer order is in `src-tauri/src/layers.rs`.
 - `src/`: Tauri desktop UI.
 
 ## Validation

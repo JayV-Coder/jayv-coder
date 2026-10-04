@@ -105,7 +105,7 @@ export function t(key: Key, params?: Params) {
 }
 
 /** O texto que o núcleo devolve no lugar de uma frase: a chave e os valores
- * que ela cita, que podem ser outras chaves (ver `src-tauri/src/i18n.rs`). */
+ * que ela cita, que podem ser outras chaves (ver `src-tauri/crates/jayv-base/src/i18n.rs`). */
 export interface Text { key: string; params?: Record<string, string | Text> }
 
 export function isText(value: unknown): value is Text {

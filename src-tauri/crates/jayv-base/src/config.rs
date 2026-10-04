@@ -201,9 +201,9 @@ mod tests {
     #[test] fn the_file_never_carries_providers_or_models() {
         let parsed:Config=serde_yaml::from_str("providers:\n  claude:\n    type: cli\n    command: claude\nmodels:\n  x:\n    provider: claude\n").expect("config antigo");
         assert!(parsed.providers.is_empty() && parsed.models.is_empty());
-        let shipped:Config=serde_yaml::from_str(&expand_env(include_str!("../../config.yaml"))).expect("config.yaml do projeto");
+        let shipped:Config=serde_yaml::from_str(&expand_env(include_str!("../../../../config.yaml"))).expect("config.yaml do projeto");
         assert!(shipped.providers.is_empty() && shipped.models.is_empty());
-        assert!(!include_str!("../../config.yaml").contains("providers:"),"o config.yaml do projeto não declara provedores");
+        assert!(!include_str!("../../../../config.yaml").contains("providers:"),"o config.yaml do projeto não declara provedores");
     }
     #[test] fn provider_local_flag_is_optional_and_opt_in() { let implicit:ProviderConfig=serde_yaml::from_str("type: cli\ncommand: ollama").expect("cli provider"); assert_eq!(implicit.local,None); let explicit:ProviderConfig=serde_yaml::from_str("type: cli\ncommand: ollama\nlocal: true").expect("local cli provider"); assert_eq!(explicit.local,Some(true)); assert!(!serde_yaml::to_string(&implicit).expect("yaml").contains("local")); }
     #[test] fn expands_missing_env_to_empty() { assert_eq!(expand_env("api_key: ${JEV_TEST_MISSING}"), "api_key: "); }

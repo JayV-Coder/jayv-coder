@@ -4,8 +4,10 @@
 //! dele). Quem precisar de algo de uma camada de cima inverte a direção: o
 //! tipo ou a constante desce, e a de cima reexporta.
 //!
-//! Por ora só o código conta; os testes ainda cruzam camadas em alguns
-//! lugares e mudam junto quando cada crate sair.
+//! As camadas que já saíram para `crates/` (base e armazenamento) têm a
+//! fronteira garantida pelo próprio Cargo; este teste cobre as que ainda
+//! moram em `src/`. Por ora só o código conta; os testes ainda cruzam camadas
+//! em alguns lugares e mudam junto quando cada crate sair.
 
 /// Camada e os módulos dela, na ordem em que podem depender umas das outras.
 pub const LAYERS:&[(&str,&[&str])]=&[
@@ -21,7 +23,7 @@ pub const LAYERS:&[(&str,&[&str])]=&[
     ("workspace",&["workspace","turns"]),
     ("orchestration",&["orchestrator","parallel","split","review"]),
     ("live",&["live_files"]),
-    ("app",&["desktop","mcp","sync","layers"]),
+    ("app",&["desktop","mcp","sync","layers","outbox_tests"]),
 ];
 
 #[cfg(test)]
