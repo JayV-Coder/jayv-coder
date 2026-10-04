@@ -103,8 +103,10 @@ pub struct ClaudeOptions {
     pub safe_mode:bool,
     /// Dá ao Claude as ferramentas do índice de símbolos do JayV (`jayv mcp`).
     pub symbol_tools:bool,
+    /// Os mecanismos liberados sem pergunta (`CLAUDE_MECHANISMS`).
+    pub mechanisms:Vec<String>,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH])} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -116,8 +118,10 @@ pub struct CodexOptions {
     /// Só vale com `workspace-write`: nos outros dois a rede já está decidida.
     pub network_access:bool,
     pub skip_git_repo_check:bool,
+    /// Os mecanismos ligados (`CODEX_MECHANISMS`).
+    pub mechanisms:Vec<String>,
 }
-impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true} } }
+impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true,mechanisms:strings(&[WEB_SEARCH])} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -126,8 +130,10 @@ pub struct CopilotOptions {
     pub tool_access:String,
     pub blocked_tools:Vec<String>,
     pub silent:bool,
+    /// Os mecanismos liberados sem pergunta (`COPILOT_MECHANISMS`).
+    pub mechanisms:Vec<String>,
 }
-impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true} } }
+impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -163,6 +169,33 @@ const COPILOT_ACCESS:[&str;3]=["read","edits","all"];
 pub const COPILOT_TOOLS:[&str;4]=["shell","write","shell(git push)","shell(rm)"];
 const CURSOR_SANDBOXES:[&str;3]=["default","enabled","disabled"];
 
+/// Os mecanismos que dão ao agente o que fazer além de ler e editar o
+/// projeto: buscar na web, abrir páginas, rodar comandos. Cada agente roda sem
+/// terminal (`--print`/`exec`), e ninguém responde ao pedido de aprovação
+/// dele: o que não vem liberado na linha de comando é negado. Cada agente só
+/// mostra os que a CLI dele sabe ligar por flag.
+pub const WEB_SEARCH:&str="webSearch";
+pub const WEB_FETCH:&str="webFetch";
+pub const SHELL:&str="shell";
+pub const GITHUB_TOOLS:&str="githubTools";
+/// `WebSearch`, `WebFetch` e `Bash` no `--allowedTools`.
+pub const CLAUDE_MECHANISMS:[&str;3]=[WEB_SEARCH,WEB_FETCH,SHELL];
+/// `web_search = "live"`; desligado é `"disabled"`.
+pub const CODEX_MECHANISMS:[&str;1]=[WEB_SEARCH];
+/// `--allow-all-urls`, `--allow-tool shell` e `--enable-all-github-mcp-tools`.
+pub const COPILOT_MECHANISMS:[&str;3]=[WEB_FETCH,SHELL,GITHUB_TOOLS];
+
+/// Os mecanismos que a CLI do agente sabe ligar. O Cursor não tem flag para
+/// nenhum: a busca na web dele é sempre dele, e os comandos só pelo `--force`.
+pub fn mechanisms_of(agent:AgentId)->&'static [&'static str] {
+    match agent { AgentId::Claude=>&CLAUDE_MECHANISMS, AgentId::Codex=>&CODEX_MECHANISMS, AgentId::Copilot=>&COPILOT_MECHANISMS, AgentId::Cursor=>&[] }
+}
+
+/// A ferramenta do Claude atrás de cada mecanismo.
+fn claude_tool(mechanism:&str)->Option<&'static str> {
+    match mechanism { WEB_SEARCH=>Some("WebSearch"), WEB_FETCH=>Some("WebFetch"), SHELL=>Some("Bash"), _=>None }
+}
+
 /// `field` é a chave do i18n do nome do campo, sem o prefixo
 /// `settings.field.`.
 fn one_of(field:&str,value:&str,allowed:&[&str])->Result<()> {
@@ -183,6 +216,10 @@ impl ClaudeOptions {
         if !self.fallback_model.is_empty()&&!models.contains(self.fallback_model.as_str()) { bail!(Text::new("settings.claude.fallback")); }
         if let Some(budget)=self.max_budget_usd { if !(budget.is_finite()&&budget>0.0&&budget<=1_000.0) { bail!(Text::new("settings.claude.budget")); } }
         self.blocked_tools=tools_in("claude.blockedTools",&self.blocked_tools,&CLAUDE_TOOLS)?;
+        // Ferramenta bloqueada não se libera: o bloqueio vence.
+        let blocked=self.blocked_tools.clone();
+        self.mechanisms=tools_in("claude.mechanisms",&self.mechanisms,&CLAUDE_MECHANISMS)?.into_iter()
+            .filter(|mechanism|claude_tool(mechanism).is_none_or(|tool|!blocked.iter().any(|item|item==tool))).collect();
         self.append_system_prompt=self.append_system_prompt.trim().to_string();
         if self.append_system_prompt.chars().count()>4_000 { bail!(Text::new("settings.claude.instructions").with("max",4_000u32)); }
         Ok(self)
@@ -200,6 +237,13 @@ impl ClaudeOptions {
         // resposta, e é de lá que o JayV monta o formulário.
         let blocked=[INTERACTIVE_ONLY_TOOL.to_string()].into_iter().chain(self.blocked_tools.iter().cloned()).collect::<Vec<_>>();
         args.extend(["--disallowed-tools".to_string(),blocked.join(",")]);
+        // O que roda sem pergunta. Sem terminal, o resto do que pede
+        // aprovação — a busca na web inclusive — é negado.
+        let mut allowed=self.mechanisms.iter().filter_map(|mechanism|claude_tool(mechanism))
+            .filter(|tool|!self.blocked_tools.iter().any(|item|item==tool)).map(str::to_string).collect::<Vec<_>>();
+        let symbols=if self.symbol_tools { symbol_server_config() } else { None };
+        if symbols.is_some() { allowed.push(SYMBOL_SERVER_TOOLS.to_string()); }
+        if !allowed.is_empty() { args.extend(["--allowedTools".to_string(),allowed.join(",")]); }
         if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
         // Com as sessões guardadas, o pedido seguinte do mesmo chat retoma a
         // sessão do anterior: o agente já leu o que leu e não explora tudo de
@@ -210,7 +254,7 @@ impl ClaudeOptions {
         // leitura: o Claude pergunta onde algo mora em vez de varrer a pasta.
         // Desligado por padrão — as definições das ferramentas custam tokens em
         // toda sessão, e o `jayv bench` diz se se pagam no projeto.
-        if self.symbol_tools { if let Some(config)=symbol_server_config() { args.extend(["--mcp-config".to_string(),config,"--allowedTools".to_string(),SYMBOL_SERVER_TOOLS.to_string()]); } }
+        if let Some(config)=symbols { args.extend(["--mcp-config".to_string(),config]); }
         args
     }
 }
@@ -231,6 +275,7 @@ impl CodexOptions {
         self.reasoning_effort=effort_of(&self.reasoning_effort);
         one_of("codex.reasoning",&self.reasoning_effort,&CODEX_EFFORTS)?;
         if self.sandbox!="workspace-write" { self.network_access=false; }
+        self.mechanisms=tools_in("codex.mechanisms",&self.mechanisms,&CODEX_MECHANISMS)?;
         Ok(self)
     }
     fn args(&self)->Vec<String> {
@@ -241,6 +286,10 @@ impl CodexOptions {
         let effort=effort_of(&self.reasoning_effort);
         args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",if effort==AUTO_EFFORT {EFFORT} else {&effort})]);
         if self.network_access { args.extend(strings(&["-c","sandbox_workspace_write.network_access=true"])); }
+        // `live` busca na hora; desligado é desligado mesmo, e não o `cached`
+        // que o Codex usa quando ninguém diz nada.
+        let search=if self.mechanisms.iter().any(|mechanism|mechanism==WEB_SEARCH) {"live"} else {"disabled"};
+        args.extend(["-c".to_string(),format!("web_search=\"{search}\"")]);
         // O pedido chega pela entrada padrão.
         args.push("-".into());
         args
@@ -251,12 +300,25 @@ impl CopilotOptions {
     fn checked(mut self)->Result<Self> {
         one_of("copilot.toolAccess",&self.tool_access,&COPILOT_ACCESS)?;
         self.blocked_tools=tools_in("copilot.blockedTools",&self.blocked_tools,&COPILOT_TOOLS)?;
+        let shell_blocked=self.blocked_tools.iter().any(|tool|tool==SHELL);
+        self.mechanisms=tools_in("copilot.mechanisms",&self.mechanisms,&COPILOT_MECHANISMS)?.into_iter()
+            .filter(|mechanism|!(shell_blocked&&mechanism==SHELL)).collect();
         Ok(self)
     }
     fn args(&self)->Vec<String> {
         // O Copilot não lê o pedido da entrada padrão: ele vai no `-p`.
         let mut args=strings(&["-p","{prompt}","--model","{model}"]);
         match self.tool_access.as_str() { "edits"=>args.extend(strings(&["--allow-tool","write"])), "all"=>args.push("--allow-all-tools".into()), _=>{} }
+        for mechanism in &self.mechanisms {
+            match mechanism.as_str() {
+                WEB_FETCH=>args.push("--allow-all-urls".into()),
+                SHELL=>args.extend(strings(&["--allow-tool","shell"])),
+                GITHUB_TOOLS=>args.push("--enable-all-github-mcp-tools".into()),
+                _=>{}
+            }
+        }
+        // A negação vence a liberação no Copilot, então o bloqueio continua
+        // valendo mesmo com o mecanismo ligado.
         for tool in &self.blocked_tools { args.extend(["--deny-tool".to_string(),tool.clone()]); }
         if self.silent { args.push("--silent".into()); }
         // A conta do fim vai para um arquivo, que o provedor lê e apaga: o
@@ -351,14 +413,21 @@ impl AgentSettings {
     }
 
     /// A linha de comando do modo planejamento: as opções do desenvolvedor,
-    /// com a escrita desligada. O Claude entra no `--permission-mode plan`, o
+    /// com a escrita desligada — e sem rodar comandos sem pergunta, que
+    /// também escrevem. O Claude entra no `--permission-mode plan`, o
     /// Codex no sandbox `read-only` sem rede, o Copilot só lê e o Cursor entra
     /// no `--mode plan`, sem `--force`.
     pub fn plan_args(&self)->Vec<String> {
         match self.id {
-            AgentId::Claude=>ClaudeOptions{permission_mode:"plan".into(),..parse::<ClaudeOptions>(&self.options).unwrap_or_default()}.args(),
+            AgentId::Claude=>{
+                let options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
+                ClaudeOptions{permission_mode:"plan".into(),mechanisms:without_shell(&options.mechanisms),..options}.args()
+            }
             AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
-            AgentId::Copilot=>CopilotOptions{tool_access:"read".into(),..parse::<CopilotOptions>(&self.options).unwrap_or_default()}.args(),
+            AgentId::Copilot=>{
+                let options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
+                CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),..options}.args()
+            }
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
         }
     }
@@ -367,12 +436,14 @@ impl AgentSettings {
     /// `safe_agents`: o Claude sai do `bypassPermissions`, o Codex do
     /// `danger-full-access` (para `workspace-write`, sem rede), o Copilot do
     /// `all` (para `edits`) e o Cursor perde `--force`, `--approve-mcps` e o
-    /// sandbox desligado. O que já tinha trava fica como está.
+    /// sandbox desligado. O Claude e o Copilot perdem também os comandos sem
+    /// pergunta (o mecanismo `shell`). O que já tinha trava fica como está.
     pub fn without_unsafe_modes(&self)->Self {
         let options=match self.id {
             AgentId::Claude=>{
                 let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
                 if options.permission_mode=="bypassPermissions" { options.permission_mode="default".into(); }
+                options.mechanisms=without_shell(&options.mechanisms);
                 serde_json::to_value(options)
             }
             AgentId::Codex=>{
@@ -383,6 +454,7 @@ impl AgentSettings {
             AgentId::Copilot=>{
                 let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
                 if options.tool_access=="all" { options.tool_access="edits".into(); }
+                options.mechanisms=without_shell(&options.mechanisms);
                 serde_json::to_value(options)
             }
             AgentId::Cursor=>{
@@ -395,7 +467,25 @@ impl AgentSettings {
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
+
+    /// O mesmo agente sem os mecanismos que a política bloqueia, escritos
+    /// `agente/mecanismo`. A política só tira: nunca liga o que quem usa
+    /// deixou desligado.
+    pub fn without_mechanisms(&self,blocked:&[String])->Self {
+        let prefix=format!("{}/",self.id.key());
+        if !blocked.iter().any(|key|key.starts_with(&prefix)) { return self.clone(); }
+        let gone=|mechanisms:&[String]|mechanisms.iter().filter(|mechanism|!blocked.contains(&format!("{}/{mechanism}",self.id.key()))).cloned().collect::<Vec<_>>();
+        let options=match self.id {
+            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
+            AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
+            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
+            AgentId::Cursor=>return self.clone(),
+        }.unwrap_or_default();
+        Self{options,..self.clone()}
+    }
 }
+
+fn without_shell(mechanisms:&[String])->Vec<String> { mechanisms.iter().filter(|mechanism|*mechanism!=SHELL).cloned().collect() }
 
 /// Um modelo que o agente oferece, com os números que a tela preenche sozinha
 /// ao escolhê-lo.
@@ -594,6 +684,20 @@ fn legacy_effort(mut options:Value)->Value {
     options
 }
 
+/// As opções gravadas com o que faltava preenchido pelo padrão: a opção
+/// nova de uma versão (os mecanismos, por exemplo) chega à tela com o valor
+/// que o agente de fato usa. O que não se lê fica como veio, para a
+/// validação dizer o quê.
+fn filled(id:AgentId,options:Value)->Value {
+    let typed=match id {
+        AgentId::Claude=>parse::<ClaudeOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
+        AgentId::Codex=>parse::<CodexOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
+        AgentId::Copilot=>parse::<CopilotOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
+        AgentId::Cursor=>parse::<CursorOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
+    };
+    typed.unwrap_or(options)
+}
+
 pub fn load(connection:&Connection)->Result<LlmSettings> {
     let mut agents=Vec::new();
     {
@@ -602,7 +706,7 @@ pub fn load(connection:&Connection)->Result<LlmSettings> {
         for row in rows {
             let (id,enabled,command,timeout,options)=row?;
             let Ok(id)=AgentId::parse(&id) else { continue };
-            agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:legacy_effort(serde_json::from_str(&options).unwrap_or(Value::Null))});
+            agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:filled(id,legacy_effort(serde_json::from_str(&options).unwrap_or(Value::Null)))});
         }
     }
     // Um agente que falte no banco volta com o padrão: a tela sempre tem uma
@@ -1033,7 +1137,7 @@ mod tests {
         let config:Value=serde_json::from_str(&args[at+1]).expect("json");
         assert_eq!(config["mcpServers"]["jayv"]["args"],json!(["mcp"]));
         assert_eq!(config["mcpServers"]["jayv"]["command"],std::env::current_exe().unwrap().display().to_string());
-        assert!(args.windows(2).any(|pair|pair==["--allowedTools",SYMBOL_SERVER_TOOLS]));
+        assert!(args.windows(2).any(|pair|pair[0]=="--allowedTools"&&pair[1].split(',').any(|tool|tool==SYMBOL_SERVER_TOOLS)));
         let plan=agent(AgentId::Claude,json!({"symbolTools":true})).plan_args();
         assert!(plan.iter().any(|arg|arg=="--mcp-config"),"só leem: valem no plano também");
     }
@@ -1119,6 +1223,39 @@ mod tests {
         let codex=&providers["codex"];
         assert!(codex.args.windows(2).any(|pair|pair==["--sandbox","workspace-write"]),"o build usa o que foi configurado");
         assert!(codex.for_planning().args.windows(2).any(|pair|pair==["--sandbox","read-only"]));
+    }
+
+    /// Sem terminal, o que pede aprovação é negado: o mecanismo ligado vai
+    /// liberado na linha de comando de cada agente, e o desligado não.
+    #[test] fn mechanisms_reach_each_command_line() {
+        let allowed=|args:&[String]|args.windows(2).find(|pair|pair[0]=="--allowedTools").map(|pair|pair[1].clone()).unwrap_or_default();
+        let claude=agent(AgentId::Claude,Value::Null).args();
+        assert_eq!(allowed(&claude),"WebSearch","a busca na web vem ligada");
+        let claude=agent(AgentId::Claude,json!({"mechanisms":["webSearch","webFetch","shell"]})).args();
+        assert_eq!(allowed(&claude),"WebSearch,WebFetch,Bash");
+        assert!(!allowed(&agent(AgentId::Claude,json!({"mechanisms":["shell"]})).plan_args()).contains("Bash"),"o plano não roda comandos sem pergunta");
+        assert!(!agent(AgentId::Claude,json!({"mechanisms":[]})).args().iter().any(|arg|arg=="--allowedTools"));
+
+        let codex=agent(AgentId::Codex,Value::Null).args();
+        assert!(codex.windows(2).any(|pair|pair==["-c","web_search=\"live\""]));
+        let codex=agent(AgentId::Codex,json!({"mechanisms":[]})).args();
+        assert!(codex.windows(2).any(|pair|pair==["-c","web_search=\"disabled\""]),"desligado não cai no cached do Codex");
+
+        let copilot=agent(AgentId::Copilot,json!({"mechanisms":["webFetch","shell","githubTools"]})).args();
+        for flag in ["--allow-all-urls","--enable-all-github-mcp-tools"] { assert!(copilot.iter().any(|arg|arg==flag),"falta {flag}"); }
+        assert!(copilot.windows(2).any(|pair|pair==["--allow-tool","shell"]));
+        assert!(!agent(AgentId::Copilot,Value::Null).args().iter().any(|arg|arg=="--allow-all-urls"),"desligado por padrão");
+        assert!(!agent(AgentId::Copilot,json!({"mechanisms":["shell"]})).plan_args().windows(2).any(|pair|pair==["--allow-tool","shell"]));
+        assert!(!agent(AgentId::Copilot,json!({"mechanisms":["shell"]})).without_unsafe_modes().args().windows(2).any(|pair|pair==["--allow-tool","shell"]),"safe_agents tira os comandos sem pergunta");
+    }
+
+    #[test] fn a_blocked_tool_wins_over_its_mechanism() {
+        let checked=agent(AgentId::Claude,json!({"blockedTools":["WebSearch"],"mechanisms":["webSearch","webFetch"]})).checked(&HashSet::new()).expect("válido");
+        assert_eq!(checked["mechanisms"],json!(["webFetch"]));
+        let checked=agent(AgentId::Copilot,json!({"blockedTools":["shell"],"mechanisms":["shell","webFetch"]})).checked(&HashSet::new()).expect("válido");
+        assert_eq!(checked["mechanisms"],json!(["webFetch"]));
+        assert!(agent(AgentId::Codex,json!({"mechanisms":["shell"]})).checked(&HashSet::new()).is_err(),"o Codex não sabe ligar esse");
+        assert!(mechanisms_of(AgentId::Cursor).is_empty());
     }
 
     #[test] fn the_orchestrator_configuration_comes_from_the_database() {

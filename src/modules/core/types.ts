@@ -195,6 +195,8 @@ export interface ClaudeOptions {
   safeMode: boolean;
   /** As ferramentas do índice de símbolos do JayV (`jayv mcp`). */
   symbolTools: boolean;
+  /** Os mecanismos liberados sem pergunta (`AGENT_MECHANISMS.claude`). */
+  mechanisms: Mechanism[];
 }
 
 export interface CodexOptions {
@@ -202,12 +204,14 @@ export interface CodexOptions {
   reasoningEffort: "auto" | "low" | "medium" | "high";
   networkAccess: boolean;
   skipGitRepoCheck: boolean;
+  mechanisms: Mechanism[];
 }
 
 export interface CopilotOptions {
   toolAccess: "read" | "edits" | "all";
   blockedTools: string[];
   silent: boolean;
+  mechanisms: Mechanism[];
 }
 
 export interface CursorOptions {
@@ -215,6 +219,19 @@ export interface CursorOptions {
   force: boolean;
   approveMcps: boolean;
 }
+
+/** O que o agente pode fazer além de ler e editar o projeto: buscar na web,
+ * abrir páginas, rodar comandos, usar as ferramentas do GitHub. */
+export type Mechanism = "webSearch" | "webFetch" | "shell" | "githubTools";
+
+/** Os mecanismos que a CLI de cada agente sabe ligar por flag (o mesmo
+ * `mechanisms_of` do núcleo). O Cursor não tem flag para nenhum. */
+export const AGENT_MECHANISMS: Record<AgentId, Mechanism[]> = {
+  claude: ["webSearch", "webFetch", "shell"],
+  codex: ["webSearch"],
+  copilot: ["webFetch", "shell", "githubTools"],
+  cursor: [],
+};
 
 export interface AgentOptions {
   claude: ClaudeOptions;

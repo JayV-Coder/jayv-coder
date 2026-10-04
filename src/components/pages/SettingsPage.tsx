@@ -32,10 +32,16 @@ export function SettingsPage() {
   return (
     <ScrollPage>
       <PageHeading eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={t("settings.description")}>
-        {dirty && <Badge variant="warning">{t("settings.unsaved")}</Badge>}
-        <Button variant="ghost" disabled={saving} onClick={restoreCoreDefaults} title={t("settings.defaults.hint")}>{t("settings.defaults")}</Button>
-        <Button variant="ghost" disabled={!dirty || saving} onClick={discardChanges}>{t("settings.discard")}</Button>
-        <Button disabled={!dirty || saving || broken || noneEnabled} onClick={() => void saveSettings()}>{t("settings.save")}</Button>
+        {/* O aviso fica em cima dos botões, num lugar que existe mesmo sem
+            alteração: aparecer não empurra os botões para baixo nem para o lado. */}
+        <div className="grid justify-items-end gap-1.5">
+          <Badge variant="warning" aria-hidden={!dirty} className={cn(!dirty && "invisible")}>{t("settings.unsaved")}</Badge>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="ghost" disabled={saving} onClick={restoreCoreDefaults} title={t("settings.defaults.hint")}>{t("settings.defaults")}</Button>
+            <Button variant="ghost" disabled={!dirty || saving} onClick={discardChanges}>{t("settings.discard")}</Button>
+            <Button disabled={!dirty || saving || broken || noneEnabled} onClick={() => void saveSettings()}>{t("settings.save")}</Button>
+          </div>
+        </div>
       </PageHeading>
 
       {(broken || noneEnabled) && (

@@ -2,6 +2,7 @@ import type { AgentSettings, CodexOptions } from "@/modules/core";
 import { useT } from "@/modules/i18n";
 import { updateOptions } from "@/modules/settings";
 import { FormField, OptionSelect, ToggleRow } from "@/components/molecules";
+import { MechanismsField } from "./MechanismsField";
 
 const SANDBOXES: CodexOptions["sandbox"][] = ["read-only", "workspace-write", "danger-full-access"];
 const EFFORTS: CodexOptions["reasoningEffort"][] = ["auto", "low", "medium", "high"];
@@ -23,6 +24,7 @@ export function CodexOptionsForm({ agent }: { agent: AgentSettings<"codex"> }) {
         <OptionSelect id="codex-effort" value={options.reasoningEffort} onChange={(reasoningEffort) => set({ reasoningEffort })}
           options={EFFORTS.map((value) => ({ value, label: t(`effort.${value}`) }))} />
       </FormField>
+      <MechanismsField agent="codex" selected={options.mechanisms ?? []} onChange={(mechanisms) => set({ mechanisms })} />
       <ToggleRow id="codex-network" label={t("codex.network")} hint={t("codex.network.hint")} checked={writes && options.networkAccess} disabled={!writes} onChange={(networkAccess) => set({ networkAccess })} />
       <ToggleRow id="codex-git" label={t("codex.git")} hint={t("codex.git.hint")} checked={options.skipGitRepoCheck} onChange={(skipGitRepoCheck) => set({ skipGitRepoCheck })} />
     </div>
