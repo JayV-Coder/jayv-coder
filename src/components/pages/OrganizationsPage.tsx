@@ -4,12 +4,13 @@ import { useLocale, useT, type Key } from "@/modules/i18n";
 import { acceptInvite, declineInvite, loadOrganizations, openOrganization, useOrganizations } from "@/modules/organizations";
 import { EmptyText } from "@/components/atoms";
 import { PageHeading, SettingsSection } from "@/components/molecules";
-import { NewOrganizationDialog, YardCard } from "@/components/organisms";
+import { SiteDashboardButton, YardCard } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-/** As organizações de quem usa o app e os convites que chegaram para ele. */
+/** As organizações de quem usa o app e os convites que chegaram para ele.
+ * Criar uma organização mudou para o painel do site. */
 export function OrganizationsPage() {
   const t = useT();
   const list = useOrganizations((state) => state.list);
@@ -30,8 +31,9 @@ export function OrganizationsPage() {
   return (
     <ScrollPage>
       <PageHeading eyebrow={t("header.account")} title={t("nav.organizations")} description={t("org.list.description")}>
-        <NewOrganizationDialog><Button>{t("org.new.title")}</Button></NewOrganizationDialog>
+        <SiteDashboardButton path="/organizations" />
       </PageHeading>
+      <p className="mb-6 text-sm text-muted-foreground">{t("org.site.hint")}</p>
 
       {incoming.length > 0 && (
         <div className="mb-6">

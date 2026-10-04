@@ -59,12 +59,10 @@ interface CatalogState {
   plans: Plan[];
   features: FeatureRow[];
   subscription: Subscription | null;
-  /** Só do admin: assinantes por plano. */
-  subscribers: Record<string, number>;
   busy: string | null;
 }
 
-export const useCatalog = create<CatalogState>(() => ({ loaded: false, plans: [], features: [], subscription: null, subscribers: {}, busy: null }));
+export const useCatalog = create<CatalogState>(() => ({ loaded: false, plans: [], features: [], subscription: null, busy: null }));
 
 /** O erro das RPCs do admin chega como chave do i18n (`admin.plan.invalid`). */
 function failure(error: { message?: string }) {
@@ -101,11 +99,6 @@ export async function loadCatalog() {
   ]);
   for (const result of [plans, links, features]) if (result.error) throw failure(result.error);
   const included = (key: string) => (links.data ?? []).filter((link) => link.plan_key === key).map((link) => link.feature_key as string);
-  let subscribers: Record<string, number> = {};
-  if (useEntitlements.getState().admin) {
-    const counts = await supabase.rpc("admin_plan_counts");
-    if (!counts.error) subscribers = Object.fromEntries((counts.data as { plan_key: string; subscribers: number }[]).map((row) => [row.plan_key, Number(row.subscribers)]));
-  }
   const sub = subscription.data;
   useCatalog.setState({
     loaded: true,
@@ -118,7 +111,6 @@ export async function loadCatalog() {
     // não tem texto aqui.
     features: (features.data as FeatureRow[]).filter((row) => (FEATURES as readonly string[]).includes(row.key)),
     subscription: sub ? { planKey: sub.plan_key, status: sub.status, currentPeriodEnd: sub.current_period_end, cancelAtPeriodEnd: sub.cancel_at_period_end } : null,
-    subscribers,
   });
 }
 
@@ -147,7 +139,7 @@ export function clearEntitlements() {
   if (channel) void supabase.removeChannel(channel);
   channel = null;
   useEntitlements.setState({ plan: null, admin: false, features: null });
-  useCatalog.setState({ loaded: false, plans: [], features: [], subscription: null, subscribers: {}, busy: null });
+  useCatalog.setState({ loaded: false, plans: [], features: [], subscription: null, busy: null });
 }
 
 /** O link `jayv://billing/<done|cancel|portal>` com que o navegador volta do
@@ -190,57 +182,6 @@ export async function manageSubscription() {
   useCatalog.setState({ busy: "portal" });
   try {
     await billing({ action: "portal" });
-  } catch (error) {
-    reportError(error);
-  } finally {
-    useCatalog.setState({ busy: null });
-  }
-}
-
-// O admin.
-
-async function call(name: string, args: Record<string, unknown>) {
-  const { error } = await supabase.rpc(name, args);
-  if (error) throw failure(error);
-}
-
-export async function setFeatureEnabled(feature: string, enabled: boolean) {
-  useCatalog.setState((state) => ({ features: state.features.map((row) => (row.key === feature ? { ...row, enabled } : row)) }));
-  try {
-    await call("admin_set_feature", { feature, on_off: enabled });
-  } catch (error) {
-    reportError(error);
-  }
-  refresh();
-}
-
-export async function savePlan(plan: Plan) {
-  useCatalog.setState({ busy: plan.key });
-  try {
-    await call("admin_save_plan", {
-      plan: {
-        key: plan.key, name: plan.name, description: plan.description, position: plan.position, active: plan.active, is_default: plan.isDefault,
-        stripe_price_id: plan.stripePriceId ?? "", price_cents: plan.priceCents, currency: plan.currency ?? "", billing_interval: plan.billingInterval ?? "",
-        features: plan.features,
-      },
-    });
-    notify(t("admin.plan.saved", { plan: plan.name }));
-    await loadCatalog();
-    return true;
-  } catch (error) {
-    reportError(error);
-    return false;
-  } finally {
-    useCatalog.setState({ busy: null });
-  }
-}
-
-export async function deletePlan(plan: Plan) {
-  useCatalog.setState({ busy: plan.key });
-  try {
-    await call("admin_delete_plan", { plan: plan.key });
-    notify(t("admin.plan.deleted", { plan: plan.name }));
-    await loadCatalog();
   } catch (error) {
     reportError(error);
   } finally {
