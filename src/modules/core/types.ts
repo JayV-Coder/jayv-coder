@@ -259,7 +259,7 @@ export type Permission = "allow" | "ask" | "deny";
 export const COMPLEXITIES = ["trivial", "simple", "medium", "complex"] as const;
 export type Complexity = (typeof COMPLEXITIES)[number];
 
-/** O que se ajusta no Jev e no app (ver `src-tauri/src/core_settings.rs`). */
+/** O que se ajusta no Jev e no app (ver `src-tauri/crates/jayv-jev/src/core_settings.rs`). */
 export interface CoreSettings {
   adaptiveRouting: boolean;
   confidenceThreshold: number;

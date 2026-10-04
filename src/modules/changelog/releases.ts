@@ -26,6 +26,12 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.51.5", date: "2026-10-04",
+    items: [
+      { kind: "fix", id: "coreJevPlansOrgs" },
+    ],
+  },
+  {
     version: "0.51.4", date: "2026-10-04",
     items: [
       { kind: "fix", id: "interruptedNotResumed" },

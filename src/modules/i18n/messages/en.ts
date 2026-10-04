@@ -1306,6 +1306,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.coreJevPlansOrgs.title": "Jev, plans and organizations in separate parts",
+  "whatsNew.item.coreJevPlansOrgs.detail": "An internal change with no difference in use: Jev's gate, the plan features and the organization repositories became parts of their own in the core, built and tested separately.",
   "whatsNew.item.indexAfterBuild.title": "Search sees what the agent just created",
   "whatsNew.item.indexAfterBuild.detail": "The project index was read once and did not change after an agent edited files in Development mode: new files stayed out of search, the map and the symbols. Now, after each Development request, the folder is read again for the next request.",
   "whatsNew.item.settingsWhileWorking.title": "Settings and System open while an agent works",

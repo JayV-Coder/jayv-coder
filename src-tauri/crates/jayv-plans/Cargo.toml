@@ -1,0 +1,18 @@
+# Os planos e recursos: o catálogo do que o plano da conta libera, guardado no
+# SQLite, e o que ele desliga nas configurações do núcleo. Depende da base, da
+# nuvem e do Jev.
+[package]
+name = "jayv-plans"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-cloud = { path = "../jayv-cloud" }
+jayv-jev = { path = "../jayv-jev" }
+anyhow.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true

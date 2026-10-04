@@ -400,7 +400,7 @@ impl RoutingDecision {
     fn jev_seed()->Option<String> {
         const SEED:&str="20261001120100_seed_jev_en.sql";
         let repository=std::env::var_os("JAYV_SUPABASE_REPO").map(std::path::PathBuf::from)
-            .unwrap_or_else(||std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../supabase"));
+            .unwrap_or_else(||std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../supabase"));
         ["supabase/migrations","migrations"].iter().find_map(|folder|std::fs::read_to_string(repository.join(folder).join(SEED)).ok())
     }
 

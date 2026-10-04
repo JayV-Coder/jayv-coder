@@ -1,0 +1,28 @@
+# O Jev: a portaria de entrada e de saída, as perguntas ao usuário, o nível,
+# a política de LLM, as configurações do núcleo e os turnos com as conferências
+# gravadas. Depende da base, da nuvem e dos agentes.
+[package]
+name = "jayv-jev"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-cloud = { path = "../jayv-cloud" }
+jayv-agents = { path = "../jayv-agents" }
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+globset.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+jayv-store = { path = "../jayv-store" }
+tempfile.workspace = true

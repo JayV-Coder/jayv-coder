@@ -1,0 +1,19 @@
+# As organizações no disco: as chaves dos repositórios de uma pasta e o clone,
+# a varredura e o estado de cada checkout (pelo git do sistema). Depende da
+# base e dos agentes (o lançador de processos).
+[package]
+name = "jayv-orgs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-agents = { path = "../jayv-agents" }
+anyhow.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
