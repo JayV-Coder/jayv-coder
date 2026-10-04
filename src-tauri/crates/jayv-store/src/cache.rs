@@ -1,4 +1,4 @@
-use crate::model::Context;
+use jayv_base::model::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,7 +48,7 @@ fn referenced(context: &Context, current: &BTreeMap<String, String>) -> BTreeMap
 }
 
 #[cfg(test)] mod tests {
-    use super::*; use crate::model::ContextSnippet;
+    use super::*; use jayv_base::model::ContextSnippet;
     fn context(paths: &[&str]) -> Context { Context { relevant_files: paths.iter().map(|p| (*p).into()).collect(), snippets: paths.iter().map(|p| ContextSnippet { path: (*p).into(), content: "body".into(), score: 1.0 }).collect(), ..Default::default() } }
     fn hashes(pairs: &[(&str, &str)]) -> BTreeMap<String, String> { pairs.iter().map(|(p, h)| ((*p).to_string(), (*h).to_string())).collect() }
     #[test] #[allow(deprecated)] fn caches_context() { let mut c = SemanticCache::new(60, 2); c.insert("x".into(), Context::default()); assert!(c.get("x").is_some()); assert_eq!(c.stats(), (1,1,0)); }

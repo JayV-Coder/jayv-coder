@@ -558,7 +558,7 @@ export const en = {
   "connection.pending": { one: "{count} change not synced", other: "{count} changes not synced" },
   "connection.failed": { one: "{count} change refused by the server", other: "{count} changes refused by the server" },
 
-  // Textos que o núcleo devolve como chave (ver src-tauri/src/i18n.rs).
+  // Textos que o núcleo devolve como chave (ver src-tauri/crates/jayv-base/src/i18n.rs).
   "error.unexpected": "Something went wrong: {reason}",
   "session.required": "Sign in to continue.",
   "session.expired": "Your session has expired. Sign in again.",
@@ -1305,6 +1305,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.coreCrates.title": "Core foundation in separate parts",
+  "whatsNew.item.coreCrates.detail": "An internal change with no difference in use: texts, configuration, network security and the app's local database became parts of their own in the core, built and tested separately.",
   "whatsNew.item.coreLayers.title": "Core organized in layers",
   "whatsNew.item.coreLayers.detail": "An internal change with no difference in use: the parts of the app's core no longer depend on each other in circles. It is the first step toward building and fixing each feature separately.",
   "whatsNew.item.plans.title": "Plans and subscription",

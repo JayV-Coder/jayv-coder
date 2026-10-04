@@ -1,7 +1,7 @@
 import { isText, say, t, type Key, type Text } from "@/modules/i18n";
 
 /** O prefixo dos avisos que o núcleo grava como mensagem (ver
- * `src-tauri/src/i18n.rs`). */
+ * `src-tauri/crates/jayv-base/src/i18n.rs`). */
 const NOTICE = "jayv:notice:";
 
 /** O aviso gravado no chat, no idioma de quem lê — ou nada, quando a mensagem

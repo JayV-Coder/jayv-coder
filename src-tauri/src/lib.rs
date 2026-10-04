@@ -1,33 +1,30 @@
+// As camadas que já são crates, com os nomes de sempre: `crate::i18n` continua
+// valendo aqui dentro.
+pub use jayv_base::{config, firewall, i18n, lockdown, model, progress};
+pub use jayv_store::{cache, checkpoint, local};
+
 pub mod agents;
 pub mod asking;
 pub mod bench;
-pub mod cache;
-pub mod checkpoint;
 pub mod checkout;
 pub mod cloud;
-pub mod config;
 pub mod desktop;
 pub mod expertise;
 pub mod features;
 pub mod context_engine;
 pub mod core_settings;
-pub mod firewall;
 pub mod gatekeeper;
 pub mod graph;
-pub mod i18n;
 pub mod jev;
 pub mod layers;
 pub mod live_files;
 pub mod llm;
-pub mod local;
-pub mod lockdown;
 pub mod mcp;
 pub mod memory;
-pub mod model;
 pub mod orchestrator;
+mod outbox_tests;
 pub mod parallel;
 pub mod policy;
-pub mod progress;
 pub mod project_map;
 pub mod project_memory;
 pub mod providers;
