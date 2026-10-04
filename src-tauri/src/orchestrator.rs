@@ -227,7 +227,7 @@ impl Orchestrator {
         }
         self.memory.add_message(session_id,"user",normalized.clone());
         let brief=self.pending_brief.take();
-        let extras=std::mem::take(&mut self.pending_context);
+        let mut extras=std::mem::take(&mut self.pending_context);
         let gate_passed=self.pending_gate_passed.take().unwrap_or(true);
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
         let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
@@ -258,6 +258,11 @@ impl Orchestrator {
             return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
         }
         pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
+        // Pedido complexo no build: um modelo de raciocínio planeja antes, em
+        // somente leitura, e o plano vai junto ao agente que constrói.
+        if self.config.jev.plan_first&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity) {
+            if let Some(plan)=self.plan_first(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await { extras.push(plan); }
+        }
         pulse.beat(Beat::Running);
         // A revisão compara o projeto de antes com o de depois: a largada é
         // tirada antes de o agente começar.
@@ -444,6 +449,22 @@ impl Orchestrator {
         messages.extend(short_history(self.memory.conversation(session_id)));
         messages.push(ChatMessage{role:"user".into(),content:user});
         Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false))
+    }
+
+    /// O plano escrito por um modelo de raciocínio, em somente leitura, para
+    /// o agente que constrói seguir. Sem planejador ou com ele falhando, nada:
+    /// o agente constrói como antes.
+    async fn plan_first(&self,request:&str,context:&Context,builder:&ModelSelection,session_id:&str,pulse:&Pulse)->Option<String> {
+        let ranked=rank_models(&self.config,"analysis","complex",context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
+        let planner=ranked.iter().find(|candidate|self.planners.contains_key(&candidate.provider))?;
+        let provider=self.planners.get(&planner.provider)?;
+        let system=format!("{}\n{}",context.system_instructions,language_note());
+        let messages=[ChatMessage{role:"system".into(),content:system},ChatMessage{role:"user".into(),content:crate::split::prompt(request,&agent_name(&builder.provider))}];
+        pulse.beat(Beat::Plan{provider:planner.provider.clone(),model:planner.model_name.clone()});
+        match provider.chat_turn(&messages,&planner.model_name,Some("high"),None,&Pulse::silent()).await {
+            Ok(response)=>crate::split::handoff(&response.response,&agent_name(&planner.provider)),
+            Err(error)=>{ eprintln!("plano: {} não planejou ({error:#})",planner.provider); None }
+        }
     }
 
     /// A foto do projeto antes do pedido, para a revisão saber o que ele
@@ -1119,6 +1140,46 @@ mod tests {
         orchestrator.providers=build_providers(&HashMap::from([("maker".to_string(),script("echo só-li","cat >/dev/null; echo maker-planejou")),("checker".to_string(),script("echo checker-construiu","cat >/dev/null; echo revisou"))]),&orchestrator.workdir);
         let quiet=orchestrator.process("adicione um teste ao roteador",Some("quiet"),&Pulse::silent()).await;
         assert_eq!(quiet.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("só-li"));
+    }
+
+    /// Com o plano ligado, o pedido complexo do build passa antes por um
+    /// modelo de raciocínio, em somente leitura, e o plano chega ao agente
+    /// que constrói. O pedido que não é complexo vai direto.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_reasoning_model_plans_before_another_agent_builds() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=|build:&str,plan:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build.into()],plan_args:vec!["-c".into(),plan.into()],..Default::default()};
+        let providers=HashMap::from([
+            ("thinker".to_string(),agent("cat >/dev/null; echo thinker-construiu","cat >/dev/null; echo '1. PLANO-X'")),
+            ("maker".to_string(),agent("grep -q 'PLANO-X' && echo seguiu-o-plano || echo sem-plano","cat >/dev/null; echo maker-planejou")),
+        ]);
+        let caps=|list:&[&str]|list.iter().map(|cap|cap.to_string()).collect::<Vec<_>>();
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([
+            // Só pensa: não entra na disputa de quem constrói.
+            ("thinker/m".to_string(),crate::config::ModelConfig{enabled:true,provider:"thinker".into(),model:"deep".into(),capabilities:caps(&["chat","reasoning"]),cost_class:"high".into(),speed:"slow".into(),context_window:200_000}),
+            ("maker/m".to_string(),crate::config::ModelConfig{enabled:true,provider:"maker".into(),model:"coder".into(),capabilities:caps(&["chat","code","tools"]),cost_class:"medium".into(),speed:"medium".into(),context_window:200_000}),
+        ]);
+        orchestrator.config.jev.plan_first=true;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"complex",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        let (pulse,mut beats)=Pulse::channel();
+        let complex=orchestrator.process("reescreva o roteador inteiro",Some("complex"),&pulse).await;
+        drop(pulse);
+        assert_eq!(complex.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("seguiu-o-plano"));
+        assert_eq!(complex.model_selection.provider,"maker");
+        let mut planned=None;
+        while let Some(beat)=beats.recv().await { if let Beat::Plan{provider,model}=beat { planned=Some((provider,model)); } }
+        assert_eq!(planned,Some(("thinker".to_string(),"deep".to_string())));
+
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        let simple=orchestrator.process("adicione um teste ao roteador",Some("simple"),&Pulse::silent()).await;
+        assert_eq!(simple.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("sem-plano"));
     }
 
     #[test] fn a_missing_agent_steps_aside_only_when_another_is_there() {

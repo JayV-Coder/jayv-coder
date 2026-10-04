@@ -34,6 +34,7 @@ pub mod review;
 pub mod router;
 pub mod sandbox;
 pub mod search;
+pub mod split;
 pub mod symbols;
 pub mod sync;
 pub mod tools;

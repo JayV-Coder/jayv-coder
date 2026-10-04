@@ -273,6 +273,8 @@ export interface CoreSettings {
   agentOrder: AgentId[];
   /** Um agente de outro provedor revisa o que o modo build mudou. */
   reviewChanges: boolean;
+  /** Num pedido complexo do build, um modelo de raciocínio planeja antes. */
+  planFirst: boolean;
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */
