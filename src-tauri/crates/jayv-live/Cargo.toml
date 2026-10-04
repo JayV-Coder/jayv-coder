@@ -1,0 +1,17 @@
+# O painel "Ao vivo": o que mudou nos arquivos dos repositórios de uma pasta
+# enquanto o agente trabalha. Depende da base e das organizações (os checkouts).
+[package]
+name = "jayv-live"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-orgs = { path = "../jayv-orgs" }
+serde.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

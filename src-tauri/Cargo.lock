@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.51.6"
+version = "0.51.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2117,10 +2117,12 @@ dependencies = [
  "jayv-cloud",
  "jayv-code",
  "jayv-jev",
+ "jayv-live",
  "jayv-memory",
  "jayv-orgs",
  "jayv-plans",
  "jayv-store",
+ "jayv-workspace",
  "jsonwebtoken",
  "regex",
  "reqwest 0.12.28",
@@ -2245,6 +2247,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jayv-live"
+version = "0.1.0"
+dependencies = [
+ "jayv-base",
+ "jayv-orgs",
+ "serde",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "jayv-memory"
 version = "0.1.0"
 dependencies = [
@@ -2297,6 +2310,28 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "jayv-workspace"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "jayv-agents",
+ "jayv-base",
+ "jayv-code",
+ "jayv-jev",
+ "jayv-memory",
+ "jayv-orgs",
+ "jayv-plans",
+ "jayv-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "uuid",
 ]
