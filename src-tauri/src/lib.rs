@@ -2,12 +2,12 @@
 // valendo aqui dentro.
 pub use jayv_base::{config, firewall, i18n, lockdown, model, progress};
 pub use jayv_store::{cache, checkpoint, local};
+pub use jayv_cloud as cloud;
+pub use jayv_agents::{agents, llm, providers, router, sandbox, tools, usage};
 
-pub mod agents;
 pub mod asking;
 pub mod bench;
 pub mod checkout;
-pub mod cloud;
 pub mod desktop;
 pub mod expertise;
 pub mod features;
@@ -18,28 +18,23 @@ pub mod graph;
 pub mod jev;
 pub mod layers;
 pub mod live_files;
-pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod orchestrator;
 mod outbox_tests;
+mod usage_tests;
 pub mod parallel;
 pub mod policy;
 pub mod project_map;
 pub mod project_memory;
-pub mod providers;
 pub mod rag;
 pub mod repo_keys;
 pub mod review;
-pub mod router;
-pub mod sandbox;
 pub mod search;
 pub mod split;
 pub mod symbols;
 pub mod sync;
-pub mod tools;
 pub mod turns;
-pub mod usage;
 pub mod workspace;
 
 pub use desktop::run_desktop;

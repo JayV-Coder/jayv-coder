@@ -182,7 +182,7 @@ export type Speed = "fast" | "medium" | "slow";
 export type Capability = "chat" | "code" | "reasoning" | "tools";
 
 /** As opções de cada agente, com os valores que o núcleo aceita (ver
- * `src-tauri/src/llm.rs`). Nenhuma vira argumento cru: o núcleo monta a linha
+ * `src-tauri/crates/jayv-agents/src/llm.rs`). Nenhuma vira argumento cru: o núcleo monta a linha
  * de comando a partir delas. */
 export interface ClaudeOptions {
   permissionMode: "default" | "plan" | "acceptEdits" | "auto" | "bypassPermissions";
@@ -334,7 +334,7 @@ export interface AgentProbe {
   version: string | null;
 }
 
-/** De quem é a conta das estatísticas (ver `src-tauri/src/usage/store.rs`). */
+/** De quem é a conta das estatísticas (ver `src-tauri/crates/jayv-agents/src/usage/store.rs`). */
 /** De quem é a conta. `projects` é um punhado de projetos (os de uma
  * organização); vazio, não conta nada. */
 export type UsageScope = { kind: "global" } | { kind: "project"; id: string } | { kind: "projects"; id: string[] } | { kind: "chat"; id: string };
