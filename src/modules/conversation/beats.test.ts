@@ -26,6 +26,12 @@ describe("beatLine", () => {
     expect(line).toContain("Codex");
     expect(line).toContain("next agent");
   });
+
+  it("names the agent that reviews the change and how many files it reads", () => {
+    const line = beatLine("review", { provider: "cursor", model: "auto", files: 3 });
+    expect(line).toContain("Cursor");
+    expect(line).toContain("3 changed");
+  });
 });
 
 describe("agentLine", () => {

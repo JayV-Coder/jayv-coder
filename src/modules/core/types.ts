@@ -271,6 +271,8 @@ export interface CoreSettings {
   /** Os agentes na ordem de preferência para desempatar; vazia, os empatados
    * se espalham entre os chats. */
   agentOrder: AgentId[];
+  /** Um agente de outro provedor revisa o que o modo build mudou. */
+  reviewChanges: boolean;
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */
