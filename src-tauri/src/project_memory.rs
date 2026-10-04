@@ -137,8 +137,9 @@ pub fn save(connection:&Connection,draft:&NoteDraft)->Result<ProjectNote> {
     note(connection,&id)?.ok_or_else(||anyhow::anyhow!("project note `{id}` vanished after writing"))
 }
 
-pub fn delete(connection:&Connection,id:&str)->Result<()> {
-    connection.execute("DELETE FROM project_notes WHERE id=?1",[id])?;
+/// Só apaga a nota do projeto pedido: o id de outro projeto não some daqui.
+pub fn delete(connection:&Connection,project_id:&str,id:&str)->Result<()> {
+    connection.execute("DELETE FROM project_notes WHERE id=?1 AND project_id=?2",[id,project_id])?;
     Ok(())
 }
 

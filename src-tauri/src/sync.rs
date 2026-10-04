@@ -45,6 +45,7 @@ pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,Re
     upload(store,backend,&mut result).await?;
     download(store,backend,&mut result).await?;
     refresh_policies(store,backend).await;
+    refresh_features(store,backend).await;
     Ok(result)
 }
 
@@ -56,6 +57,17 @@ async fn refresh_policies(store:&SharedWorkspace,backend:&dyn Backend) {
         Ok(Some(rows))=>{ if let Err(error)=store.lock().await.replace_project_policies(&rows) {eprintln!("política de LLM: {error:#}");} }
         Ok(None)=>{}
         Err(error)=>eprintln!("política de LLM: {error}"),
+    }
+}
+
+/// Os recursos do plano descem como a política: falhar (servidor sem a
+/// migração dos planos, por exemplo) não para a volta, e o cache anterior
+/// continua valendo.
+async fn refresh_features(store:&SharedWorkspace,backend:&dyn Backend) {
+    match backend.features().await {
+        Ok(Some(remote))=>{ if let Err(error)=store.lock().await.replace_entitlements(&remote) {eprintln!("recursos do plano: {error:#}");} }
+        Ok(None)=>{}
+        Err(error)=>eprintln!("recursos do plano: {error}"),
     }
 }
 
@@ -161,7 +173,14 @@ async fn download(store:&SharedWorkspace,backend:&dyn Backend,result:&mut Round)
     for table in &TABLES {
         let mut since=outbox::cursor(store.lock().await.connection(),table).map_err(local)?.unwrap_or_default();
         loop {
-            let rows=backend.pull(table,&since,PAGE).await?;
+            // Tabela que o servidor recusa (a migração dela ainda não rodou,
+            // uma coluna nova) fica para a próxima volta; as outras descem e a
+            // fila de pedidos não fica parada como se faltasse rede.
+            let rows=match backend.pull(table,&since,PAGE).await {
+                Ok(rows)=>rows,
+                Err(RemoteError::Rejected{status,detail})=>{eprintln!("sincronização: `{}` recusada ({status}): {detail}",table.name); break;}
+                Err(error)=>return Err(error),
+            };
             let Some(last)=rows.last().and_then(|row|row["synced_at"].as_str()).map(str::to_string) else {break};
             let mut guard=store.lock().await;
             result.pulled+=outbox::apply_remote(guard.connection_mut(),table,&rows).map_err(local)?;

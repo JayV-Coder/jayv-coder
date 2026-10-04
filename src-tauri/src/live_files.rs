@@ -273,6 +273,9 @@ impl Session {
     pub fn view(&self,relative:&str)->Option<FileView> {
         let relative=relative.trim().trim_start_matches("./");
         if relative.split(['/','\\']).any(|part|part==".."||part.is_empty()) {return None;}
+        // Um caminho absoluto (`/etc/x`, `C:\x`) troca a pasta inteira no
+        // `join`: só caminhos relativos, sem raiz nem letra de unidade.
+        if std::path::Path::new(relative).components().any(|part|!matches!(part,std::path::Component::Normal(_))) || relative.contains(':') {return None;}
         let path=self.folder.join(relative);
         let mut view=FileView{path:relative.to_string(),before_known:true,..Default::default()};
         if self.firewall.check_file(relative).is_sensitive {view.hidden=true;return Some(view);}

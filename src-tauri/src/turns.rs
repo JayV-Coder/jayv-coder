@@ -30,6 +30,10 @@ impl TurnStatus {
 
     /// Um estado que não se reconhece é erro, não `Flying`: cair no padrão
     /// faria um pedido já respondido voltar a girar a ampulheta para sempre.
+    /// Na leitura, um estado que esta versão não conhece (gravado por uma
+    /// versão mais nova em outra máquina) vale como falho: some da fila, e o
+    /// chat continua abrindo.
+    fn read(value:&str)->Self { Self::parse(value).unwrap_or(Self::Failed) }
     fn parse(value:&str)->Result<Self> {
         Ok(match value{"queued"=>Self::Queued,"flying"=>Self::Flying,"answered"=>Self::Answered,"failed"=>Self::Failed,"blocked"=>Self::Blocked,other=>anyhow::bail!("unknown turn status: `{other}`")})
     }
@@ -130,6 +134,11 @@ pub fn open_or_reopen(connection:&Connection,chat_id:&str,requested:Option<&str>
     let Some(turn_id)=requested else {return open_turn(connection,chat_id)};
     let existing=turn(connection,turn_id)?.ok_or_else(||Text::new("turn.notFound").with("turn",turn_id))?;
     anyhow::ensure!(existing.chat_id==chat_id,Text::new("turn.otherChat").with("turn",turn_id));
+    // Só o que fechou sem resposta volta: reabrir um turno no ar ou respondido
+    // apagaria a resposta dele. Um turno de outra máquina passa a ser daqui,
+    // senão a fila (que só chama os locais) nunca o atenderia.
+    anyhow::ensure!(matches!(existing.status,TurnStatus::Failed|TurnStatus::Blocked),Text::new("turn.notRetryable").with("turn",&existing.code));
+    connection.execute("UPDATE turns SET local=1 WHERE id=?1",[turn_id])?;
     reopen_turn(connection,turn_id)
 }
 
@@ -213,7 +222,7 @@ pub fn place_in_queue(connection:&Connection,turn_id:&str)->Result<Option<u32>> 
 /// desacordo.
 fn read_turn(row:&rusqlite::Row)->rusqlite::Result<Result<Turn>> {
     let (id,chat_id,chat_code,ordinal,status,created_at)=(row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,u32>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?);
-    Ok((||Ok(Turn{id,chat_id,code:turn_code(&chat_code,ordinal),ordinal,status:TurnStatus::parse(&status)?,created_at:parse_time(&created_at)?}))())
+    Ok((||Ok(Turn{id,chat_id,code:turn_code(&chat_code,ordinal),ordinal,status:TurnStatus::read(&status),created_at:parse_time(&created_at)?}))())
 }
 
 /// Grava o veredito de entrada do turno. Retentar reescreve a linha: o pedido
@@ -307,12 +316,13 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
         row.get::<_,Option<String>>(7)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial,route)|{
-        let status=TurnStatus::parse(&status)?;
+        let status=TurnStatus::read(&status);
         let activity=if status.is_open(){activity(connection,&id)?}else{vec![]};
         Ok(TurnView{
             id,code:turn_code(&chat_code,ordinal),status,
-            entry:entry.as_deref().map(EntryVerdict::parse).transpose()?,
-            exit:exit.as_deref().map(ExitVerdict::parse).transpose()?,
+            // Veredito desconhecido só tira o selo do balão.
+            entry:entry.as_deref().and_then(|value|EntryVerdict::parse(value).ok()),
+            exit:exit.as_deref().and_then(|value|ExitVerdict::parse(value).ok()),
             partial:partial.filter(|text|!text.is_empty()),activity,
             // Um detalhe ilegível só tira a linha do balão, não o chat.
             route:route.and_then(|detail|serde_json::from_str::<TurnRoute>(&detail).ok()).filter(|route|!route.provider.is_empty()),
@@ -528,7 +538,8 @@ fn entries(connection:&Connection,chats:Option<&BTreeSet<String>>)->Result<Vec<E
         row.get::<_,String>(5)?,row.get::<_,u8>(6)?,row.get::<_,u8>(7)?,row.get::<_,String>(8)?,row.get::<_,String>(9)?,
         row.get::<_,String>(10)?,row.get::<_,String>(11)?,row.get::<_,String>(12)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(|(id,at,chat_id,chat_code,ordinal,prompt,score,demand,verdict,scope_,criteria,source,note)|Ok(EntryCheck{
+    // Uma linha com veredito que esta versão não conhece sai do feed, não o feed inteiro.
+    rows.into_iter().filter(|row|EntryVerdict::parse(&row.8).is_ok()).map(|(id,at,chat_id,chat_code,ordinal,prompt,score,demand,verdict,scope_,criteria,source,note)|Ok(EntryCheck{
         id,at:parse_time(&at)?,chat_id,turn:turn_code(&chat_code,ordinal),prompt,score,demand,
         verdict:EntryVerdict::parse(&verdict)?,scope:scope_,criteria:serde_json::from_str::<Vec<Criterion>>(&criteria)?,source,note,
     })).collect()
@@ -544,7 +555,7 @@ fn exits(connection:&Connection,chats:Option<&BTreeSet<String>>)->Result<Vec<Exi
         row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,
         row.get::<_,u32>(5)?,row.get::<_,String>(6)?,row.get::<_,String>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,String>(9)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(|(id,at,chat_id,turn_id,chat_code,ordinal,kind,target,rule,verdict)|Ok(ExitCheck{
+    rows.into_iter().filter(|row|ExitVerdict::parse(&row.9).is_ok()).map(|(id,at,chat_id,turn_id,chat_code,ordinal,kind,target,rule,verdict)|Ok(ExitCheck{
         id,at:parse_time(&at)?,chat_id,turn_id,turn:turn_code(&chat_code,ordinal),kind,target,rule,verdict:ExitVerdict::parse(&verdict)?,
     })).collect()
 }

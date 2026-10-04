@@ -1,6 +1,7 @@
 import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId, type CoreSettings, type CoreSnapshot, type Permission } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
+import { useEntitlements, allows, type FeatureKey } from "@/modules/plans";
 import { AGENTS, AGENT_LABELS, updateCore } from "@/modules/settings";
 import { AgentIcon } from "@/components/atoms";
 import { FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
@@ -19,6 +20,13 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
  * portaria de entrada vêm do Supabase e aqui só se leem. */
 export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: CoreSnapshot }) {
   const t = useT();
+  const entitlements = useEntitlements();
+  // A opção fora do plano fica à vista, desligada e marcada: o núcleo também a
+  // ignora, mesmo que o valor gravado diga ligada.
+  const gated = (feature: FeatureKey, hint: string) => {
+    const on = allows(entitlements, feature);
+    return { disabled: !on, hint: on ? hint : `${t("plans.jevLocked")} · ${hint}` };
+  };
   const [minBudget, maxBudget] = snapshot.budgetRange;
   const duration = (seconds: number) =>
     seconds === 0 ? t("jev.cache.off") : seconds % 3600 === 0 ? t("jev.cache.hours", { count: seconds / 3600 }) : t("jev.cache.minutes", { count: Math.round(seconds / 60) });
@@ -28,15 +36,15 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
     <div className="grid gap-5">
       <SettingsSection title={t("jev.section.routing")} description={t("jev.section.routing.description")}>
         <div className="grid gap-3">
-          <ToggleRow id="jev-adaptive" label={t("jev.adaptive")} hint={t("jev.adaptive.hint")} checked={core.adaptiveRouting} onChange={(adaptiveRouting) => updateCore({ adaptiveRouting })} />
+          <ToggleRow id="jev-adaptive" label={t("jev.adaptive")} {...gated("adaptiveRouting", t("jev.adaptive.hint"))} checked={core.adaptiveRouting} onChange={(adaptiveRouting) => updateCore({ adaptiveRouting })} />
           <ToggleRow id="jev-local" label={t("jev.preferLocal")} hint={t("jev.preferLocal.hint")} checked={core.preferLocal} onChange={(preferLocal) => updateCore({ preferLocal })} />
           <FormField label={t("jev.confidence")} htmlFor="jev-confidence" hint={t("jev.confidence.hint")}>
             <OptionSelect id="jev-confidence" value={String(core.confidenceThreshold)} onChange={(value) => updateCore({ confidenceThreshold: Number(value) })}
               options={[...new Set([...THRESHOLDS, String(core.confidenceThreshold)])].map((value) => ({ value, label: percent(Number(value)) }))} />
           </FormField>
-          <ToggleRow id="jev-review" label={t("jev.review")} hint={t("jev.review.hint")} checked={core.reviewChanges} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
-          <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} hint={t("jev.planFirst.hint")} checked={core.planFirst} onChange={(planFirst) => updateCore({ planFirst })} />
-          <ToggleRow id="jev-parallel" label={t("jev.parallel")} hint={t("jev.parallel.hint")} checked={core.parallelTasks} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
+          <ToggleRow id="jev-review" label={t("jev.review")} {...gated("secondOpinion", t("jev.review.hint"))} checked={core.reviewChanges} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
+          <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} {...gated("planFirst", t("jev.planFirst.hint"))} checked={core.planFirst} onChange={(planFirst) => updateCore({ planFirst })} />
+          <ToggleRow id="jev-parallel" label={t("jev.parallel")} {...gated("parallelTasks", t("jev.parallel.hint"))} checked={core.parallelTasks} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
           <AgentOrderField order={core.agentOrder} />
         </div>
       </SettingsSection>

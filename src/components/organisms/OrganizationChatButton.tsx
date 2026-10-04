@@ -6,6 +6,7 @@ import {
   chatReach, openOrganizationChat, organizationFolder, organizationRepositories, pickFolder, rememberOrganizationFolder, resumeOrganizationChat,
   type Repository,
 } from "@/modules/organizations";
+import { useFeature } from "@/modules/plans";
 import { useWorkspace } from "@/modules/workspace";
 import { Eyebrow, PathText } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ export function OrganizationChatButton({ organization, repositories, size, varia
   variant?: ComponentProps<typeof Button>["variant"];
 }) {
   const t = useT();
+  const allowed = useFeature("orgChat");
   const [folder, setFolder] = useState<string | null>(null);
   const [fetched, setFetched] = useState<Repository[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,6 +75,8 @@ export function OrganizationChatButton({ organization, repositories, size, varia
     </section>
   );
 
+  // Fora do plano (ou desligado pelo admin), o botão some.
+  if (!allowed) return null;
   return (
     <>
       <Button size={size} variant={variant} disabled={repositories === null} onClick={() => void open().catch(reportError)}>

@@ -6,6 +6,7 @@ import { commands, onCore } from "@/modules/core/bridge";
 import { notify, reportError } from "@/modules/feedback";
 import { t } from "@/modules/i18n";
 import { readCallback } from "./callback";
+import { receiveBillingLink } from "@/modules/plans";
 import { CALLBACK_URL, supabase } from "./client";
 import { authFailure } from "./errors";
 import { canUnlink, linkOutcome, PROVIDER_NAMES, type Provider } from "./identities";
@@ -117,6 +118,8 @@ async function hand(session: Session | null) {
  * e-mail ou da recuperação de senha: o supabase-js sabe qual pelo verificador
  * do PKCE que guardou. */
 function receive(url: string) {
+  // A volta do pagamento no Stripe (`jayv://billing/...`) não é de login.
+  if (receiveBillingLink(url)) return;
   const callback = readCallback(url);
   if (!callback) return;
   const { linking } = useAuth.getState();

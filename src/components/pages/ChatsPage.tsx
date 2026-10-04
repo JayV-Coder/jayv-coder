@@ -1,6 +1,7 @@
 import { BrainIcon } from "lucide-react";
 import { chatsOf, createChat, deleteChat, findProject, openChat, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
+import { useFeature } from "@/modules/plans";
 import { EmptyText } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
 import { ChatCard, ChatSearch, ProjectMemoryDialog } from "@/components/organisms";
@@ -13,19 +14,23 @@ export function ChatsPage() {
   const { data, activeProjectId } = useWorkspace();
   const project = findProject(data, activeProjectId);
   const chats = chatsOf(data, activeProjectId);
+  const notes = useFeature("projectNotes");
+  const search = useFeature("chatSearch");
   return (
     <ScrollPage>
       <PageHeading eyebrow={project ? t("header.project", { name: project.name }) : t("chats.eyebrow")} title={t("nav.chats")} description={t("chats.description")}>
         {project && (
           <div className="flex gap-2">
-            <ProjectMemoryDialog projectId={project.id}>
-              <Button variant="outline"><BrainIcon aria-hidden="true" />{t("memory.open")}</Button>
-            </ProjectMemoryDialog>
+            {notes && (
+              <ProjectMemoryDialog projectId={project.id}>
+                <Button variant="outline"><BrainIcon aria-hidden="true" />{t("memory.open")}</Button>
+              </ProjectMemoryDialog>
+            )}
             <Button onClick={() => void createChat(project.id)}>{t("common.newChat")}</Button>
           </div>
         )}
       </PageHeading>
-      {project && chats.length > 0 && <ChatSearch projectId={project.id} />}
+      {project && search && chats.length > 0 && <ChatSearch projectId={project.id} />}
       {chats.length === 0
         ? <EmptyText>{t("chats.empty")}</EmptyText>
         : (

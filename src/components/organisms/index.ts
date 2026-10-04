@@ -55,3 +55,4 @@ export { YardCard } from "./YardCard";
 export { NotificationBell } from "./NotificationBell";
 export { CommandPalette } from "./CommandPalette";
 export { StatusBar } from "./StatusBar";
+export { FeatureLocked } from "./FeatureLocked";

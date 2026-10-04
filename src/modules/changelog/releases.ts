@@ -26,6 +26,21 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.51.0", date: "2026-10-04",
+    items: [
+      { kind: "feature", id: "plans" },
+      { kind: "feature", id: "adminFeatures" },
+    ],
+  },
+  {
+    version: "0.50.1", date: "2026-10-04",
+    items: [
+      { kind: "fix", id: "queueUnstuck" },
+      { kind: "fix", id: "editsKept" },
+      { kind: "fix", id: "safetyFixes" },
+    ],
+  },
+  {
     version: "0.50.0", date: "2026-10-04",
     items: [
       { kind: "feature", id: "parallelTasks" },

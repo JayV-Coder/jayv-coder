@@ -51,7 +51,11 @@ export function Composer({ chat }: { chat: Chat | null }) {
     // comando segue como pedido, já no modo novo.
     const command = !question ? modeCommand(value) : null;
     if (command) {
-      await setWorkMode(chat.id, command.mode);
+      // Modo recusado: nada de aviso de sucesso nem de pedido no modo antigo.
+      if (!(await setWorkMode(chat.id, command.mode))) {
+        setDraft(chat.id, draft);
+        return;
+      }
       if (!command.rest) {
         notify(t("mode.set", { name: t(`mode.${command.mode}`) }));
         input.current?.focus();

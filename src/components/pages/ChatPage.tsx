@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { loadLive, useLive } from "@/modules/live";
+import { useFeature } from "@/modules/plans";
 import { findChat, findProject, useWorkspace } from "@/modules/workspace";
 import { ChatUsageBar, Composer, LivePanel, RepositoryPanel, Timeline } from "@/components/organisms";
 
@@ -12,6 +13,7 @@ export function ChatPage() {
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const chat = findChat(data, activeChatId);
   const project = findProject(data, activeProjectId);
+  const liveAllowed = useFeature("liveFiles");
   const live = useLive((state) => (activeChatId ? state.panel[activeChatId] === true : false));
 
   useEffect(() => {
@@ -32,7 +34,7 @@ export function ChatPage() {
           {chat && <ChatUsageBar chatId={chat.id} />}
         </div>
       </div>
-      {chat && live && project?.rootPath.trim() && <LivePanel chat={chat} />}
+      {chat && live && liveAllowed && project?.rootPath.trim() && <LivePanel chat={chat} />}
     </div>
   );
 }

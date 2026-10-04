@@ -1,4 +1,4 @@
-import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, FolderKanbanIcon, MessagesSquareIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, PlusIcon, SettingsIcon, ShieldCheckIcon } from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
@@ -9,6 +9,7 @@ import { useAuth } from "@/modules/auth";
 import { useProfile } from "@/modules/profile";
 import { useOrganizations } from "@/modules/organizations";
 import { openStats } from "@/modules/usage";
+import { allows, useEntitlements } from "@/modules/plans";
 import { cn } from "@/lib/utils";
 import { displayName } from "./ProfileCard";
 import { NotificationBell } from "./NotificationBell";
@@ -23,6 +24,9 @@ export function Sidebar() {
   const name = displayName(account, profile, email);
   const view = useNavigation((state) => state.view);
   const invites = useOrganizations((state) => state.incoming.length);
+  // O que o plano (ou o admin) desligou some do menu; Planos fica sempre.
+  const entitlements = useEntitlements();
+  const can = { organizations: allows(entitlements, "organizations"), stats: allows(entitlements, "stats"), gate: allows(entitlements, "gateBoard") };
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const project = findProject(data, activeProjectId);
   // O chat só aparece selecionado enquanto a conversa dele está na tela: na
@@ -43,14 +47,16 @@ export function Sidebar() {
       {!project ? (
         <nav className="grid gap-0.5">
           <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
-          <NavItem active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>
+          {can.organizations && <NavItem active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>
             <span className="flex-1">{t("nav.organizations")}</span>
             {invites > 0 && (
               <span title={t("org.invites.count", { count: invites })} className="rounded-md bg-accent px-1.5 font-mono text-caption font-semibold text-accent-foreground tabular-nums">{invites}</span>
             )}
-          </NavItem>
-          <NavItem active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>
+          </NavItem>}
+          {can.stats && <NavItem active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>}
           <NavItem active={view === "status"} mark={<ActivityIcon />} shortcut="system" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
+          <NavItem active={view === "plans"} mark={<CreditCardIcon />} onClick={() => navigate("plans")}>{t("nav.plans")}</NavItem>
+          {entitlements.admin && <NavItem active={view === "admin"} mark={<ShieldCheckIcon />} onClick={() => navigate("admin")}>{t("nav.admin")}</NavItem>}
         </nav>
       ) : (
         <div className="flex min-h-0 flex-col">
@@ -64,7 +70,7 @@ export function Sidebar() {
           </button>
           <ProjectPlate project={project} />
           <NavItem active={view === "chats"} mark={<MessagesSquareIcon />} onClick={() => navigate("chats")}>{t("nav.chats")}</NavItem>
-          <NavItem
+          {can.gate && <NavItem
             active={view === "gate"}
             className="mb-1"
             shortcut="gate"
@@ -72,8 +78,8 @@ export function Sidebar() {
             onClick={() => navigate("gate")}
           >
             {t("nav.gate")}
-          </NavItem>
-          <NavItem active={view === "stats"} mark={<ChartColumnIcon />} onClick={() => openStats({ kind: "project", id: project.id })}>{t("nav.stats")}</NavItem>
+          </NavItem>}
+          {can.stats && <NavItem active={view === "stats"} mark={<ChartColumnIcon />} onClick={() => openStats({ kind: "project", id: project.id })}>{t("nav.stats")}</NavItem>}
           <div className="flex items-center justify-between ps-2.5 pe-1 pt-5 pb-1.5 font-mono text-caption font-medium tracking-wider text-sidebar-muted uppercase">
             {t("nav.recentChats")}
             <button type="button" title={t("common.newChat")} aria-label={t("common.newChat")} onClick={() => void createChat(project.id)} className="grid size-6 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"><PlusIcon aria-hidden="true" className="size-4" /></button>

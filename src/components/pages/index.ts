@@ -12,3 +12,5 @@ export { ProfileSetupPage } from "./ProfileSetupPage";
 export { OrganizationsPage } from "./OrganizationsPage";
 export { OrganizationPage } from "./OrganizationPage";
 export { SecondFactorPage } from "./SecondFactorPage";
+export { PlansPage } from "./PlansPage";
+export { AdminPage } from "./AdminPage";

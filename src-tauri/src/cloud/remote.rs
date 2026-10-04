@@ -39,6 +39,9 @@ pub trait Backend:Send+Sync {
     /// A política de LLM dos projetos de quem está logado
     /// (`rpc/my_project_policies`). `None`: este backend não fala dela.
     async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> { Ok(None) }
+    /// Os recursos do plano de quem está logado (`rpc/my_features`). `None`:
+    /// este backend não fala deles.
+    async fn features(&self)->Result<Option<crate::features::RemoteFeatures>,RemoteError> { Ok(None) }
 }
 
 pub struct Remote {
@@ -97,6 +100,10 @@ impl Remote {
 
     pub fn project_policies_request(&self)->reqwest::Result<Request> {
         self.request(Method::POST,"rpc/my_project_policies").json(&json!({})).build()
+    }
+
+    pub fn features_request(&self)->reqwest::Result<Request> {
+        self.request(Method::POST,"rpc/my_features").json(&json!({})).build()
     }
 
     async fn send(&self,request:reqwest::Result<Request>)->Result<String,RemoteError> {
@@ -175,6 +182,10 @@ impl Backend for Remote {
 
     async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> {
         self.get(self.project_policies_request()).await.map(Some)
+    }
+
+    async fn features(&self)->Result<Option<crate::features::RemoteFeatures>,RemoteError> {
+        self.get(self.features_request()).await.map(Some)
     }
 }
 
@@ -275,6 +286,12 @@ mod tests {
     #[test] fn the_policies_come_from_the_rpc_with_the_users_token() {
         let request=remote().project_policies_request().unwrap();
         assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_project_policies"));
+        assert_eq!(request.headers()["Authorization"],"Bearer jwt");
+    }
+
+    #[test] fn the_plan_features_come_from_the_rpc_with_the_users_token() {
+        let request=remote().features_request().unwrap();
+        assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_features"));
         assert_eq!(request.headers()["Authorization"],"Bearer jwt");
     }
 

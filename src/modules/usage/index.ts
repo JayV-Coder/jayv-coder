@@ -89,8 +89,11 @@ export async function loadReport() {
   }
 }
 
+/** Outro recorte não mostra os números do anterior enquanto o novo carrega. */
+const sameScope = (a: UsageScope, b: UsageScope) => JSON.stringify(a) === JSON.stringify(b);
+
 export function setScope(scope: UsageScope) {
-  useUsage.setState({ scope });
+  useUsage.setState((state) => (sameScope(state.scope, scope) ? { scope } : { scope, report: null }));
   void loadReport();
 }
 
@@ -105,7 +108,7 @@ export function setPeriod(period: Period, range?: Range) {
 /** Abre as estatísticas já recortadas: o clique no rodapé do chat ou numa
  * linha da tabela. */
 export function openStats(scope: UsageScope) {
-  useUsage.setState({ scope });
+  useUsage.setState((state) => (sameScope(state.scope, scope) ? { scope } : { scope, report: null }));
   navigate("stats");
 }
 
