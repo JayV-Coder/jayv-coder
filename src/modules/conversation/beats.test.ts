@@ -32,6 +32,13 @@ describe("beatLine", () => {
     expect(line).toContain("Cursor");
     expect(line).toContain("3 changed");
   });
+
+  it("names the model that writes the plan before the build", () => {
+    const line = beatLine("plan", { provider: "claude", model: "opus" });
+    expect(line).toContain("Claude Code");
+    expect(line).toContain("opus");
+    expect(line).toContain("plan");
+  });
 });
 
 describe("agentLine", () => {

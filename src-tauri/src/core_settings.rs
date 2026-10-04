@@ -47,6 +47,9 @@ pub struct CoreSettings {
     #[serde(default)] pub agent_order:Vec<String>,
     /// Um agente de outro provedor revisa o que o modo build mudou.
     #[serde(default)] pub review_changes:bool,
+    /// Num pedido complexo do modo build, um modelo de raciocínio planeja
+    /// antes de o agente construir.
+    #[serde(default)] pub plan_first:bool,
 }
 
 impl CoreSettings {
@@ -62,6 +65,7 @@ impl CoreSettings {
             privacy:Privacy{deny:config.privacy.deny.clone(),local_only:config.privacy.local_only.clone(),redact_secrets:config.privacy.redact_secrets},
             agent_order:config.jev.agent_order.clone(),
             review_changes:config.jev.review_changes,
+            plan_first:config.jev.plan_first,
         }
     }
 
@@ -80,6 +84,7 @@ impl CoreSettings {
         config.privacy.redact_secrets=self.privacy.redact_secrets;
         config.jev.agent_order=self.agent_order.clone();
         config.jev.review_changes=self.review_changes;
+        config.jev.plan_first=self.plan_first;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,

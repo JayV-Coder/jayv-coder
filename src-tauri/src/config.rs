@@ -27,8 +27,11 @@ pub struct JevConfig {
     /// Depois de uma mudança no modo build, um agente de outro provedor lê o
     /// diff em somente leitura e aponta problemas (ver `review`).
     #[serde(default)] pub review_changes: bool,
+    /// Num pedido complexo do modo build, um modelo de raciocínio escreve o
+    /// plano em somente leitura antes de o agente construir (ver `split`).
+    #[serde(default)] pub plan_first: bool,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {
