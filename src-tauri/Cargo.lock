@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.51.5"
+version = "0.51.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2115,7 +2115,9 @@ dependencies = [
  "jayv-agents",
  "jayv-base",
  "jayv-cloud",
+ "jayv-code",
  "jayv-jev",
+ "jayv-memory",
  "jayv-orgs",
  "jayv-plans",
  "jayv-store",
@@ -2128,7 +2130,6 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "similar",
- "streaming-iterator",
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",
@@ -2140,12 +2141,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tree-sitter",
- "tree-sitter-go",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
  "uuid",
  "walkdir",
 ]
@@ -2204,6 +2199,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "jayv-code"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "jayv-base",
+ "jayv-orgs",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "streaming-iterator",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "jayv-jev"
 version = "0.1.0"
 dependencies = [
@@ -2217,6 +2237,21 @@ dependencies = [
  "jayv-store",
  "regex",
  "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "jayv-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "jayv-base",
+ "jayv-code",
  "rusqlite",
  "serde",
  "serde_json",
