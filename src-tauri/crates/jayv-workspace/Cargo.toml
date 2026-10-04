@@ -1,0 +1,30 @@
+# O workspace: projetos, chats, títulos, histórico das mensagens e a fila de
+# turnos, no SQLite local. O banco é um só, então depende de todas as camadas
+# que guardam tabelas nele (agentes, Jev, planos, organizações, código e
+# memória) para criar o esquema de cada uma.
+[package]
+name = "jayv-workspace"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-store = { path = "../jayv-store" }
+jayv-agents = { path = "../jayv-agents" }
+jayv-jev = { path = "../jayv-jev" }
+jayv-plans = { path = "../jayv-plans" }
+jayv-orgs = { path = "../jayv-orgs" }
+jayv-code = { path = "../jayv-code" }
+jayv-memory = { path = "../jayv-memory" }
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

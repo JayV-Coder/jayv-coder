@@ -5,7 +5,8 @@
 //! tipo ou a constante desce, e a de cima reexporta.
 //!
 //! As camadas que já saíram para `crates/` (base, armazenamento, nuvem,
-//! agentes, Jev, planos, organizações, código e memória) têm a
+//! agentes, Jev, planos, organizações, código, memória, workspace e ao vivo)
+//! têm a
 //! fronteira garantida pelo próprio Cargo; este teste cobre as que ainda
 //! moram em `src/`. Por ora só o código conta; os testes ainda cruzam camadas
 //! em alguns lugares e mudam junto quando cada crate sair.

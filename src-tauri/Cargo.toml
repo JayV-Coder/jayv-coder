@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.51.6"
+version = "0.51.7"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -66,6 +66,8 @@ jayv-plans = { path = "crates/jayv-plans" }
 jayv-orgs = { path = "crates/jayv-orgs" }
 jayv-code = { path = "crates/jayv-code" }
 jayv-memory = { path = "crates/jayv-memory" }
+jayv-workspace = { path = "crates/jayv-workspace" }
+jayv-live = { path = "crates/jayv-live" }
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true

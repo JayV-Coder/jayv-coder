@@ -9,11 +9,12 @@ pub use jayv_plans::features;
 pub use jayv_orgs::{checkout, repo_keys};
 pub use jayv_code::{context_engine, graph, project_map, rag, search, symbols};
 pub use jayv_memory::{memory, project_memory};
+pub use jayv_workspace::workspace;
+pub use jayv_live::live_files;
 
 pub mod bench;
 pub mod desktop;
 pub mod layers;
-pub mod live_files;
 pub mod mcp;
 pub mod orchestrator;
 mod outbox_tests;
@@ -22,6 +23,5 @@ pub mod parallel;
 pub mod review;
 pub mod split;
 pub mod sync;
-pub mod workspace;
 
 pub use desktop::run_desktop;
