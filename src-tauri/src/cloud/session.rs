@@ -3,6 +3,7 @@
 //! público certos e dentro do prazo.
 
 use super::{AUDIENCE, ISSUER, PROJECT_URL};
+use crate::i18n::Text;
 use anyhow::Context;
 use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
@@ -25,6 +26,17 @@ pub enum SessionError {
     #[error("invalid session: {0}")]
     Invalid(String),
 }
+
+impl From<&SessionError> for Text {
+    fn from(error:&SessionError)->Self {
+        match error {
+            SessionError::Expired=>Text::new("session.expired"),
+            SessionError::UnknownKey=>Text::new("session.unknownKey"),
+            SessionError::Invalid(reason)=>Text::new("session.invalid").with("reason",reason),
+        }
+    }
+}
+impl From<SessionError> for Text { fn from(error:SessionError)->Self{(&error).into()} }
 
 /// O token da sessão validada agora, para quem fala com o Supabase em nome do
 /// usuário — o Jev, por exemplo. O desktop o troca a cada `set_session`.
@@ -85,6 +97,11 @@ mod tests {
     use super::*;
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde_json::json;
+
+    #[test] fn a_session_error_reaches_the_screen_as_a_key() {
+        assert_eq!(Text::from(SessionError::Expired).key,"session.expired");
+        assert_eq!(Text::from(SessionError::Invalid("x".into())).key,"session.invalid");
+    }
 
     const NOW:i64=1_900_000_000;
     const USER:&str="6f1c1f9e-5b1a-4a59-9a39-1c0b6b8f9f10";

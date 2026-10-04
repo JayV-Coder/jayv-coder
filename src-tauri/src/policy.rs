@@ -13,7 +13,6 @@ use crate::llm::LlmSettings;
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 pub const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS project_policies (
@@ -90,9 +89,7 @@ impl LlmPolicy {
     }
 }
 
-/// Uma linha de `my_project_policies`.
-#[derive(Debug,Clone,Deserialize)]
-pub struct RemotePolicy { pub project_id:String, pub org_slug:String, pub policy:Value }
+pub use crate::cloud::remote::RemotePolicy;
 
 /// Troca o cache inteiro pelo que o servidor devolveu: projeto que saiu da
 /// lista deixou de ter política.
@@ -125,6 +122,7 @@ impl LlmPolicy {
 
 #[cfg(test)] mod tests {
     use super::*;
+    use serde_json::Value;
     use crate::config::Config;
     use crate::llm::{AgentId, AgentModel, AgentSettings};
     use serde_json::json;

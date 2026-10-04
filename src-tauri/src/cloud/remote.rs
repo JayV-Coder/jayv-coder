@@ -5,11 +5,19 @@
 
 use super::{PROJECT_URL, PUBLISHABLE_KEY};
 use crate::local::{global::LocaleRow, outbox::SyncTable};
-use crate::policy::RemotePolicy;
 use async_trait::async_trait;
 use reqwest::{Method, Request};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+/// Uma linha de `my_project_policies`; quem a lê é a política de LLM.
+#[derive(Debug,Clone,Deserialize)]
+pub struct RemotePolicy { pub project_id:String, pub org_slug:String, pub policy:Value }
+
+/// O que `my_features` devolve; quem o lê é o catálogo de recursos.
+#[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
+#[serde(default)]
+pub struct RemoteFeatures { pub plan:Option<String>, pub features:Vec<String> }
 use std::collections::BTreeMap;
 
 #[derive(Debug,Clone,PartialEq,thiserror::Error)]
@@ -41,7 +49,7 @@ pub trait Backend:Send+Sync {
     async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> { Ok(None) }
     /// Os recursos do plano de quem está logado (`rpc/my_features`). `None`:
     /// este backend não fala deles.
-    async fn features(&self)->Result<Option<crate::features::RemoteFeatures>,RemoteError> { Ok(None) }
+    async fn features(&self)->Result<Option<RemoteFeatures>,RemoteError> { Ok(None) }
 }
 
 pub struct Remote {
@@ -184,7 +192,7 @@ impl Backend for Remote {
         self.get(self.project_policies_request()).await.map(Some)
     }
 
-    async fn features(&self)->Result<Option<crate::features::RemoteFeatures>,RemoteError> {
+    async fn features(&self)->Result<Option<RemoteFeatures>,RemoteError> {
         self.get(self.features_request()).await.map(Some)
     }
 }

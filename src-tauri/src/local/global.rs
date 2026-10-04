@@ -2,7 +2,6 @@
 //! para validar sem rede, o último usuário validado, os idiomas, as
 //! traduções e os parâmetros do Jev.
 
-use crate::gatekeeper;
 use anyhow::{Context, Result};
 use jsonwebtoken::jwk::JwkSet;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -12,49 +11,6 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
 pub struct LocaleRow { pub id:String, pub name:String, pub rtl:bool, pub position:i64 }
-
-/// Os números da portaria. Cada um vem do cache quando lá está e é válido;
-/// faltando ou torto, vale a constante do Rust.
-#[derive(Debug,Clone,PartialEq,serde::Serialize)]
-#[serde(rename_all="camelCase")]
-pub struct JevParameters {
-    pub scope_demand:[f64;3],
-    pub block_margin:f64,
-    pub weights:BTreeMap<String,f64>,
-    pub scope_levels:[String;3],
-    pub noul_line:f64,
-}
-
-impl Default for JevParameters {
-    fn default()->Self { Self::from_values(&gatekeeper::parameters()) }
-}
-
-impl JevParameters {
-    pub fn from_values(values:&BTreeMap<String,Value>)->Self {
-        let defaults=gatekeeper::parameters();
-        let pick=|key:&str|->Value { values.get(key).cloned().unwrap_or_else(||defaults[key].clone()) };
-        let fallback=|key:&str|defaults[key].clone();
-        let unit=|value:&Value|value.as_f64().filter(|number|(0.0..=1.0).contains(number));
-        let demand=|value:Value|->Option<[f64;3]> { let list:Vec<f64>=serde_json::from_value(value).ok()?; let array:[f64;3]=list.try_into().ok()?; array.iter().all(|number|(0.0..=1.0).contains(number)).then_some(array) };
-        let levels=|value:Value|->Option<[String;3]> { let list:Vec<String>=serde_json::from_value(value).ok()?; list.try_into().ok() };
-        let weights=|value:Value|->Option<BTreeMap<String,f64>> { let map:BTreeMap<String,f64>=serde_json::from_value(value).ok()?; (!map.is_empty() && map.values().all(|weight|*weight>=0.0)).then_some(map) };
-        Self {
-            scope_demand:demand(pick("scope_demand")).or_else(||demand(fallback("scope_demand"))).expect("default scope_demand"),
-            block_margin:unit(&pick("block_margin")).or_else(||unit(&fallback("block_margin"))).expect("default block_margin"),
-            weights:weights(pick("weights")).or_else(||weights(fallback("weights"))).expect("default weights"),
-            scope_levels:levels(pick("scope_levels")).or_else(||levels(fallback("scope_levels"))).expect("default scope_levels"),
-            noul_line:unit(&pick("noul_line")).or_else(||unit(&fallback("noul_line"))).expect("default noul_line"),
-        }
-    }
-}
-
-/// Os parâmetros em uso agora. O desktop os troca quando o cache é
-/// atualizado; até lá valem as constantes.
-static CURRENT:std::sync::RwLock<Option<JevParameters>>=std::sync::RwLock::new(None);
-
-pub fn current_parameters()->JevParameters { CURRENT.read().unwrap_or_else(|poisoned|poisoned.into_inner()).clone().unwrap_or_default() }
-
-pub fn set_current_parameters(parameters:JevParameters) { *CURRENT.write().unwrap_or_else(|poisoned|poisoned.into_inner())=Some(parameters); }
 
 pub struct GlobalCache { connection:Connection }
 
@@ -127,12 +83,14 @@ impl GlobalCache {
         Ok(())
     }
 
-    pub fn jev_parameters(&self)->Result<JevParameters> {
+    /// Os valores crus que o painel mandou; quem os lê é
+    /// `gatekeeper::JevParameters::from_values`.
+    pub fn jev_parameter_values(&self)->Result<BTreeMap<String,Value>> {
         let mut statement=self.connection.prepare("SELECT key,value FROM jev_parameters")?;
         let rows=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
         let mut values=BTreeMap::new();
         for row in rows {let (key,value)=row?; if let Ok(value)=serde_json::from_str(&value) {values.insert(key,value);}}
-        Ok(JevParameters::from_values(&values))
+        Ok(values)
     }
 
     pub fn save_jev_parameters(&mut self,values:&BTreeMap<String,Value>)->Result<()> {
@@ -174,29 +132,5 @@ mod tests {
         cache.save_translations("en",&messages).expect("traduções");
         assert_eq!(cache.translations("en").expect("traduções"),messages);
         assert!(cache.translations("ar").expect("vazio").is_empty());
-    }
-
-    #[test] fn without_cached_parameters_the_constants_apply() {
-        let cache=GlobalCache::in_memory().expect("cache");
-        let parameters=cache.jev_parameters().expect("parâmetros");
-        assert_eq!(parameters.scope_demand,gatekeeper::SCOPE_DEMAND);
-        assert_eq!(parameters.block_margin,gatekeeper::BLOCK_MARGIN);
-        assert_eq!(parameters.noul_line,crate::asking::NOUL_LINE);
-        assert_eq!(parameters.weights.len(),gatekeeper::WEIGHTS.len());
-    }
-
-    /// Um valor torto vindo do painel não derruba a portaria: só ele volta ao
-    /// padrão, os outros valem.
-    #[test] fn a_valid_value_replaces_and_a_malformed_one_falls_back_to_default() {
-        let mut cache=GlobalCache::in_memory().expect("cache");
-        cache.save_jev_parameters(&BTreeMap::from([
-            ("block_margin".to_string(),json!(0.3)),
-            ("scope_demand".to_string(),json!([0.5,2.0])),
-            ("noul_line".to_string(),json!("alto")),
-        ])).expect("grava");
-        let parameters=cache.jev_parameters().expect("parâmetros");
-        assert_eq!(parameters.block_margin,0.3);
-        assert_eq!(parameters.scope_demand,gatekeeper::SCOPE_DEMAND);
-        assert_eq!(parameters.noul_line,crate::asking::NOUL_LINE);
     }
 }

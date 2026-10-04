@@ -86,7 +86,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     // sessão, e aí vira o `workspace-<usuário>.sqlite3` desta pasta.
     let data_dir=crate::workspace::database_location(&config_path,&root).parent().map(PathBuf::from).unwrap_or_else(||root.join(".jev"));
     let cache=GlobalCache::open(&data_dir.join("cache.sqlite3"))?;
-    crate::local::global::set_current_parameters(cache.jev_parameters()?);
+    crate::gatekeeper::set_current_parameters(crate::gatekeeper::JevParameters::from_values(&cache.jev_parameter_values()?));
     let workspace=WorkspaceStore::in_memory()?;
     orchestrator.use_llm(&workspace.llm_settings()?);
 

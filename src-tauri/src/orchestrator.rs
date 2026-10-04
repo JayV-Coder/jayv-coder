@@ -51,10 +51,7 @@ const FOCUS_NOTE:&str="Be brief: read only what the task needs, never reread wha
 const LEAN_FULL_NOTE:&str="Write the least code that fully solves the task: check whether it must exist, then reuse the standard library, the platform or an installed dependency, and only then write new code. No speculative abstractions, options or files. Never drop input validation, error handling that prevents data loss, security or accessibility.";
 const LEAN_LITE_NOTE:&str="Prefer the simplest change that fully works. When the standard library, the platform or an installed dependency already covers part of the task, say so and use it. Never drop input validation, error handling, security or accessibility.";
 const MULTI_REPOSITORY_NOTE:&str="This folder holds several repositories of the same organization; keep each change inside the repository it belongs to and name it in the answer. REPOSITORIES:";
-pub const MODE_PLAN:&str="plan";
-pub const MODE_BUILD:&str="build";
-/// O chat sem modo fixo: o Jev escolhe planejamento ou build a cada pedido.
-pub const MODE_AUTO:&str="auto";
+pub use crate::workspace::{work_mode, MODE_AUTO, MODE_BUILD, MODE_PLAN};
 /// O chat estava fixo em planejamento e o pedido é para implementar.
 pub const SWITCH_ASKED:&str="asked";
 /// No automático, o pedido para implementar veio de novo depois de um que
@@ -878,8 +875,6 @@ pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_befor
         _=>(chosen,None),
     }
 }
-/// O modo como o chat o guarda, ou nada se o valor não é um dos três.
-pub fn work_mode(value:&str)->Option<&'static str> { [MODE_AUTO,MODE_PLAN,MODE_BUILD].into_iter().find(|mode|*mode==value) }
 /// As notas do roteamento mais a do modo. Em build o agente executa, então a
 /// nota de "devolva os comandos para o desenvolvedor" não vale.
 pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
@@ -941,6 +936,15 @@ pub fn usable_response(response:&ProviderResponse)->bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test] fn the_reply_language_follows_the_app_and_falls_back_to_the_request() {
+        crate::i18n::set_reply_language(Some(crate::i18n::ReplyLanguage{tag:"ja".into(),name:"日本語".into()}));
+        let note=language_note();
+        assert!(note.contains("日本語") && note.contains("`ja`"),"{note}");
+        crate::i18n::set_reply_language(Some(crate::i18n::ReplyLanguage{tag:"  ".into(),name:"".into()}));
+        assert!(crate::i18n::reply_language().is_none(),"an empty tag is no choice");
+        assert!(language_note().contains("language their request is written in"));
+    }
 
     fn repository(files:&[(&str,String)])->tempfile::TempDir { let dir=tempfile::tempdir().expect("temporary repository"); for (name,body) in files { std::fs::write(dir.path().join(name),body).expect("fixture"); } dir }
     fn orchestrator(dir:&tempfile::TempDir)->Orchestrator { Orchestrator::new(dir.path().join("missing-config.yaml"),dir.path().to_path_buf()).expect("orchestrator") }

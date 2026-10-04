@@ -97,7 +97,7 @@ pub(crate) async fn check_agent(command:String)->Result<Probe,Text>{
 pub struct CoreSnapshot {
     pub settings:CoreSettings,
     pub defaults:CoreSettings,
-    pub gate:crate::local::global::JevParameters,
+    pub gate:crate::gatekeeper::JevParameters,
     /// O nível da conta e os números da portaria e do Jev em cada nível, para
     /// a tela mostrar o que a escolha muda antes de ela ser feita.
     pub expertise:crate::expertise::Expertise,
@@ -135,7 +135,7 @@ pub struct LevelView {
 }
 
 fn core_snapshot(settings:CoreSettings,defaults:CoreSettings,expertise:crate::expertise::Expertise,suggestion:Option<LevelSuggestion>,lean_code:bool)->CoreSnapshot {
-    let gate=crate::local::global::current_parameters();
+    let gate=crate::gatekeeper::current_parameters();
     let levels=crate::expertise::Expertise::ALL.into_iter().map(|level|{
         let adjusted=level.gate(&gate);
         LevelView{id:level,scope_demand:adjusted.scope_demand,block_margin:adjusted.block_margin,confidence:level.confidence(settings.confidence_threshold),build_ceiling:level.build_ceiling(),destructive_threshold:level.destructive_threshold()}

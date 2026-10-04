@@ -62,7 +62,14 @@ pub struct ChatRecord {
     pub work_mode: String,
 }
 
-fn auto_mode()->String { crate::orchestrator::MODE_AUTO.into() }
+pub const MODE_PLAN:&str="plan";
+pub const MODE_BUILD:&str="build";
+/// O chat sem modo fixo: o Jev escolhe planejamento ou build a cada pedido.
+pub const MODE_AUTO:&str="auto";
+/// O modo como o chat o guarda, ou nada se o valor não é um dos três.
+pub fn work_mode(value:&str)->Option<&'static str> { [MODE_AUTO,MODE_PLAN,MODE_BUILD].into_iter().find(|mode|*mode==value) }
+
+fn auto_mode()->String { MODE_AUTO.into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all="camelCase")]
@@ -404,7 +411,7 @@ impl WorkspaceStore {
     /// Fixa o modo do chat. Como o título, não mexe no `updated_at`: trocar
     /// de modo não é conversa e não reordena a lista.
     pub fn set_work_mode(&mut self, chat_id: &str, mode: &str) -> Result<()> {
-        let mode=crate::orchestrator::work_mode(mode).with_context(||format!("unknown work mode `{mode}`"))?;
+        let mode=work_mode(mode).with_context(||format!("unknown work mode `{mode}`"))?;
         anyhow::ensure!(self.connection.execute("UPDATE chats SET work_mode=?1 WHERE id=?2",params![mode,chat_id])?>0,Text::new("chat.notFound"));
         Ok(())
     }
