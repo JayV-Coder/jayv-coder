@@ -1,0 +1,32 @@
+# O código dos projetos: o índice (rag), a busca, os símbolos do tree-sitter,
+# o mapa do projeto, o grafo de contexto e o motor de contexto. Depende da base
+# e das organizações (os checkouts aninhados de uma pasta).
+[package]
+name = "jayv-code"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-orgs = { path = "../jayv-orgs" }
+anyhow.workspace = true
+chrono.workspace = true
+hex.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+streaming-iterator.workspace = true
+tree-sitter.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
