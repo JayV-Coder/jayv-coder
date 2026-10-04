@@ -34,6 +34,7 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
             <OptionSelect id="jev-confidence" value={String(core.confidenceThreshold)} onChange={(value) => updateCore({ confidenceThreshold: Number(value) })}
               options={[...new Set([...THRESHOLDS, String(core.confidenceThreshold)])].map((value) => ({ value, label: percent(Number(value)) }))} />
           </FormField>
+          <ToggleRow id="jev-review" label={t("jev.review")} hint={t("jev.review.hint")} checked={core.reviewChanges} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
           <AgentOrderField order={core.agentOrder} />
         </div>
       </SettingsSection>

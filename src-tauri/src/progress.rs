@@ -35,6 +35,8 @@ pub enum Beat {
     /// O agente não conseguiu começar e o pedido passou ao próximo: quem
     /// falhou e por quê (um aviso do i18n).
     Fallback{provider:String,error:String},
+    /// Um agente de outro provedor está revisando o que o pedido mudou.
+    Review{provider:String,model:String,files:usize},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -46,7 +48,7 @@ impl Beat {
     pub fn kind(&self)->&'static str {
         match self {
             Self::Gate{..}=>"gate", Self::Read{..}=>"read", Self::Context{..}=>"context",
-            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Running=>"running", Self::Agent{..}=>"agent",
+            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Review{..}=>"review", Self::Running=>"running", Self::Agent{..}=>"agent",
             Self::Chunk{..}=>"chunk", Self::Done{..}=>"done", Self::Failed{..}=>"failed",
         }
     }

@@ -30,6 +30,7 @@ pub mod project_memory;
 pub mod providers;
 pub mod rag;
 pub mod repo_keys;
+pub mod review;
 pub mod router;
 pub mod sandbox;
 pub mod search;

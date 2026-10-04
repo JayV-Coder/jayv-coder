@@ -259,6 +259,9 @@ impl Orchestrator {
         }
         pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
         pulse.beat(Beat::Running);
+        // A revisão compara o projeto de antes com o de depois: a largada é
+        // tirada antes de o agente começar.
+        let watch=if self.config.jev.review_changes&&mode==MODE_BUILD { self.start_watch().await } else { None };
         let started=Instant::now();
         let mut execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
         // Plano B: o agente que nem conseguiu começar (não instalado, sem
@@ -274,6 +277,14 @@ impl Orchestrator {
             tried.push(selection.provider.clone());
             pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
             execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
+        }
+        if let (Some(watch),Ok((response,_)))=(watch,&mut execution) {
+            if usable_response(response) {
+                if let Some(review)=self.review(&normalized,&complexity,&context,&selection,session_id,watch,pulse).await {
+                    pulse.beat(Beat::Chunk{text:review.clone()});
+                    response.response.push_str(&review);
+                }
+            }
         }
         let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
         let resumed=execution.as_ref().is_ok_and(|(_,resumed)|*resumed);
@@ -435,6 +446,33 @@ impl Orchestrator {
         Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false))
     }
 
+    /// A foto do projeto antes do pedido, para a revisão saber o que ele
+    /// mudou. Sem pasta legível, sem revisão.
+    async fn start_watch(&self)->Option<crate::live_files::Session> {
+        let root=PathBuf::from(self.rag.project_info().root);
+        let firewall=ContextFirewall::new(self.config.privacy.clone());
+        tokio::task::spawn_blocking(move ||root.is_dir().then(||crate::live_files::Session::start("review",&root,firewall))).await.ok().flatten()
+    }
+
+    /// A segunda opinião sobre o que o pedido mudou: um agente de outro
+    /// provedor, em somente leitura, lê o diff e aponta problemas. Devolve a
+    /// seção que entra no fim da resposta, ou nada — sem mudança, sem outro
+    /// provedor ou com a revisão falhando, a resposta segue como veio.
+    #[allow(clippy::too_many_arguments)]
+    async fn review(&self,request:&str,complexity:&str,context:&Context,executor:&ModelSelection,session_id:&str,mut watch:crate::live_files::Session,pulse:&Pulse)->Option<String> {
+        let (watch,diff)=tokio::task::spawn_blocking(move ||{ watch.poll(); let diff=crate::review::diff(&watch); (watch,diff) }).await.ok()?;
+        let diff=diff?;
+        let ranked=rank_models(&self.config,"review",complexity,context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
+        let reviewer=crate::review::pick(&ranked,&executor.provider,|provider|self.planners.contains_key(provider))?;
+        let provider=self.planners.get(&reviewer.provider)?;
+        pulse.beat(Beat::Review{provider:reviewer.provider.clone(),model:reviewer.model_name.clone(),files:watch.changes().len()});
+        let messages=[ChatMessage{role:"system".into(),content:language_note()},ChatMessage{role:"user".into(),content:crate::review::prompt(request,&diff,&agent_name(&executor.provider),&agent_name(&reviewer.provider))}];
+        match provider.chat_turn(&messages,&reviewer.model_name,Some(effort_for(complexity)),None,&Pulse::silent()).await {
+            Ok(response)=>crate::review::section(&response.response),
+            Err(error)=>{ eprintln!("revisão: {} não revisou ({error:#})",reviewer.provider); None }
+        }
+    }
+
     /// O pedido anterior deste chat não resolveu: a nota do modelo que o
     /// atendeu cai, e o roteamento aprende com isso.
     pub fn mark_last_failed(&mut self,session_id:&str) {
@@ -581,6 +619,11 @@ const FALLBACK_WINDOW:std::time::Duration=std::time::Duration::from_secs(30);
 
 /// O agente falhou antes de trabalhar: não está instalado, não abriu, ou
 /// recusou de cara por login, chave ou cota.
+/// O nome do agente como a pessoa o conhece, para o prompt da revisão.
+fn agent_name(provider:&str)->String {
+    match provider { "claude"=>"Claude Code", "codex"=>"Codex", "copilot"=>"GitHub Copilot", "cursor"=>"Cursor", other=>other }.to_string()
+}
+
 pub fn could_not_start(error:&anyhow::Error)->bool {
     static REFUSAL:std::sync::OnceLock<regex::Regex>=std::sync::OnceLock::new();
     let refusal=REFUSAL.get_or_init(||regex::Regex::new(r"(?i)not logged in|log ?in|sign ?in|authenticat|unauthori[sz]ed|api key|credential|quota|rate.?limit|usage limit|credit|billing|subscription|\b(?:401|402|403|429)\b").expect("refusal regex"));
@@ -1037,6 +1080,45 @@ mod tests {
         let broken=orchestrator.process("adicione um teste ao roteador",Some("broken"),&Pulse::silent()).await;
         assert!(broken.error.is_some(),"a falha de quem trabalhou fica com ele");
         assert_eq!(broken.model_selection.provider,"first");
+    }
+
+    /// Com a revisão ligada, o que o modo build mudou vai a um agente de
+    /// outro provedor, em somente leitura, e a revisão entra no fim da
+    /// resposta. Sem mudança no projeto, ninguém revisa.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn another_provider_reviews_what_the_build_changed() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        for args in [&["init","-q"][..],&["-c","user.email=t@t","-c","user.name=t","commit","-qm","base","--allow-empty"],&["add","."],&["-c","user.email=t@t","-c","user.name=t","commit","-qm","fixture"]] {
+            assert!(std::process::Command::new("git").current_dir(dir.path()).args(args).output().expect("git").status.success());
+        }
+        let mut orchestrator=orchestrator(&dir);
+        let script=|build:&str,plan:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),format!("cat >/dev/null; {build}")],plan_args:vec!["-c".into(),plan.into()],..Default::default()};
+        let model=|provider:&str,cost:&str|crate::config::ModelConfig{enabled:true,provider:provider.into(),model:format!("{provider}-model"),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:cost.into(),speed:"medium".into(),context_window:200_000};
+        let providers=HashMap::from([
+            ("maker".to_string(),script("echo 'fn added() {}' > added.rs; echo feito","cat >/dev/null; echo maker-planejou")),
+            // Quem revisa recebe o diff pela entrada: a resposta prova que ele chegou.
+            ("checker".to_string(),script("echo checker-construiu","grep -q 'fn added' && printf '### Revisão\\nnada a corrigir'")),
+        ]);
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([("maker/m".to_string(),model("maker","low")),("checker/m".to_string(),model("checker","medium"))]);
+        orchestrator.config.jev.review_changes=true;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        let (pulse,mut beats)=Pulse::channel();
+        let result=orchestrator.process("adicione um teste ao roteador",Some("review"),&pulse).await;
+        drop(pulse);
+        let answer=result.result.expect("resposta").response;
+        assert!(answer.starts_with("feito")&&answer.contains("---")&&answer.trim_end().ends_with("nada a corrigir"),"{answer}");
+        let mut reviewed=None;
+        while let Some(beat)=beats.recv().await { if let Beat::Review{provider,files,..}=beat { reviewed=Some((provider,files)); } }
+        assert_eq!(reviewed,Some(("checker".to_string(),1)));
+
+        // O pedido seguinte não muda nada: a resposta vem sem revisão.
+        orchestrator.providers=build_providers(&HashMap::from([("maker".to_string(),script("echo só-li","cat >/dev/null; echo maker-planejou")),("checker".to_string(),script("echo checker-construiu","cat >/dev/null; echo revisou"))]),&orchestrator.workdir);
+        let quiet=orchestrator.process("adicione um teste ao roteador",Some("quiet"),&Pulse::silent()).await;
+        assert_eq!(quiet.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("só-li"));
     }
 
     #[test] fn a_missing_agent_steps_aside_only_when_another_is_there() {

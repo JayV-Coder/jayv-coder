@@ -24,8 +24,11 @@ pub struct JevConfig {
     /// Os agentes na ordem de preferência para desempatar (`claude`,
     /// `codex`…). Vazia, os empatados se espalham entre os chats.
     #[serde(default)] pub agent_order: Vec<String>,
+    /// Depois de uma mudança no modo build, um agente de outro provedor lê o
+    /// diff em somente leitura e aponta problemas (ver `review`).
+    #[serde(default)] pub review_changes: bool,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![] } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {
