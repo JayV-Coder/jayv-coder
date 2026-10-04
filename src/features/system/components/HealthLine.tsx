@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Health } from "@/modules/system";
+import type { Health } from "../report";
 import { cn } from "@/lib/utils";
 
 const DOT: Record<Health, string> = { ok: "bg-go", warn: "bg-warning", fail: "bg-destructive", off: "bg-muted-foreground/50" };

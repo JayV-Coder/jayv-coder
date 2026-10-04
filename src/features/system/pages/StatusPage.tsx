@@ -5,14 +5,16 @@ import { notify, reportError } from "@/modules/feedback";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
 import { AGENT_LABELS, AGENTS, checkAllAgents, useSettings, type ProbeState } from "@/modules/settings";
-import { agentHealth, connectionHealth, diagnosticReport, loadStatus, useSystem, type Health } from "@/modules/system";
 import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { Eyebrow, LoadingNote } from "@/components/atoms";
-import { HealthLine, Metric, PageHeading, PathLine } from "@/components/molecules";
-import { DatabaseCard } from "@/components/organisms";
+import { Metric, PageHeading, PathLine } from "@/components/molecules";
 import { ScrollPage } from "@/components/templates";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DatabaseCard } from "../components/DatabaseCard";
+import { HealthLine } from "../components/HealthLine";
+import { agentHealth, connectionHealth, diagnosticReport, type Health } from "../report";
+import { loadStatus, useSystem } from "../store";
 
 const LINK: Record<string, Key> = { online: "system.link.online", offline: "system.link.offline", expired: "system.link.expired", signedOut: "system.link.signedOut" };
 
