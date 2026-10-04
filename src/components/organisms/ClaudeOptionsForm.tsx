@@ -1,14 +1,17 @@
-import type { AgentSettings, ClaudeOptions } from "@/modules/core";
+import type { AgentSettings, ClaudeOptions, Mechanism } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { updateOptions, type ModelDraft } from "@/modules/settings";
 import { CheckList, FormField, OptionSelect, ToggleRow } from "@/components/molecules";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { MechanismsField } from "./MechanismsField";
 
 const PERMISSIONS: ClaudeOptions["permissionMode"][] = ["default", "plan", "acceptEdits", "auto", "bypassPermissions"];
 const EFFORTS: ClaudeOptions["effort"][] = ["auto", "low", "medium", "high", "xhigh", "max"];
 const TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
 const NONE = "__none__";
+/** A ferramenta atrás de cada mecanismo: bloquear uma desliga o outro. */
+const TOOL_OF: Partial<Record<Mechanism, string>> = { webSearch: "WebSearch", webFetch: "WebFetch", shell: "Bash" };
 
 /** O que o Claude Code pode fazer e como pensa. */
 export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSettings<"claude">; models: ModelDraft[]; problems: Record<string, Key> }) {
@@ -45,8 +48,11 @@ export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSet
           onChange={(event) => set({ maxBudgetUsd: event.target.value === "" ? null : Number(event.target.value) })}
         />
       </FormField>
+      <MechanismsField agent="claude" selected={options.mechanisms ?? []}
+        onChange={(mechanisms) => set({ mechanisms, blockedTools: options.blockedTools.filter((tool) => !mechanisms.some((mechanism) => TOOL_OF[mechanism] === tool)) })} />
       <FormField label={t("agent.tools")} hint={t("agent.tools.hint")} wide>
-        <CheckList id="claude-tools" tone="danger" selected={options.blockedTools} onChange={(blockedTools) => set({ blockedTools })}
+        <CheckList id="claude-tools" tone="danger" selected={options.blockedTools}
+          onChange={(blockedTools) => set({ blockedTools, mechanisms: (options.mechanisms ?? []).filter((mechanism) => !blockedTools.includes(TOOL_OF[mechanism] ?? "")) })}
           items={TOOLS.map((value) => ({ value, label: t(`tool.${value}` as Key) }))} />
       </FormField>
       <FormField label={t("claude.prompt")} htmlFor="claude-prompt" hint={t("claude.prompt.hint", { count: options.appendSystemPrompt.length })} wide>

@@ -4,8 +4,8 @@
 //! sync: só desce. No atendimento, as configurações de quem usa passam por
 //! ela antes de chegar ao orquestrador.
 //!
-//! A política só aperta: desliga agente e modelo, troca os modos sem trava dos
-//! agentes por um com trava, soma padrões de privacidade e endurece as regras
+//! A política só aperta: desliga agente, modelo e mecanismo (a busca na web,
+//! por exemplo), troca os modos sem trava dos agentes por um com trava, soma padrões de privacidade e endurece as regras
 //! da portaria de saída. Nunca liga o que quem usa desligou.
 
 use crate::core_settings::CoreSettings;
@@ -30,6 +30,9 @@ pub struct LlmPolicy {
     pub agents:Option<Vec<String>>,
     /// `agente/modelo`.
     pub blocked_models:Vec<String>,
+    /// `agente/mecanismo` (`claude/webSearch`): o que nenhum projeto da
+    /// organização liga, mesmo que quem usa tenha ligado.
+    pub blocked_mechanisms:Vec<String>,
     pub deny:Vec<String>,
     pub local_only:Vec<String>,
     pub safe_agents:bool,
@@ -63,7 +66,8 @@ impl LlmPolicy {
     /// Os agentes e modelos de quem usa, com o que a política proíbe desligado.
     pub fn restrict_llm(&self,settings:&LlmSettings)->LlmSettings {
         let agents=settings.agents.iter().map(|agent|{
-            let mut agent=if self.safe_agents { agent.without_unsafe_modes() } else { agent.clone() };
+            let agent=if self.safe_agents { agent.without_unsafe_modes() } else { agent.clone() };
+            let mut agent=agent.without_mechanisms(&self.blocked_mechanisms);
             agent.enabled=agent.enabled && self.allows_agent(agent.id.key());
             agent
         }).collect();
@@ -177,6 +181,16 @@ impl LlmPolicy {
         assert_eq!(restricted.agents[0].options["permissionMode"],"plan");
         assert_eq!(restricted.agents[0].options["effort"],"high","o resto das opções fica");
         assert_eq!(restricted.agents[1].options["sandbox"],"read-only","read-only não vira workspace-write");
+    }
+
+    #[test] fn blocked_mechanisms_come_off_only_for_their_agent() {
+        let mut mine=settings();
+        mine.agents[0].options=json!({"mechanisms":["webSearch","webFetch"]});
+        mine.agents[1].options=json!({"mechanisms":["webSearch"]});
+        let restricted=policy(json!({"blocked_mechanisms":["claude/webSearch"]})).restrict_llm(&mine);
+        assert_eq!(restricted.agents[0].options["mechanisms"],json!(["webFetch"]));
+        assert_eq!(restricted.agents[1].options,mine.agents[1].options,"a busca do Codex não foi bloqueada");
+        assert!(!restricted.agents[0].args().iter().any(|arg|arg.contains("WebSearch")),"a linha de comando não libera a busca");
     }
 
     #[test] fn the_core_settings_only_get_stricter() {

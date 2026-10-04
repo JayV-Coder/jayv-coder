@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AgentId, Permission } from "@/modules/core";
+import { AGENT_MECHANISMS, type AgentId, type Permission } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { useT, type Key } from "@/modules/i18n";
 import {
@@ -7,7 +7,7 @@ import {
   type LlmPolicy, type OrganizationDetail, type Role,
 } from "@/modules/organizations";
 import { AGENT_LABELS } from "@/modules/settings";
-import { ConfirmAction, FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
+import { CheckList, ConfirmAction, FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -88,6 +88,18 @@ function PolicyForm({ orgId, repository, initial, manages }: { orgId: string; re
           <FormField label={t("policy.models")} htmlFor="policy-models" hint={t("policy.models.hint")} error={problems.includes("models") ? t("policy.models.invalid") : null}>
             <Textarea id="policy-models" rows={4} spellCheck={false} className="font-mono text-xs" placeholder="claude/opus" value={models}
               aria-invalid={problems.includes("models") || undefined} onChange={(event) => setModels(event.target.value)} />
+          </FormField>
+          <FormField label={t("policy.mechanisms")} hint={t("policy.mechanisms.hint")}>
+            <div className="grid gap-3">
+              {POLICY_AGENTS.filter((agent) => AGENT_MECHANISMS[agent].length > 0).map((agent) => (
+                <div key={agent} className="grid gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">{AGENT_LABELS[agent]}</span>
+                  <CheckList id={`policy-mechanisms-${agent}`} tone="danger" selected={policy.blocked_mechanisms}
+                    onChange={(blocked_mechanisms) => update({ blocked_mechanisms })}
+                    items={AGENT_MECHANISMS[agent].map((mechanism) => ({ value: `${agent}/${mechanism}`, label: t(`mechanism.${mechanism}` as Key) }))} />
+                </div>
+              ))}
+            </div>
           </FormField>
           <ToggleRow id="policy-safe" label={t("policy.safe")} hint={t("policy.safe.hint")} checked={policy.safe_agents}
             onChange={(safe_agents) => update({ safe_agents })} disabled={!manages} />

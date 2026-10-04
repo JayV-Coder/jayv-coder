@@ -5,6 +5,8 @@ import type { AgentId, Permission } from "@/modules/core";
 export interface LlmPolicy {
   agents: AgentId[] | null;
   blocked_models: string[];
+  /** `agente/mecanismo` (`claude/webSearch`). */
+  blocked_mechanisms: string[];
   deny: string[];
   local_only: string[];
   safe_agents: boolean;
@@ -25,7 +27,7 @@ export const PATTERN_LENGTH_MAX = 200;
 export const MODELS_MAX = 100;
 
 export const emptyPolicy = (): LlmPolicy => ({
-  agents: null, blocked_models: [], deny: [], local_only: [], safe_agents: false, redact_secrets: false,
+  agents: null, blocked_models: [], blocked_mechanisms: [], deny: [], local_only: [], safe_agents: false, redact_secrets: false,
   min_read: "allow", min_write: "allow", min_shell: "allow",
 });
 
@@ -60,6 +62,7 @@ export function policyPayload(policy: LlmPolicy): LlmPolicy {
     ...policy,
     agents: policy.agents ? POLICY_AGENTS.filter((agent) => policy.agents!.includes(agent)) : null,
     blocked_models: clean(policy.blocked_models),
+    blocked_mechanisms: clean(policy.blocked_mechanisms),
     deny: clean(policy.deny),
     local_only: clean(policy.local_only),
   };
@@ -74,6 +77,7 @@ export function storedPolicy(row: Record<string, unknown>): StoredPolicy {
     updatedAt: String(row.updated_at ?? ""),
     agents: Array.isArray(row.agents) ? (row.agents as AgentId[]) : null,
     blocked_models: list(row.blocked_models),
+    blocked_mechanisms: list(row.blocked_mechanisms),
     deny: list(row.deny),
     local_only: list(row.local_only),
     safe_agents: row.safe_agents === true,

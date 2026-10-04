@@ -51,6 +51,9 @@ interface OrganizationsState {
   projects: Record<string, ProjectOrganization>;
   /** Os projetos que rodam sob uma política de LLM, por id. */
   policed: Record<string, true>;
+  /** Os mecanismos (`agente/mecanismo`) que alguma organização bloqueia nos
+   * projetos dela, com as organizações que bloqueiam. */
+  blockedMechanisms: Record<string, string[]>;
   loaded: boolean;
   /** A organização aberta na vista `organization`. */
   openId: string | null;
@@ -59,7 +62,7 @@ interface OrganizationsState {
   detail: OrganizationDetail | null;
 }
 
-export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, tab: "projects", detail: null }));
+export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, loaded: false, openId: null, tab: "projects", detail: null }));
 
 /** As RPCs falham com uma chave do i18n (`org.forbidden`); o resto segue como
  * veio. */
@@ -88,6 +91,19 @@ const count = (rows: { org_id: string }[] | null) => {
 
 type Row = Record<string, unknown>;
 
+/** Quem bloqueia cada mecanismo, a partir das políticas dos projetos. */
+function blockedBy(rows: Row[]) {
+  const found: Record<string, string[]> = {};
+  for (const row of rows) {
+    const listed = (row.policy as { blocked_mechanisms?: unknown } | null)?.blocked_mechanisms;
+    const keys = Array.isArray(listed) ? listed.map(String) : [];
+    for (const slug of String(row.org_slug ?? "").split(", ").filter(Boolean)) {
+      for (const key of keys) if (!(found[key] ??= []).includes(slug)) found[key].push(slug);
+    }
+  }
+  return found;
+}
+
 export async function loadOrganizations() {
   const me = await userId();
   const [mine, members, repositories, incoming, projects, policed] = await Promise.all([
@@ -115,6 +131,7 @@ export async function loadOrganizations() {
     })),
     projects: Object.fromEntries((projects ?? []).map((row) => [row.project_id as string, { orgId: row.org_id as string, slug: row.org_slug as string, name: row.org_name as string }])),
     policed: Object.fromEntries((policed ?? []).map((row) => [row.project_id as string, true as const])),
+    blockedMechanisms: blockedBy(policed ?? []),
   });
 }
 
@@ -215,7 +232,7 @@ export async function findUsers(query: string): Promise<FoundUser[]> {
 }
 
 export function clearOrganizations() {
-  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, loaded: false, openId: null, tab: "projects", detail: null });
+  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, loaded: false, openId: null, tab: "projects", detail: null });
 }
 
 export function setOrganizationTab(tab: OrganizationTab) {

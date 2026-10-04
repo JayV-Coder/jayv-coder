@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, RotateCcwIcon, Undo2Icon } from "lucide-react";
 import type { TurnView } from "@/modules/core";
 import { messageLight, routeHint, routeLabel, shownText } from "@/modules/conversation";
@@ -55,6 +55,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
 }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
+  const [thoughts, setThoughts] = useState(false);
   const light = turn ? messageLight(role, turn) : null;
   const user = role === "user";
   // Pedido barrado, falha e resposta a uma pergunta ficam gravados como aviso
@@ -67,6 +68,13 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   // o que ele avisou no caminho não se mistura com a resposta final.
   const parts = user ? [text] : splitMessages(text);
   const answer = parts[parts.length - 1] ?? "";
+  // O que o agente pensou em voz alta no caminho fica recolhido: só o mais
+  // recente aparece, e um botão abre os anteriores.
+  const said = parts.slice(0, -1);
+  const earlier = thoughts ? 0 : Math.max(0, said.length - 1);
+  const shown = [...said.slice(earlier), answer];
+  // Pedido novo, balão recolhido de novo.
+  useEffect(() => setThoughts(false), [turn?.id]);
   const tinted = light !== null && light.aspect !== "go";
   const animate = pending && "animate-pending-in motion-reduce:animate-none";
 
@@ -140,11 +148,21 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
         )}
         {(text || !pending) && (
           <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
-            {parts.map((part, index) => {
-              const last = index === parts.length - 1;
+            {said.length > 1 && (
+              <button
+                type="button"
+                aria-expanded={thoughts}
+                onClick={() => setThoughts(!thoughts)}
+                className="-ms-1 w-fit rounded-xs px-1 text-start text-caption text-muted-foreground underline-offset-[3px] hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                {thoughts ? t("chat.thoughts.less") : t("chat.thoughts.more", { count: earlier })}
+              </button>
+            )}
+            {shown.map((part, index) => {
+              const last = index === shown.length - 1;
               return (
                 <div
-                  key={index}
+                  key={earlier + index}
                   data-aspect={light?.aspect}
                   className={cn(
                     "min-w-0 leading-relaxed [overflow-wrap:anywhere]",
