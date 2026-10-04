@@ -1,0 +1,31 @@
+# A orquestração: o Jev que recebe o pedido, monta o contexto, escolhe o
+# modelo ou agente, executa (inclusive em paralelo, em worktrees), revisa e
+# explica. É a camada de cima do núcleo e depende de todas as de baixo.
+[package]
+name = "jayv-orchestration"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-store = { path = "../jayv-store" }
+jayv-agents = { path = "../jayv-agents" }
+jayv-jev = { path = "../jayv-jev" }
+jayv-code = { path = "../jayv-code" }
+jayv-memory = { path = "../jayv-memory" }
+jayv-workspace = { path = "../jayv-workspace" }
+jayv-live = { path = "../jayv-live" }
+anyhow.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

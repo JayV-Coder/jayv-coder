@@ -983,7 +983,7 @@ mod tests {
         jev::RoutingDecision{intent:intent.into(),intent_confidence,intent_probabilities:HashMap::from([(intent.to_string(),intent_confidence)]),complexity:complexity.into(),complexity_score:0.0,complexity_confidence,complexity_probabilities:HashMap::new(),needs_repository_context:1.0,needs_tools:1.0,is_destructive:0.0,model:"jev-1.13.0".into(),usage:jev::Usage{input_tokens:1_200,output_tokens:64}}
     }
     fn signals_of(orchestrator:&Orchestrator,decision:&jev::RoutingDecision)->RoutingSignals { orchestrator.jev_routing(decision).2 }
-    fn repository_root()->PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().expect("repository root").to_path_buf() }
+    fn repository_root()->PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..").canonicalize().expect("repository root") }
 
     /// O Jev conta o que fez no contexto: a leitura nova, o acerto do cache
     /// na segunda vez e os segredos trocados por marcador.
