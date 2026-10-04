@@ -258,17 +258,29 @@ impl Orchestrator {
             return ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy:"configuration_required".into(), model_selection, result:Some(response), validation:true, decision, routing:signals, error:None };
         }
         pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
-        // Pedido complexo no build: um modelo de raciocínio planeja antes, em
-        // somente leitura, e o plano vai junto ao agente que constrói.
-        if self.config.jev.plan_first&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity) {
-            if let Some(plan)=self.plan_first(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await { extras.push(plan); }
-        }
         pulse.beat(Beat::Running);
         // A revisão compara o projeto de antes com o de depois: a largada é
         // tirada antes de o agente começar.
         let watch=if self.config.jev.review_changes&&mode==MODE_BUILD { self.start_watch().await } else { None };
         let started=Instant::now();
-        let mut execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
+        // Pedido complexo no build, com a divisão ligada: partes do pedido vão
+        // a agentes diferentes ao mesmo tempo. Sem divisão possível, segue
+        // inteiro com o agente escolhido.
+        let split=if self.config.jev.parallel_tasks&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity)&&self.config.permissions.write!="deny" {
+            self.run_parallel(brief.as_deref().unwrap_or(&normalized),&context,&ranked,session_id,pulse).await
+        } else { None };
+        let mut execution=match split {
+            Some((response,first))=>{ selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..first}; Ok((response,false)) }
+            None=>{
+                // Pedido complexo no build: um modelo de raciocínio planeja
+                // antes, em somente leitura, e o plano vai junto ao agente que
+                // constrói.
+                if self.config.jev.plan_first&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity) {
+                    if let Some(plan)=self.plan_first(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await { extras.push(plan); }
+                }
+                self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await
+            }
+        };
         // Plano B: o agente que nem conseguiu começar (não instalado, sem
         // login, sem cota) passa a vez ao próximo da lista que é de outro
         // agente. Quem já trabalhou um pouco e falhou não passa: o próximo
@@ -465,6 +477,84 @@ impl Orchestrator {
             Ok(response)=>crate::split::handoff(&response.response,&agent_name(&planner.provider)),
             Err(error)=>{ eprintln!("plano: {} não planejou ({error:#})",planner.provider); None }
         }
+    }
+
+    /// O pedido dividido entre agentes. O planejador quebra o pedido em partes
+    /// com arquivos separados; cada parte roda numa cópia do projeto (`git
+    /// worktree`), todas ao mesmo tempo, e as mudanças voltam como patch. A
+    /// resposta junta o que cada agente disse. Devolve também quem fez a
+    /// primeira parte, que fica como o agente do pedido. Nada quando o
+    /// projeto não é um repositório git, quando não há planejador ou quando a
+    /// divisão não vale: aí o pedido segue inteiro.
+    async fn run_parallel(&self,request:&str,context:&Context,ranked:&[ModelSelection],session_id:&str,pulse:&Pulse)->Option<(ProviderResponse,ModelSelection)> {
+        let folder=PathBuf::from(self.rag.project_info().root);
+        let (top,prefix)=tokio::task::spawn_blocking({let folder=folder.clone(); move ||crate::parallel::repository(&folder)}).await.ok().flatten()?;
+        let planners=rank_models(&self.config,"analysis","complex",context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
+        let planner=planners.iter().find(|candidate|self.planners.contains_key(&candidate.provider))?;
+        let system=format!("{}\n{}",context.system_instructions,language_note());
+        let asked=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:crate::parallel::split_prompt(request)}];
+        let answer=match self.planners.get(&planner.provider)?.chat_turn(&asked,&planner.model_name,Some("high"),None,&Pulse::silent()).await {
+            Ok(answer)=>answer,
+            Err(error)=>{ eprintln!("divisão: {} não dividiu ({error:#})",planner.provider); return None; }
+        };
+        let tasks=crate::parallel::parse_split(&answer.response);
+        let workers=crate::parallel::assign(&ranked.iter().filter(|candidate|self.providers.contains_key(&candidate.provider)).cloned().collect::<Vec<_>>(),tasks.len());
+        if tasks.is_empty()||workers.len()!=tasks.len() { return None; }
+        let start=tokio::task::spawn_blocking({let top=top.clone(); move ||crate::parallel::base(&top)}).await.ok()?.map_err(|error|eprintln!("divisão: sem ponto de partida ({error:#})")).ok()?;
+        // Cada parte numa cópia própria; os agentes de cada uma enxergam a
+        // pasta do projeto dentro da cópia.
+        let mut copies:Vec<PathBuf>=Vec::new();
+        for index in 0..tasks.len() {
+            let dir=crate::parallel::worktree_dir(index);
+            let created=tokio::task::spawn_blocking({let (top,start,dir)=(top.clone(),start.clone(),dir.clone()); move ||crate::parallel::add_worktree(&top,&start,&dir)}).await;
+            if !matches!(created,Ok(Ok(()))) {
+                eprintln!("divisão: a cópia {index} não foi criada");
+                for made in &copies { crate::parallel::remove_worktree(&top,made); }
+                return None;
+            }
+            copies.push(dir);
+        }
+        pulse.beat(Beat::Split{tasks:tasks.iter().zip(&workers).map(|(task,worker)|crate::progress::SplitTask{title:task.title.clone(),provider:worker.provider.clone(),model:worker.model_name.clone()}).collect()});
+        let pools:Vec<HashMap<String,Box<dyn Provider>>>=copies.iter().map(|dir|{let workdir=Workdir::default(); workdir.focus(dir.join(&prefix)); build_providers(&self.config.providers,&workdir)}).collect();
+        let runs=tasks.iter().enumerate().map(|(index,task)|{
+            let others:Vec<&crate::parallel::Subtask>=tasks.iter().enumerate().filter(|(other,_)|*other!=index).map(|(_,other)|other).collect();
+            let messages=vec![ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:crate::parallel::task_message(request,task,&others)}];
+            let (worker,pool)=(&workers[index],&pools[index]);
+            async move {
+                match pool.get(&worker.provider) {
+                    Some(provider)=>provider.chat_turn(&messages,&worker.model_name,Some("medium"),None,&Pulse::silent()).await,
+                    None=>Err(anyhow!("no executable provider named '{}' is configured",worker.provider)),
+                }
+            }
+        });
+        let results=futures_util::future::join_all(runs).await;
+        let mut text=String::new();
+        let (mut input_tokens,mut output_tokens)=(0,0);
+        for (index,((task,worker),result)) in tasks.iter().zip(&workers).zip(results).enumerate() {
+            let (outcome,patch_path,said)=match result {
+                Err(error)=>("failed",None,crate::i18n::notice(&[crate::i18n::failure(error)])),
+                Ok(response)=>{
+                    input_tokens+=response.input_tokens; output_tokens+=response.output_tokens;
+                    let patch=tokio::task::spawn_blocking({let (dir,start)=(copies[index].clone(),start.clone()); move ||crate::parallel::collect_patch(&dir,&start)}).await.ok().and_then(Result::ok).unwrap_or_default();
+                    let applied=tokio::task::spawn_blocking({let (top,patch)=(top.clone(),patch.clone()); move ||crate::parallel::apply_patch(&top,&patch)}).await.ok().map(|applied|applied.is_ok()).unwrap_or(false);
+                    if patch.trim().is_empty() { ("empty",None,response.response) }
+                    else if applied { ("applied",None,response.response) }
+                    else {
+                        let kept=crate::parallel::keep_patch(&top,&format!("{session_id}-{}",index+1),&patch).ok().map(|path|path.display().to_string());
+                        ("conflict",kept,response.response)
+                    }
+                }
+            };
+            pulse.beat(Beat::Subtask{index,title:task.title.clone(),provider:worker.provider.clone(),outcome:outcome.into(),patch:patch_path.clone()});
+            let mark=match outcome { "applied"|"empty"=>"✓", _=>"⚠" };
+            let said=crate::i18n::for_model(&said);
+            let apply=patch_path.map(|path|format!("\n\n```\ngit apply \"{path}\"\n```")).unwrap_or_default();
+            text.push_str(&format!("{}### {mark} {} · {}\n\n{}{apply}",if text.is_empty() {""} else {"\n\n"},task.title,agent_name(&worker.provider),said.trim()));
+        }
+        for dir in &copies { let (top,dir)=(top.clone(),dir.clone()); let _=tokio::task::spawn_blocking(move ||crate::parallel::remove_worktree(&top,&dir)).await; }
+        pulse.beat(Beat::Chunk{text:text.clone()});
+        let first=workers[0].clone();
+        Some((ProviderResponse{response:text,input_tokens,output_tokens,model:first.model_name.clone(),provider:first.provider.clone(),latency_ms:0,session:None},first))
     }
 
     /// A foto do projeto antes do pedido, para a revisão saber o que ele
@@ -1180,6 +1270,57 @@ mod tests {
         orchestrator.pending_work_mode=Some(MODE_BUILD.into());
         let simple=orchestrator.process("adicione um teste ao roteador",Some("simple"),&Pulse::silent()).await;
         assert_eq!(simple.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("sem-plano"));
+    }
+
+    /// Com a divisão ligada, o pedido complexo do build vira partes que
+    /// agentes diferentes fazem ao mesmo tempo, cada um na sua cópia do
+    /// projeto; as mudanças voltam para a pasta do projeto e as cópias somem.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_complex_build_is_split_between_agents_in_worktrees() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        for args in [&["init","-q"][..],&["add","."],&["-c","user.email=t@t","-c","user.name=t","commit","-qm","base"]] {
+            assert!(std::process::Command::new("git").current_dir(dir.path()).args(args).output().expect("git").status.success());
+        }
+        let mut orchestrator=orchestrator(&dir);
+        let agent=|build:&str,plan:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build.into()],plan_args:vec!["-c".into(),plan.into()],..Default::default()};
+        let worker=r#"input=$(cat); case "$input" in *"Your part: Parte A"*) echo A > a.txt;; *"Your part: Parte B"*) echo B > b.txt;; esac; echo pronto"#;
+        let split=r#"cat >/dev/null; printf '%s' '{"tasks":[{"title":"Parte A","instructions":"crie a","files":["a.txt"]},{"title":"Parte B","instructions":"crie b","files":["b.txt"]}]}'"#;
+        let providers=HashMap::from([
+            ("thinker".to_string(),agent("cat >/dev/null; echo thinker-construiu",split)),
+            ("maker".to_string(),agent(worker,"cat >/dev/null; echo maker-planejou")),
+            ("helper".to_string(),agent(worker,"cat >/dev/null; echo helper-planejou")),
+        ]);
+        let caps=|list:&[&str]|list.iter().map(|cap|cap.to_string()).collect::<Vec<_>>();
+        let model=|provider:&str,capabilities:Vec<String>,cost:&str|crate::config::ModelConfig{enabled:true,provider:provider.into(),model:format!("{provider}-m"),capabilities,cost_class:cost.into(),speed:"medium".into(),context_window:200_000};
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([
+            ("thinker/m".to_string(),model("thinker",caps(&["chat","reasoning"]),"high")),
+            ("maker/m".to_string(),model("maker",caps(&["chat","code","tools"]),"medium")),
+            ("helper/m".to_string(),model("helper",caps(&["chat","code","tools"]),"medium")),
+        ]);
+        orchestrator.config.jev.parallel_tasks=true;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"complex",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        let (pulse,mut beats)=Pulse::channel();
+        let result=orchestrator.process("crie os arquivos a e b",Some("split"),&pulse).await;
+        drop(pulse);
+        let answer=result.result.expect("resposta").response;
+        assert!(answer.contains("✓ Parte A")&&answer.contains("✓ Parte B"),"{answer}");
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).expect("a").trim(),"A");
+        assert_eq!(std::fs::read_to_string(dir.path().join("b.txt")).expect("b").trim(),"B");
+        let listed=std::process::Command::new("git").current_dir(dir.path()).args(["worktree","list"]).output().expect("git");
+        assert_eq!(String::from_utf8_lossy(&listed.stdout).lines().count(),1,"as cópias foram removidas");
+        let mut split_into=vec![];
+        let mut finished=vec![];
+        while let Some(beat)=beats.recv().await {
+            match beat { Beat::Split{tasks}=>split_into=tasks.into_iter().map(|task|task.provider).collect(), Beat::Subtask{outcome,..}=>finished.push(outcome), _=>{} }
+        }
+        split_into.sort();
+        assert_eq!(split_into,["helper","maker"],"cada parte foi para um agente");
+        assert_eq!(finished,["applied","applied"]);
     }
 
     #[test] fn a_missing_agent_steps_aside_only_when_another_is_there() {

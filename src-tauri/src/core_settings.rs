@@ -50,6 +50,9 @@ pub struct CoreSettings {
     /// Num pedido complexo do modo build, um modelo de raciocínio planeja
     /// antes de o agente construir.
     #[serde(default)] pub plan_first:bool,
+    /// Num pedido complexo do modo build, partes do pedido vão a agentes
+    /// diferentes ao mesmo tempo.
+    #[serde(default)] pub parallel_tasks:bool,
 }
 
 impl CoreSettings {
@@ -66,6 +69,7 @@ impl CoreSettings {
             agent_order:config.jev.agent_order.clone(),
             review_changes:config.jev.review_changes,
             plan_first:config.jev.plan_first,
+            parallel_tasks:config.jev.parallel_tasks,
         }
     }
 
@@ -85,6 +89,7 @@ impl CoreSettings {
         config.jev.agent_order=self.agent_order.clone();
         config.jev.review_changes=self.review_changes;
         config.jev.plan_first=self.plan_first;
+        config.jev.parallel_tasks=self.parallel_tasks;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,

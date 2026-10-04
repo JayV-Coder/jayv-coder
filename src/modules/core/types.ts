@@ -275,6 +275,8 @@ export interface CoreSettings {
   reviewChanges: boolean;
   /** Num pedido complexo do build, um modelo de raciocínio planeja antes. */
   planFirst: boolean;
+  /** Num pedido complexo do build, partes vão a agentes diferentes ao mesmo tempo. */
+  parallelTasks: boolean;
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */
