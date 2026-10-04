@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, RotateCcwIcon, Undo2Icon } from "lucide-react";
 import type { TurnView } from "@/modules/core";
-import { messageLight, routeHint, routeLabel, shownText } from "@/modules/conversation";
+import { answerLines, messageLight, routeHint, routeLabel, shownText } from "@/modules/conversation";
+import { ChevronIcon } from "@/components/atoms";
 import { formatClock, useT } from "@/modules/i18n";
 import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,11 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   const t = useT();
   const [copied, setCopied] = useState(false);
   const [thoughts, setThoughts] = useState(false);
+  // Respostas a várias perguntas do agente ocupam o chat: ficam recolhidas
+  // numa linha, e abrem com um clique.
+  const answers = role === "user" ? answerLines(content) : null;
+  const foldable = answers !== null && answers.length > 1;
+  const [unfolded, setUnfolded] = useState(false);
   const light = turn ? messageLight(role, turn) : null;
   const user = role === "user";
   // Pedido barrado, falha e resposta a uma pergunta ficam gravados como aviso
@@ -74,7 +80,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   const earlier = thoughts ? 0 : Math.max(0, said.length - 1);
   const shown = [...said.slice(earlier), answer];
   // Pedido novo, balão recolhido de novo.
-  useEffect(() => setThoughts(false), [turn?.id]);
+  useEffect(() => { setThoughts(false); setUnfolded(false); }, [turn?.id]);
   const tinted = light !== null && light.aspect !== "go";
   const animate = pending && "animate-pending-in motion-reduce:animate-none";
 
@@ -101,7 +107,22 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
           </div>
           <div className="flex gap-2.5 font-medium">
             <span aria-hidden="true" className={cn("shrink-0 font-semibold text-go", tinted && "text-[var(--aspect)]")}>{tinted && light.aspect === "ask" ? "?" : "❯"}</span>
-            <div className="min-w-0 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
+            {foldable ? (
+              <div className="grid min-w-0 gap-1">
+                <button
+                  type="button"
+                  aria-expanded={unfolded}
+                  onClick={() => setUnfolded(!unfolded)}
+                  className="-ms-1 flex items-center gap-1.5 rounded-sm px-1 text-start underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <ChevronIcon className={cn("w-[15px] flex-none transition-transform duration-200 motion-reduce:transition-none", !unfolded && "-rotate-90")} />
+                  {t("chat.answers", { count: answers.length })}
+                </button>
+                {unfolded && <div className="min-w-0 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>}
+              </div>
+            ) : (
+              <div className="min-w-0 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
+            )}
           </div>
         </div>
         {children}

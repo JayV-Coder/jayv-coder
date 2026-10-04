@@ -12,12 +12,14 @@ export function CodexOptionsForm({ agent }: { agent: AgentSettings<"codex"> }) {
   const t = useT();
   const options = agent.options;
   const set = (patch: Partial<CodexOptions>) => updateOptions("codex", patch);
-  const writes = options.sandbox === "workspace-write";
+  // Sem sandbox a rede já está aberta; nos outros dois, a escolha vale quando
+  // o Codex escreve — e no `read-only` o modo Desenvolvimento o faz escrever.
+  const open = options.sandbox === "danger-full-access";
 
   return (
     <div className="grid gap-5 sm:grid-cols-2">
       <FormField label={t("codex.sandbox")} htmlFor="codex-sandbox" hint={t(`codex.sandbox.${options.sandbox}.hint`)} wide>
-        <OptionSelect id="codex-sandbox" value={options.sandbox} onChange={(sandbox) => set({ sandbox, networkAccess: sandbox === "workspace-write" && options.networkAccess })}
+        <OptionSelect id="codex-sandbox" value={options.sandbox} onChange={(sandbox) => set({ sandbox, networkAccess: sandbox !== "danger-full-access" && options.networkAccess })}
           options={SANDBOXES.map((value) => ({ value, label: t(`codex.sandbox.${value}`) }))} />
       </FormField>
       <FormField label={t("agent.effort")} htmlFor="codex-effort" hint={t("agent.effort.hint.auto")} wide>
@@ -25,7 +27,7 @@ export function CodexOptionsForm({ agent }: { agent: AgentSettings<"codex"> }) {
           options={EFFORTS.map((value) => ({ value, label: t(`effort.${value}`) }))} />
       </FormField>
       <MechanismsField agent="codex" selected={options.mechanisms ?? []} onChange={(mechanisms) => set({ mechanisms })} />
-      <ToggleRow id="codex-network" label={t("codex.network")} hint={t("codex.network.hint")} checked={writes && options.networkAccess} disabled={!writes} onChange={(networkAccess) => set({ networkAccess })} />
+      <ToggleRow id="codex-network" label={t("codex.network")} hint={t(open ? "codex.network.open" : "codex.network.hint")} checked={open || options.networkAccess} disabled={open} onChange={(networkAccess) => set({ networkAccess })} />
       <ToggleRow id="codex-git" label={t("codex.git")} hint={t("codex.git.hint")} checked={options.skipGitRepoCheck} onChange={(skipGitRepoCheck) => set({ skipGitRepoCheck })} />
     </div>
   );

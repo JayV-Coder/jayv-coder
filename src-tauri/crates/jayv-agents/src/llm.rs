@@ -115,7 +115,10 @@ pub struct CodexOptions {
     pub sandbox:String,
     /// `auto` (o Jev escolhe por pedido), `low`, `medium` ou `high`.
     pub reasoning_effort:String,
-    /// Só vale com `workspace-write`: nos outros dois a rede já está decidida.
+    /// A rede do sandbox quando o Codex escreve no projeto: no
+    /// `workspace-write` e no `read-only`, que o modo desenvolvimento sobe para
+    /// `workspace-write`. O `danger-full-access` já tem rede, e o modo
+    /// planejamento nunca tem.
     pub network_access:bool,
     pub skip_git_repo_check:bool,
     /// Os mecanismos ligados (`CODEX_MECHANISMS`).
@@ -274,7 +277,7 @@ impl CodexOptions {
         one_of("codex.sandbox",&self.sandbox,&CODEX_SANDBOXES)?;
         self.reasoning_effort=effort_of(&self.reasoning_effort);
         one_of("codex.reasoning",&self.reasoning_effort,&CODEX_EFFORTS)?;
-        if self.sandbox!="workspace-write" { self.network_access=false; }
+        if self.sandbox=="danger-full-access" { self.network_access=false; }
         self.mechanisms=tools_in("codex.mechanisms",&self.mechanisms,&CODEX_MECHANISMS)?;
         Ok(self)
     }
@@ -285,7 +288,9 @@ impl CodexOptions {
         if self.skip_git_repo_check { args.push("--skip-git-repo-check".into()); }
         let effort=effort_of(&self.reasoning_effort);
         args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",if effort==AUTO_EFFORT {EFFORT} else {&effort})]);
-        if self.network_access { args.extend(strings(&["-c","sandbox_workspace_write.network_access=true"])); }
+        // A chave só existe no `workspace-write`: no `read-only` não há rede,
+        // e o `danger-full-access` não tem sandbox.
+        if self.network_access&&self.sandbox=="workspace-write" { args.extend(strings(&["-c","sandbox_workspace_write.network_access=true"])); }
         // `live` busca na hora; desligado é desligado mesmo, e não o `cached`
         // que o Codex usa quando ninguém diz nada.
         let search=if self.mechanisms.iter().any(|mechanism|mechanism==WEB_SEARCH) {"live"} else {"disabled"};
@@ -386,7 +391,8 @@ impl AgentSettings {
     /// e ninguém responde ao pedido de aprovação dele: o que só se faz com
     /// aprovação é negado. Então o que na configuração só lê sobe para o
     /// degrau que escreve no projeto e nada além — o Claude para o
-    /// `acceptEdits`, o Codex para o `workspace-write` sem rede e o Copilot
+    /// `acceptEdits`, o Codex para o `workspace-write` (com a rede que a
+    /// configuração deu) e o Copilot
     /// para o `edits`. O que já escrevia fica como está, e o Cursor também: o
     /// único degrau dele que escreve é o `--force`, que roda comandos sem
     /// perguntar. Quem não quer escrita usa o modo planejamento, e a regra de
@@ -400,7 +406,7 @@ impl AgentSettings {
             }
             AgentId::Codex=>{
                 let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
-                if options.sandbox=="read-only" { options.sandbox="workspace-write".into(); options.network_access=false; }
+                if options.sandbox=="read-only" { options.sandbox="workspace-write".into(); }
                 options.args()
             }
             AgentId::Copilot=>{
@@ -1156,10 +1162,16 @@ mod tests {
 
     #[test] fn codex_reads_stdin_and_only_opens_the_network_when_it_can_write() {
         let args=agent(AgentId::Codex,json!({"sandbox":"read-only","networkAccess":true})).args();
-        let cleaned:CodexOptions=serde_json::from_value(validate(&settings(vec![agent(AgentId::Codex,json!({"sandbox":"read-only","networkAccess":true}))])).expect("válido").agents[1].options.clone()).expect("opções");
-        assert!(!cleaned.network_access);
+        let cleaned=|options:Value|->CodexOptions { serde_json::from_value(validate(&settings(vec![agent(AgentId::Codex,options)])).expect("válido").agents[1].options.clone()).expect("opções") };
+        // O `read-only` guarda a escolha: é ela que vale quando o modo
+        // desenvolvimento o sobe para escrever.
+        assert!(cleaned(json!({"sandbox":"read-only","networkAccess":true})).network_access);
+        assert!(!cleaned(json!({"sandbox":"danger-full-access","networkAccess":true})).network_access);
+        assert!(!args.iter().any(|arg|arg.contains("network_access")),"lendo, não há rede");
         assert_eq!(args.last().map(String::as_str),Some("-"));
         assert!(args.windows(2).any(|pair|pair==["--sandbox","read-only"]));
+        let writing=agent(AgentId::Codex,json!({"sandbox":"workspace-write","networkAccess":true})).args();
+        assert!(writing.windows(2).any(|pair|pair==["-c","sandbox_workspace_write.network_access=true"]));
     }
 
     #[test] fn copilot_receives_the_request_as_an_argument() {
@@ -1183,7 +1195,7 @@ mod tests {
     }
 
     /// Sem terminal ninguém aprova nada: no modo desenvolvimento o que só lia
-    /// passa a escrever no projeto, sem ganhar comandos nem rede.
+    /// passa a escrever no projeto, sem ganhar comandos nem a rede que a configuração não deu.
     #[test] fn development_lets_every_agent_write_to_the_project() {
         for options in [Value::Null,json!({"permissionMode":"default"}),json!({"permissionMode":"plan"})] {
             let claude=agent(AgentId::Claude,options).build_args();
@@ -1194,7 +1206,9 @@ mod tests {
         }
         let codex=agent(AgentId::Codex,json!({"sandbox":"read-only","networkAccess":true})).build_args();
         assert!(codex.windows(2).any(|pair|pair==["--sandbox","workspace-write"]));
-        assert!(!codex.iter().any(|arg|arg.contains("network_access")),"subir para escrever não abre a rede");
+        assert!(codex.windows(2).any(|pair|pair==["-c","sandbox_workspace_write.network_access=true"]),"a rede ligada nas configurações vale ao escrever");
+        let closed=agent(AgentId::Codex,json!({"sandbox":"read-only"})).build_args();
+        assert!(!closed.iter().any(|arg|arg.contains("network_access")),"subir para escrever não abre a rede sozinho");
         let copilot=agent(AgentId::Copilot,Value::Null).build_args();
         assert!(copilot.windows(2).any(|pair|pair==["--allow-tool","write"])&&!copilot.iter().any(|arg|arg=="--allow-all-tools"));
         assert!(!agent(AgentId::Cursor,Value::Null).build_args().iter().any(|arg|arg=="--force"),"o Cursor não ganha comandos sem aprovação");

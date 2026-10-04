@@ -26,6 +26,14 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.54.0", date: "2026-10-04",
+    items: [
+      { kind: "feature", id: "questionSteps" },
+      { kind: "feature", id: "questionFold" },
+      { kind: "fix", id: "codexNetwork" },
+    ],
+  },
+  {
     version: "0.53.0", date: "2026-10-04",
     items: [
       { kind: "feature", id: "orgAdminOnSite" },

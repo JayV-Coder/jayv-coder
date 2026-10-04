@@ -18,6 +18,16 @@ export function noticeText(content: string): string | null {
   }, "");
 }
 
+/** As respostas a perguntas do agente, uma por pergunta, quando a mensagem é
+ * só isso — ou nada. É o que o chat deixa recolher. */
+export function answerLines(content: string): string[] | null {
+  if (!content.startsWith(NOTICE)) return null;
+  let lines: unknown;
+  try { lines = JSON.parse(content.slice(NOTICE.length)); } catch { return null; }
+  if (!Array.isArray(lines) || lines.length === 0 || !lines.every((line) => isText(line) && line.key === "ask.answer")) return null;
+  return (lines as Text[]).map(say);
+}
+
 /** A mensagem como a tela a mostra. */
 export function shownText(content: string): string {
   return noticeText(content) ?? content;
