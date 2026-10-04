@@ -8,7 +8,7 @@ export const INVITE_ROLES: Exclude<Role, "owner">[] = ["maintainer", "member"];
 
 export interface RepoRef { provider: Provider; path: string; key: string }
 
-/** A mesma normalização do núcleo (`src-tauri/src/repo_keys.rs`): `host/caminho`
+/** A mesma normalização do núcleo (`src-tauri/crates/jayv-orgs/src/repo_keys.rs`): `host/caminho`
  * em minúsculas, sem `.git`, só dos três provedores. Aceita também a URL sem
  * esquema (`github.com/acme/api`), como se cola de uma barra de endereço. */
 export function parseRepoUrl(url: string): RepoRef | null {

@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.51.3"
+version = "0.51.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2115,6 +2115,9 @@ dependencies = [
  "jayv-agents",
  "jayv-base",
  "jayv-cloud",
+ "jayv-jev",
+ "jayv-orgs",
+ "jayv-plans",
  "jayv-store",
  "jsonwebtoken",
  "regex",
@@ -2198,6 +2201,52 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "jayv-jev"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "globset",
+ "jayv-agents",
+ "jayv-base",
+ "jayv-cloud",
+ "jayv-store",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "jayv-orgs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "jayv-agents",
+ "jayv-base",
+ "serde",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "jayv-plans"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "jayv-base",
+ "jayv-cloud",
+ "jayv-jev",
+ "rusqlite",
+ "serde_json",
 ]
 
 [[package]]

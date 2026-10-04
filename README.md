@@ -59,7 +59,7 @@ The app calls Jev through the `jev` Edge Function of the Supabase project (`POST
 - `src-tauri/src/rag.rs`: repository indexing and lexical retrieval.
 - `src-tauri/crates/jayv-base/src/firewall.rs`: deny/local-only policy and secret redaction.
 - `src-tauri/src/graph.rs`, `agents.rs`, `context_engine.rs`: execution graph, specialist selection, context forks, and value scoring.
-- `src-tauri/crates/`: the core layers that are already their own crates — `jayv-base` (i18n, config, context model, locked-down HTTP client, firewall, turn progress), `jayv-store` (local SQLite, sync outbox, context cache, task checkpoints), `jayv-cloud` (Supabase session and PostgREST) and `jayv-agents` (LLM settings; OpenAI, Anthropic, OpenAI-compatible and subprocess CLI providers; router; permission-aware tools and sandbox; usage and quotas). The layer order is in `src-tauri/src/layers.rs`.
+- `src-tauri/crates/`: the core layers that are already their own crates — `jayv-base` (i18n, config, context model, locked-down HTTP client, firewall, turn progress), `jayv-store` (local SQLite, sync outbox, context cache, task checkpoints), `jayv-cloud` (Supabase session and PostgREST), `jayv-agents` (LLM settings; OpenAI, Anthropic, OpenAI-compatible and subprocess CLI providers; router; permission-aware tools and sandbox; usage and quotas), `jayv-jev` (entry and exit gate, questions, expertise level, LLM policy, core settings, turns), `jayv-plans` (plan features) and `jayv-orgs` (repository keys and checkouts). The layer order is in `src-tauri/src/layers.rs`.
 - `src/`: Tauri desktop UI.
 
 ## Validation

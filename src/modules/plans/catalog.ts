@@ -3,7 +3,7 @@ import type { View } from "@/modules/core";
 /** Os recursos que o admin do sistema liga, desliga e põe nos planos. A
  * mesma lista nasce na migração dos planos (`public.features`); o texto de
  * cada um vem do i18n (`feature.<chave>.title` / `.detail`). Os quatro do
- * Jev também são aplicados pelo núcleo (`src-tauri/src/features.rs`). */
+ * Jev também são aplicados pelo núcleo (`src-tauri/crates/jayv-plans/src/features.rs`). */
 export const FEATURES = [
   "organizations",
   "orgChat",
