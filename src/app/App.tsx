@@ -12,25 +12,25 @@ import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
 import { clearNotifications, connectNotifications, loadNotifications } from "@/modules/notifications";
 import { clearOrganizations, connectOrganizationDashboard, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
-import { connectSystem, loadStatus } from "@/modules/system";
 import { connectUpdates } from "@/modules/updates";
 import { connectLive } from "@/modules/live";
 import { connectTray } from "@/modules/tray";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
+import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
-import { AdminPage, ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, PlansPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { AdminPage, ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, PlansPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage } from "@/components/pages";
 import { FeatureLocked, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const PAGES: Record<View, () => React.JSX.Element> = {
+  ...featurePages as Record<"status", () => React.JSX.Element>,
   projects: ProjectsPage,
   chats: ChatsPage,
   chat: ChatPage,
   gate: GatePage,
-  status: StatusPage,
   stats: StatsPage,
   settings: SettingsPage,
   profile: ProfilePage,
@@ -52,7 +52,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectSystem(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray()];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray()];
     return () => disconnect.forEach((off) => off());
   }, []);
 

@@ -26,5 +26,4 @@ export { DateParts } from "./DateParts";
 export { SegmentedControl, type SegmentedOption } from "./SegmentedControl";
 export { ThemeSelect } from "./ThemeSelect";
 export { NotificationItem } from "./NotificationItem";
-export { HealthLine } from "./HealthLine";
 export { PathLine } from "./PathLine";

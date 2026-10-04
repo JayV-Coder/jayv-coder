@@ -1,6 +1,6 @@
 import type { SystemStatus } from "@/modules/core";
 import { useLocale, useT } from "@/modules/i18n";
-import { tableSummary } from "@/modules/system";
+import { tableSummary } from "../report";
 import { Eyebrow } from "@/components/atoms";
 import { Card } from "@/components/ui/card";
 

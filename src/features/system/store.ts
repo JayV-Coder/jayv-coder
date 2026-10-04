@@ -2,8 +2,6 @@ import { create } from "zustand";
 import { bus, commands, type SystemStatus } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 
-export * from "./report";
-
 interface SystemState {
   status: SystemStatus | null;
 }

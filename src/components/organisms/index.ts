@@ -10,7 +10,6 @@ export { GateBoard } from "./GateBoard";
 export { GateLane } from "./GateLane";
 export { EntryItem } from "./EntryItem";
 export { ExitItem } from "./ExitItem";
-export { DatabaseCard } from "./DatabaseCard";
 export { ModelRow } from "./ModelRow";
 export { ClaudeOptionsForm } from "./ClaudeOptionsForm";
 export { CodexOptionsForm } from "./CodexOptionsForm";
