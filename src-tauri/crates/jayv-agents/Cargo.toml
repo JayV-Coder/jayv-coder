@@ -1,5 +1,5 @@
 # Os agentes e modelos: as configurações de LLM, os provedores (HTTP e CLI),
-# o roteador, as ferramentas, o sandbox e o uso e as cotas de cada agente.
+# o roteador, as ferramentas e o uso e as cotas de cada agente.
 # Só depende da base.
 [package]
 name = "jayv-agents"

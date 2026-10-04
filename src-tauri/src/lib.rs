@@ -3,7 +3,7 @@
 pub use jayv_base::{config, firewall, i18n, lockdown, model, progress};
 pub use jayv_store::{cache, checkpoint, local};
 pub use jayv_cloud as cloud;
-pub use jayv_agents::{agents, llm, providers, router, sandbox, tools, usage};
+pub use jayv_agents::{agents, llm, providers, router, tools, usage};
 
 pub mod asking;
 pub mod bench;

@@ -101,6 +101,7 @@ fn english(text:&Text)->String {
         "gate.missing"=>"What is missing:".into(),
         "gate.missing.item"=>format!("- {}: {}",param("criterion"),param("reading")),
         "turn.noAnswer"=>"The run ended without an answer.".into(),
+        "turn.interrupted"=>"The app closed while this request was running, so it stopped there and was not resumed.".into(),
         "guidance.failed"=>format!("The request could not run because {}.",param("problem")),
         "guidance.fix"=>"Open Settings, turn an agent on and keep at least one of its models active.".into(),
         "guidance.nothingConfigured"=>"no LLM provider or model is configured".into(),

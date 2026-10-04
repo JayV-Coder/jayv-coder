@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.51.3"
+version = "0.51.4"
 dependencies = [
  "anyhow",
  "async-trait",

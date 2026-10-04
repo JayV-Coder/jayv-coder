@@ -26,6 +26,16 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.51.4", date: "2026-10-04",
+    items: [
+      { kind: "fix", id: "interruptedNotResumed" },
+      { kind: "fix", id: "indexAfterBuild" },
+      { kind: "fix", id: "settingsWhileWorking" },
+      { kind: "fix", id: "policyAcrossOrgs" },
+      { kind: "fix", id: "titlesWithCli" },
+    ],
+  },
+  {
     version: "0.51.3", date: "2026-10-04",
     items: [
       { kind: "fix", id: "coreCloudAgents" },
