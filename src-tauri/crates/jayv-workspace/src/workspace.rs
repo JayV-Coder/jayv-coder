@@ -795,7 +795,7 @@ mod tests {
         let config=root.path().join("config.yaml");
         assert_eq!(database_location_in(&config,root.path(),Some("/dados".into())),PathBuf::from("/dados/ai.jayv.desktop/workspace.sqlite3"));
         assert_eq!(database_location_in(&config,root.path(),None),root.path().join(".jev/workspace.sqlite3"));
-        assert!(include_str!("../tauri.conf.json").contains(&format!("\"identifier\": \"{APP_IDENTIFIER}\"")),"a pasta de dados é a do identificador do aplicativo");
+        assert!(include_str!("../../../tauri.conf.json").contains(&format!("\"identifier\": \"{APP_IDENTIFIER}\"")),"a pasta de dados é a do identificador do aplicativo");
     }
 
     #[test]
