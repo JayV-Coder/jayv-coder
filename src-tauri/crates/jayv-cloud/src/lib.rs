@@ -4,6 +4,11 @@
 pub mod remote;
 pub mod session;
 
+// As camadas de baixo com os nomes de sempre: `crate::i18n` e `crate::local`
+// continuam valendo dentro deste crate.
+use jayv_base::i18n;
+use jayv_store::local;
+
 pub const PROJECT_URL:&str="https://exvsozyemolrjbjetqww.supabase.co";
 /// A chave publicável: vai embutida no build e só identifica o projeto. A
 /// secret key nunca entra aqui.

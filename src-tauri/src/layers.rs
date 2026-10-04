@@ -4,7 +4,8 @@
 //! dele). Quem precisar de algo de uma camada de cima inverte a direção: o
 //! tipo ou a constante desce, e a de cima reexporta.
 //!
-//! As camadas que já saíram para `crates/` (base e armazenamento) têm a
+//! As camadas que já saíram para `crates/` (base, armazenamento, nuvem e
+//! agentes) têm a
 //! fronteira garantida pelo próprio Cargo; este teste cobre as que ainda
 //! moram em `src/`. Por ora só o código conta; os testes ainda cruzam camadas
 //! em alguns lugares e mudam junto quando cada crate sair.
@@ -14,16 +15,16 @@ pub const LAYERS:&[(&str,&[&str])]=&[
     ("base",&["i18n","config","model","lockdown","firewall","progress"]),
     ("store",&["local","cache","checkpoint"]),
     ("cloud",&["cloud"]),
-    ("agents",&["llm","providers","agents","router","tools","usage","bench"]),
-    ("jev",&["jev","asking","gatekeeper","expertise","policy","core_settings"]),
+    ("agents",&["llm","providers","agents","router","tools","usage"]),
+    ("jev",&["jev","asking","gatekeeper","expertise","policy","core_settings","turns"]),
     ("plans",&["features"]),
     ("orgs",&["checkout","repo_keys"]),
     ("code",&["rag","search","symbols","project_map","graph","context_engine"]),
     ("memory",&["memory","project_memory"]),
-    ("workspace",&["workspace","turns"]),
-    ("orchestration",&["orchestrator","parallel","split","review"]),
+    ("workspace",&["workspace"]),
     ("live",&["live_files"]),
-    ("app",&["desktop","mcp","sync","layers","outbox_tests"]),
+    ("orchestration",&["orchestrator","parallel","split","review"]),
+    ("app",&["desktop","mcp","sync","bench","layers","outbox_tests","usage_tests"]),
 ];
 
 #[cfg(test)]
@@ -53,6 +54,37 @@ mod tests {
         assert!(missing.is_empty(),"módulo sem camada em layers.rs: {missing:?}");
     }
 
+    /// Os módulos de topo que o trecho cita por `crate::`, inclusive na forma
+    /// agrupada, que pode ocupar várias linhas
+    /// (`use crate::{orchestrator::Orchestrator, usage::Spend};`).
+    fn used_modules(line:&str)->Vec<String> {
+        line.split("crate::").skip(1).flat_map(modules_at).collect()
+    }
+
+    /// Os módulos de um único `crate::`, com `rest` começando logo depois dele.
+    fn modules_at(rest:&str)->Vec<String> {
+        let ident=|text:&str|text.trim_start().split(|c:char|!(c.is_alphanumeric()||c=='_')).next().unwrap_or_default().to_string();
+        let Some(group)=rest.strip_prefix('{') else {return vec![ident(rest)]};
+        let (mut found,mut depth,mut start)=(vec![],0usize,0usize);
+        for (index,c) in group.char_indices() {
+            match c {
+                '{'=>depth+=1,
+                '}' if depth==0=>{found.push(ident(&group[start..index]));break},
+                '}'=>depth-=1,
+                ',' if depth==0=>{found.push(ident(&group[start..index]));start=index+1},
+                _=>{}
+            }
+        }
+        found.retain(|name|!name.is_empty());
+        found
+    }
+
+    #[test] fn a_grouped_use_counts_every_module() {
+        assert_eq!(used_modules("use crate::{orchestrator::Orchestrator, usage::{self, Spend}, i18n};"),["orchestrator","usage","i18n"]);
+        assert_eq!(used_modules("let x=crate::rag::index(crate::firewall::check());"),["rag","firewall"]);
+        assert_eq!(used_modules("use crate::{\n    config::Config,\n    rag::Index,\n};"),["config","rag"]);
+    }
+
     #[test] fn no_module_reaches_a_layer_above_its_own() {
         let root=Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files=vec![]; sources(&root,&mut files);
@@ -61,11 +93,15 @@ mod tests {
             let module=module_of(&root,file);
             let Some(own)=layer_of(&module) else {continue};
             let source=fs::read_to_string(file).expect("arquivo");
-            let code=source.split("#[cfg(test)]").next().unwrap_or_default();
-            for (number,line) in code.lines().enumerate() {
-                for used in line.split("crate::").skip(1).map(|rest|rest.split(|c:char|!(c.is_alphanumeric()||c=='_')).next().unwrap_or_default()) {
-                    if let Some(theirs)=layer_of(used) && theirs>own {
-                        crossings.push(format!("{}:{} {module} ({}) → {used} ({})",file.strip_prefix(&root).unwrap().display(),number+1,LAYERS[own].0,LAYERS[theirs].0));
+            // Só o módulo de testes fica de fora: um `#[cfg(test)]` solto numa
+            // função no meio do arquivo não esconde o código que vem depois.
+            let tests=["#[cfg(test)]\nmod ","#[cfg(test)] mod "].iter().filter_map(|marker|source.find(marker)).min();
+            let code=&source[..tests.unwrap_or(source.len())];
+            for (at,_) in code.match_indices("crate::") {
+                let number=code[..at].matches('\n').count()+1;
+                for used in modules_at(&code[at+"crate::".len()..]) {
+                    if let Some(theirs)=layer_of(&used) && theirs>own {
+                        crossings.push(format!("{}:{number} {module} ({}) → {used} ({})",file.strip_prefix(&root).unwrap().display(),LAYERS[own].0,LAYERS[theirs].0));
                     }
                 }
             }

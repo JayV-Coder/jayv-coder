@@ -44,9 +44,7 @@ impl Shape {
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
 pub struct FormItem { pub prompt:String, pub options:Vec<String> }
 
-/// Onde uma mensagem do agente termina e a próxima começa, dentro da resposta
-/// gravada. A tela desenha cada mensagem no seu balão.
-pub const MESSAGE_BREAK:char='\u{2063}';
+pub use crate::providers::MESSAGE_BREAK;
 
 /// A última mensagem da resposta: é nela que o agente pergunta.
 fn last_message(answer:&str)->&str { answer.rsplit(MESSAGE_BREAK).next().unwrap_or(answer) }

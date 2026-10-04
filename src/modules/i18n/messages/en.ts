@@ -1316,6 +1316,8 @@ export const en = {
   "whatsNew.item.policyAcrossOrgs.detail": "A project with repositories from two organizations used only the LLM policy of the first one. Now all of them apply together, whichever is stricter: only the agents every one allows, the privacy patterns of all and the toughest exit rule of each.",
   "whatsNew.item.interruptedNotResumed.title": "A request cut off by closing the app does not restart by itself",
   "whatsNew.item.interruptedNotResumed.detail": "When the app reopened, the request that was running went back to the queue and ran again from scratch, even a half-done build in a folder already changed. Now it shows as failed, with the reason, and resending is one click away. Requests that were only waiting their turn stay in the queue.",
+  "whatsNew.item.coreCloudAgents.title": "Cloud and agents in separate parts",
+  "whatsNew.item.coreCloudAgents.detail": "An internal change with no difference in use: the connection to the server and everything that talks to the agents and models became parts of their own in the core, built and tested separately.",
   "whatsNew.item.coreCrates.title": "Core foundation in separate parts",
   "whatsNew.item.coreCrates.detail": "An internal change with no difference in use: texts, configuration, network security and the app's local database became parts of their own in the core, built and tested separately.",
   "whatsNew.item.coreLayers.title": "Core organized in layers",

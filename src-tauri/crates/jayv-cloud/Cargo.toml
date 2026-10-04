@@ -1,0 +1,20 @@
+# A nuvem: o único crate que conhece o Supabase — o endereço do projeto, a
+# sessão validada e o PostgREST. Depende da base e do armazenamento local.
+[package]
+name = "jayv-cloud"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+jayv-base = { path = "../jayv-base" }
+jayv-store = { path = "../jayv-store" }
+anyhow.workspace = true
+async-trait.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

@@ -36,6 +36,12 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    version: "0.51.3", date: "2026-10-04",
+    items: [
+      { kind: "fix", id: "coreCloudAgents" },
+    ],
+  },
+  {
     version: "0.51.2", date: "2026-10-04",
     items: [
       { kind: "fix", id: "coreCrates" },
