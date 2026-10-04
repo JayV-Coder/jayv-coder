@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.51.5"
+version = "0.51.6"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -45,6 +45,13 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
+streaming-iterator = "0.1.9"
+tree-sitter = "0.27.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -57,6 +64,8 @@ jayv-agents = { path = "crates/jayv-agents" }
 jayv-jev = { path = "crates/jayv-jev" }
 jayv-plans = { path = "crates/jayv-plans" }
 jayv-orgs = { path = "crates/jayv-orgs" }
+jayv-code = { path = "crates/jayv-code" }
+jayv-memory = { path = "crates/jayv-memory" }
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
@@ -75,7 +84,6 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
 similar = "2"
-streaming-iterator = "0.1.9"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"
@@ -84,12 +92,6 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-updater = "2"
 thiserror.workspace = true
 tokio.workspace = true
-tree-sitter = "0.27.0"
-tree-sitter-go = "0.25.0"
-tree-sitter-javascript = "0.25.0"
-tree-sitter-python = "0.25.0"
-tree-sitter-rust = "0.24.2"
-tree-sitter-typescript = "0.23.2"
 uuid.workspace = true
 walkdir.workspace = true
 
