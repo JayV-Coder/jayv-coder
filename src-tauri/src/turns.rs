@@ -5,15 +5,18 @@
 //! código do chat mais a posição do pedido dentro dele —, e é esse código que
 //! aparece tanto no balão do chat quanto nos cartões da Portaria.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::i18n::Text;
-use crate::{gatekeeper::{Criterion, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict, GateFeed, Tally}, workspace::parse_time};
+use crate::{gatekeeper::{Criterion, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict, GateFeed, Tally}};
 use std::collections::BTreeSet;
+
+/// Um instante gravado no banco (RFC 3339).
+pub fn parse_time(value:&str)->Result<DateTime<Utc>>{Ok(DateTime::parse_from_rfc3339(value).with_context(||format!("invalid timestamp `{value}`"))?.with_timezone(&Utc))}
 
 /// Em que pé está o pedido. `Queued` é o pedido já gravado esperando a vez;
 /// `Flying` é o que saiu e ainda não voltou. Os dois são trabalho em aberto, e

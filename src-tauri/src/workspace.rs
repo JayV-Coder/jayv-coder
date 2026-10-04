@@ -743,7 +743,7 @@ fn new_chat_code()->String {
     Uuid::new_v4().as_bytes().iter().take(6).map(|byte|ALPHABET[(byte%32) as usize] as char).collect()
 }
 
-pub(crate) fn parse_time(value:&str)->Result<DateTime<Utc>>{Ok(DateTime::parse_from_rfc3339(value).with_context(||format!("invalid timestamp `{value}`"))?.with_timezone(&Utc))}
+pub use crate::turns::parse_time;
 
 /// A pasta como ela é comparada: o caminho real quando ela existe (atalhos e
 /// `..` resolvidos), sem barra no fim e, no Windows, sem diferença de

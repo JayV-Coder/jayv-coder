@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.51.2"
+version = "0.51.3"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -25,6 +25,10 @@ members = ["crates/*"]
 default-members = [".", "crates/*"]
 
 [workspace.dependencies]
+walkdir = "2"
+thiserror = "2"
+dirs = "7"
+async-trait = "0.1"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
@@ -48,11 +52,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 jayv-base = { path = "crates/jayv-base" }
 jayv-store = { path = "crates/jayv-store" }
+jayv-cloud = { path = "crates/jayv-cloud" }
+jayv-agents = { path = "crates/jayv-agents" }
 anyhow.workspace = true
-async-trait = "0.1"
+async-trait.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive"] }
-dirs = "7"
+dirs.workspace = true
 dotenvy.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 globset.workspace = true
@@ -73,7 +79,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-updater = "2"
-thiserror = "2"
+thiserror.workspace = true
 tokio.workspace = true
 tree-sitter = "0.27.0"
 tree-sitter-go = "0.25.0"
@@ -82,7 +88,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 uuid.workspace = true
-walkdir = "2"
+walkdir.workspace = true
 
 # O seletor de pastas. No Windows e no macOS o rfd fala com o diálogo nativo do
 # sistema, mas no Linux o backend padrão (gtk3) abre a janela pela própria thread

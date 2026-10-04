@@ -7,6 +7,10 @@ use reqwest::{header::{HeaderMap, RETRY_AFTER}, StatusCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::Command, time::{sleep, timeout, Duration}};
 
+/// Onde uma mensagem do agente termina e a próxima começa, dentro da resposta
+/// gravada. A tela desenha cada mensagem no seu balão.
+pub const MESSAGE_BREAK:char='\u{2063}';
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
@@ -633,7 +637,7 @@ impl Provider for CliProvider {
                             if let Beat::Chunk{text}=&beat {
                                 // Cada mensagem inteira do agente fica no seu balão.
                                 if whole_message(&line)&&!response.trim().is_empty() {
-                                    let gap=format!("\n{}\n",crate::asking::MESSAGE_BREAK);
+                                    let gap=format!("\n{}\n",MESSAGE_BREAK);
                                     response.push_str(&gap);
                                     pulse.beat(Beat::Chunk{text:gap});
                                 }

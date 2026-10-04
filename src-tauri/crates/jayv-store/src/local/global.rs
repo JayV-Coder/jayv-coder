@@ -110,7 +110,7 @@ mod tests {
     #[test] fn the_jwks_and_last_user_survive_closing() {
         let dir=tempfile::tempdir().expect("dir");
         let path=dir.path().join("cache.sqlite3");
-        let keys:JwkSet=serde_json::from_str(include_str!("../../../../src/cloud/testdata/jwks.json")).expect("jwks");
+        let keys:JwkSet=serde_json::from_str(include_str!("../../../jayv-cloud/src/testdata/jwks.json")).expect("jwks");
         {
             let cache=GlobalCache::open(&path).expect("cache");
             assert!(cache.jwks().expect("jwks").is_none());

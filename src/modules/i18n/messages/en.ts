@@ -1305,6 +1305,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.coreCloudAgents.title": "Cloud and agents in separate parts",
+  "whatsNew.item.coreCloudAgents.detail": "An internal change with no difference in use: the connection to the server and everything that talks to the agents and models became parts of their own in the core, built and tested separately.",
   "whatsNew.item.coreCrates.title": "Core foundation in separate parts",
   "whatsNew.item.coreCrates.detail": "An internal change with no difference in use: texts, configuration, network security and the app's local database became parts of their own in the core, built and tested separately.",
   "whatsNew.item.coreLayers.title": "Core organized in layers",
