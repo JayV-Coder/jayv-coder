@@ -30,6 +30,36 @@ pub struct DesktopState {
 
 pub type SharedDesktopState=Arc<Mutex<DesktopState>>;
 
+/// O retrato do orquestrador que as telas de leitura mostram, guardado fora do
+/// cadeado dele. O atendente segura o orquestrador do começo ao fim de um
+/// pedido; sem este retrato, Configurações e Sistema ficavam em "Carregando…"
+/// até o agente terminar.
+#[derive(Debug,Clone,Default)]
+pub struct OrchestratorFacts { pub config_path:PathBuf, pub providers:usize, pub models:usize, pub indexed_files:usize, pub cache_entries:usize, pub session_messages:usize, pub performance_records:usize }
+
+impl OrchestratorFacts {
+    pub fn of(orchestrator:&Orchestrator)->Self {
+        Self{config_path:orchestrator.config_path.clone(),providers:orchestrator.executable_provider_count(),models:orchestrator.executable_model_count(),indexed_files:orchestrator.rag.len(),cache_entries:orchestrator.cache.len(),session_messages:orchestrator.memory.session_messages(),performance_records:orchestrator.performance.len()}
+    }
+}
+
+pub type SharedFacts=Arc<std::sync::Mutex<OrchestratorFacts>>;
+
+/// O retrato de agora, se o orquestrador estiver livre; com um pedido no ar,
+/// o da última vez que ele esteve. Nunca espera.
+pub(crate) fn facts(desk:&SharedDesktopState,facts:&SharedFacts)->OrchestratorFacts {
+    let mut kept=facts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Ok(desk)=desk.try_lock() { *kept=OrchestratorFacts::of(&desk.orchestrator); }
+    kept.clone()
+}
+
+/// Passa uma configuração já gravada ao orquestrador, se ele estiver livre.
+/// Ocupado, não espera: o atendente relê as configurações do banco no começo
+/// de cada pedido, então o próximo já sai com elas.
+pub(crate) fn when_free(desk:&SharedDesktopState,apply:impl FnOnce(&mut Orchestrator)) {
+    if let Ok(mut desk)=desk.try_lock() { apply(&mut desk.orchestrator); }
+}
+
 /// O banco vive atrás do seu próprio cadeado, separado do orquestrador. É esta
 /// separação que faz a promessa da fila valer: aceitar um pedido é escrever uma
 /// linha, e escrever essa linha não pode esperar o modelo que está respondendo
@@ -91,6 +121,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     orchestrator.use_llm(&workspace.llm_settings()?);
 
     let http=crate::lockdown::http_client(Duration::from_secs(30)).build()?;
+    let facts:SharedFacts=Arc::new(std::sync::Mutex::new(OrchestratorFacts::of(&orchestrator)));
     let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root}));
     let workspace:SharedWorkspace=Arc::new(Mutex::new(workspace));
     let bell:QueueBell=Arc::new(Notify::new());
@@ -109,7 +140,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(desk).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
+        .manage(desk).manage(facts).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
         .manage(live::SharedLive::default())
         .manage(tray::TrayReady::default())
         .on_window_event(tray::on_window_event)

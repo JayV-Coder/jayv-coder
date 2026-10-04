@@ -32,7 +32,6 @@ pub mod rag;
 pub mod repo_keys;
 pub mod review;
 pub mod router;
-pub mod sandbox;
 pub mod search;
 pub mod split;
 pub mod symbols;

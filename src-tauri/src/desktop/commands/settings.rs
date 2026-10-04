@@ -4,7 +4,8 @@
 
 use crate::core_settings::{self, CoreSettings};
 use crate::i18n::{failure, Text};
-use crate::desktop::{SharedDesktopState, SharedWorkspace};
+use crate::desktop::{when_free, SharedDesktopState, SharedFacts, SharedWorkspace};
+use crate::orchestrator::Orchestrator;
 use crate::llm::{self, AgentId, KnownModel, LlmSettings, Probe};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -37,7 +38,7 @@ pub(crate) async fn rediscover(desk:&SharedDesktopState,workspace:&SharedWorkspa
         asked.spawn(async move {(id,llm::discover(id,&command).await)});
     }
     let answers=asked.join_all().await;
-    let (mut desk,mut workspace)=crate::desktop::both(desk,workspace).await;
+    let mut workspace=workspace.lock().await;
     let before=workspace.llm_settings()?;
     let mut settings=before.clone();
     let mut silent=Vec::new();
@@ -47,7 +48,7 @@ pub(crate) async fn rediscover(desk:&SharedDesktopState,workspace:&SharedWorkspa
     // Gravar enfileira a sincronização de todos os modelos: só quando mudou.
     if serde_json::to_value(&settings)?==serde_json::to_value(&before)? { return Ok((before,silent)); }
     let saved=workspace.save_llm_settings(&settings)?;
-    desk.orchestrator.use_llm(&saved);
+    when_free(desk,|orchestrator|orchestrator.use_llm(&saved));
     Ok((saved,silent))
 }
 
@@ -76,7 +77,7 @@ pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:St
         let mut workspace=workspace.lock().await;
         workspace.save_llm_settings(&settings).map_err(failure)?
     };
-    desk.lock().await.orchestrator.use_llm(&saved);
+    when_free(&desk,|orchestrator|orchestrator.use_llm(&saved));
     Ok(snapshot(saved))
 }
 
@@ -143,33 +144,44 @@ fn core_snapshot(settings:CoreSettings,defaults:CoreSettings,expertise:crate::ex
     CoreSnapshot{settings,defaults,gate:expertise.gate(&gate),expertise,levels,suggestion,lean_code,confidence_range:core_settings::CONFIDENCE_RANGE,budget_range:core_settings::BUDGET_RANGE,cache_ttl_range:core_settings::CACHE_TTL_RANGE,version:env!("CARGO_PKG_VERSION")}
 }
 
+/// Lê sem o orquestrador: os valores de partida vêm do `config.yaml`, e o
+/// resto do banco. Com um agente trabalhando, a tela abre na hora.
 #[tauri::command]
-pub(crate) async fn get_core_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>)->Result<CoreSnapshot,Text>{
-    let (desk,workspace)=crate::desktop::both(&desk,&workspace).await;
-    let defaults=desk.orchestrator.core_defaults();
+pub(crate) async fn get_core_settings(known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>)->Result<CoreSnapshot,Text>{
+    let defaults=defaults(&known);
+    let workspace=workspace.lock().await;
     let settings=workspace.core_settings(&defaults).map_err(failure)?;
     let expertise=workspace.expertise().map_err(failure)?;
     Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }
 
-/// Grava primeiro e só então troca o orquestrador, como as dos agentes.
+fn defaults(known:&SharedFacts)->CoreSettings {
+    let path=known.lock().unwrap_or_else(std::sync::PoisonError::into_inner).config_path.clone();
+    Orchestrator::core_defaults_at(&path)
+}
+
+/// Grava primeiro e só então troca o orquestrador, como as dos agentes. Com
+/// um pedido no ar, a troca fica para o próximo: o atendente relê tudo do
+/// banco no começo de cada pedido, já com a política e o plano por cima.
 #[tauri::command]
-pub(crate) async fn save_core_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:CoreSettings)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
-    let (mut desk,mut workspace)=crate::desktop::both(&desk,&workspace).await;
+pub(crate) async fn save_core_settings(desk:State<'_,SharedDesktopState>,known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>,settings:CoreSettings)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+    let defaults=defaults(&known);
+    let mut workspace=workspace.lock().await;
     let saved=workspace.save_core_settings(&settings).map_err(failure)?;
-    desk.orchestrator.use_core(&saved);
+    let restricted=workspace.entitlements().unwrap_or_default().restrict_core(&saved);
+    when_free(&desk,|orchestrator|orchestrator.use_core(&restricted));
     let expertise=workspace.expertise().map_err(failure)?;
-    Ok(core_snapshot(saved,desk.orchestrator.core_defaults(),expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
+    Ok(core_snapshot(saved,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }
 
 /// Grava o nível na conta. A sincronização o leva para os outros computadores,
 /// e o próximo pedido já é julgado por ele.
 #[tauri::command]
-pub(crate) async fn save_expertise(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,level:String)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
-    let (mut desk,mut workspace)=crate::desktop::both(&desk,&workspace).await;
+pub(crate) async fn save_expertise(desk:State<'_,SharedDesktopState>,known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>,level:String)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+    let defaults=defaults(&known);
+    let mut workspace=workspace.lock().await;
     let expertise=workspace.save_expertise(&level).map_err(failure)?;
-    desk.orchestrator.expertise=expertise;
-    let defaults=desk.orchestrator.core_defaults();
+    when_free(&desk,|orchestrator|orchestrator.expertise=expertise);
     let settings=workspace.core_settings(&defaults).map_err(failure)?;
     Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }
@@ -177,11 +189,12 @@ pub(crate) async fn save_expertise(desk:State<'_,SharedDesktopState>,workspace:S
 /// Liga ou desliga a regra de código enxuto. Vale na hora, como o nível, e
 /// anda com a conta pela sincronização.
 #[tauri::command]
-pub(crate) async fn save_lean_code(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,enabled:bool)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
-    let (mut desk,mut workspace)=crate::desktop::both(&desk,&workspace).await;
-    desk.orchestrator.lean_code=workspace.save_lean_code(enabled).map_err(failure)?;
+pub(crate) async fn save_lean_code(desk:State<'_,SharedDesktopState>,known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>,enabled:bool)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+    let defaults=defaults(&known);
+    let mut workspace=workspace.lock().await;
+    let lean_code=workspace.save_lean_code(enabled).map_err(failure)?;
+    when_free(&desk,|orchestrator|orchestrator.lean_code=lean_code);
     let expertise=workspace.expertise().map_err(failure)?;
-    let defaults=desk.orchestrator.core_defaults();
     let settings=workspace.core_settings(&defaults).map_err(failure)?;
-    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),desk.orchestrator.lean_code))
+    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),lean_code))
 }

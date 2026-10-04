@@ -13,7 +13,6 @@ pub const MAX_SCORE_LEVELS:usize=10;
 pub const INTENTS:[&str;8]=["analysis","code","frontend","general","refactor","review","security","test"];
 pub const COMPLEXITY_BUCKETS:[&str;4]=["trivial","simple","medium","complex"];
 pub const ROUTING_QUESTION_IDS:[&str;5]=["complexity","intent","is_destructive","needs_repository_context","needs_tools"];
-pub const VERIFICATION_QUESTION_IDS:[&str;3]=["addresses_request","unsupported_claims","verifiable_claims"];
 
 /// O Jev está ao alcance quando há sessão: a chave da TypeSafe mora na função
 /// `jev` do projeto, e é o token do usuário que abre a porta.
@@ -160,12 +159,6 @@ impl Client {
         RoutingDecision::from_evaluation(&evaluation)
     }
 
-    pub async fn verify(&self,input:&VerificationInput)->Result<VerificationVerdict> {
-        if !input.has_context(){return Ok(VerificationVerdict::unchecked(DEFAULT_MODEL));}
-        let evaluation=self.evaluate("verification",verification_state(input),None).await?;
-        VerificationVerdict::from_evaluation(&evaluation)
-    }
-
     async fn send(&self,body:&Value)->Result<Evaluation> {
         let endpoint=self.endpoint();
         let endpoint=endpoint.as_str();
@@ -205,7 +198,6 @@ pub fn daily_quota(headers:&reqwest::header::HeaderMap,now:chrono::DateTime<chro
 
 pub async fn evaluate(set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation>{Client::from_session()?.evaluate(set,state,include).await}
 pub async fn route(input:&RoutingInput)->Result<RoutingDecision>{Client::from_session()?.route(input).await}
-pub async fn verify(input:&VerificationInput)->Result<VerificationVerdict>{Client::from_session()?.verify(input).await}
 
 #[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
 pub struct RoutingInput {
@@ -363,82 +355,6 @@ impl RoutingDecision {
     pub fn holds(probability:f64,threshold:f64)->bool{probability>=threshold}
 }
 
-#[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
-pub struct VerificationInput {
-    pub request:String,
-    pub repository_context:String,
-    pub answer:String,
-}
-impl VerificationInput {
-    pub fn new(request:impl Into<String>,answer:impl Into<String>)->Self{Self{request:request.into(),answer:answer.into(),..Default::default()}}
-    pub fn with_repository_context(mut self,context:impl Into<String>)->Self{self.repository_context=context.into().trim().to_string();self}
-    pub fn with_context_blocks<P:AsRef<str>,C:AsRef<str>>(self,blocks:impl IntoIterator<Item=(P,C)>)->Self{let joined=blocks.into_iter().map(|(path,content)|format!("FILE: {}\n{}",path.as_ref(),content.as_ref())).collect::<Vec<_>>().join("\n\n");self.with_repository_context(joined)}
-    pub fn has_context(&self)->bool{!self.repository_context.trim().is_empty()}
-}
-
-pub fn verification_state(input:&VerificationInput)->Value{json!({"user_request":input.request,"repository_context":input.repository_context,"assistant_answer":input.answer})}
-
-pub fn verification_request(input:&VerificationInput,model:impl Into<String>)->Request{Request::new(verification_state(input),model,verification_questions())}
-
-pub fn verification_questions()->BTreeMap<String,Question> {
-    BTreeMap::from([
-        ("unsupported_claims".to_string(),Question::noul_with(
-            json!({"question":"Does `assistant_answer` present something about this repository as a fact that `repository_context` does not support?","context":"`repository_context` holds the `FILE: <path>` blocks that were the assistant's only evidence about this repository while it answered `user_request`. Treat those blocks as the whole of the repository that was visible to it.","guidance":"Check each statement the answer makes about this repository — paths, modules, symbols, signatures, values, call sites, existing behaviour — against those blocks. Judge only whether the evidence is there; ignore style, length and whether the advice is good."}),
-            json!({"when":"At least one statement about this repository is stated as fact and the blocks neither show it nor imply it.","examples":["names a file, module, symbol or setting that appears in no block","states a signature, default value or return type that differs from the one shown","describes existing behaviour that the code shown contradicts","attributes to this project a dependency, convention or layout that no block shows"]}),
-            json!({"when":"Every statement about this repository can be traced to the blocks, allowing for paraphrase and summary.","also":"An answer that makes no factual claim about this repository belongs here too: general knowledge, restating the developer's own words, or code it openly offers as new rather than describing as already present.","not_a_defect":["saying that something is absent from the supplied context","declining to guess about code it was not shown"]}))),
-        ("addresses_request".to_string(),Question::noul_with(
-            json!({"question":"Does `assistant_answer` respond to what `user_request` actually asked for?","guidance":"Judge the fit between the request and the reply, not whether the reply is correct, grounded or thorough. The developer may write in any language — judge the meaning the same way whatever the language."}),
-            json!({"when":"The reply delivers the kind of thing that was asked for — the explanation, the code, the review, the plan or the decision — even if it is partial or imperfect.","also":"Directly refusing the request, or asking for one detail genuinely needed to proceed, still counts as addressing it."}),
-            json!({"when":"The reply is about something other than the request, or says nothing usable at all.","examples":["solves a different problem or answers a question that was not asked","generic filler, an apology or a restatement with no substance","empty, cut off before it says anything, or just a transport or provider error message"]}))),
-        ("verifiable_claims".to_string(),Question::noul_with(
-            json!({"question":"Does `assistant_answer` make any statement about this repository whose truth could be confirmed or refuted by `repository_context`?","guidance":"This asks only whether repository-specific claims are present, never whether they are right. A reply that needs no repository grounding is a normal, correct outcome, not a defect."}),
-            json!({"when":"The reply describes this particular codebase: it names a file, symbol, signature, setting or existing behaviour of this project, or asserts that something here does or does not exist."}),
-            json!({"when":"Nothing in the reply depends on this repository, so the blocks could neither confirm nor refute it.","examples":["a definition, or how a language, library or tool works in general","new code the reply proposes, presented as something to add rather than as something already here","a plan, an opinion, a question back to the developer, or small talk"]}))),
-    ])
-}
-
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum VerificationOutcome{Grounded,Unverifiable,OffTopic,Fabricated}
-impl VerificationOutcome {
-    pub fn as_str(&self)->&'static str{match self{Self::Grounded=>"grounded",Self::Unverifiable=>"unverifiable",Self::OffTopic=>"off_topic",Self::Fabricated=>"fabricated"}}
-    pub fn is_acceptable(&self)->bool{matches!(self,Self::Grounded|Self::Unverifiable)}
-}
-
-#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
-pub struct VerificationVerdict {
-    pub unsupported_claims:f64,
-    pub addresses_request:f64,
-    pub verifiable_claims:f64,
-    pub checked:bool,
-    pub model:String,
-    pub usage:Usage,
-}
-
-impl VerificationVerdict {
-    pub fn from_evaluation(evaluation:&Evaluation)->Result<Self> {
-        let noul=|id:&str|->Result<f64>{let answer=evaluation.require(id)?;answer.as_noul().ok_or_else(||anyhow!("the Jev returned `{id}` as {} instead of `noul`",answer.kind()))};
-        Ok(Self{
-            unsupported_claims:noul("unsupported_claims")?,
-            addresses_request:noul("addresses_request")?,
-            verifiable_claims:noul("verifiable_claims")?,
-            checked:true,
-            model:evaluation.model.clone(),
-            usage:evaluation.usage,
-        })
-    }
-    pub fn unchecked(model:impl Into<String>)->Self{Self{unsupported_claims:0.0,addresses_request:0.0,verifiable_claims:0.0,checked:false,model:model.into(),usage:Usage::default()}}
-    pub fn outcome(&self,threshold:f64)->VerificationOutcome {
-        let threshold=if threshold.is_finite(){threshold.clamp(0.0,1.0)}else{1.0};
-        if !self.checked{VerificationOutcome::Unverifiable}
-        else if RoutingDecision::holds(1.0-self.addresses_request,threshold){VerificationOutcome::OffTopic}
-        else if RoutingDecision::holds(self.unsupported_claims,threshold){VerificationOutcome::Fabricated}
-        else if RoutingDecision::holds(1.0-self.verifiable_claims,threshold){VerificationOutcome::Unverifiable}
-        else{VerificationOutcome::Grounded}
-    }
-    pub fn is_acceptable(&self,threshold:f64)->bool{self.outcome(threshold).is_acceptable()}
-}
-
 #[cfg(test)] mod tests {
     use super::*;
 
@@ -503,11 +419,9 @@ impl VerificationVerdict {
         }
         assert_eq!(sets["entry"],crate::gatekeeper::entry_questions());
         assert_eq!(sets["routing"],routing_questions());
-        assert_eq!(sets["verification"],verification_questions());
         assert_eq!(sets["asking"],crate::asking::questions());
         for id in crate::gatekeeper::ENTRY_QUESTION_IDS {assert!(sets["entry"].contains_key(id),"{id}");}
         for id in ROUTING_QUESTION_IDS {assert!(sets["routing"].contains_key(id),"{id}");}
-        for id in VERIFICATION_QUESTION_IDS {assert!(sets["verification"].contains_key(id),"{id}");}
         for id in [crate::asking::KIND_QUESTION,crate::asking::OPTIONS_QUESTION] {assert!(sets["asking"].contains_key(id),"{id}");}
         assert_eq!(parameters,crate::gatekeeper::parameters());
     }
@@ -673,114 +587,6 @@ impl VerificationVerdict {
         assert_eq!(decision.complexity,"trivial");
         let partial:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{"intent":{"type":"choice","choice":"code","confidence":1.0,"probabilities":{"code":1.0}}},"usage":{"input_tokens":1,"output_tokens":1}}"#).unwrap();
         assert!(RoutingDecision::from_evaluation(&partial).unwrap_err().to_string().contains("complexity"));
-    }
-
-    fn verification_fixture()->VerificationInput {
-        VerificationInput::new("Onde o roteador escolhe o modelo?","`select_model` em `src/router.rs` ordena os modelos por score.")
-            .with_context_blocks([("src/router.rs","pub fn select_model() {}")])
-    }
-    fn verdict(unsupported:f64,addresses:f64,verifiable:f64)->VerificationVerdict{VerificationVerdict{unsupported_claims:unsupported,addresses_request:addresses,verifiable_claims:verifiable,checked:true,model:"jev-1.13.0".into(),usage:Usage::default()}}
-
-    #[test]
-    fn verification_questions_are_three_batched_nouls_with_explicit_boundaries() {
-        let questions=verification_questions();
-        let mut ids=questions.keys().map(String::as_str).collect::<Vec<_>>(); ids.sort();
-        assert_eq!(ids,VERIFICATION_QUESTION_IDS.to_vec());
-        for (id,asked) in &questions {
-            asked.validate().unwrap_or_else(|error|panic!("{id}: {error}"));
-            assert_eq!(asked.kind(),"noul","{id}");
-            let Question::Noul{instructions,criteria}=asked else {panic!("{id} não é um noul")};
-            let criteria=criteria.as_ref().unwrap_or_else(||panic!("{id} precisa de `criteria` explícito"));
-            assert!(instructions.get("question").and_then(Value::as_str).is_some_and(|text|text.len()>40),"{id}");
-            assert!(criteria.yes.is_object() && criteria.no.is_object(),"{id}");
-            assert!(!serde_json::to_string(asked).expect("json").contains(id.as_str()),"{id} depende do próprio identificador");
-        }
-    }
-
-    #[test]
-    fn verification_instructions_only_reference_state_fields_that_exist() {
-        let state=verification_state(&verification_fixture());
-        for field in ["user_request","repository_context","assistant_answer"] {assert!(state.get(field).and_then(Value::as_str).is_some(),"{field}");}
-        assert_eq!(state.pointer("/repository_context").and_then(Value::as_str),Some("FILE: src/router.rs\npub fn select_model() {}"));
-        let wire=serde_json::to_string(&verification_questions()).expect("json");
-        for quoted in ["`user_request`","`repository_context`","`assistant_answer`"] {
-            let field=quoted.trim_matches('`');
-            assert!(wire.contains(quoted),"nenhuma pergunta cita {quoted}");
-            assert!(state.get(field).is_some(),"{field} citado mas ausente do estado");
-        }
-    }
-
-    #[test]
-    fn serializes_one_batched_verification_request() {
-        let request=verification_request(&verification_fixture(),"jev-latest");
-        request.validate().expect("requisição de verificação");
-        let body=serde_json::to_value(&request).expect("json");
-        assert_eq!(body.pointer("/model").and_then(Value::as_str),Some("jev-latest"));
-        assert_eq!(body.pointer("/state/user_request").and_then(Value::as_str),Some("Onde o roteador escolhe o modelo?"));
-        assert_eq!(body.pointer("/questions").and_then(Value::as_object).expect("perguntas").len(),VERIFICATION_QUESTION_IDS.len());
-        for id in VERIFICATION_QUESTION_IDS {
-            assert_eq!(body.pointer(&format!("/questions/{id}/type")).and_then(Value::as_str),Some("noul"),"{id}");
-            assert!(body.pointer(&format!("/questions/{id}/criteria/true")).is_some() && body.pointer(&format!("/questions/{id}/criteria/false")).is_some(),"{id}");
-        }
-    }
-
-    #[test]
-    fn builds_a_verdict_from_a_batched_evaluation() {
-        let evaluation:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{
-            "unsupported_claims":{"type":"noul","noul":0.91},
-            "addresses_request":{"type":"noul","noul":0.88},
-            "verifiable_claims":{"type":"noul","noul":0.96}},
-            "usage":{"input_tokens":2480,"output_tokens":24}}"#).unwrap();
-        let verdict=VerificationVerdict::from_evaluation(&evaluation).expect("veredito");
-        assert!(verdict.checked);
-        assert_eq!((verdict.unsupported_claims,verdict.addresses_request,verdict.verifiable_claims),(0.91,0.88,0.96));
-        assert_eq!(verdict.model,"jev-1.13.0");
-        assert_eq!(verdict.usage,Usage{input_tokens:2480,output_tokens:24});
-        assert_eq!(verdict.outcome(0.7),VerificationOutcome::Fabricated);
-        assert!(!verdict.is_acceptable(0.7));
-    }
-
-    #[test]
-    fn reports_missing_and_mistyped_verification_answers() {
-        let partial:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{"unsupported_claims":{"type":"noul","noul":0.1}},"usage":{"input_tokens":1,"output_tokens":1}}"#).unwrap();
-        assert!(VerificationVerdict::from_evaluation(&partial).unwrap_err().to_string().contains("addresses_request"));
-        let mistyped:Evaluation=serde_json::from_str(r#"{"model":"jev-1.13.0","answers":{
-            "unsupported_claims":{"type":"score","score":1.0,"confidence":0.5,"probabilities":{"0":0.5,"1":0.5}},
-            "addresses_request":{"type":"noul","noul":0.9},
-            "verifiable_claims":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1,"output_tokens":1}}"#).unwrap();
-        let error=VerificationVerdict::from_evaluation(&mistyped).unwrap_err().to_string();
-        assert!(error.contains("unsupported_claims") && error.contains("score"),"{error}");
-    }
-
-    #[test]
-    fn an_empty_repository_context_is_unverifiable_and_never_blocks_the_answer() {
-        let input=VerificationInput::new("O que é uma mônada?","Uma mônada é um monoide na categoria dos endofuntores.");
-        assert!(!input.has_context());
-        assert!(!VerificationInput::new("pergunta","resposta").with_repository_context("   \n  ").has_context());
-        let verdict=VerificationVerdict::unchecked(DEFAULT_MODEL);
-        assert!(!verdict.checked);
-        assert_eq!(verdict.usage,Usage::default());
-        for threshold in [0.5,0.7,0.9,1.0] {
-            assert_eq!(verdict.outcome(threshold),VerificationOutcome::Unverifiable,"{threshold}");
-            assert!(verdict.is_acceptable(threshold),"{threshold}");
-        }
-    }
-
-    #[test]
-    fn the_policy_helper_uses_the_threshold_the_caller_supplies() {
-        assert_eq!(verdict(0.02,0.97,0.99).outcome(0.7),VerificationOutcome::Grounded);
-        assert_eq!(verdict(0.80,0.97,0.99).outcome(0.7),VerificationOutcome::Fabricated);
-        assert_eq!(verdict(0.80,0.97,0.99).outcome(0.9),VerificationOutcome::Grounded);
-        assert_eq!(verdict(0.99,0.10,0.99).outcome(0.7),VerificationOutcome::OffTopic);
-        assert_eq!(verdict(0.02,0.99,0.04).outcome(0.7),VerificationOutcome::Unverifiable);
-        assert!(verdict(0.02,0.99,0.04).is_acceptable(0.7));
-        assert_eq!(verdict(0.99,0.99,0.04).outcome(0.7),VerificationOutcome::Fabricated);
-        assert!(!verdict(0.99,0.99,0.04).is_acceptable(0.7));
-        assert_eq!(verdict(0.55,0.55,0.55).outcome(0.7),VerificationOutcome::Grounded);
-        assert_eq!(verdict(0.99,0.99,0.99).outcome(f64::NAN),VerificationOutcome::Grounded);
-        assert_eq!(VerificationOutcome::OffTopic.as_str(),"off_topic");
-        assert_eq!(serde_json::to_value(VerificationOutcome::Fabricated).unwrap(),json!("fabricated"));
-        assert!(!VerificationOutcome::Fabricated.is_acceptable() && !VerificationOutcome::OffTopic.is_acceptable());
     }
 
     #[test]

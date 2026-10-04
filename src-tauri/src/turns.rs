@@ -168,12 +168,16 @@ pub fn reopen_turn(connection:&Connection,turn_id:&str)->Result<Turn> {
     turn(connection,turn_id)?.ok_or_else(||Text::new("turn.notFound").with("turn",turn_id).into())
 }
 
-/// Na abertura do banco, todo pedido que ficou pela metade volta para a fila.
-/// Ele já está gravado com o texto do desenvolvedor: descartá-lo seria perder
-/// um pedido que o aplicativo aceitou, e é exatamente o que a fila existe para
-/// impedir. Quem retoma é o atendente, na ordem de sempre.
-pub fn requeue_interrupted_turns(connection:&Connection)->Result<usize> {
-    Ok(connection.execute("UPDATE turns SET status=?1 WHERE status=?2 AND local=1",params![TurnStatus::Queued.as_str(),TurnStatus::Flying.as_str()])?)
+/// Na abertura do banco, o pedido que estava no ar quando o app fechou vira
+/// falho. Ele não volta sozinho: um build pela metade, recomeçado do zero sem
+/// ninguém olhando, mexeria de novo numa árvore que o agente já tinha mexido.
+/// O reenvio fica a um clique, no balão. O que só esperava a vez continua na
+/// fila — esse nunca começou. Devolve os turnos e os chats deles.
+pub fn fail_interrupted_turns(connection:&Connection)->Result<Vec<(String,String)>> {
+    let mut statement=connection.prepare("SELECT id,chat_id FROM turns WHERE status=?1 AND local=1 ORDER BY created_at,ordinal")?;
+    let interrupted=statement.query_map([TurnStatus::Flying.as_str()],|row|Ok((row.get(0)?,row.get(1)?)))?.collect::<rusqlite::Result<Vec<(String,String)>>>()?;
+    for (turn,_) in &interrupted { connection.execute("UPDATE turns SET status=?1,partial=NULL WHERE id=?2",params![TurnStatus::Failed.as_str(),turn])?; }
+    Ok(interrupted)
 }
 
 /// De quem é a vez: o mais antigo dos que esperam. Ordenar por `created_at` e
@@ -627,18 +631,24 @@ mod tests {
     }
 
     #[test]
-    fn a_flying_request_goes_back_to_the_queue_when_the_app_reopens() {
+    fn a_flying_request_fails_when_the_app_reopens_and_the_queue_keeps_waiting() {
         let connection=bench("XY4T9B");
         let flying=open_turn(&connection,"chat-1").expect("turno");
         set_status(&connection,&flying.id,TurnStatus::Flying).expect("estado");
+        set_partial(&connection,&flying.id,"metade da resposta").expect("rascunho");
         let answered=open_turn(&connection,"chat-1").expect("turno");
         set_status(&connection,&answered.id,TurnStatus::Answered).expect("estado");
+        let waiting=open_turn(&connection,"chat-1").expect("turno");
 
-        let resumed=requeue_interrupted_turns(&connection).expect("varredura");
+        let interrupted=fail_interrupted_turns(&connection).expect("varredura");
 
-        assert_eq!(resumed,1,"só o que ficou pela metade é retomado");
-        assert_eq!(status_of(&connection,&flying.id),TurnStatus::Queued,"o pedido aceito volta para a fila em vez de ser descartado");
+        assert_eq!(interrupted,vec![(flying.id.clone(),"chat-1".to_string())],"só o que estava no ar");
+        assert_eq!(status_of(&connection,&flying.id),TurnStatus::Failed,"não recomeça sozinho: o reenvio é de quem pediu");
+        let partial:Option<String>=connection.query_row("SELECT partial FROM turns WHERE id=?1",[&flying.id],|row|row.get(0)).expect("rascunho");
+        assert_eq!(partial,None,"o rascunho sai junto");
         assert_eq!(status_of(&connection,&answered.id),TurnStatus::Answered,"quem já tinha resposta não é tocado");
+        assert_eq!(status_of(&connection,&waiting.id),TurnStatus::Queued,"o que nunca começou continua na fila");
+        assert!(reopen_turn(&connection,&flying.id).is_ok(),"o falho se reenvia");
     }
 
     #[test]
@@ -832,17 +842,6 @@ mod tests {
         assert_eq!(queue_depth(&connection,"chat-2").expect("fila"),1);
         assert_eq!(place_in_queue(&connection,&here.id).expect("posição"),Some(1));
         assert_eq!(place_in_queue(&connection,&there.id).expect("posição"),Some(1),"cada chat tem a sua própria fila");
-    }
-
-    #[test]
-    fn a_request_caught_flying_at_shutdown_goes_back_to_the_queue_instead_of_dying() {
-        let connection=bench("XY4T9B");
-        let turn=open_turn(&connection,"chat-1").expect("turno");
-        set_status(&connection,&turn.id,TurnStatus::Flying).expect("saiu");
-
-        requeue_interrupted_turns(&connection).expect("reabertura");
-
-        assert_eq!(super::turn(&connection,&turn.id).expect("turno").expect("existe").status,TurnStatus::Queued,"o que ficou pela metade é retomado, não descartado");
     }
 
     /// O ciclo da pergunta: nasce pendente com o turno que a fez, é encerrada
