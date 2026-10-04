@@ -1,4 +1,4 @@
-import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, PlusIcon, SettingsIcon, ShieldCheckIcon } from "lucide-react";
+import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
@@ -56,7 +56,6 @@ export function Sidebar() {
           {can.stats && <NavItem active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>}
           <NavItem active={view === "status"} mark={<ActivityIcon />} shortcut="system" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
           <NavItem active={view === "plans"} mark={<CreditCardIcon />} onClick={() => navigate("plans")}>{t("nav.plans")}</NavItem>
-          {entitlements.admin && <NavItem active={view === "admin"} mark={<ShieldCheckIcon />} onClick={() => navigate("admin")}>{t("nav.admin")}</NavItem>}
         </nav>
       ) : (
         <div className="flex min-h-0 flex-col">

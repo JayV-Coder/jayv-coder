@@ -19,7 +19,7 @@ import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
-import { AdminPage, ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
 import { FeatureLocked, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
@@ -35,7 +35,6 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   profile: ProfilePage,
   organizations: OrganizationsPage,
   organization: OrganizationPage,
-  admin: AdminPage,
 };
 
 /** Liga os módulos uma vez: cada um passa a ouvir o núcleo e o barramento por
