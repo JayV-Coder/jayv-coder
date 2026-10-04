@@ -1328,6 +1328,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.featureStatsPlans.title": "Statistics and Plans in their own folders",
+  "whatsNew.item.featureStatsPlans.detail": "An internal change with no difference in use: the Statistics and Plans pages now each keep their screens in a folder of their own, like the System page.",
   "whatsNew.item.featureSystem.title": "The System page in its own folder",
   "whatsNew.item.featureSystem.detail": "An internal change with no difference in use: the System page now keeps its logic, screens and tests in one folder, the first step in organizing the screens by feature.",
   "whatsNew.item.coreOrchestration.title": "The whole core in separate parts",
