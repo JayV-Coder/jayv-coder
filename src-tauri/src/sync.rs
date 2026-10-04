@@ -45,6 +45,7 @@ pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,Re
     upload(store,backend,&mut result).await?;
     download(store,backend,&mut result).await?;
     refresh_policies(store,backend).await;
+    refresh_features(store,backend).await;
     Ok(result)
 }
 
@@ -56,6 +57,17 @@ async fn refresh_policies(store:&SharedWorkspace,backend:&dyn Backend) {
         Ok(Some(rows))=>{ if let Err(error)=store.lock().await.replace_project_policies(&rows) {eprintln!("política de LLM: {error:#}");} }
         Ok(None)=>{}
         Err(error)=>eprintln!("política de LLM: {error}"),
+    }
+}
+
+/// Os recursos do plano descem como a política: falhar (servidor sem a
+/// migração dos planos, por exemplo) não para a volta, e o cache anterior
+/// continua valendo.
+async fn refresh_features(store:&SharedWorkspace,backend:&dyn Backend) {
+    match backend.features().await {
+        Ok(Some(remote))=>{ if let Err(error)=store.lock().await.replace_entitlements(&remote) {eprintln!("recursos do plano: {error:#}");} }
+        Ok(None)=>{}
+        Err(error)=>eprintln!("recursos do plano: {error}"),
     }
 }
 

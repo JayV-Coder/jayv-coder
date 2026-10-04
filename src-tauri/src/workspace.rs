@@ -169,6 +169,7 @@ impl WorkspaceStore {
         crate::usage::store::ensure(&connection)?;
         connection.execute_batch(crate::expertise::SCHEMA)?;
         connection.execute_batch(crate::policy::SCHEMA)?;
+        connection.execute_batch(crate::features::SCHEMA)?;
         connection.execute_batch(crate::project_memory::SCHEMA)?;
         crate::search::ensure(&connection)?;
         crate::local::outbox::install(&connection)?;
@@ -468,6 +469,9 @@ impl WorkspaceStore {
     pub fn chat_policy(&self, chat_id: &str) -> Result<Option<crate::policy::ProjectPolicy>> {crate::policy::for_chat(&self.connection,chat_id)}
 
     pub fn replace_project_policies(&mut self, rows: &[crate::policy::RemotePolicy]) -> Result<()> {crate::policy::replace_all(&mut self.connection,rows)}
+    /// Os recursos do plano que valem agora (todos, se a lista nunca desceu).
+    pub fn entitlements(&self) -> Result<crate::features::Entitlements> {crate::features::load(&self.connection)}
+    pub fn replace_entitlements(&mut self, remote: &crate::features::RemoteFeatures) -> Result<()> {crate::features::replace(&self.connection,remote)}
 
     pub fn average_output(&self) -> Result<u64> {crate::usage::store::average_output(&self.connection)}
 

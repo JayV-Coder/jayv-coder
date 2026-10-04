@@ -1,4 +1,5 @@
 import { clearChat } from "@/modules/conversation";
+import { useFeature } from "@/modules/plans";
 import { useT } from "@/modules/i18n";
 import { useNavigation } from "@/modules/navigation";
 import { chatTitle, findChat, findProject, useWorkspace } from "@/modules/workspace";
@@ -16,6 +17,7 @@ export function AppHeader() {
   const chat = findChat(data, activeChatId);
   const project = findProject(data, activeProjectId);
   const changed = useLive((state) => (activeChatId ? state.chats[activeChatId]?.files.length ?? 0 : 0));
+  const liveAllowed = useFeature("liveFiles");
   const liveOpen = useLive((state) => (activeChatId ? state.panel[activeChatId] === true : false));
   if (view !== "chat" && view !== "status" && view !== "stats" && view !== "settings" && view !== "profile") return null;
 
@@ -32,7 +34,7 @@ export function AppHeader() {
       </nav>
       {view === "chat" && chat && (
         <div className="flex flex-none items-center gap-1">
-        {project?.rootPath.trim() && (
+        {liveAllowed && project?.rootPath.trim() && (
           <Button variant={liveOpen ? "secondary" : "ghost"} size="sm" aria-pressed={liveOpen} className="text-muted-foreground" title={t("live.toggle.hint")}
             onClick={() => setLivePanel(chat.id, !liveOpen)}>
             <FileDiffIcon aria-hidden="true" />

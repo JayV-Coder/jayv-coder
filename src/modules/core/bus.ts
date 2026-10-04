@@ -16,7 +16,7 @@ export interface BusEvents {
   "settings:saved": Record<string, never>;
 }
 
-export type View = "projects" | "chats" | "chat" | "gate" | "status" | "stats" | "settings" | "profile" | "organizations" | "organization";
+export type View = "projects" | "chats" | "chat" | "gate" | "status" | "stats" | "settings" | "profile" | "organizations" | "organization" | "plans" | "admin";
 
 type Handler<K extends keyof BusEvents> = (payload: BusEvents[K]) => void;
 const handlers = new Map<keyof BusEvents, Set<Handler<never>>>();

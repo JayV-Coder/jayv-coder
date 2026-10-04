@@ -116,6 +116,7 @@ export function CommandPalette() {
       { id: "system", group: "palette.group.navigate", label: t("nav.system"), shortcut: "system", run: () => navigate("status") },
       { id: "settings", group: "palette.group.navigate", label: t("nav.settings"), shortcut: "settings", run: () => navigate("settings") },
       { id: "profile", group: "palette.group.navigate", label: t("nav.profile"), run: () => navigate("profile") },
+      { id: "plans", group: "palette.group.navigate", label: t("nav.plans"), run: () => navigate("plans") },
     );
     for (const item of data.projects) {
       if (item.id === project?.id) continue;

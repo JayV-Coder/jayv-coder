@@ -318,7 +318,7 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     let defaults=state.orchestrator.core_defaults();
     let (llm,core,policy)={
         let workspace=workspace.lock().await;
-        (workspace.llm_settings(),workspace.core_settings(&defaults),workspace.chat_policy(chat_id))
+        (workspace.llm_settings(),workspace.core_settings(&defaults).map(|core|workspace.entitlements().unwrap_or_default().restrict_core(&core)),workspace.chat_policy(chat_id))
     };
     let (Ok(llm),Ok(core))=(llm,core) else { eprintln!("política de LLM: configurações ilegíveis, mantidas as anteriores"); return };
     let policy=policy.unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});

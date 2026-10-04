@@ -18,8 +18,9 @@ import { connectLive } from "@/modules/live";
 import { connectTray } from "@/modules/tray";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
-import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
-import { UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
+import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
+import { AdminPage, ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, PlansPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage, StatusPage } from "@/components/pages";
+import { FeatureLocked, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -35,6 +36,8 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   profile: ProfilePage,
   organizations: OrganizationsPage,
   organization: OrganizationPage,
+  plans: PlansPage,
+  admin: AdminPage,
 };
 
 /** Liga os módulos uma vez: cada um passa a ouvir o núcleo e o barramento por
@@ -60,6 +63,7 @@ export function App() {
       clearProfile();
       clearOrganizations();
       clearNotifications();
+      clearEntitlements();
       return;
     }
     navigate("projects");
@@ -68,6 +72,8 @@ export function App() {
     loadOrganizations().catch((error) => console.error("organizations", error));
     // Idem sem a migração das notificações: o sino fica só com as do aparelho.
     loadNotifications().catch((error) => console.error("notifications", error));
+    // Os recursos do plano: sem a migração (ou sem rede), tudo segue liberado.
+    startEntitlements().catch((error) => console.error("plans", error));
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
     // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.
     void refreshQuotas();
@@ -76,6 +82,10 @@ export function App() {
   }, [status, userEmail]);
 
   const Page = PAGES[view];
+  // A tela de um recurso fora do plano (ou desligado pelo admin) vira o aviso
+  // com o caminho para os planos, por qualquer atalho que se chegue a ela.
+  const locked = VIEW_FEATURE[view];
+  const blocked = useEntitlements((state) => (locked ? !allows(state, locked) : false));
   const loading = <p className="grid min-h-full place-items-center text-sm text-muted-foreground">{t("auth.loading")}</p>;
   // Sem perfil (a leitura falhou ou a linha não existe), o app abre mesmo
   // assim: o passo de perfil é convite, não porta.
@@ -85,7 +95,7 @@ export function App() {
       ? loading
       : profile && !profile.completedAt
         ? <ProfileSetupPage profile={profile} />
-        : <AppShell><Page /></AppShell>;
+        : <AppShell>{blocked && locked ? <FeatureLocked feature={locked} /> : <Page />}</AppShell>;
   return (
     <TooltipProvider>
       {/* O aviso de versão nova fica acima de qualquer tela, logada ou não. */}
