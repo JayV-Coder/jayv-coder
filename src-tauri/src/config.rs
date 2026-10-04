@@ -30,8 +30,12 @@ pub struct JevConfig {
     /// Num pedido complexo do modo build, um modelo de raciocínio escreve o
     /// plano em somente leitura antes de o agente construir (ver `split`).
     #[serde(default)] pub plan_first: bool,
+    /// Num pedido complexo do modo build, o planejador divide o pedido em
+    /// partes que agentes fazem ao mesmo tempo, cada um numa `git worktree`
+    /// (ver `parallel`).
+    #[serde(default)] pub parallel_tasks: bool,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {

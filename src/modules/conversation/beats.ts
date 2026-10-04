@@ -4,6 +4,8 @@ import { AGENT_LABELS } from "@/modules/settings";
 import { shownText, sourceLabel } from "./notice";
 
 const GATE_WORDS: Record<string, Key> = { pass: "beat.gate.pass", ask: "beat.gate.ask", block: "beat.gate.block" };
+const SUBTASK_WORDS: Record<string, Key> = { applied: "beat.subtask.applied", empty: "beat.subtask.empty", conflict: "beat.subtask.conflict", failed: "beat.subtask.failed" };
+const agentLabel = (provider: unknown) => { const id = String(provider ?? ""); return id in AGENT_LABELS ? AGENT_LABELS[id as AgentId] : id; };
 
 /** Uma etapa em uma linha. O evento cru é JSON; quem espera quer ler o que está
  * acontecendo, não o formato em que foi gravado. */
@@ -32,6 +34,14 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     case "plan": {
       const provider = String(d.provider ?? "");
       return t("beat.plan", { agent: provider in AGENT_LABELS ? AGENT_LABELS[provider as AgentId] : provider, model: String(d.model ?? "") });
+    }
+    case "split": {
+      const tasks = Array.isArray(detail.tasks) ? (detail.tasks as { title?: string; provider?: string }[]) : [];
+      return t("beat.split", { count: tasks.length, parts: tasks.map((task) => `${task.title ?? ""} (${agentLabel(task.provider)})`).join(", ") });
+    }
+    case "subtask": {
+      const key = SUBTASK_WORDS[String(d.outcome ?? "")] ?? "beat.subtask.failed";
+      return t(key, { title: String(d.title ?? ""), agent: agentLabel(d.provider), patch: String(d.patch ?? "") });
     }
     case "running": return t("beat.running");
     case "agent": return agentLine(String(d.line ?? ""));

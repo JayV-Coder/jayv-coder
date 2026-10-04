@@ -19,6 +19,11 @@ use tokio::sync::mpsc;
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,serde::Deserialize)]
 pub struct ModeSwitch { pub from:String, pub reason:String }
 
+/// Uma parte de um pedido dividido entre agentes: o título e quem a faz.
+#[derive(Debug,Clone,PartialEq,Eq,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct SplitTask { pub title:String, pub provider:String, pub model:String }
+
 /// Um sinal de vida do turno. O `Chunk` é a resposta crescendo; os outros são
 /// etapas com nome próprio, e é por isso que cada um vira uma linha no log
 /// enquanto o `Chunk` vira texto acumulado.
@@ -39,6 +44,12 @@ pub enum Beat {
     Review{provider:String,model:String,files:usize},
     /// Um modelo de raciocínio está escrevendo o plano que o agente vai seguir.
     Plan{provider:String,model:String},
+    /// O pedido foi dividido em partes que agentes fazem ao mesmo tempo.
+    Split{tasks:Vec<SplitTask>},
+    /// Uma das partes terminou: `applied` (as mudanças entraram no projeto),
+    /// `empty` (não mudou nada), `conflict` (não encaixou; o patch ficou
+    /// guardado em `patch`) ou `failed` (o agente falhou).
+    Subtask{index:usize,title:String,provider:String,outcome:String,#[serde(skip_serializing_if="Option::is_none")] patch:Option<String>},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -50,7 +61,7 @@ impl Beat {
     pub fn kind(&self)->&'static str {
         match self {
             Self::Gate{..}=>"gate", Self::Read{..}=>"read", Self::Context{..}=>"context",
-            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Running=>"running", Self::Agent{..}=>"agent",
+            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
             Self::Chunk{..}=>"chunk", Self::Done{..}=>"done", Self::Failed{..}=>"failed",
         }
     }

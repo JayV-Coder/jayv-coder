@@ -23,6 +23,7 @@ pub mod mcp;
 pub mod memory;
 pub mod model;
 pub mod orchestrator;
+pub mod parallel;
 pub mod policy;
 pub mod progress;
 pub mod project_map;

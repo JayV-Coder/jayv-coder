@@ -39,6 +39,19 @@ describe("beatLine", () => {
     expect(line).toContain("opus");
     expect(line).toContain("plan");
   });
+
+  it("lists the parts of a split request and who does each", () => {
+    const line = beatLine("split", { tasks: [{ title: "API", provider: "codex", model: "gpt-5.5" }, { title: "Screen", provider: "claude", model: "sonnet" }] });
+    expect(line).toContain("2 parts");
+    expect(line).toContain("API (Codex)");
+    expect(line).toContain("Screen (Claude Code)");
+  });
+
+  it("says where the patch of a part that did not fit was kept", () => {
+    const line = beatLine("subtask", { index: 1, title: "Screen", provider: "cursor", outcome: "conflict", patch: "/repo/.git/jayv-patches/c-2.patch" });
+    expect(line).toContain("Screen");
+    expect(line).toContain("/repo/.git/jayv-patches/c-2.patch");
+  });
 });
 
 describe("agentLine", () => {
