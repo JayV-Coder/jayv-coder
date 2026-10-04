@@ -5,8 +5,12 @@ use std::collections::HashMap;
 /// A sessão do agente que atende um chat. O pedido seguinte a retoma enquanto
 /// for o mesmo agente, o mesmo modelo e a mesma pasta, e até `turns` chegar ao
 /// teto: uma sessão longa demais volta a ficar cara, mesmo lida do cache.
+///
+/// `writes` diz se a sessão nasceu com o agente que escreve (build) ou com o
+/// que só lê (planejamento): a permissão e a nota do modo ficam na conversa
+/// dela, e retomar uma no outro modo deixava o agente preso ao primeiro.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AgentSession { pub provider: String, pub model: String, pub root: String, pub id: String, pub turns: usize }
+pub struct AgentSession { pub provider: String, pub model: String, pub root: String, pub id: String, pub turns: usize, pub writes: bool }
 
 #[derive(Debug, Default)]
 pub struct MemoryManager {
@@ -62,7 +66,7 @@ mod tests {
 
         assert_eq!(memory.conversation("chat-a")[0].content,"A");
         assert_eq!(memory.conversation("chat-b")[0].content,"B");
-        memory.keep_agent_session("chat-a",AgentSession{provider:"claude".into(),model:"sonnet".into(),root:"/repo".into(),id:"s-1".into(),turns:1});
+        memory.keep_agent_session("chat-a",AgentSession{provider:"claude".into(),model:"sonnet".into(),root:"/repo".into(),id:"s-1".into(),turns:1,writes:true});
         memory.clear_session("chat-a");
         assert!(memory.agent_session("chat-a").is_none(),"limpar o chat esquece a sessão do agente");
         assert!(memory.conversation("chat-a").is_empty());

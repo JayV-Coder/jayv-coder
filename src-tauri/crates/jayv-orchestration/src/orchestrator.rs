@@ -203,8 +203,9 @@ impl Orchestrator {
     /// Aí o agente roda como no planejamento, e a regra vale também para o
     /// que ele faria sozinho, não só para o que a resposta conta.
     fn pool(&self,mode:&str)->&HashMap<String,Box<dyn Provider>> {
-        if mode==MODE_BUILD&&self.config.permissions.write!="deny" {&self.providers} else {&self.planners}
+        if self.writes(mode) {&self.providers} else {&self.planners}
     }
+    fn writes(&self,mode:&str)->bool { mode==MODE_BUILD&&self.config.permissions.write!="deny" }
 
     pub fn executable_provider_count(&self)->usize { self.providers.len() }
     pub fn executable_model_count(&self)->usize { self.config.models.values().filter(|model|model.enabled && self.providers.contains_key(&model.provider)).count() }
@@ -622,11 +623,14 @@ impl Orchestrator {
     }
 
     /// A sessão do agente que este chat pode retomar: a do mesmo agente, do
-    /// mesmo modelo e da mesma pasta, enquanto não chegou ao teto de pedidos.
+    /// mesmo modelo, da mesma pasta e do mesmo lado da escrita, enquanto não
+    /// chegou ao teto de pedidos. A sessão aberta no planejamento guarda o
+    /// `--permission-mode plan` e a nota de somente leitura; retomada no
+    /// build, o agente seguia dizendo que a sessão permanecia somente leitura.
     fn resumable_session(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->Option<String> {
         if !provider.resumes() { return None; }
         let kept=self.memory.agent_session(session_id)?;
-        (kept.provider==selection.provider&&kept.model==selection.model_name&&kept.root==self.rag.project_info().root&&kept.turns<RESUMED_TURNS).then(||kept.id.clone())
+        (kept.provider==selection.provider&&kept.model==selection.model_name&&kept.root==self.rag.project_info().root&&kept.writes==self.writes(&selection.mode)&&kept.turns<RESUMED_TURNS).then(||kept.id.clone())
     }
 
     /// Guarda (ou esquece) a sessão que o agente acabou de usar, para o pedido
@@ -636,7 +640,7 @@ impl Orchestrator {
         let Some(id)=response.and_then(|response|response.session.clone()).filter(|_|resumes) else { self.memory.forget_agent_session(session_id); return };
         let turns=if resumed { self.memory.agent_session(session_id).map_or(0,|kept|kept.turns)+1 } else { 1 };
         if resumed { crate::usage::mark(crate::usage::JevMark::count("session_resumed",1)); }
-        self.memory.keep_agent_session(session_id,AgentSession{provider:selection.provider.clone(),model:selection.model_name.clone(),root:self.rag.project_info().root,id,turns});
+        self.memory.keep_agent_session(session_id,AgentSession{provider:selection.provider.clone(),model:selection.model_name.clone(),root:self.rag.project_info().root,id,turns,writes:self.writes(&selection.mode)});
     }
 
     fn without_local_only(&self,context:&Context)->Context {
@@ -1514,6 +1518,37 @@ mod tests {
 
         orchestrator.process("and the tests?",Some("other-chat"),&Pulse::silent()).await;
         assert_eq!(orchestrator.memory.agent_session("other-chat").map(|kept|kept.turns),Some(1),"outro chat, outra sessão");
+    }
+
+    /// A sessão aberta no planejamento não é retomada no build: ela guarda a
+    /// permissão de só ler, e o agente seguia dizendo que a sessão
+    /// permanecia somente leitura. No mesmo modo, retoma como sempre.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_plan_session_is_not_resumed_in_build_mode() {
+        let dir=repository(&[("router.rs",filler("route_request",200))]);
+        let calls=tempfile::tempdir().expect("chamadas");
+        let mut orchestrator=orchestrator(&dir);
+        let script=|side:&str|format!(r#"cat >/dev/null; echo "$@" > "{}/{side}-$(ls {} | wc -l)"; echo '{{"type":"system","subtype":"init","session_id":"s-{side}"}}'; echo resposta"#,calls.path().display(),calls.path().display());
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),script("build"),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],plan_args:vec!["-c".into(),script("plan"),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+        let call=|name:&str|std::fs::read_to_string(calls.path().join(name)).unwrap_or_else(|_|panic!("{name} não rodou"));
+
+        orchestrator.pending_work_mode=Some(MODE_PLAN.into());
+        orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
+        assert!(!call("plan-0").contains("--resume"),"sessão nova");
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("explain route_request again",Some("chat"),&Pulse::silent()).await;
+        assert!(!call("build-1").contains("--resume"),"a sessão do planejamento fica para trás: {}",call("build-1"));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
+        assert!(call("build-2").contains("--resume s-build"),"no mesmo modo, retoma: {}",call("build-2"));
     }
 
     /// A planta do projeto vai no começo da sessão do agente, e a sessão

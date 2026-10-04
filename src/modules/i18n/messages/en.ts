@@ -1328,6 +1328,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.planSessionInBuild.title": "The agent no longer stays read-only after planning",
+  "whatsNew.item.planSessionInBuild.detail": "When a chat went from Planning to Development, the agent picked up the session it had opened in Planning, kept its read-only permission and answered that the session was still read-only. A request in Development now opens its own agent session, and the next requests in the same mode pick it up as before.",
   "whatsNew.item.featureSystem.title": "The System page in its own folder",
   "whatsNew.item.featureSystem.detail": "An internal change with no difference in use: the System page now keeps its logic, screens and tests in one folder, the first step in organizing the screens by feature.",
   "whatsNew.item.coreOrchestration.title": "The whole core in separate parts",
