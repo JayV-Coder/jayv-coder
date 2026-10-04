@@ -19,24 +19,22 @@ import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
-import { AdminPage, ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, PlansPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage, StatsPage } from "@/components/pages";
+import { AdminPage, ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
 import { FeatureLocked, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const PAGES: Record<View, () => React.JSX.Element> = {
-  ...featurePages as Record<"status", () => React.JSX.Element>,
+  ...featurePages,
   projects: ProjectsPage,
   chats: ChatsPage,
   chat: ChatPage,
   gate: GatePage,
-  stats: StatsPage,
   settings: SettingsPage,
   profile: ProfilePage,
   organizations: OrganizationsPage,
   organization: OrganizationPage,
-  plans: PlansPage,
   admin: AdminPage,
 };
 

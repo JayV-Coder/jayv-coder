@@ -21,7 +21,6 @@ export { AgentPanel, AGENT_NAMES } from "./AgentPanel";
 export { ExpertisePanel } from "./ExpertisePanel";
 export { JevPanel } from "./JevPanel";
 export { AppPanel } from "./AppPanel";
-export { StatsToolbar } from "./StatsToolbar";
 export { UsageSummary } from "./UsageSummary";
 export { QuotaPanel } from "./QuotaPanel";
 export { UsageCharts } from "./UsageCharts";
