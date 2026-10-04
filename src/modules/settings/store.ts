@@ -286,7 +286,8 @@ export function connectSettings() {
       else void loadSettings();
     }
     if (view !== "settings") return;
-    void loadSettings();
+    // Voltar à página com alteração pendente não a joga fora.
+    if (!isDirty(useSettings.getState())) void loadSettings();
     stop = watchAgents();
   });
   // A descoberta de fundo trocou os modelos: a aba aberta e sem alteração

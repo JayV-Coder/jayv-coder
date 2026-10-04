@@ -331,12 +331,22 @@ impl WorkspaceStore {
     /// interface, que garante um pedido de cada vez.
     pub fn claim_next_turn(&mut self) -> Result<Option<(Turn,String)>> {
         if turns::is_flying(&self.connection)? {return Ok(None);}
-        let Some(turn)=turns::next_queued(&self.connection)? else {return Ok(None)};
-        let prompt:String=self.connection.query_row(
-            "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY created_at,id LIMIT 1",[&turn.id],|row|row.get(0),
-        ).with_context(||format!("turn `{}` is queued without a written request",turn.id))?;
-        turns::set_status(&self.connection,&turn.id,TurnStatus::Flying)?;
-        Ok(Some((Turn{status:TurnStatus::Flying,..turn},prompt)))
+        loop {
+            let Some(turn)=turns::next_queued(&self.connection)? else {return Ok(None)};
+            let prompt:Option<String>=self.connection.query_row(
+                "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY created_at,id LIMIT 1",[&turn.id],|row|row.get(0),
+            ).optional()?;
+            // Um turno na fila sem o pedido escrito (o chat foi limpo aqui ou em
+            // outra máquina) não tem o que atender: falha e dá a vez ao
+            // seguinte, em vez de travar a fila de todos os chats.
+            let Some(prompt)=prompt else {
+                eprintln!("turn `{}` is queued without a written request; failing it",turn.id);
+                turns::set_status(&self.connection,&turn.id,TurnStatus::Failed)?;
+                continue;
+            };
+            turns::set_status(&self.connection,&turn.id,TurnStatus::Flying)?;
+            return Ok(Some((Turn{status:TurnStatus::Flying,..turn},prompt)));
+        }
     }
 
     /// Quantos pedidos deste chat ainda estão em aberto, contando o que está
@@ -402,6 +412,9 @@ impl WorkspaceStore {
         anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
         let transaction=self.connection.transaction()?;
         transaction.execute("DELETE FROM messages WHERE chat_id=?1",[chat_id])?;
+        // Os pedidos que ainda esperavam saem junto com o texto deles: sem o
+        // pedido escrito, a fila não teria o que mandar ao agente.
+        transaction.execute("UPDATE turns SET status=?1 WHERE chat_id=?2 AND status=?3",params![TurnStatus::Failed.as_str(),chat_id,TurnStatus::Queued.as_str()])?;
         transaction.execute("UPDATE chats SET title='',named=0,updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
         transaction.commit()?;
         Ok(())
@@ -422,6 +435,20 @@ impl WorkspaceStore {
         anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
         // É o histórico que o modelo lê: avisos gravados para a tela vão em inglês.
         Ok(self.messages(chat_id)?.into_iter().map(|message|ChatMessage{role:message.role,content:crate::i18n::for_model(&message.content)}).collect())
+    }
+
+    /// O histórico que vai ao modelo junto do turno que está sendo atendido:
+    /// só os turnos já fechados, na ordem dos turnos. O pedido atual entra
+    /// pelo `process`, e os que ainda esperam na fila não podem aparecer antes
+    /// da hora — nem a resposta de um deles colada ao pedido de outro.
+    pub fn history_before_open_turns(&self, chat_id: &str) -> Result<Vec<ChatMessage>> {
+        anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
+        let mut statement=self.connection.prepare(
+            "SELECT m.role,m.content FROM messages m LEFT JOIN turns t ON t.id=m.turn_id
+             WHERE m.chat_id=?1 AND (m.turn_id IS NULL OR (t.id IS NOT NULL AND t.status NOT IN (?2,?3)))
+             ORDER BY COALESCE(t.ordinal,0),m.created_at,m.id")?;
+        let rows=statement.query_map(params![chat_id,TurnStatus::Queued.as_str(),TurnStatus::Flying.as_str()],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|(role,content)|ChatMessage{role,content:crate::i18n::for_model(&content)}).collect())
     }
 
     pub fn contains_chat(&self, chat_id: &str) -> Result<bool> {
@@ -524,7 +551,7 @@ impl WorkspaceStore {
 
     pub fn project_notes(&self, project_id:&str) -> Result<Vec<crate::project_memory::ProjectNote>> {crate::project_memory::notes(&self.connection,project_id)}
     pub fn save_project_note(&mut self, draft:&crate::project_memory::NoteDraft) -> Result<crate::project_memory::ProjectNote> {crate::project_memory::save(&self.connection,draft)}
-    pub fn delete_project_note(&mut self, id:&str) -> Result<()> {crate::project_memory::delete(&self.connection,id)}
+    pub fn delete_project_note(&mut self, project_id:&str, id:&str) -> Result<()> {crate::project_memory::delete(&self.connection,project_id,id)}
     pub fn learn_project_note(&mut self, project_id:&str, criterion:&str, sentence:&str) -> Result<Option<crate::project_memory::ProjectNote>> {crate::project_memory::learn(&self.connection,project_id,criterion,sentence)}
     pub fn repeated_requests(&self, project_id:&str) -> Result<Vec<crate::project_memory::RepeatedRequest>> {crate::project_memory::repeated_requests(&self.connection,project_id)}
     pub fn search_chats(&self, project_id:&str, text:&str, limit:usize) -> Result<Vec<crate::search::SearchHit>> {crate::search::search(&self.connection,project_id,text,limit)}
@@ -817,6 +844,74 @@ mod tests {
         store.set_turn_status(&turn.id,TurnStatus::Answered).expect("respondido");
         let (_,following)=store.claim_next_turn().expect("consulta").expect("agora é a vez dele");
         assert_eq!(following,"segundo");
+    }
+
+    #[test]
+    fn clearing_a_chat_does_not_stall_the_queue_of_the_others() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let cleared=store.create_chat(&project.id,None).expect("chat limpo");
+        let other=store.create_chat(&project.id,None).expect("outro chat");
+        let waiting=store.enqueue_prompt(&cleared.id,"esperando",None).expect("na fila");
+        store.enqueue_prompt(&other.id,"o de outro chat",None).expect("outro");
+
+        store.clear_chat(&cleared.id).expect("limpa");
+        assert_eq!(store.turn(&waiting.id).expect("lê").expect("turno").status,TurnStatus::Failed,"o pedido sem texto sai da fila");
+        let (_,prompt)=store.claim_next_turn().expect("consulta").expect("a fila anda");
+        assert_eq!(prompt,"o de outro chat");
+    }
+
+    #[test]
+    fn a_queued_turn_without_its_text_is_failed_and_skipped() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let orphan=store.enqueue_prompt(&chat.id,"some",None).expect("um");
+        store.enqueue_prompt(&chat.id,"fica",None).expect("dois");
+        // O texto sumiu por fora (a limpeza veio de outra máquina pelo sync).
+        store.connection().execute("DELETE FROM messages WHERE turn_id=?1",[&orphan.id]).expect("apaga");
+
+        let (_,prompt)=store.claim_next_turn().expect("consulta").expect("o seguinte é chamado");
+        assert_eq!(prompt,"fica");
+        assert_eq!(store.turn(&orphan.id).expect("lê").expect("turno").status,TurnStatus::Failed);
+    }
+
+    #[test]
+    fn only_a_failed_turn_can_be_retried() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"pronto",None).expect("pedido");
+        store.append_answer(&chat.id,&turn.id,"a resposta").expect("resposta");
+        store.set_turn_status(&turn.id,TurnStatus::Answered).expect("respondido");
+
+        assert!(store.enqueue_prompt(&chat.id,"pronto",Some(&turn.id)).is_err(),"reenviar um respondido apagaria a resposta");
+        let saved=store.snapshot().expect("snapshot");
+        assert_eq!(saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat").messages.len(),2,"a resposta continua lá");
+    }
+
+    #[test]
+    fn the_history_skips_open_turns_and_follows_turn_order() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let first=store.enqueue_prompt(&chat.id,"u1",None).expect("um");
+        store.append_answer(&chat.id,&first.id,"a1").expect("r1");
+        store.set_turn_status(&first.id,TurnStatus::Answered).expect("fechou");
+        let second=store.enqueue_prompt(&chat.id,"u2",None).expect("dois");
+        store.enqueue_prompt(&chat.id,"u3",None).expect("três");
+        store.claim_next_turn().expect("consulta").expect("u2 no ar");
+
+        let history=store.history_before_open_turns(&chat.id).expect("histórico");
+        assert_eq!(history.iter().map(|message|message.content.as_str()).collect::<Vec<_>>(),["u1","a1"],"nem o atual nem o que espera");
+        store.append_answer(&chat.id,&second.id,"a2").expect("r2");
+        store.set_turn_status(&second.id,TurnStatus::Answered).expect("fechou");
+        let history=store.history_before_open_turns(&chat.id).expect("histórico");
+        assert_eq!(history.iter().map(|message|message.content.as_str()).collect::<Vec<_>>(),["u1","a1","u2","a2"],"a resposta fica colada ao seu pedido");
     }
 
     #[test]

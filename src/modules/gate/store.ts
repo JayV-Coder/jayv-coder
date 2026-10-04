@@ -32,8 +32,10 @@ export const useGate = create<GateState>(() => ({ feed: EMPTY, project: null, ch
 
 export async function loadGate() {
   try {
-    const feed = await commands.gateFeed(useGate.getState().project?.id ?? null);
-    useGate.setState({ feed });
+    const asked = useGate.getState().project?.id ?? null;
+    const feed = await commands.gateFeed(asked);
+    // A resposta lenta de outro projeto não pinta o placar deste.
+    if ((useGate.getState().project?.id ?? null) === asked) useGate.setState({ feed });
   } catch (error) {
     console.error(error);
   }
@@ -100,6 +102,9 @@ export function connectGate() {
   const offScope = bus.on("scope:changed", ({ project, chats }) => {
     const changed = useGate.getState().project?.id !== project?.id;
     useGate.setState({ project, chats: Object.fromEntries(chats.map((chat) => [chat.id, chat])), ...(changed ? { feed: EMPTY } : {}) });
+    // O placar da barra de status vale para o projeto aberto por qualquer
+    // caminho (notificação, chat da organização), não só pela página de chats.
+    if (changed && project) void loadGate();
   });
   const offView = bus.on("view:changed", ({ view }) => {
     if (view === "gate" || view === "chats") void loadGate();

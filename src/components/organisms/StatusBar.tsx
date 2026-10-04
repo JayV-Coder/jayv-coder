@@ -44,7 +44,7 @@ export function StatusBar() {
       </span>
       {project && (
         <>
-          <span className="min-w-0 truncate" title={project.rootPath ?? undefined}>{project.rootPath ?? project.name}</span>
+          <span className="min-w-0 truncate" title={project.rootPath?.trim() || project.name}>{project.rootPath?.trim() || project.name}</span>
           {gateProject === project.id && (
             <button
               type="button"

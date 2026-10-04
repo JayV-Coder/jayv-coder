@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { showChanges } from "@/modules/changelog";
+import { reportError } from "@/modules/feedback";
 import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
@@ -121,7 +122,7 @@ export function CommandPalette() {
       all.push({ id: `project-${item.id}`, group: "palette.group.projects", label: item.name, hint: item.rootPath ?? undefined, run: () => openProject(item.id) });
     }
     for (const organization of organizations) {
-      all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id) });
+      all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id).catch(reportError) });
     }
     for (const preference of THEME_PREFERENCES) {
       all.push({ id: `theme-${preference}`, group: "palette.group.appearance", label: t("palette.theme", { name: t(`theme.${preference}`) }), run: () => setThemePreference(preference) });

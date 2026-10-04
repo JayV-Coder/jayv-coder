@@ -161,7 +161,14 @@ async fn download(store:&SharedWorkspace,backend:&dyn Backend,result:&mut Round)
     for table in &TABLES {
         let mut since=outbox::cursor(store.lock().await.connection(),table).map_err(local)?.unwrap_or_default();
         loop {
-            let rows=backend.pull(table,&since,PAGE).await?;
+            // Tabela que o servidor recusa (a migração dela ainda não rodou,
+            // uma coluna nova) fica para a próxima volta; as outras descem e a
+            // fila de pedidos não fica parada como se faltasse rede.
+            let rows=match backend.pull(table,&since,PAGE).await {
+                Ok(rows)=>rows,
+                Err(RemoteError::Rejected{status,detail})=>{eprintln!("sincronização: `{}` recusada ({status}): {detail}",table.name); break;}
+                Err(error)=>return Err(error),
+            };
             let Some(last)=rows.last().and_then(|row|row["synced_at"].as_str()).map(str::to_string) else {break};
             let mut guard=store.lock().await;
             result.pulled+=outbox::apply_remote(guard.connection_mut(),table,&rows).map_err(local)?;

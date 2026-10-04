@@ -119,6 +119,8 @@ export async function answerQuestion(question: Question, chatId: string, picked:
     bus.emit("prompt:sent", { chatId });
   } catch (error) {
     reportError(error);
+    // Como no pedido: a resposta digitada volta para a caixa.
+    if (text && !useConversation.getState().drafts[chatId]?.trim()) setDraft(chatId, text);
   }
 }
 

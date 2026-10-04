@@ -24,7 +24,8 @@ function NoteForm({ draft, onSave, onCancel }: { draft: NoteDraft; onSave: (draf
   const recipe = value.kind === "recipe";
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    await onSave(value);
+    // A falha já virou aviso em `save`; o formulário só não se limpa.
+    try { await onSave(value); } catch { return; }
     if (!value.id) setValue(blank(value.projectId, value.kind));
   };
   return (

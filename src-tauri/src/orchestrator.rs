@@ -745,9 +745,14 @@ pub fn could_not_start(error:&anyhow::Error)->bool {
     })
 }
 
+/// O agente não achou a sessão que pedimos para retomar. Só as frases de erro
+/// de retomada contam: a falha de um pedido que *fala* de sessão (o texto da
+/// resposta vai junto do erro) não pode fazer o pedido rodar de novo do zero
+/// numa árvore já meio mexida.
 fn lost_session(error:&anyhow::Error)->bool {
-    let text=format!("{error:#}").to_lowercase();
-    ["session","conversation"].iter().any(|word|text.contains(word))
+    static LOST:std::sync::OnceLock<regex::Regex>=std::sync::OnceLock::new();
+    let lost=LOST.get_or_init(||regex::Regex::new(r"(?i)no conversation found|conversation (?:id )?not found|session (?:id )?not found|no such session|unknown session|invalid session(?: id)?|session (?:\S+ )?(?:does not exist|has expired|expired)|could not (?:find|resume|load) (?:the )?(?:session|conversation)|failed to resume").expect("lost session regex"));
+    lost.is_match(&format!("{error:#}"))
 }
 
 fn mark_firewall(retrieved:usize,filtered:&Context) {

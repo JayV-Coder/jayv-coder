@@ -43,7 +43,7 @@ pub(crate) async fn save_project_note(workspace:State<'_,SharedWorkspace>,draft:
 #[tauri::command]
 pub(crate) async fn delete_project_note(workspace:State<'_,SharedWorkspace>,project_id:String,id:String)->Result<ProjectMemory,Text>{crate::desktop::require_session()?;
     let mut workspace=workspace.lock().await;
-    workspace.delete_project_note(&id).map_err(failure)?;
+    workspace.delete_project_note(&project_id,&id).map_err(failure)?;
     memory(&workspace,&project_id)
 }
 

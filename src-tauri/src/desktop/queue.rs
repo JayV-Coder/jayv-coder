@@ -251,7 +251,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     if exits.iter().any(|exit|exit.verdict==ExitVerdict::Held) { state.orchestrator.mark_last_failed(chat_id); }
     if !exits.is_empty(){let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits});}
     drop(state);
-    if result.result.is_some() {enable_question(app,workspace,turn,&assistant).await;}
+    // A ida ao Jev para achar a pergunta não segura o próximo da fila.
+    if result.result.is_some() {
+        let (app,workspace,turn)=(app.clone(),workspace.clone(),turn.clone());
+        tauri::async_runtime::spawn(async move {enable_question(&app,&workspace,&turn,&assistant).await;});
+    }
     if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
 }
 
@@ -329,8 +333,7 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
 /// memória da sessão: sem isto o modelo receberia a mesma linha duas vezes no
 /// histórico.
 async fn forget_pending_prompt(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->anyhow::Result<()> {
-    let mut history=workspace.lock().await.conversation(chat_id)?;
-    if history.last().is_some_and(|message|message.role=="user") {history.pop();}
+    let history=workspace.lock().await.history_before_open_turns(chat_id)?;
     state.orchestrator.memory.set_conversation(chat_id.to_string(),history);
     Ok(())
 }

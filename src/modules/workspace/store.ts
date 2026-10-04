@@ -58,7 +58,8 @@ export function setLayout(layout: Layout) {
 
 /** Fixa o modo de trabalho do chat. A tela muda na hora; se o núcleo recusar,
  * o modo volta ao que era e o erro aparece. */
-export async function setWorkMode(chatId: string, mode: WorkMode) {
+/** `false` quando o núcleo recusou: o modo volta ao anterior. */
+export async function setWorkMode(chatId: string, mode: WorkMode): Promise<boolean> {
   const before = useWorkspace.getState().data.chats.find((chat) => chat.id === chatId)?.workMode ?? "auto";
   const put = (workMode: WorkMode) => useWorkspace.setState((state) => ({
     data: { ...state.data, chats: state.data.chats.map((chat) => (chat.id === chatId ? { ...chat, workMode } : chat)) },
@@ -66,9 +67,11 @@ export async function setWorkMode(chatId: string, mode: WorkMode) {
   put(mode);
   try {
     await commands.setWorkMode(chatId, mode);
+    return true;
   } catch (error) {
     put(before);
     reportError(error);
+    return false;
   }
 }
 

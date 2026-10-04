@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Chat, Question } from "@/modules/core";
 import { useT } from "@/modules/i18n";
 import { answerForm, answerQuestion, answeringFor, dismissQuestion, formItems, pick, setDraft, setWriting, useConversation, sourceLabel } from "@/modules/conversation";
@@ -13,6 +14,14 @@ import { Button } from "@/components/ui/button";
  * pergunta que não trava a caixa para sempre é pergunta que se pode recusar. */
 export function AskingPanel({ chat, question }: { chat: Chat; question: Question }) {
   const t = useT();
+  // Um clique de cada vez: o segundo clique mandaria outra resposta a uma
+  // pergunta que o primeiro já fechou.
+  const [busy, setBusy] = useState(false);
+  const run = (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    void action().finally(() => setBusy(false));
+  };
   const answering = answeringFor(question, useConversation((state) => state.answering));
   const multiple = question.kind === "multiple";
   const form = question.kind === "form";
@@ -85,22 +94,22 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
           <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}>{t("ask.back")}</Button>
         ) : form ? (
           <>
-            <Button type="button" className={act} disabled={!answering.form.some((value) => value?.trim())} onClick={() => void answerQuestion(question, chat.id, items.map((_, index) => answering.form[index] ?? ""))}>{t("ask.form.send")}</Button>
+            <Button type="button" className={act} disabled={busy || !answering.form.some((value) => value?.trim())} onClick={() => run(() => answerQuestion(question, chat.id, items.map((_, index) => answering.form[index] ?? "")))}>{t("ask.form.send")}</Button>
             <Button type="button" variant="outline" className={act} onClick={() => setWriting(question, true)}>{t("ask.reply")}</Button>
           </>
         ) : question.kind === "noul" ? (
           <>
-            <Button type="button" className={act} onClick={() => void answerQuestion(question, chat.id, ["yes"])}>{t("ask.yes")}</Button>
-            <Button type="button" variant="outline" className={act} onClick={() => void answerQuestion(question, chat.id, ["no"])}>{t("ask.no")}</Button>
+            <Button type="button" disabled={busy} className={act} onClick={() => run(() => answerQuestion(question, chat.id, ["yes"]))}>{t("ask.yes")}</Button>
+            <Button type="button" disabled={busy} variant="outline" className={act} onClick={() => run(() => answerQuestion(question, chat.id, ["no"]))}>{t("ask.no")}</Button>
             <Button type="button" variant="outline" className={act} onClick={() => setWriting(question, true)}>{t("ask.reply")}</Button>
           </>
         ) : (
           <>
-            <Button type="button" className={act} disabled={answering.picked.length === 0} onClick={() => void answerQuestion(question, chat.id, answering.picked)}>{t("ask.sendChoice")}</Button>
+            <Button type="button" className={act} disabled={busy || answering.picked.length === 0} onClick={() => run(() => answerQuestion(question, chat.id, answering.picked))}>{t("ask.sendChoice")}</Button>
             <Button type="button" variant="outline" className={act} onClick={() => setWriting(question, true)}>{t("ask.reply")}</Button>
           </>
         )}
-        <Button type="button" variant="ghost" className={`${act} ms-auto text-muted-foreground`} onClick={() => void dismissQuestion(question, chat.id)}>{t("ask.ignore")}</Button>
+        <Button type="button" disabled={busy} variant="ghost" className={`${act} ms-auto text-muted-foreground`} onClick={() => run(() => dismissQuestion(question, chat.id))}>{t("ask.ignore")}</Button>
       </div>
     </div>
   );
