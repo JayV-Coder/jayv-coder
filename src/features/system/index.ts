@@ -7,8 +7,8 @@ import { connectSystem } from "./store";
  * funcionalidade; quem está fora importa só daqui. */
 export { loadStatus, useSystem } from "./store";
 
-export const systemFeature: FeatureManifest = {
+export const systemFeature = {
   key: "system",
   routes: { status: StatusPage },
   connect: connectSystem,
-};
+} satisfies FeatureManifest;

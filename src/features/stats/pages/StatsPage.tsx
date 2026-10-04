@@ -1,7 +1,8 @@
 import { useT } from "@/modules/i18n";
 import { setScope, sourceLabel, useUsage } from "@/modules/usage";
 import { LoadingNote } from "@/components/atoms";
-import { JevUsagePanel, QuotaPanel, StatsToolbar, UsageCharts, UsageSummary, UsageTable } from "@/components/organisms";
+import { JevUsagePanel, QuotaPanel, UsageCharts, UsageSummary, UsageTable } from "@/components/organisms";
+import { StatsToolbar } from "../components/StatsToolbar";
 import { ScrollPage } from "@/components/templates";
 
 /** As estatísticas de uso: o que o JayV gastou, o limite dos planos e o

@@ -32,6 +32,12 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    version: "0.52.3", date: "2026-10-04",
+    items: [
+      { kind: "fix", id: "featureStatsPlans" },
+    ],
+  },
+  {
     version: "0.52.2", date: "2026-10-04",
     items: [
       { kind: "fix", id: "featureSystem" },
