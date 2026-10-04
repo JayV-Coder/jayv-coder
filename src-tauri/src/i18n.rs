@@ -7,7 +7,6 @@
 //! vai como `notice`: linhas de `Text` atrás de um prefixo. O modelo lê o
 //! histórico em inglês, então `for_model` diz o mesmo aviso em inglês.
 
-use crate::cloud::session::SessionError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -49,22 +48,10 @@ impl From<anyhow::Error> for Text {
         if let Some(text)=error.downcast_ref::<Text>() {return text.clone();}
         for cause in error.chain() {
             if let Some(text)=cause.downcast_ref::<Text>() {return text.clone();}
-            if let Some(session)=cause.downcast_ref::<SessionError>() {return session.into();}
         }
         Self::unexpected(format!("{error:#}"))
     }
 }
-
-impl From<&SessionError> for Text {
-    fn from(error:&SessionError)->Self {
-        match error {
-            SessionError::Expired=>Self::new("session.expired"),
-            SessionError::UnknownKey=>Self::new("session.unknownKey"),
-            SessionError::Invalid(reason)=>Self::new("session.invalid").with("reason",reason),
-        }
-    }
-}
-impl From<SessionError> for Text { fn from(error:SessionError)->Self{(&error).into()} }
 
 /// O erro de um comando do Tauri: a tela recebe `{ key, params }`.
 pub fn failure(error:impl Into<anyhow::Error>)->Text{Text::from(error.into())}
@@ -83,6 +70,9 @@ pub fn set_reply_language(language:Option<ReplyLanguage>) {
 }
 
 pub fn reply_language()->Option<ReplyLanguage>{REPLY_LANGUAGE.read().unwrap_or_else(|poisoned|poisoned.into_inner()).clone()}
+
+/// Os três tamanhos de escopo, como o modelo os lê (`scope.0`..`scope.2`).
+pub const SCOPE_LEVELS:[&str;3]=["small change","feature","whole system"];
 
 const NOTICE:&str="jayv:notice:";
 
@@ -122,7 +112,7 @@ fn english(text:&Text)->String {
         "guidance.unknownProvider"=>format!("the selected model points to the provider `{}`, which does not exist",param("provider")),
         "explain.last"=>format!("The last request used {} through {}. The context had {} files and an estimated budget of {} tokens.",param("model"),param("provider"),param("files"),param("tokens")),
         "explain.none"=>"There is no previous routing decision in this session.".into(),
-        key if key.starts_with("scope.")=>key[6..].parse::<usize>().ok().and_then(|level|crate::gatekeeper::SCOPE_LEVELS.get(level)).map_or_else(||key.to_string(),|scope|scope.to_string()),
+        key if key.starts_with("scope.")=>key[6..].parse::<usize>().ok().and_then(|level|SCOPE_LEVELS.get(level)).map_or_else(||key.to_string(),|scope|scope.to_string()),
         key if key.starts_with("criterion.")=>key[10..].replace('_'," ").replace('.'," "),
         key if text.params.is_empty()=>key.to_string(),
         key=>format!("{key} ({})",text.params.keys().map(|name|format!("{name}: {}",param(name))).collect::<Vec<_>>().join(", ")),
@@ -141,7 +131,6 @@ fn english(text:&Text)->String {
     #[test] fn any_error_becomes_a_key() {
         let chosen=anyhow::Error::new(Text::new("chat.notFound")).context("lendo o chat");
         assert_eq!(Text::from(chosen).key,"chat.notFound");
-        assert_eq!(Text::from(anyhow::Error::new(SessionError::Expired)).key,"session.expired");
         let other=Text::from(anyhow::anyhow!("disk full"));
         assert_eq!((other.key.as_str(),other.params.get("reason")),("error.unexpected",Some(&Param::Plain("disk full".into()))));
     }
@@ -153,14 +142,5 @@ fn english(text:&Text)->String {
         assert_eq!(for_model("plain text"),"plain text");
         let blocked=notice(&[Text::new("gate.blocked").with("score",30u8).with("demand",55u8).with("scope",Text::new("scope.1"))]);
         assert_eq!(for_model(&blocked),"The JayV entry gate blocked this request with 30 out of 100 (the minimum for a feature is 55).");
-    }
-
-    #[test] fn the_reply_language_follows_the_app_and_falls_back_to_the_request() {
-        set_reply_language(Some(ReplyLanguage{tag:"ja".into(),name:"日本語".into()}));
-        let note=crate::orchestrator::language_note();
-        assert!(note.contains("日本語") && note.contains("`ja`"),"{note}");
-        set_reply_language(Some(ReplyLanguage{tag:"  ".into(),name:"".into()}));
-        assert!(reply_language().is_none(),"an empty tag is no choice");
-        assert!(crate::orchestrator::language_note().contains("language their request is written in"));
     }
 }

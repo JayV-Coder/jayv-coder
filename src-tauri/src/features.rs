@@ -10,7 +10,6 @@
 use crate::core_settings::CoreSettings;
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const SCHEMA:&str="
@@ -28,10 +27,7 @@ pub const SECOND_OPINION:&str="secondOpinion";
 pub const PLAN_FIRST:&str="planFirst";
 pub const PARALLEL_TASKS:&str="parallelTasks";
 
-/// O que `my_features` devolve.
-#[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
-#[serde(default)]
-pub struct RemoteFeatures { pub plan:Option<String>, pub features:Vec<String> }
+pub use crate::cloud::remote::RemoteFeatures;
 
 /// Os recursos que valem agora. `None`: nenhuma lista desceu ainda, vale tudo.
 #[derive(Debug,Clone,Default,PartialEq)]

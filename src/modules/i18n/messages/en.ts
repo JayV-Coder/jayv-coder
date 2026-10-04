@@ -1305,6 +1305,8 @@ export const en = {
   "admin.error.priceTaken": "This Stripe price is already used by another plan.",
   "admin.error.default": "There must be a default plan, and it can't be deleted.",
   "admin.error.inUse": "This plan has subscribers. Take it off sale instead of deleting it.",
+  "whatsNew.item.coreLayers.title": "Core organized in layers",
+  "whatsNew.item.coreLayers.detail": "An internal change with no difference in use: the parts of the app's core no longer depend on each other in circles. It is the first step toward building and fixing each feature separately.",
   "whatsNew.item.plans.title": "Plans and subscription",
   "whatsNew.item.plans.detail": "The new Plans page shows what each plan includes and subscribes through Stripe. Anyone without a subscription stays on the free plan, with everything they already used.",
   "whatsNew.item.adminFeatures.title": "Features controlled by the administrator",

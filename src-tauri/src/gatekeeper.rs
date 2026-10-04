@@ -8,12 +8,12 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::Path, sync::OnceLock};
 use uuid::Uuid;
 
 pub const ENTRY_QUESTION_IDS:[&str;5]=["bundles_requests","goal_is_clear","says_when_done","says_where","scope"];
-pub const SCOPE_LEVELS:[&str;3]=["small change","feature","whole system"];
+pub use crate::i18n::SCOPE_LEVELS;
 
 /// O nível de escopo, aceito também na grafia antiga em português — os checks
 /// gravados antes da troca continuam com ela.
@@ -29,6 +29,49 @@ pub const WEIGHTS:[(&str,f64);4]=[("goal_is_clear",0.40),("says_where",0.25),("s
 
 /// Os números do Jev como vão para o seed de `jev_parameters`. São também o
 /// padrão quando o cache não tem um valor válido.
+/// Os números da portaria. Cada um vem do cache quando lá está e é válido;
+/// faltando ou torto, vale a constante do Rust.
+#[derive(Debug,Clone,PartialEq,serde::Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct JevParameters {
+    pub scope_demand:[f64;3],
+    pub block_margin:f64,
+    pub weights:BTreeMap<String,f64>,
+    pub scope_levels:[String;3],
+    pub noul_line:f64,
+}
+
+impl Default for JevParameters {
+    fn default()->Self { Self::from_values(&parameters()) }
+}
+
+impl JevParameters {
+    pub fn from_values(values:&BTreeMap<String,Value>)->Self {
+        let defaults=parameters();
+        let pick=|key:&str|->Value { values.get(key).cloned().unwrap_or_else(||defaults[key].clone()) };
+        let fallback=|key:&str|defaults[key].clone();
+        let unit=|value:&Value|value.as_f64().filter(|number|(0.0..=1.0).contains(number));
+        let demand=|value:Value|->Option<[f64;3]> { let list:Vec<f64>=serde_json::from_value(value).ok()?; let array:[f64;3]=list.try_into().ok()?; array.iter().all(|number|(0.0..=1.0).contains(number)).then_some(array) };
+        let levels=|value:Value|->Option<[String;3]> { let list:Vec<String>=serde_json::from_value(value).ok()?; list.try_into().ok() };
+        let weights=|value:Value|->Option<BTreeMap<String,f64>> { let map:BTreeMap<String,f64>=serde_json::from_value(value).ok()?; (!map.is_empty() && map.values().all(|weight|*weight>=0.0)).then_some(map) };
+        Self {
+            scope_demand:demand(pick("scope_demand")).or_else(||demand(fallback("scope_demand"))).expect("default scope_demand"),
+            block_margin:unit(&pick("block_margin")).or_else(||unit(&fallback("block_margin"))).expect("default block_margin"),
+            weights:weights(pick("weights")).or_else(||weights(fallback("weights"))).expect("default weights"),
+            scope_levels:levels(pick("scope_levels")).or_else(||levels(fallback("scope_levels"))).expect("default scope_levels"),
+            noul_line:unit(&pick("noul_line")).or_else(||unit(&fallback("noul_line"))).expect("default noul_line"),
+        }
+    }
+}
+
+/// Os parâmetros em uso agora. O desktop os troca quando o cache é
+/// atualizado; até lá valem as constantes.
+static CURRENT:std::sync::RwLock<Option<JevParameters>>=std::sync::RwLock::new(None);
+
+pub fn current_parameters()->JevParameters { CURRENT.read().unwrap_or_else(|poisoned|poisoned.into_inner()).clone().unwrap_or_default() }
+
+pub fn set_current_parameters(parameters:JevParameters) { *CURRENT.write().unwrap_or_else(|poisoned|poisoned.into_inner())=Some(parameters); }
+
 pub fn parameters()->BTreeMap<String,serde_json::Value> {
     BTreeMap::from([
         ("scope_demand".to_string(),json!(SCOPE_DEMAND)),
@@ -145,7 +188,7 @@ pub struct EntryReading{pub scope_score:f64,pub goal_is_clear:f64,pub says_where
 
 impl EntryReading {
     pub fn scope_level(&self)->usize{let score=if self.scope_score.is_finite(){self.scope_score}else{0.0};if score<0.67{0}else if score<1.34{1}else{2}}
-    pub fn clarity(&self)->f64 { self.clarity_with(&crate::local::global::current_parameters().weights) }
+    pub fn clarity(&self)->f64 { self.clarity_with(&current_parameters().weights) }
     /// Um peso cujo critério esta versão não conhece não conta.
     pub fn clarity_with(&self,weights:&BTreeMap<String,f64>)->f64 {
         weights.iter().map(|(id,weight)|weight*match id.as_str() {
@@ -180,7 +223,7 @@ fn criterion(id:&str,value:f64,demand:f64,inverted:bool)->Criterion {
 
 /// Passa, pergunta ou bloqueia: a clareza contra a exigência do tamanho, com
 /// os números do cache.
-pub fn verdict_with(reading:&EntryReading,parameters:&crate::local::global::JevParameters)->EntryVerdict {
+pub fn verdict_with(reading:&EntryReading,parameters:&JevParameters)->EntryVerdict {
     let demand=parameters.scope_demand[reading.scope_level()];
     let clarity=reading.clarity_with(&parameters.weights);
     if clarity+parameters.block_margin<demand{EntryVerdict::Block}else if clarity<demand{EntryVerdict::Ask}else{EntryVerdict::Pass}
@@ -191,7 +234,7 @@ pub fn judge(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str)->EntryChe
 
 /// O mesmo, com a exigência do nível de quem pediu.
 pub fn judge_for(turn:&Turn,prompt:&str,reading:&EntryReading,source:&str,level:crate::expertise::Expertise)->EntryCheck {
-    let parameters=level.gate(&crate::local::global::current_parameters());
+    let parameters=level.gate(&current_parameters());
     let level=reading.scope_level();
     let demand=parameters.scope_demand[level];
     let clarity=reading.clarity_with(&parameters.weights);
@@ -488,6 +531,30 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn without_cached_parameters_the_constants_apply() {
+        let cache=crate::local::global::GlobalCache::in_memory().expect("cache");
+        let parameters=JevParameters::from_values(&cache.jev_parameter_values().expect("parâmetros"));
+        assert_eq!(parameters.scope_demand,SCOPE_DEMAND);
+        assert_eq!(parameters.block_margin,BLOCK_MARGIN);
+        assert_eq!(parameters.noul_line,crate::asking::NOUL_LINE);
+        assert_eq!(parameters.weights.len(),WEIGHTS.len());
+    }
+
+    /// Um valor torto vindo do painel não derruba a portaria: só ele volta ao
+    /// padrão, os outros valem.
+    #[test] fn a_valid_value_replaces_and_a_malformed_one_falls_back_to_default() {
+        let mut cache=crate::local::global::GlobalCache::in_memory().expect("cache");
+        cache.save_jev_parameters(&BTreeMap::from([
+            ("block_margin".to_string(),json!(0.3)),
+            ("scope_demand".to_string(),json!([0.5,2.0])),
+            ("noul_line".to_string(),json!("alto")),
+        ])).expect("grava");
+        let parameters=JevParameters::from_values(&cache.jev_parameter_values().expect("parâmetros"));
+        assert_eq!(parameters.block_margin,0.3);
+        assert_eq!(parameters.scope_demand,SCOPE_DEMAND);
+        assert_eq!(parameters.noul_line,crate::asking::NOUL_LINE);
+    }
+
 
     /// Os níveis são identificadores em inglês; os checks antigos, gravados em
     /// português, continuam lidos no nível certo.
@@ -504,7 +571,7 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
     #[test]
     fn cached_parameters_change_the_verdict() {
         let reading=EntryReading{scope_score:0.0,goal_is_clear:0.0,says_where:0.0,says_when_done:0.0,bundles_requests:0.6};
-        let defaults=crate::local::global::JevParameters::default();
+        let defaults=JevParameters::default();
         assert_eq!(verdict_with(&reading,&defaults),EntryVerdict::Block);
         let mut lenient=defaults.clone();
         lenient.block_margin=0.5;

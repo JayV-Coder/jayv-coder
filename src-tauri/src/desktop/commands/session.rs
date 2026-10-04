@@ -6,7 +6,7 @@ use crate::i18n::{failure, Text};
 use crate::cloud::{remote::Remote, session::{self, fetch_jwks, validate_offline, Identity, SessionError}};
 use crate::desktop::events::{LinkEvent, LINK_EVENT, MODELS_EVENT, TRANSLATIONS_EVENT};
 use crate::desktop::{both, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
-use crate::local::global::{self, GlobalCache, LocaleRow};
+use crate::local::global::{GlobalCache, LocaleRow};
 use crate::memory::MemoryManager;
 use crate::sync::{Connectivity, Link};
 use crate::workspace::WorkspaceStore;
@@ -181,7 +181,7 @@ async fn refresh_jev_parameters(session:SharedSession) {
     if fresh.is_empty() {return;}
     let mut state=session.lock().await;
     if state.cache.save_jev_parameters(&fresh).is_ok() {
-        if let Ok(parameters)=state.cache.jev_parameters() {global::set_current_parameters(parameters);}
+        if let Ok(values)=state.cache.jev_parameter_values() {crate::gatekeeper::set_current_parameters(crate::gatekeeper::JevParameters::from_values(&values));}
     }
 }
 

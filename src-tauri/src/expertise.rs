@@ -7,7 +7,7 @@
 //! planos; quem projeta sistemas escreve pedidos curtos e recebe build até no
 //! trabalho do tamanho do sistema.
 
-use crate::local::global::JevParameters;
+use crate::gatekeeper::JevParameters;
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
