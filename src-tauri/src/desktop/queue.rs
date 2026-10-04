@@ -281,14 +281,14 @@ async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,an
 /// O título definitivo depende de outra ida ao modelo, e a fila não pode
 /// esperar por ela: o chat já entrou na lista com o resumo local do pedido, e o
 /// próximo da fila tem direito ao orquestrador antes de qualquer enfeite. O
-/// batismo pega o cadeado quando ele estiver livre e avisa a interface.
+/// batismo só pega o cadeado para montar o pedido; a ida ao modelo roda solta,
+/// e a interface é avisada no fim.
 fn name_in_background(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,chat_id:String,prompt:String,reading:String) {
     // O batismo roda noutro task: o escopo do turno vai junto, à mão.
     let scope=usage::current_scope();
     tauri::async_runtime::spawn(usage::within(scope,async move {
-        let state=desk.lock().await;
-        let Some(title)=state.orchestrator.name_chat(&prompt,&reading).await else {return};
-        drop(state);
+        let request=desk.lock().await.orchestrator.title_request(&prompt,&reading);
+        let Some(title)=(match request { Some(request)=>request.run().await, None=>None }) else {return};
         if workspace.lock().await.rename_chat(&chat_id,&title).is_ok() {let _=app.emit(RENAME_EVENT,RenameEvent{chat_id,title});}
     }));
 }

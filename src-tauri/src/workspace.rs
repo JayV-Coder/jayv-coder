@@ -180,7 +180,7 @@ impl WorkspaceStore {
         connection.execute_batch(crate::project_memory::SCHEMA)?;
         crate::search::ensure(&connection)?;
         crate::local::outbox::install(&connection)?;
-        turns::requeue_interrupted_turns(&connection)?;
+        fail_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
         store.ensure_chat_codes()?;
         // Os remotes mudam fora do app (um `git remote add`): a abertura
@@ -729,6 +729,19 @@ fn written(connection:&Connection,turn_id:&str)->Result<bool> {
     Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE turn_id=?1 AND role='user')",[turn_id],|row|row.get(0))?)
 }
 
+/// O pedido que o fechamento do app pegou no ar vira falho, com o motivo no
+/// lugar da resposta: o balão oferece o reenvio, e nada recomeça sozinho.
+fn fail_interrupted_turns(connection:&Connection)->Result<()> {
+    let transaction=connection.unchecked_transaction()?;
+    let notice=crate::i18n::notice(&[Text::new("turn.interrupted")]);
+    for (turn,chat) in turns::fail_interrupted_turns(&transaction)? {
+        transaction.execute("DELETE FROM messages WHERE turn_id=?1 AND role='assistant'",[&turn])?;
+        insert_message(&transaction,&chat,Some(&turn),"assistant",&notice,Utc::now())?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 /// O `uid` sai daqui e não do padrão da coluna: nos bancos antigos a coluna
 /// entrou por `ALTER`, que não aceita padrão calculado.
 fn insert_message(transaction:&Transaction<'_>,chat_id:&str,turn_id:Option<&str>,role:&str,content:&str,created_at:DateTime<Utc>)->Result<()> {
@@ -800,6 +813,30 @@ mod tests {
         assert_eq!(saved.messages[0].content,"desenha o cabeçalho");
         assert_eq!(saved.messages[0].turn_id.as_deref(),Some(turn.id.as_str()),"o pedido nasce preso ao seu turno");
         assert_eq!(turn.status,TurnStatus::Queued);
+    }
+
+    #[test]
+    fn a_request_caught_by_the_shutdown_reopens_failed_with_the_reason() {
+        let root=tempfile::tempdir().expect("root");
+        let (chat,turn,waiting)={
+            let mut store=store(&root);
+            let project=store.create_project("Produto",None).expect("project");
+            let chat=store.create_chat(&project.id,None).expect("chat");
+            let turn=store.enqueue_prompt(&chat.id,"refatora o roteador",None).expect("fila");
+            store.set_turn_status(&turn.id,TurnStatus::Flying).expect("no ar");
+            let waiting=store.enqueue_prompt(&chat.id,"e depois os testes",None).expect("fila");
+            (chat,turn,waiting)
+        };
+
+        let store=store(&root);
+
+        assert_eq!(store.turn(&turn.id).expect("turno").expect("existe").status,TurnStatus::Failed,"nada recomeça sozinho");
+        assert_eq!(store.turn(&waiting.id).expect("turno").expect("existe").status,TurnStatus::Queued,"o que só esperava a vez continua na fila");
+        let saved=store.snapshot().expect("snapshot");
+        let answer=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat").messages.iter().find(|message|message.role=="assistant").expect("o motivo no lugar da resposta");
+        assert_eq!(answer.turn_id.as_deref(),Some(turn.id.as_str()));
+        assert_eq!(crate::i18n::read_notice(&answer.content).map(|lines|lines[0].key.clone()).as_deref(),Some("turn.interrupted"));
+        assert!(store.conversation(&chat.id).expect("conversa").iter().any(|message|message.content.starts_with("The app closed")),"o modelo lê o motivo em inglês");
     }
 
     #[test]
@@ -926,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn the_queue_survives_closing_the_app() {
+    fn a_claimed_request_does_not_restart_alone_after_closing_the_app() {
         let root=tempfile::tempdir().expect("root");
         let path=root.path().join("workspace.sqlite3");
         let chat_id={
@@ -939,10 +976,11 @@ mod tests {
         };
 
         let mut store=WorkspaceStore::open(path).expect("reabre");
-        let (turn,prompt)=store.claim_next_turn().expect("consulta").expect("o pedido interrompido voltou para a fila");
-
-        assert_eq!(prompt,"não me perca");
-        assert_eq!(turn.chat_id,chat_id);
+        assert!(store.claim_next_turn().expect("consulta").is_none(),"o que estava no ar não recomeça sozinho");
+        let turn=store.snapshot().expect("snapshot").chats.into_iter().find(|chat|chat.id==chat_id).expect("chat").messages.into_iter().find_map(|message|message.turn_id).expect("turno");
+        store.reopen_turn(&turn).expect("o reenvio é de quem pediu");
+        let (_,prompt)=store.claim_next_turn().expect("consulta").expect("reenviado, volta à fila");
+        assert_eq!(prompt,"não me perca","o pedido não se perde");
     }
 
     /// O defeito relatado: mandar uma segunda coisa enquanto a primeira estava

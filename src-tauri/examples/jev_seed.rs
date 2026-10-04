@@ -19,7 +19,6 @@ fn main() {
     let sets=[
         ("entry",gatekeeper::entry_questions()),
         ("routing",jev::routing_questions()),
-        ("verification",jev::verification_questions()),
         ("asking",asking::questions()),
     ];
     println!("-- Gerado por src-tauri/examples/jev_seed.rs. Não edite à mão.\n");

@@ -158,8 +158,11 @@ impl Orchestrator {
     /// fala deles; sem esta chamada o orquestrador não tem com quem conversar.
     /// Os valores de partida das configurações do Jev e do app: o que o
     /// `config.yaml` diz, ou os padrões.
-    pub fn core_defaults(&self)->crate::core_settings::CoreSettings {
-        Config::load(&self.config_path).map(|config|crate::core_settings::CoreSettings::from_config(&config)).unwrap_or_else(|_|crate::core_settings::CoreSettings::from_config(&Config::default()))
+    pub fn core_defaults(&self)->crate::core_settings::CoreSettings { Self::core_defaults_at(&self.config_path) }
+    /// Os mesmos valores de partida, lidos sem o orquestrador: as telas que só
+    /// leem não esperam o pedido que está no ar.
+    pub fn core_defaults_at(config_path:&Path)->crate::core_settings::CoreSettings {
+        Config::load(config_path).map(|config|crate::core_settings::CoreSettings::from_config(&config)).unwrap_or_else(|_|crate::core_settings::CoreSettings::from_config(&Config::default()))
     }
 
     /// Passa a usar as configurações do Jev e do app. Privacidade nova é
@@ -222,6 +225,7 @@ impl Orchestrator {
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
             return result;
         }
+        if let Err(error)=self.rag.refresh(&self.firewall) { eprintln!("índice: não consegui ler a pasta de novo ({error:#})"); }
         self.memory.add_message(session_id,"user",normalized.clone());
         let brief=self.pending_brief.take();
         let mut extras=std::mem::take(&mut self.pending_context);
@@ -300,6 +304,10 @@ impl Orchestrator {
                 }
             }
         }
+        // No build o agente mexe nos arquivos: o índice lido antes dele já não
+        // é o projeto. A próxima leitura varre a pasta de novo, e arquivo novo
+        // entra na busca, no mapa e nos símbolos.
+        if mode==MODE_BUILD { self.rag.invalidate(); }
         let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
         let resumed=execution.as_ref().is_ok_and(|(_,resumed)|*resumed);
         let execution=execution.map(|(response,_)|response);
@@ -408,23 +416,31 @@ impl Orchestrator {
 
     /// Batiza o chat. O modelo recebe o pedido junto com a leitura de intenção
     /// do Jev e devolve só o título; nenhum arquivo do repositório entra nessa
-    /// chamada, ela vê apenas o que o desenvolvedor já digitou. Só um modelo
-    /// por API batiza: um agente de linha de comando abriria uma sessão inteira
-    /// — prompt de sistema, ferramentas, leitura da pasta — por seis palavras.
-    /// Sem modelo assim, ou com resposta que não serve como título, devolve
-    /// nada e o resumo local que já está no banco continua valendo.
-    pub async fn name_chat(&self,prompt:&str,intent:&str)->Option<String> {
+    /// chamada, ela vê apenas o que o desenvolvedor já digitou. Um modelo por
+    /// API batiza primeiro; sem nenhum, batiza o agente de linha de comando no
+    /// modelo mais barato dele, em somente leitura — uma chamada curta por
+    /// chat, uma vez só. Sem modelo nenhum, ou com resposta que não serve como
+    /// título, devolve nada e o resumo local que já está no banco continua
+    /// valendo.
+    ///
+    /// Devolve o pedido pronto, com um provedor só dele: a chamada roda fora
+    /// do cadeado do orquestrador, e o próximo da fila não espera o batismo.
+    pub fn title_request(&self,prompt:&str,intent:&str)->Option<TitleRequest> {
         // O batismo não mexe em nada: vai sempre pelos agentes em somente leitura.
-        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.planners.get(&model.provider).is_some_and(|provider|!provider.explores())).collect();
-        usable.sort_by(|(left,_),(right,_)|left.cmp(right));
+        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.planners.contains_key(&model.provider)).collect();
+        usable.sort_by(|(left_key,left),(right_key,right)|{
+            let by_api=|model:&crate::config::ModelConfig|self.planners.get(&model.provider).is_some_and(|provider|provider.explores());
+            (by_api(left),cost_rank(&left.cost_class),left_key.as_str()).cmp(&(by_api(right),cost_rank(&right.cost_class),right_key.as_str()))
+        });
         let (_,model)=usable.first()?;
-        let provider=self.planners.get(&model.provider)?;
+        let config=self.config.providers.get(&model.provider)?;
+        let provider=build_planners(&HashMap::from([(model.provider.clone(),config.clone())]),&self.workdir).into_values().next()?;
         let request:String=prompt.trim().chars().take(TITLE_PROMPT_CHARS).collect();
-        let messages=[
+        let messages=vec![
             ChatMessage{role:"system".into(),content:format!("{TITLE_INSTRUCTIONS}\n{}",language_note())},
             ChatMessage{role:"user".into(),content:format!("Intent read by Jev: {intent}\n\nRequest:\n{request}")},
         ];
-        clean_title(&provider.chat_with_effort(&messages,&model.model,Some(effort_for("trivial")),&Pulse::silent()).await.ok()?.response)
+        Some(TitleRequest{provider,model:model.model.clone(),messages})
     }
 
     /// Manda o pedido ao modelo escolhido. Um agente que explora o repositório
@@ -776,6 +792,18 @@ pub fn language_note()->String {
 /// O que volta do modelo raramente é só o título: vem entre aspas, com marca
 /// de lista, às vezes com um parágrafo de justificativa embaixo. Fica a
 /// primeira linha limpa, e só se ela couber numa aba da barra lateral.
+/// O batismo pronto para sair, já sem depender do orquestrador.
+pub struct TitleRequest { provider:Box<dyn Provider>, model:String, messages:Vec<ChatMessage> }
+
+impl TitleRequest {
+    pub async fn run(self)->Option<String> {
+        clean_title(&self.provider.chat_with_effort(&self.messages,&self.model,Some(effort_for("trivial")),&Pulse::silent()).await.ok()?.response)
+    }
+}
+
+/// `low` < `medium` < `high`; classe desconhecida vai por último.
+fn cost_rank(class:&str)->u8 { match class { "low"=>0, "medium"=>1, "high"=>2, _=>3 } }
+
 fn clean_title(response:&str)->Option<String> {
     let line=response.lines().map(str::trim).find(|line|!line.is_empty())?;
     let line=line.trim_start_matches(['#','-','*','>']).trim();
@@ -1166,6 +1194,28 @@ mod tests {
         assert!(estimate_tokens(LEAN_FULL_NOTE)<=90,"a regra custa {} tokens por pedido de build",estimate_tokens(LEAN_FULL_NOTE));
     }
 
+    /// Sem modelo por API, o agente de linha de comando batiza o chat — no
+    /// modelo mais barato, em somente leitura, e fora do orquestrador.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_line_agent_names_the_chat_when_no_api_model_exists() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        assert!(orchestrator.title_request("corrige o frete","code").is_none(),"sem agente nenhum, fica o resumo local");
+        let script=|title:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),"cat >/dev/null; echo construiu".into()],plan_args:vec!["-c".into(),format!("cat >/dev/null; echo '\"{title}.\"'")],..Default::default()};
+        let model=|provider:&str,cost:&str|crate::config::ModelConfig{enabled:true,provider:provider.into(),model:format!("{provider}-model"),capabilities:vec!["chat".into()],cost_class:cost.into(),speed:"medium".into(),context_window:200_000};
+        let providers=HashMap::from([("caro".to_string(),script("Título do caro")),("barato".to_string(),script("Frete do checkout"))]);
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([("caro/m".to_string(),model("caro","high")),("barato/m".to_string(),model("barato","low"))]);
+
+        let request=orchestrator.title_request("corrige o cálculo do frete no checkout","code").expect("há quem batize");
+        drop(orchestrator);
+
+        assert_eq!(request.run().await.as_deref(),Some("Frete do checkout"),"o mais barato batiza, e o título sai limpo");
+    }
+
     /// O agente escolhido que não consegue começar passa a vez ao próximo de
     /// outro agente; o que falha trabalhando não passa.
     #[cfg(unix)]
@@ -1239,6 +1289,7 @@ mod tests {
         orchestrator.providers=build_providers(&HashMap::from([("maker".to_string(),script("echo só-li","cat >/dev/null; echo maker-planejou")),("checker".to_string(),script("echo checker-construiu","cat >/dev/null; echo revisou"))]),&orchestrator.workdir);
         let quiet=orchestrator.process("adicione um teste ao roteador",Some("quiet"),&Pulse::silent()).await;
         assert_eq!(quiet.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("só-li"));
+        assert!(orchestrator.rag.paths().any(|path|path=="added.rs"),"o arquivo que o build criou entra no índice do pedido seguinte");
     }
 
     /// Com o plano ligado, o pedido complexo do build passa antes por um
