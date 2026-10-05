@@ -508,6 +508,26 @@ pub fn question_verdict(connection:&Connection,turn_id:&str)->Result<Option<Entr
     verdict.map(|verdict|EntryVerdict::parse(&verdict)).transpose()
 }
 
+/// O pedido anterior do mesmo chat, quando ele foi respondido: o veredito que
+/// a portaria lhe deu e a hora da resposta. É contra ele que um pedido curto
+/// ("pode implementar", "não funcionou") é lido como continuação.
+pub fn previous_answer(connection:&Connection,turn_id:&str)->Result<Option<(EntryVerdict,DateTime<Utc>)>> {
+    let found:Option<(String,Option<String>)>=connection.query_row(
+        "SELECT e.verdict,(SELECT MAX(m.created_at) FROM messages m WHERE m.turn_id=previous.id AND m.role='assistant')
+         FROM turns current JOIN turns previous ON previous.chat_id=current.chat_id AND previous.ordinal<current.ordinal
+           JOIN entry_checks e ON e.turn_id=previous.id
+         WHERE current.id=?1 AND previous.status=?2 ORDER BY previous.ordinal DESC LIMIT 1",
+        params![turn_id,TurnStatus::Answered.as_str()],|row|Ok((row.get(0)?,row.get(1)?)),
+    ).optional()?;
+    let Some((verdict,Some(at)))=found else { return Ok(None) };
+    Ok(Some((EntryVerdict::parse(&verdict)?,parse_time(&at)?)))
+}
+
+/// Se `turn_id` responde à confirmação que a portaria fez no lugar do agente.
+pub fn answers_gate(connection:&Connection,turn_id:&str)->Result<bool> {
+    Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM questions WHERE answered_by=?1 AND source=?2)",params![turn_id,crate::gatekeeper::GATE_SOURCE],|row|row.get(0))?)
+}
+
 /// Fecha a pergunta. Devolve `false` quando não havia nada pendente para fechar
 /// — responder duas vezes a mesma pergunta não é acidente de tela, é dois
 /// turnos em cima de um só pedido, e o segundo tem de ser recusado.

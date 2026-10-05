@@ -26,6 +26,11 @@ pub const SCOPE_DEMAND:[f64;3]=[0.35,0.55,0.70];
 /// Abaixo da exigência o portão pergunta; abaixo dela com esta folga, barra.
 pub const BLOCK_MARGIN:f64=0.20;
 pub const WEIGHTS:[(&str,f64);4]=[("goal_is_clear",0.40),("says_where",0.25),("says_when_done",0.20),("bundles_requests",0.15)];
+/// Por quantos minutos depois de uma resposta um pedido curto do mesmo chat
+/// ainda é continuação dela — e herda o veredito do pedido que ela atendeu.
+pub const CONTINUATION_MINUTES:f64=30.0;
+/// O teto da janela: um dia. Além disso não é continuação, é outra conversa.
+const CONTINUATION_MAX_MINUTES:f64=1_440.0;
 
 /// Os números do Jev como vão para o seed de `jev_parameters`. São também o
 /// padrão quando o cache não tem um valor válido.
@@ -39,6 +44,9 @@ pub struct JevParameters {
     pub weights:BTreeMap<String,f64>,
     pub scope_levels:[String;3],
     pub noul_line:f64,
+    /// A janela, em minutos, em que um pedido curto ainda continua a
+    /// resposta anterior do chat.
+    pub continuation_minutes:f64,
 }
 
 impl Default for JevParameters {
@@ -54,12 +62,14 @@ impl JevParameters {
         let demand=|value:Value|->Option<[f64;3]> { let list:Vec<f64>=serde_json::from_value(value).ok()?; let array:[f64;3]=list.try_into().ok()?; array.iter().all(|number|(0.0..=1.0).contains(number)).then_some(array) };
         let levels=|value:Value|->Option<[String;3]> { let list:Vec<String>=serde_json::from_value(value).ok()?; list.try_into().ok() };
         let weights=|value:Value|->Option<BTreeMap<String,f64>> { let map:BTreeMap<String,f64>=serde_json::from_value(value).ok()?; (!map.is_empty() && map.values().all(|weight|*weight>=0.0)).then_some(map) };
+        let minutes=|value:&Value|value.as_f64().filter(|minutes|*minutes>0.0&&*minutes<=CONTINUATION_MAX_MINUTES);
         Self {
             scope_demand:demand(pick("scope_demand")).or_else(||demand(fallback("scope_demand"))).expect("default scope_demand"),
             block_margin:unit(&pick("block_margin")).or_else(||unit(&fallback("block_margin"))).expect("default block_margin"),
             weights:weights(pick("weights")).or_else(||weights(fallback("weights"))).expect("default weights"),
             scope_levels:levels(pick("scope_levels")).or_else(||levels(fallback("scope_levels"))).expect("default scope_levels"),
             noul_line:unit(&pick("noul_line")).or_else(||unit(&fallback("noul_line"))).expect("default noul_line"),
+            continuation_minutes:minutes(&pick("continuation_minutes")).or_else(||minutes(&fallback("continuation_minutes"))).expect("default continuation_minutes"),
         }
     }
 }
@@ -79,6 +89,7 @@ pub fn parameters()->BTreeMap<String,serde_json::Value> {
         ("weights".to_string(),json!(WEIGHTS.iter().map(|(id,weight)|(id.to_string(),json!(weight))).collect::<serde_json::Map<_,_>>())),
         ("scope_levels".to_string(),json!(SCOPE_LEVELS)),
         ("noul_line".to_string(),json!(crate::asking::NOUL_LINE)),
+        ("continuation_minutes".to_string(),json!(CONTINUATION_MINUTES)),
     ])
 }
 const PROMPT_PREVIEW:usize=600;
@@ -93,6 +104,63 @@ impl EntryVerdict {
     pub fn as_str(&self)->&'static str{match self{Self::Pass=>"pass",Self::Ask=>"ask",Self::Block=>"block"}}
     pub fn parse(value:&str)->Result<Self>{Ok(match value{"pass"=>Self::Pass,"ask"=>Self::Ask,"block"=>Self::Block,other=>return Err(anyhow!("unknown entry verdict: `{other}`"))})}
     pub fn lets_through(&self)->bool{!matches!(self,Self::Block)}
+    /// A ordem dos vereditos: barrar < perguntar < passar.
+    pub fn rank(&self)->u8{match self{Self::Block=>0,Self::Ask=>1,Self::Pass=>2}}
+}
+
+/// A nota do pedido liberado pela confirmação do desenvolvedor.
+pub const CONFIRMED_NOTE:&str="entry.note.confirmed";
+/// A origem da pergunta que a portaria faz no lugar do agente.
+pub const GATE_SOURCE:&str="gate";
+/// As duas saídas da confirmação; a terceira é completar o pedido em texto.
+pub const SEND_AS_IS:&str="send_as_is";
+pub const SEND_REWRITTEN:&str="send_rewritten";
+pub const CONFIRM_OPTIONS:[&str;2]=[SEND_AS_IS,SEND_REWRITTEN];
+
+/// O que o desenvolvedor respondeu à confirmação da portaria.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum GateChoice{AsIs,Rewritten}
+
+/// A resposta à confirmação, como fica no chat: a escolha gravada como aviso,
+/// ou o complemento que o desenvolvedor escreveu, como ele escreveu.
+pub fn gate_answer(picked:&[String],text:Option<&str>)->Result<String> {
+    if let Some(text)=text.map(str::trim).filter(|text|!text.is_empty()) { return Ok(text.to_string()); }
+    let [choice]=picked else { return Err(Text::new("answer.single").into()) };
+    if !CONFIRM_OPTIONS.contains(&choice.as_str()) { return Err(Text::new("answer.unknown").with("option",choice).into()); }
+    Ok(i18n::notice(&[Text::new("gate.confirm.picked").with("choice",Text::new(&format!("gate.confirm.option.{choice}")))]))
+}
+
+/// A escolha gravada por `gate_answer`, lida da mensagem crua do turno. Texto
+/// livre não é escolha: é o pedido completado, julgado de novo.
+pub fn gate_choice(content:&str)->Option<GateChoice> {
+    let lines=i18n::read_notice(content)?;
+    let [line]=lines.as_slice() else { return None };
+    if line.key!="gate.confirm.picked" { return None; }
+    match line.params.get("choice") {
+        Some(i18n::Param::Text(choice)) if choice.key==format!("gate.confirm.option.{SEND_AS_IS}")=>Some(GateChoice::AsIs),
+        Some(i18n::Param::Text(choice)) if choice.key==format!("gate.confirm.option.{SEND_REWRITTEN}")=>Some(GateChoice::Rewritten),
+        _=>None,
+    }
+}
+
+/// Até quantas palavras um pedido pode ser continuação da resposta anterior.
+/// O mesmo corte que a heurística usa para "ajuste pequeno".
+pub const CONTINUATION_WORDS:usize=12;
+
+/// Se o pedido curto só faz sentido junto com a resposta anterior do chat:
+/// confirma ("sim", "pode implementar", "go ahead"), reclama ("não
+/// funcionou", "ainda dá erro", "still fails") ou aponta para o que veio
+/// antes ("corrige então", "faz isso"). Um pedido curto que nomeia um
+/// arquivo ou caminho é assunto novo e não continua nada.
+pub fn is_continuation(prompt:&str)->bool {
+    static CUES:OnceLock<Regex>=OnceLock::new();
+    let trimmed=prompt.trim();
+    let words=trimmed.split_whitespace().count();
+    if words==0||words>CONTINUATION_WORDS { return false; }
+    let (place,..)=regexes();
+    if place.find_iter(trimmed).any(|found|found.as_str().contains('/')||found.as_str().contains('.')) { return false; }
+    let cues=CUES.get_or_init(||Regex::new(r"(?i)^\s*(?:sim|s|ok|okay|beleza|blz|certo|isso|claro|pode|podes|manda|segue|siga|continua|continue|prossiga|vai|bora|yes|yep|yeah|sure|go|proceed|n[ãa]o|nao|nope|ainda|still|again|de novo|outra vez|mesmo erro|same)\b|\b(?:então|entao|isso|isto|esse|essa|aquilo|assim|ele|ela|it|that|this|them|then|there|anyway|anyways|funcionou|funciona|resolveu|deu certo|deu erro|quebrou|work|works|worked|fixed|broke|broken|fails|failed|error)\b").unwrap());
+    cues.is_match(trimmed)
 }
 
 /// Um critério do portão, já normalizado para a barrinha de 0 a 100% da tela.
@@ -145,12 +213,36 @@ impl EntryCheck {
     /// abrir — "ainda não, aviso quando sair" não é um pedido novo, é a
     /// conversa continuando. A nota e os critérios continuam os de agora:
     /// muda só o desfecho.
+    ///
+    /// Vale também para a continuação digitada ("pode implementar", "não
+    /// funcionou") logo depois de uma resposta: o veredito sobe para o do
+    /// pedido de origem quando ele é melhor — de barrado ou de ressalva para
+    /// o que a origem teve —, e nunca desce.
     pub fn inherit(mut self,origin:EntryVerdict)->Self {
-        if self.verdict==EntryVerdict::Block&&origin.lets_through() {
+        if origin.rank()>self.verdict.rank() {
             self.verdict=origin;
             self.note=format!("entry.note.{}",origin.as_str());
         }
         self
+    }
+    /// O pedido que o desenvolvedor confirmou depois de a portaria perguntar:
+    /// vale como liberado de vez, com os critérios que ela leu.
+    pub fn confirmed(mut self)->Self {
+        self.verdict=EntryVerdict::Pass;
+        self.note=CONFIRMED_NOTE.into();
+        self
+    }
+    /// O que a tela mostra quando a portaria pergunta antes de chamar o
+    /// agente: a nota, o que faltou e a escolha. Gravado como aviso.
+    pub fn confirmation(&self)->String {
+        let level=scope_level_of(&self.scope);
+        let mut lines=vec![
+            Text::new("gate.confirm").with("score",self.score).with("demand",self.demand).with("scope",Text::new(&format!("scope.{level}"))),
+            Text::new("gate.missing"),
+        ];
+        lines.extend(self.failing().iter().map(|criterion|Text::new("gate.missing.item").with("criterion",Text::new(&format!("criterion.{}",criterion.id))).with("reading",Text::new(&format!("criterion.{}.out",criterion.id)))));
+        lines.push(Text::new("gate.confirm.choose"));
+        i18n::notice(&lines)
     }
     /// A instrução que acompanha um pedido liberado com ressalva.
     pub fn clarifying_note(&self)->Option<String> {
@@ -259,7 +351,14 @@ fn preview(prompt:&str)->String {
     format!("{}…",trimmed.chars().take(PROMPT_PREVIEW).collect::<String>())
 }
 
-pub fn entry_state(prompt:&str,project:&str,languages:&[String])->serde_json::Value{json!({"user_request":prompt,"project":{"name":project,"languages":languages}})}
+/// O estado que o Jev avalia na entrada. `recent_turns` são as últimas falas
+/// do chat — as mesmas que o roteamento recebe —, para "pode implementar" ser
+/// julgado contra o plano que veio antes. Vazio, a chave nem vai.
+pub fn entry_state(prompt:&str,project:&str,languages:&[String],recent_turns:&[String])->serde_json::Value{
+    let mut state=json!({"user_request":prompt,"project":{"name":project,"languages":languages}});
+    if !recent_turns.is_empty() { state["recent_turns"]=json!(recent_turns); }
+    state
+}
 
 pub fn entry_questions()->BTreeMap<String,Question> {
     BTreeMap::from([
@@ -275,11 +374,11 @@ pub fn entry_questions()->BTreeMap<String,Question> {
                 json!({"what":"A whole system or a change that reaches across the codebase: a new subsystem, a migration, a redesign of how existing parts interact, or work whose extent cannot be stated without exploring the repository first.","examples":["Migrate persistence from JSON files to SQLite","Build the multi-agent orchestration layer","Rewrite the app so every provider streams"]}),
             ])),
         ("goal_is_clear".to_string(),Question::noul_with(
-            json!({"question":"Does `user_request` state what the developer wants to be true once the work is finished?","guidance":"Look for the intended outcome, not for politeness or detail. A request can be short and still name its outcome exactly."}),
+            json!({"question":"Does `user_request` state what the developer wants to be true once the work is finished?","guidance":"Look for the intended outcome, not for politeness or detail. A request can be short and still name its outcome exactly.","conversation":"`recent_turns`, when present, holds the last messages of this conversation. A short follow-up such as \"go ahead\", \"implement it\" or \"it still fails\" takes its outcome from them: judge the request together with what they already established."}),
             json!({"when":"The outcome is stated: the request names the behaviour, artefact or answer it expects to exist afterwards.","examples":["asks for a named capability, file or fix","states the problem to be gone and what working looks like","asks a question whose answer would settle a decision"]}),
             json!({"when":"The outcome has to be guessed.","examples":["\"fix this\", \"improve it here\", \"make it faster\" with nothing to anchor them","names a topic without saying what should change about it","several possible goals with no sign of which one is meant"]}))),
         ("says_where".to_string(),Question::noul_with(
-            json!({"question":"Does `user_request` say where in the project the work belongs?","guidance":"A location can be a path, a file, a module, a function, a screen, a layer or a named subsystem. Judge whether someone who knows this project could open the right place without guessing."}),
+            json!({"question":"Does `user_request` say where in the project the work belongs?","guidance":"A location can be a path, a file, a module, a function, a screen, a layer or a named subsystem. Judge whether someone who knows this project could open the right place without guessing.","conversation":"`recent_turns`, when present, holds the last messages of this conversation. A place named there, or the plan they already laid out, still locates a short follow-up that refers back to it."}),
             json!({"when":"The request points at a place: a path or filename, a named symbol, a module, a screen, a route, or a layer of the system."}),
             json!({"when":"No place is given and the request is not self-locating.","examples":["a change described only by its effect, in a project with many plausible homes for it","\"in the system\", \"in the code\", \"somewhere in the backend\""],"not_a_defect":["a general question that does not touch this project at all"]}))),
         ("says_when_done".to_string(),Question::noul_with(
@@ -293,8 +392,8 @@ pub fn entry_questions()->BTreeMap<String,Question> {
     ])
 }
 
-pub async fn evaluate_entry(prompt:&str,project:&str,languages:&[String])->Result<EntryReading> {
-    let evaluation=jev::evaluate("entry",entry_state(prompt,project,languages),None).await?;
+pub async fn evaluate_entry(prompt:&str,project:&str,languages:&[String],recent_turns:&[String])->Result<EntryReading> {
+    let evaluation=jev::evaluate("entry",entry_state(prompt,project,languages,recent_turns),None).await?;
     EntryReading::from_evaluation(&evaluation)
 }
 
@@ -601,7 +700,68 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         for id in ["goal_is_clear","says_where","says_when_done","bundles_requests"] {assert_eq!(questions[id].kind(),"noul","{id}");}
         let wire=serde_json::to_string(&questions).expect("json");
         assert!(wire.contains("`user_request`") && wire.contains("`project`"));
-        assert!(entry_state("pedido","JayV",&["Rust".into()]).pointer("/project/name").is_some());
+        assert!(entry_state("pedido","JayV",&["Rust".into()],&[]).pointer("/project/name").is_some());
+        assert!(entry_state("pedido","JayV",&[],&[]).get("recent_turns").is_none(),"sem conversa, a chave nem vai");
+        let turns=vec!["user: planeje o cache".to_string(),"assistant: 1. criar o cache".to_string()];
+        assert_eq!(entry_state("pode implementar","JayV",&[],&turns)["recent_turns"],json!(turns));
+        for id in ["goal_is_clear","says_where"] {assert!(serde_json::to_string(&questions[id]).expect("json").contains("`recent_turns`"),"{id} julga a continuação contra a conversa");}
+    }
+
+    /// As continuações típicas de quem já está numa conversa são reconhecidas;
+    /// pedido novo, pedido longo e pedido que nomeia um arquivo não.
+    #[test]
+    fn a_short_follow_up_is_read_as_a_continuation() {
+        for follow in ["sim","pode implementar","não funcionou","Não funcionou, dá erro ao salvar","corrige então","faz isso","ainda dá erro","go ahead","it still fails","ok, segue","implementa isso"] {
+            assert!(is_continuation(follow),"{follow}");
+        }
+        for fresh in ["faz o login","cria uma tela de login com email e senha","corrige o bug em src/lib.rs então","explica o roteamento","",
+            "adicione validação de email no formulário e depois escreva os testes do login com todos os casos de erro"] {
+            assert!(!is_continuation(fresh),"{fresh}");
+        }
+    }
+
+    /// A continuação sobe para o veredito melhor da origem e nunca desce.
+    #[test]
+    fn the_inherited_verdict_only_ever_goes_up() {
+        let asked=judge(&turn_at("c"),"pode implementar",&heuristic_entry("pode implementar"),"local");
+        assert_eq!(asked.verdict,EntryVerdict::Ask,"sozinho, \"pode implementar\" pergunta: {}",asked.score);
+        let followed=asked.clone().inherit(EntryVerdict::Pass);
+        assert_eq!((followed.verdict,followed.note.as_str()),(EntryVerdict::Pass,"entry.note.pass"));
+        assert_eq!((followed.score,&followed.criteria),(asked.score,&asked.criteria),"o que a portaria leu fica");
+        assert_eq!(asked.clone().inherit(EntryVerdict::Block).verdict,EntryVerdict::Ask,"herdar não piora");
+        let confirmed=asked.confirmed();
+        assert_eq!((confirmed.verdict,confirmed.note.as_str()),(EntryVerdict::Pass,CONFIRMED_NOTE));
+    }
+
+    /// A confirmação no lugar do agente: a pergunta lista o que faltou, e a
+    /// resposta volta como escolha ou como o pedido completado.
+    #[test]
+    fn the_gate_asks_and_reads_back_the_choice() {
+        let asked=judge(&turn_at("c"),"melhora o desempenho do app",&heuristic_entry("melhora o desempenho do app"),"local");
+        assert_eq!(asked.verdict,EntryVerdict::Ask);
+        let lines=i18n::read_notice(&asked.confirmation()).expect("aviso");
+        assert_eq!(lines.first().map(|line|line.key.as_str()),Some("gate.confirm"));
+        assert_eq!(lines.last().map(|line|line.key.as_str()),Some("gate.confirm.choose"));
+        assert!(lines.iter().any(|line|line.key=="gate.missing.item"),"diz o que faltou");
+        assert!(i18n::for_model(&asked.confirmation()).contains("held this request before calling any agent"));
+
+        let as_is=gate_answer(&[SEND_AS_IS.into()],None).expect("escolha");
+        let rewritten=gate_answer(&[SEND_REWRITTEN.into()],None).expect("escolha");
+        assert_eq!((gate_choice(&as_is),gate_choice(&rewritten)),(Some(GateChoice::AsIs),Some(GateChoice::Rewritten)));
+        assert_eq!(i18n::for_model(&as_is),"Send it as written.");
+        let completed=gate_answer(&[],Some("  no arquivo src/app.rs, até o teste passar  ")).expect("texto");
+        assert_eq!((completed.as_str(),gate_choice(&completed)),("no arquivo src/app.rs, até o teste passar",None),"texto livre é o pedido completado");
+        assert!(gate_answer(&["outra".into()],None).is_err());
+        assert!(gate_answer(&[],None).is_err());
+    }
+
+    #[test]
+    fn the_continuation_window_comes_from_the_cache_within_a_day() {
+        assert_eq!(JevParameters::default().continuation_minutes,CONTINUATION_MINUTES);
+        let read=|value:Value|JevParameters::from_values(&BTreeMap::from([("continuation_minutes".to_string(),value)])).continuation_minutes;
+        assert_eq!(read(json!(45)),45.0);
+        assert_eq!(read(json!(0)),CONTINUATION_MINUTES,"zero desligaria a continuação por engano");
+        assert_eq!(read(json!(5000)),CONTINUATION_MINUTES,"mais de um dia não é continuação");
     }
 
     #[test]

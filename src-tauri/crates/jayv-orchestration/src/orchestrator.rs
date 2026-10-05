@@ -353,8 +353,16 @@ impl Orchestrator {
 
     fn routing_input_after(&self,input:&str,session_id:&str,current:usize)->jev::RoutingInput {
         let project=self.rag.project_info();
-        let turns=self.memory.conversation(session_id).iter().rev().skip(current).take(ROUTING_TURNS).rev().map(|message|format!("{}: {}",message.role,message.content.chars().take(ROUTING_TURN_CHARS).collect::<String>())).collect::<Vec<_>>();
-        jev::RoutingInput::new(input).with_project(project.name,project.languages).with_candidate_files(self.rag.search(input,ROUTING_CANDIDATES).into_iter().map(|snippet|snippet.path).collect()).with_recent_turns(turns)
+        jev::RoutingInput::new(input).with_project(project.name,project.languages).with_candidate_files(self.rag.search(input,ROUTING_CANDIDATES).into_iter().map(|snippet|snippet.path).collect()).with_recent_turns(self.recent_turns(session_id,current))
+    }
+
+    /// As últimas falas do chat, curtas, antes de o pedido entrar na memória.
+    /// A portaria de entrada as recebe junto com o pedido, as mesmas do
+    /// roteamento: "pode implementar" é julgado contra o plano que veio antes.
+    pub fn recent_turns_ahead(&self,session_id:&str)->Vec<String> { self.recent_turns(session_id,0) }
+
+    fn recent_turns(&self,session_id:&str,current:usize)->Vec<String> {
+        self.memory.conversation(session_id).iter().rev().skip(current).take(ROUTING_TURNS).rev().map(|message|format!("{}: {}",message.role,message.content.chars().take(ROUTING_TURN_CHARS).collect::<String>())).collect()
     }
 
     pub fn jev_routing(&self,decision:&jev::RoutingDecision)->(IntentAnalysis,String,RoutingSignals) {
