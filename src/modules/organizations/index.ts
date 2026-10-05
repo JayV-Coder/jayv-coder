@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/modules/auth/client";
 import type { Provider } from "@/modules/auth";
 import { navigate, useNavigation } from "@/modules/navigation";
@@ -27,7 +28,22 @@ export interface Organization {
 }
 
 export interface Member { userId: string; username: string; displayName: string; avatarUrl: string | null; role: Role; joinedAt: string }
-export interface Repository { id: string; provider: Provider; path: string; repoKey: string }
+/** Um repositório da organização, como o owner associou no site. O que vem
+ * do provedor (privado, branch padrão, descrição, página) é nulo no que foi
+ * colado por URL nas versões antigas do app. */
+export interface Repository {
+  id: string;
+  provider: Provider;
+  path: string;
+  repoKey: string;
+  defaultBranch: string | null;
+  private: boolean | null;
+  description: string | null;
+  webUrl: string | null;
+}
+
+/** A conta do provedor git que o owner conectou no site. */
+export interface GitConnection { provider: Provider; account: string; connectedAt: string }
 export interface IncomingInvite { id: string; orgId: string; orgName: string; orgSlug: string; role: Role; invitedBy: string | null; expiresAt: string }
 export interface ProjectOrganization { orgId: string; slug: string; name: string }
 
@@ -37,6 +53,7 @@ export interface OrganizationDetail {
   repositories: Repository[];
   /** A política da organização e as dos repositórios dela. */
   policies: StoredPolicy[];
+  connections: GitConnection[];
 }
 
 export type OrganizationTab = "projects" | "stats" | "gate" | "members" | "repositories";
@@ -132,11 +149,24 @@ export async function loadOrganizations() {
   });
 }
 
+const REPOSITORY_COLUMNS = "id, provider, path, repo_key, default_branch, private, description, web_url";
+
+function repositoryOf(row: Row): Repository {
+  return {
+    id: row.id as string, provider: row.provider as Provider, path: row.path as string, repoKey: row.repo_key as string,
+    defaultBranch: (row.default_branch as string) ?? null,
+    private: typeof row.private === "boolean" ? row.private : null,
+    description: (row.description as string) ?? null,
+    webUrl: typeof row.web_url === "string" && row.web_url.startsWith("https://") ? row.web_url : null,
+  };
+}
+
 export async function loadDetail(id: string) {
-  const [members, repositories, policies] = await Promise.all([
+  const [members, repositories, policies, connections] = await Promise.all([
     call<Row[]>("organization_members_view", { org: id }),
-    supabase.from("organization_repositories").select("id, provider, path, repo_key").eq("org_id", id).order("repo_key"),
+    supabase.from("organization_repositories").select(REPOSITORY_COLUMNS).eq("org_id", id).order("repo_key"),
     supabase.from("organization_llm_policies").select("*").eq("org_id", id),
+    supabase.from("organization_git_connections").select("provider, account, connected_at").eq("org_id", id),
   ]);
   if (repositories.error) throw failure(repositories.error);
   if (useOrganizations.getState().openId !== id) return;
@@ -147,9 +177,12 @@ export async function loadDetail(id: string) {
         userId: row.user_id as string, username: row.username as string, displayName: row.display_name as string,
         avatarUrl: (row.avatar_url as string) ?? null, role: row.role as Role, joinedAt: row.joined_at as string,
       })),
-      repositories: (repositories.data ?? []).map((row) => ({ id: row.id, provider: row.provider as Provider, path: row.path, repoKey: row.repo_key })),
+      repositories: (repositories.data ?? []).map((row) => repositoryOf(row as Row)),
       // Sem a tabela (migração ainda não aplicada), a aba mostra sem política.
       policies: policies.error ? [] : (policies.data ?? []).map((row) => storedPolicy(row as Row)),
+      connections: connections.error ? [] : ((connections.data ?? []) as Row[]).map((row) => ({
+        provider: row.provider as Provider, account: row.account as string, connectedAt: row.connected_at as string,
+      })),
     },
   });
 }
@@ -157,9 +190,9 @@ export async function loadDetail(id: string) {
 /** Os repositórios da organização, para quem abre o chat dela fora da página
  * da organização (a lista de projetos), onde o detalhe não está carregado. */
 export async function organizationRepositories(id: string): Promise<Repository[]> {
-  const { data, error } = await supabase.from("organization_repositories").select("id, provider, path, repo_key").eq("org_id", id).order("repo_key");
+  const { data, error } = await supabase.from("organization_repositories").select(REPOSITORY_COLUMNS).eq("org_id", id).order("repo_key");
   if (error) throw failure(error);
-  return (data ?? []).map((row) => ({ id: row.id, provider: row.provider as Provider, path: row.path, repoKey: row.repo_key }));
+  return (data ?? []).map((row) => repositoryOf(row as Row));
 }
 
 /** Os repositórios da organização e as políticas dela, para o painel do chat
@@ -181,7 +214,35 @@ export async function organizationRules(orgId: string): Promise<{ repositories: 
 export function openOrganization(id: string, tab: OrganizationTab = "projects") {
   useOrganizations.setState({ openId: id, tab, detail: null });
   navigate("organization");
+  watchOrganization(id);
   return loadDetail(id);
+}
+
+let watched: RealtimeChannel | null = null;
+let settle: ReturnType<typeof setTimeout> | null = null;
+
+/** Enquanto a organização está aberta, o que o owner muda no site — o
+ * provedor conectado e os repositórios associados — chega sozinho: a lista e
+ * a organização voltam do banco (com uma folga, para uma associação de vários
+ * repositórios virar uma leitura só). */
+function watchOrganization(id: string | null) {
+  if (watched) void supabase.removeChannel(watched);
+  watched = null;
+  if (settle) clearTimeout(settle);
+  settle = null;
+  if (!id) return;
+  const reload = () => {
+    if (settle) clearTimeout(settle);
+    settle = setTimeout(() => {
+      settle = null;
+      if (useOrganizations.getState().openId === id) void refresh().catch((error) => console.error("organizations", error));
+    }, 400);
+  };
+  watched = supabase
+    .channel(`organization:${id}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "organization_repositories", filter: `org_id=eq.${id}` }, reload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "organization_git_connections", filter: `org_id=eq.${id}` }, reload)
+    .subscribe();
 }
 
 /** Depois de cada mudança, a lista e a organização aberta voltam do banco. */
@@ -193,6 +254,7 @@ async function refresh() {
   else {
     // Saiu, foi removido ou a organização foi excluída (pelo site): a vista
     // volta para a lista.
+    watchOrganization(null);
     useOrganizations.setState({ openId: null, detail: null });
     navigate("organizations");
   }
@@ -200,12 +262,11 @@ async function refresh() {
 
 export async function setMemberRole(org: string, member: string, role: Role) { await call("set_member_role", { org, member, role }); await refresh(); }
 export async function removeMember(org: string, member: string) { await call("remove_member", { org, member }); await refresh(); }
-export async function addRepository(org: string, provider: Provider, path: string) { await call("add_repository", { org, provider, path }); await refresh(); }
-export async function removeRepository(repository: string) { await call("remove_repository", { repository }); await refresh(); }
 export async function acceptInvite(invite: string) { await call("accept_invite", { invite }); await refresh(); }
 export async function declineInvite(invite: string) { await call("decline_invite", { invite }); await refresh(); }
 
 export function clearOrganizations() {
+  watchOrganization(null);
   useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, loaded: false, openId: null, tab: "projects", detail: null });
 }
 

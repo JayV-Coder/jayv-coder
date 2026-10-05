@@ -42,7 +42,7 @@ export { OrganizationMembers } from "./OrganizationMembers";
 export { OrganizationProjects } from "./OrganizationProjects";
 export { OrganizationGate, OrganizationStats } from "./OrganizationDashboard";
 export { OrganizationRepositories } from "./OrganizationRepositories";
-export { ImportClonesDialog } from "./ImportClonesDialog";
+export { FolderCompareDialog } from "./FolderCompareDialog";
 export { SiteDashboardButton } from "./SiteDashboardButton";
 export { YardCard } from "./YardCard";
 export { NotificationBell } from "./NotificationBell";

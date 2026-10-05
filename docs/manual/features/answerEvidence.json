@@ -1,7 +1,7 @@
 {
   "id": "answerEvidence",
   "category": "gate",
-  "since": "0.64.0",
+  "since": "0.65.0",
   "plan": null,
   "commands": [],
   "title": "What was checked",

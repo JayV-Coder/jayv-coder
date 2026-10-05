@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatReach, localCopy, newClones } from "./checkout";
+import { chatReach, compareFolder, localCopy } from "./checkout";
 
 const project = (rootPath: string, repoKeys: string[]) => ({ rootPath, repoKeys });
 
@@ -15,15 +15,36 @@ describe("localCopy", () => {
   });
 });
 
-describe("newClones", () => {
-  it("leaves out folders and repositories that are already projects", () => {
-    const found = [
-      { key: "github.com/acme/api", path: "/code/acme/api" },
-      { key: "github.com/acme/web", path: "/code/acme/web/" },
-      { key: "github.com/acme/worker", path: "/code/acme/worker" },
+describe("compareFolder", () => {
+  const repositories = [
+    { repoKey: "github.com/acme/api" }, { repoKey: "github.com/acme/web" }, { repoKey: "github.com/acme/worker" },
+    { repoKey: "gitlab.com/acme/docs" }, { repoKey: "github.com/acme/mobile" },
+  ];
+
+  it("splits the organization's repositories into found, missing and the folder's other clones", () => {
+    const clones = [
+      { path: "/code/acme/services/api", keys: ["github.com/acme/api"] },
+      { path: "/code/acme/web", keys: ["github.com/acme/web"] },
+      { path: "/code/acme/deep/a/b/worker", keys: ["github.com/acme/worker"] },
+      { path: "/code/acme/fork", keys: ["github.com/someone/fork", "github.com/acme/fork"] },
+      { path: "/code/acme/scratch", keys: [] },
     ];
-    const projects = [project("/code/acme/web", []), project("/elsewhere/worker", ["github.com/acme/worker"])];
-    expect(newClones(found, projects).map((clone) => clone.key)).toEqual(["github.com/acme/api"]);
+    const projects = [project("/code/acme/web/", ["github.com/acme/web"]), project("/elsewhere/worker", ["github.com/acme/worker"]), project("/old/mobile", ["github.com/acme/mobile"])];
+    const result = compareFolder(repositories, clones, projects);
+    expect(result.found.map((item) => [item.repository.repoKey, item.state, item.elsewhere])).toEqual([
+      ["github.com/acme/api", "new", null],
+      ["github.com/acme/web", "project", null],
+      ["github.com/acme/worker", "elsewhere", "/elsewhere/worker"],
+    ]);
+    expect(result.missing.map((item) => [item.repository.repoKey, item.local])).toEqual([["gitlab.com/acme/docs", null], ["github.com/acme/mobile", "/old/mobile"]]);
+    expect(result.outside.map((clone) => clone.path)).toEqual(["/code/acme/fork", "/code/acme/scratch"]);
+  });
+
+  it("takes the shallowest clone when a repository is cloned twice", () => {
+    const clones = [{ path: "C:\\code\\acme\\old\\copies\\api", keys: ["github.com/acme/api"] }, { path: "C:\\code\\acme\\api", keys: ["github.com/acme/api"] }];
+    const result = compareFolder([{ repoKey: "github.com/acme/api" }], clones, [project("C:\\code\\acme\\api", [])]);
+    expect(result.found).toEqual([{ repository: { repoKey: "github.com/acme/api" }, path: "C:\\code\\acme\\api", state: "project", elsewhere: null }]);
+    expect(result.outside).toEqual([]);
   });
 });
 
