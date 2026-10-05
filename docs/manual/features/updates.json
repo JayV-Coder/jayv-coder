@@ -1,0 +1,10 @@
+{
+  "id": "updates",
+  "category": "app",
+  "since": "0.33.0",
+  "plan": null,
+  "commands": [],
+  "title": "Updates and what's new",
+  "summary": "JayV checks for a new version in the background and, after each update, shows what changed since the last version you saw.",
+  "usage": "When a new version is out, a bar offers What changes and Update now. The full history is in What's new, in the command palette, and on the Release notes page of the site."
+}

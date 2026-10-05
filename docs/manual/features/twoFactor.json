@@ -1,0 +1,10 @@
+{
+  "id": "twoFactor",
+  "category": "account",
+  "since": "0.31.0",
+  "plan": null,
+  "commands": [],
+  "title": "Two-factor authentication",
+  "summary": "Besides the password or the linked account, signing in asks for a code from an authenticator app on your phone.",
+  "usage": "On the JayV site, open Dashboard › Account › Security, scan the QR code with an authenticator app and confirm with the first code."
+}

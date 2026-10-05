@@ -98,6 +98,27 @@ mudança incompatível sobe o MINOR e vem explicada na mensagem do commit.
 O README do repositório público `jayv-coder-releases` é gerado pelo Actions
 (`releases-readme.yml`, chamado ao fim do `release.yml`): não o edite à mão.
 
+## Documentação: toda funcionalidade tem a sua página
+
+A página Documentação do site é feita de `docs/manual/`: cada funcionalidade
+é um JSON em `docs/manual/features/<id>.json` (listado, na ordem da página, em
+`docs/manual/index.json`) e os comandos ficam em `docs/manual/commands.json`.
+O `releases-docs.yml` publica tudo, com o changelog inteiro, no repositório
+de releases depois de cada release; o site e o app só leem de lá pela função
+`releases` do `JayV-Coder/supabase`, nunca direto do GitHub.
+
+- Funcionalidade nova, ou que muda de uso, atualiza o seu JSON no mesmo
+  commit: `id` igual ao nome do arquivo, `category` de `index.json`, `since`
+  com a versão em que chegou (ou `null`), `plan` com a chave do catálogo dos
+  planos quando o plano liga ou desliga, os `commands` relacionados e
+  `title`, `summary` e `usage` em inglês.
+- O texto ganha as chaves `docs.<id>.title`, `.summary`, `.usage` (e
+  `docs.command.<id>` para um comando) numa migração com os dez idiomas, como
+  toda chave nova.
+- `node .github/scripts/manual.cjs check` confere tudo (o `release.yml` e o
+  `npm run test:web` também): todo recurso do catálogo dos planos precisa de
+  página.
+
 ## Mensagem de commit: detalha cada alteração
 
 A mensagem de todo commit no `main` começa por `vX.Y.Z: resumo` (a versão

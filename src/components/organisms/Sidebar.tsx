@@ -21,6 +21,7 @@ export function Sidebar() {
   const email = useAuth((state) => state.email);
   const profile = useAuth((state) => state.profile);
   const account = useProfile((state) => state.profile);
+  const photo = useProfile((state) => state.photo);
   const name = displayName(account, profile, email);
   const view = useNavigation((state) => state.view);
   const invites = useOrganizations((state) => state.incoming.length);
@@ -107,7 +108,7 @@ export function Sidebar() {
               view === "profile" && "bg-sidebar-accent",
             )}
           >
-            <UserAvatar name={name} src={profile?.avatarUrl} className="size-7 text-xs" />
+            <UserAvatar name={name} src={photo ?? profile?.avatarUrl} className="size-7 text-xs" />
             <span className="grid min-w-0">
               <span className="truncate text-[13px] font-medium text-sidebar-foreground">{name}</span>
               {email && name !== email && <span className="truncate text-caption text-sidebar-muted">{email}</span>}

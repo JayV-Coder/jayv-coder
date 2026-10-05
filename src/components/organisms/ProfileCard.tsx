@@ -1,7 +1,7 @@
 import { LogOutIcon } from "lucide-react";
 import type { Expertise } from "@/modules/core";
 import { PROVIDERS, signOut, useAuth, type Profile, type Provider } from "@/modules/auth";
-import type { AccountProfile } from "@/modules/profile";
+import { useProfile, type AccountProfile } from "@/modules/profile";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import { PROVIDER_NAMES, ProviderIcon, UserAvatar } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
@@ -13,11 +13,14 @@ export function displayName(account: AccountProfile | null, profile: Profile | n
   return account?.displayName || profile?.name || email?.split("@")[0] || "";
 }
 
-/** Quem está conectado: foto, nome, e-mail, como entrou e desde quando. */
+/** Quem está conectado: foto, nome, e-mail, como entrou e desde quando. A foto
+ * é a da conta (escolhida no painel do site, ou a do provedor); aqui ela só
+ * aparece, sem envio. */
 export function ProfileCard({ email, account, profile, expertise }: { email: string | null; account: AccountProfile | null; profile: Profile | null; expertise: Expertise | null }) {
   const t = useT();
   const locale = useLocale();
   const providers = useAuth((state) => state.providers);
+  const photo = useProfile((state) => state.photo);
   const hasPassword = useAuth((state) => state.hasPassword);
   const linked = PROVIDERS.filter((provider: Provider) => providers.includes(provider));
   const name = displayName(account, profile, email);
@@ -30,7 +33,7 @@ export function ProfileCard({ email, account, profile, expertise }: { email: str
     <Card className="relative mb-5 gap-0 overflow-hidden p-0">
       <div aria-hidden="true" className="h-20 border-b border-border bg-secondary" />
       <div className="flex flex-wrap items-end gap-5 px-7 pb-6">
-        <UserAvatar name={name} src={profile?.avatarUrl} className="-mt-10 size-[84px] border-4 border-card text-h1" />
+        <UserAvatar name={name} src={photo ?? profile?.avatarUrl} className="-mt-10 size-[84px] border-4 border-card text-h1" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-h2 font-semibold">{name}</h2>
           {(account?.username || email) && (

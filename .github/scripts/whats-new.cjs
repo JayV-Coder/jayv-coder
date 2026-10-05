@@ -20,18 +20,29 @@ function english(source, key) {
   return match ? JSON.parse(`"${match[1]}"`) : null;
 }
 
-/** A versão mais nova do changelog, com o inglês de cada item. */
-function latestRelease(releasesSource, enSource) {
-  const start = releasesSource.indexOf("export const RELEASES");
-  const head = releasesSource.slice(start).match(/version:\s*"([^"]+)",\s*date:\s*"([^"]+)",\s*items:\s*\[([\s\S]*?)\]/);
-  if (!head) return null;
-  const items = [...head[3].matchAll(/kind:\s*"(feature|fix)",\s*id:\s*"([^"]+)"/g)].map(([, kind, id]) => ({
+const RELEASE = /version:\s*"([^"]+)",\s*date:\s*"([^"]+)",\s*items:\s*\[([\s\S]*?)\]/g;
+
+/** Uma entrada do changelog, com o inglês de cada item. */
+function releaseOf([, version, date, body], enSource) {
+  const items = [...body.matchAll(/kind:\s*"(feature|fix)",\s*id:\s*"([^"]+)"/g)].map(([, kind, id]) => ({
     kind,
     id,
     title: english(enSource, `whatsNew.item.${id}.title`),
     detail: english(enSource, `whatsNew.item.${id}.detail`),
   }));
-  return { version: head[1], date: head[2], items };
+  return { version, date, items };
+}
+
+/** Todas as versões do changelog, da mais nova para a mais antiga: o
+ * `changelog.json` que o repositório de releases publica para o site. */
+function allReleases(releasesSource, enSource) {
+  const start = releasesSource.indexOf("export const RELEASES");
+  return [...releasesSource.slice(start).matchAll(RELEASE)].map((match) => releaseOf(match, enSource));
+}
+
+/** A versão mais nova do changelog, com o inglês de cada item. */
+function latestRelease(releasesSource, enSource) {
+  return allReleases(releasesSource, enSource)[0] ?? null;
 }
 
 /** O comentário que vai no fim do corpo do release. */
@@ -42,7 +53,7 @@ function whatsNewComment(root = process.cwd()) {
   return `<!-- ${MARK}: ${Buffer.from(JSON.stringify(release), "utf8").toString("base64")} -->`;
 }
 
-module.exports = { latestRelease, whatsNewComment };
+module.exports = { allReleases, latestRelease, whatsNewComment };
 
 if (require.main === module) {
   const comment = whatsNewComment();

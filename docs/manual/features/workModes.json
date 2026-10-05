@@ -1,0 +1,15 @@
+{
+  "id": "workModes",
+  "category": "chat",
+  "since": "0.43.0",
+  "plan": null,
+  "commands": [
+    "modeAuto",
+    "modePlan",
+    "modeBuild",
+    "workMode"
+  ],
+  "title": "Work modes: Auto, Planning and Development",
+  "summary": "Each chat has a work mode. Planning only reads the project and answers with a plan; Development changes files; Auto lets Jev pick for each request.",
+  "usage": "Pick the mode under the message box, type /plan, /build or /auto at the start of a message, or press Ctrl+. (⌘. on Mac). When a chat in Planning asks to implement, Jev switches it to Development."
+}

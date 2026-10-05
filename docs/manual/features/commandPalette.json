@@ -1,0 +1,20 @@
+{
+  "id": "commandPalette",
+  "category": "app",
+  "since": "0.37.0",
+  "plan": null,
+  "commands": [
+    "palette",
+    "projects",
+    "organizations",
+    "stats",
+    "system",
+    "settings",
+    "newChat",
+    "gate",
+    "workMode"
+  ],
+  "title": "Command palette and shortcuts",
+  "summary": "Everything that has a button also has a name in the command palette, and the main screens have keyboard shortcuts.",
+  "usage": "Press Ctrl+K (⌘K on Mac) on any screen and type: go to a page, open a project, chat or organization, start a chat or change the theme."
+}

@@ -1,0 +1,10 @@
+{
+  "id": "entryGate",
+  "category": "gate",
+  "since": null,
+  "plan": "entryGate",
+  "commands": [],
+  "title": "Entry gate",
+  "summary": "Jev checks every request before any agent runs: what it asks, where it applies and what is missing.",
+  "usage": "Always on. When something is missing, the gatehouse shows it and offers to send as written, send the version JayV rewrote, or complete the request."
+}

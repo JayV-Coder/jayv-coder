@@ -1,0 +1,10 @@
+{
+  "id": "stopRequest",
+  "category": "chat",
+  "since": "0.60.0",
+  "plan": null,
+  "commands": [],
+  "title": "Stop a request",
+  "summary": "A running request can be stopped at any moment: the agent and every process it opened are closed, and what it already said stays in the chat.",
+  "usage": "While a request runs, the Send button turns into Stop. A request waiting in the queue can be removed from it. Every request also stops at the time limit set in Settings › Jev (30 minutes by default)."
+}

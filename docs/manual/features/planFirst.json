@@ -1,0 +1,10 @@
+{
+  "id": "planFirst",
+  "category": "agents",
+  "since": "0.49.0",
+  "plan": "planFirst",
+  "commands": [],
+  "title": "Plan before building",
+  "summary": "In a complex build request, your strongest reasoning model writes a plan first and the agent picked to build receives it with the request.",
+  "usage": "Turn on Plan with one model, build with another in Settings › Jev › Routing. The plan shows up in the progress panel while it is written; if it fails, the build goes ahead as before."
+}

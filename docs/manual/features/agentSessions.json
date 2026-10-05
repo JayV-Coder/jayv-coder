@@ -1,0 +1,10 @@
+{
+  "id": "agentSessions",
+  "category": "agents",
+  "since": "0.34.0",
+  "plan": "agentSessions",
+  "commands": [],
+  "title": "Agent sessions",
+  "summary": "Each chat resumes its agent's session instead of re-reading the project and the whole conversation on every message.",
+  "usage": "Always on. A new session starts after 10 requests, or when the agent, the model or the folder changes."
+}

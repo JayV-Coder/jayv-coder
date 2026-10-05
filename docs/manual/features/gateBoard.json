@@ -1,0 +1,12 @@
+{
+  "id": "gateBoard",
+  "category": "gate",
+  "since": null,
+  "plan": "gateBoard",
+  "commands": [
+    "gate"
+  ],
+  "title": "Gatehouse board",
+  "summary": "One page with everything Jev let through, asked about or blocked in the project.",
+  "usage": "Open it from the side menu, from the count in the status bar, or with Ctrl+G (⌘G on Mac). Answers you give to the gatehouse become project notes, so it does not ask again."
+}

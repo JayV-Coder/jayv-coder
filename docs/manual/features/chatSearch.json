@@ -1,0 +1,10 @@
+{
+  "id": "chatSearch",
+  "category": "chat",
+  "since": "0.35.0",
+  "plan": "chatSearch",
+  "commands": [],
+  "title": "Chat search",
+  "summary": "Search for words across every conversation of a project, with the matching passage highlighted.",
+  "usage": "On a project's chats screen, type in the search field. The index lives on your computer and the search never goes to the network."
+}

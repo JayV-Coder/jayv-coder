@@ -1,0 +1,10 @@
+{
+  "id": "answerRecall",
+  "category": "chat",
+  "since": "0.35.0",
+  "plan": "answerRecall",
+  "commands": [],
+  "title": "Earlier answers",
+  "summary": "A request almost identical to one already answered in another chat of the same project starts from that answer instead of exploring everything again.",
+  "usage": "It works on its own when your plan includes it. Each time an earlier answer is reused, the Jev panel shows it."
+}
