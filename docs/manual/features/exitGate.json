@@ -6,5 +6,5 @@
   "commands": [],
   "title": "Exit gate",
   "summary": "Jev checks the commands and files in every answer against the project's rules before you act on it.",
-  "usage": "Always on. An answer that touches a protected file or runs a forbidden command is held, and the gatehouse explains why."
+  "usage": "Always on. An answer that touches a protected file or runs a forbidden command is held, and the gatehouse explains why. Passing the exit gate does not make an answer verified: it shows as not verified, and What was checked lists each command and file the gate checked."
 }
