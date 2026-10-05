@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, time::Instant};
+use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, sync::{Arc, Mutex, MutexGuard, PoisonError}, time::Instant};
 
 const SYSTEM_INSTRUCTIONS:&str="You are Jev, a senior software engineering orchestrator. Use supplied repository context only when relevant. Never reveal secrets. State uncertainty explicitly. To ask the developer something, end the reply with the questions, each on its own line ending in '?' with its options right below as a '- ' list.";
 const REMOVAL_NOTE:&str="Context was filtered on purpose: [*_REDACTED] replaces secrets, [CONTEXT_TRUNCATED] marks a file cut to fit the token budget, and some files were withheld. Never guess removed content; say it is missing when it matters.";
@@ -87,7 +87,9 @@ pub struct Orchestrator {
     pub firewall: ContextFirewall,
     pub agents: AgentRegistry,
     pub graph: ExecutionGraph,
-    pub performance: PerformanceTracker,
+    /// O que os pedidos dividem quando correm ao mesmo tempo, cada um no seu
+    /// `Orchestrator` (`Shared`).
+    shared: Arc<Shared>,
     pub routing_mode: RoutingMode,
     /// A ressalva que o portão de entrada deixou para o próximo pedido, quando
     /// ele foi liberado com semáforo amarelo. `process` a consome uma vez.
@@ -126,20 +128,9 @@ pub struct Orchestrator {
     /// A troca de modo que o Jev fez no último `process`, para quem chamou
     /// gravar o modo novo no chat.
     pub mode_switch: Option<ModeSwitch>,
-    /// Os chats cujo último pedido pedia para implementar e ficou em
-    /// planejamento no automático: o próximo pedido igual sai em build.
-    stuck_in_plan: HashSet<String>,
-    /// O último plano que o modo planejamento devolveu em cada chat, inteiro.
-    /// O build seguinte o recebe sem o corte do histórico quando abre sessão
-    /// nova; a sessão retomada já o tem.
-    plans: HashMap<String,String>,
     /// O pedido em atendimento reclama da resposta anterior ("não
     /// funcionou"). `process` o consome uma vez.
     pub pending_retry: bool,
-    /// Quantas reclamações seguidas cada chat fez: da segunda em diante, o
-    /// agente pensa um degrau a mais.
-    complaints: HashMap<String,u32>,
-    performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
     planners: HashMap<String, Box<dyn Provider>>,
@@ -175,7 +166,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, stuck_in_plan:HashSet::new(), plans:HashMap::new(), pending_retry:false, complaints:HashMap::new(), performance_path, last_decision:None, llm_built:None, pending_review:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -192,6 +183,16 @@ impl Orchestrator {
     /// Passa a usar as configurações do Jev e do app. Privacidade nova é
     /// firewall novo, e a pasta é lida de novo no próximo pedido; validade nova
     /// é cache novo.
+    /// O que este orquestrador divide com os outros (`Shared`).
+    pub fn shared(&self)->Arc<Shared> { self.shared.clone() }
+
+    /// Passa a dividir `shared` com os outros orquestradores: é assim que um
+    /// segundo pedido corre em paralelo sem perder o que o primeiro aprendeu.
+    pub fn share(&mut self,shared:Arc<Shared>) { self.shared=shared; }
+
+    /// Quantos pedidos o histórico de desempenho guarda.
+    pub fn performance_len(&self)->usize { held(&self.shared.performance).len() }
+
     /// Força a próxima montagem dos agentes (`use_llm`).
     pub fn rebuild_llm(&mut self) { self.llm_built=None; }
 
@@ -312,12 +313,13 @@ impl Orchestrator {
         // "Não funcionou": a nova tentativa não sai igual à anterior. O agente
         // confere o que a mudança anterior fez antes de mudar de novo, e da
         // segunda reclamação seguida em diante pensa um degrau a mais.
-        let complaints=if std::mem::take(&mut self.pending_retry) { let count=self.complaints.entry(session_id.to_string()).or_insert(0); *count+=1; *count } else { self.complaints.remove(session_id); 0 };
+        let complaints=if std::mem::take(&mut self.pending_retry) { let mut all=held(&self.shared.complaints); let count=all.entry(session_id.to_string()).or_insert(0); *count+=1; *count } else { held(&self.shared.complaints).remove(session_id); 0 };
         if complaints>0 { extras.push(RETRY_NOTE.into()); }
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
         let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
-        let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,self.stuck_in_plan.contains(session_id));
-        if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { self.stuck_in_plan.insert(session_id.to_string()); } else { self.stuck_in_plan.remove(session_id); }
+        let stuck=held(&self.shared.stuck_in_plan).contains(session_id);
+        let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,stuck);
+        if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { held(&self.shared.stuck_in_plan).insert(session_id.to_string()); } else { held(&self.shared.stuck_in_plan).remove(session_id); }
         self.mode_switch=switched.clone();
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
@@ -329,7 +331,7 @@ impl Orchestrator {
         // O agente que o chat já usa desempata: a sessão dele é retomada.
         let sticky=self.memory.agent_session(session_id).map(|kept|(kept.provider.clone(),kept.model.clone()));
         let sticky=sticky.as_ref().map(|(provider,model)|(provider.as_str(),model.as_str()));
-        let ranked=rank_models(&self.config,&intent.intent,&complexity,&context,&self.performance,&Tiebreak{sticky,seed:session_id});
+        let ranked=rank_models(&self.config,&intent.intent,&complexity,&context,&held(&self.shared.performance),&Tiebreak{sticky,seed:session_id});
         // O modelo da sessão vem antes do porte: trocar abre sessão nova.
         let ranked=if self.config.jev.keep_session_model { keep_session_model(ranked,&self.config,sticky,&intent.intent,&complexity) } else { ranked };
         let mut selection=ranked.first().cloned().unwrap_or_else(||configuration_selection(&self.config,&complexity,&context));
@@ -366,7 +368,7 @@ impl Orchestrator {
         let effort=if complaints>=2 { raise_effort(effort_for(&complexity)) } else { effort_for(&complexity) };
         // O build que segue um plano do mesmo chat recebe o plano inteiro,
         // fora do corte do histórico, se abrir sessão nova.
-        let handoff:Vec<String>=if mode==MODE_BUILD { self.plans.remove(session_id).map(|plan|format!("{PLAN_HANDOFF}\n{plan}")).into_iter().collect() } else { vec![] };
+        let handoff:Vec<String>=if mode==MODE_BUILD { held(&self.shared.plans).remove(session_id).map(|plan|format!("{PLAN_HANDOFF}\n{plan}")).into_iter().collect() } else { vec![] };
         let mut execution=match split {
             Some((response,first))=>{ selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..first}; Ok((response,false,0)) }
             None=>{
@@ -417,9 +419,8 @@ impl Orchestrator {
         let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(crate::i18n::notice(&[crate::i18n::failure(error)])),false) };
         // O plano que o planejamento devolveu fica guardado, inteiro, para o
         // build que vier depois.
-        if mode==MODE_PLAN { match result.as_ref().filter(|_|valid) { Some(response)=>{ self.plans.insert(session_id.to_string(),response.response.clone()); } None=>{ self.plans.remove(session_id); } } }
-        self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now(), chat:Some(session_id.to_string()) });
-        let _=self.performance.save(&self.performance_path);
+        if mode==MODE_PLAN { match result.as_ref().filter(|_|valid) { Some(response)=>{ held(&self.shared.plans).insert(session_id.to_string(),response.response.clone()); } None=>{ held(&self.shared.plans).remove(session_id); } } }
+        self.shared.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now(), chat:Some(session_id.to_string()) });
         self.last_decision=Some(decision.clone());
         ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy, model_selection:selection, result, validation:valid, decision, routing:signals, error }
     }
@@ -609,13 +610,18 @@ impl Orchestrator {
     /// o agente que constrói seguir. Sem planejador ou com ele falhando, nada:
     /// o agente constrói como antes.
     async fn plan_first(&self,request:&str,context:&Context,builder:&ModelSelection,session_id:&str,pulse:&Pulse)->Option<String> {
-        let ranked=rank_models(&self.config,"analysis","complex",context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
+        let ranked=rank_models(&self.config,"analysis","complex",context,&held(&self.shared.performance),&Tiebreak{sticky:None,seed:session_id});
         let planner=ranked.iter().find(|candidate|self.planners.contains_key(&candidate.provider))?;
         let provider=self.planners.get(&planner.provider)?;
         let system=format!("{}\n{}",context.system_instructions,language_note());
         let messages=[ChatMessage{role:"system".into(),content:system},ChatMessage{role:"user".into(),content:crate::split::prompt(request,&agent_name(&builder.provider))}];
         pulse.beat(Beat::Plan{provider:planner.provider.clone(),model:planner.model_name.clone()});
-        match provider.chat_once(&messages,&planner.model_name,Some("high"),&pulse.quiet()).await {
+        // O plano aparece na faixa linha a linha enquanto é escrito: um plano
+        // de pedido complexo leva minutos, e a faixa ficava parada nele.
+        let told=pulse.as_lines();
+        let planned=provider.chat_once(&messages,&planner.model_name,Some("high"),&told).await;
+        told.finish_lines();
+        match planned {
             Ok(response)=>crate::split::handoff(&response.response,&agent_name(&planner.provider)),
             Err(error)=>{ eprintln!("plano: {} não planejou ({error:#})",planner.provider); None }
         }
@@ -631,7 +637,7 @@ impl Orchestrator {
     async fn run_parallel(&self,request:&str,context:&Context,ranked:&[ModelSelection],session_id:&str,pulse:&Pulse)->Option<(ProviderResponse,ModelSelection)> {
         let folder=PathBuf::from(self.rag.project_info().root);
         let (top,prefix)=tokio::task::spawn_blocking({let folder=folder.clone(); move ||crate::parallel::repository(&folder)}).await.ok().flatten()?;
-        let planners=rank_models(&self.config,"analysis","complex",context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
+        let planners=rank_models(&self.config,"analysis","complex",context,&held(&self.shared.performance),&Tiebreak{sticky:None,seed:session_id});
         let planner=planners.iter().find(|candidate|self.planners.contains_key(&candidate.provider))?;
         let system=format!("{}\n{}",context.system_instructions,language_note());
         let asked=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:crate::parallel::split_prompt(request)}];
@@ -723,7 +729,7 @@ impl Orchestrator {
     async fn review(&self,request:&str,complexity:&str,context:&Context,executor:&ModelSelection,session_id:&str,mut watch:crate::live_files::Session,pulse:&Pulse)->Option<ReviewRequest> {
         let (watch,diff)=tokio::task::spawn_blocking(move ||{ watch.poll(); let diff=crate::review::diff(&watch); (watch,diff) }).await.ok()?;
         let diff=diff?;
-        let ranked=rank_models(&self.config,"review",complexity,context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
+        let ranked=rank_models(&self.config,"review",complexity,context,&held(&self.shared.performance),&Tiebreak{sticky:None,seed:session_id});
         let reviewer=crate::review::pick(&ranked,&executor.provider,|provider|self.planners.contains_key(provider))?;
         pulse.beat(Beat::Review{provider:reviewer.provider.clone(),model:reviewer.model_name.clone(),files:watch.changes().len()});
         let messages=vec![ChatMessage{role:"system".into(),content:language_note()},ChatMessage{role:"user".into(),content:crate::review::prompt(request,&diff,&agent_name(&executor.provider),&agent_name(&reviewer.provider))}];
@@ -740,7 +746,8 @@ impl Orchestrator {
     /// O pedido anterior deste chat não resolveu: a nota do modelo que o
     /// atendeu cai, e o roteamento aprende com isso.
     pub fn mark_last_failed(&mut self,session_id:&str) {
-        if self.performance.mark_failed(session_id) { let _=self.performance.save(&self.performance_path); }
+        let mut performance=held(&self.shared.performance);
+        if performance.mark_failed(session_id) { let _=performance.save(&self.shared.performance_path); }
     }
 
     /// O mesmo pedido mandado cru ao agente que o Jev escolheu, sem nada do
@@ -765,7 +772,7 @@ impl Orchestrator {
     /// sem leitura do Jev: é com ele que o `jayv bench` roda o lado direto,
     /// do primeiro ao último pedido da tarefa.
     pub fn build_selection(&self)->ModelSelection {
-        let ranked=rank_models(&self.config,"code","medium",&Context::default(),&self.performance,&Tiebreak::default());
+        let ranked=rank_models(&self.config,"code","medium",&Context::default(),&held(&self.shared.performance),&Tiebreak::default());
         let selection=ranked.into_iter().next().unwrap_or_else(||configuration_selection(&self.config,"medium",&Context::default()));
         ModelSelection{mode:MODE_BUILD.into(),..selection}
     }
@@ -951,6 +958,37 @@ fn short_history(conversation:&[ChatMessage])->Vec<ChatMessage> {
 /// A falha que vem da sessão retomada — apagada, de outra pasta, expirada —, e
 /// não do pedido: com ela, vale começar outra sessão.
 /// Até quando depois da largada uma falha ainda conta como "não começou".
+/// O que os pedidos de chats diferentes dividem quando correm ao mesmo tempo,
+/// cada um no seu `Orchestrator` (com a sua pasta, os seus agentes e o seu
+/// índice): o desempenho dos modelos, que o roteamento aprende, e o estado de
+/// cada chat que passa de um pedido para o seguinte — o plano guardado para o
+/// build, as reclamações seguidas, o "preso no planejamento". Os pedidos de um
+/// mesmo chat continuam em ordem, então cada chat só é tocado por um pedido de
+/// cada vez; os cadeados são curtos e nunca atravessam um `await`.
+pub struct Shared {
+    performance: Mutex<PerformanceTracker>,
+    performance_path: PathBuf,
+    plans: Mutex<HashMap<String,String>>,
+    complaints: Mutex<HashMap<String,u32>>,
+    stuck_in_plan: Mutex<HashSet<String>>,
+}
+
+impl Shared {
+    fn load(performance_path:PathBuf)->Self {
+        Self{performance:Mutex::new(PerformanceTracker::load(&performance_path)),performance_path,plans:Mutex::default(),complaints:Mutex::default(),stuck_in_plan:Mutex::default()}
+    }
+
+    /// Anota o pedido e grava o histórico no disco, sob o mesmo cadeado: dois
+    /// pedidos terminando juntos não gravam um por cima do outro.
+    fn record(&self,record:PerformanceRecord) {
+        let mut performance=held(&self.performance);
+        performance.record(record);
+        let _=performance.save(&self.performance_path);
+    }
+}
+
+fn held<T>(lock:&Mutex<T>)->MutexGuard<'_,T> { lock.lock().unwrap_or_else(PoisonError::into_inner) }
+
 /// De quanto em quanto tempo os agentes são montados de novo mesmo sem mudar
 /// nada: é assim que o agente instalado com o app aberto aparece.
 const LLM_REFRESH:std::time::Duration=std::time::Duration::from_secs(60);
@@ -1626,6 +1664,21 @@ mod tests {
         assert!(result.error.as_deref().is_some_and(|error|error.contains("turn.cancelled")),"{:?}",result.error);
         assert!(!built.exists(),"o construtor não foi aberto");
         assert_eq!(result.model_selection.provider,"maker","ninguém entrou no lugar");
+    }
+
+    /// Dois orquestradores que dividem o `Shared` veem o mesmo desempenho e o
+    /// mesmo plano guardado: o pedido de um chat atendido pelo segundo
+    /// atendente segue o que o primeiro aprendeu.
+    #[test] fn orchestrators_that_share_see_the_same_learning() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let first=orchestrator(&dir);
+        let mut second=orchestrator(&dir);
+        second.share(first.shared());
+        let before=second.performance_len();
+        first.shared.record(PerformanceRecord{task_type:"code".into(),strategy_used:"auto".into(),model_used:"m".into(),success:true,response_time_ms:1,input_tokens:1,output_tokens:1,estimated_cost:0.0,timestamp:Utc::now(),chat:Some("chat".into())});
+        assert_eq!(second.performance_len(),before+1);
+        held(&first.shared.plans).insert("chat".into(),"1. PLANO".into());
+        assert_eq!(held(&second.shared.plans).get("chat").map(String::as_str),Some("1. PLANO"));
     }
 
     #[test] fn only_medium_and_complex_requests_get_a_second_opinion() {

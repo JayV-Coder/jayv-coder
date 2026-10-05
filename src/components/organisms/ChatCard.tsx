@@ -14,7 +14,7 @@ import { YardCard } from "./YardCard";
 export function ChatCard({ chat, onOpen, onDelete }: { chat: Chat; onOpen: () => void; onDelete: () => void }) {
   const t = useT();
   const feed = useGate((state) => state.feed);
-  const last = [...chat.messages].reverse().find((message) => message.role === "user")?.content;
+  const last = chat.lastPrompt ?? [...chat.messages].reverse().find((message) => message.role === "user")?.content;
   const said = last === undefined ? undefined : shownText(last);
   return (
     <YardCard

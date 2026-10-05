@@ -55,6 +55,8 @@ pub const CORE:[&str;7]=[ENTRY_GATE,EXIT_GATE,SECRET_REDACTION,SENSITIVE_FILES,A
 pub const SENSITIVE_PATTERNS:[&str;9]=[".env",".env.*","*.pem","*.key","*.p12","*.pfx","*.secret",".ssh/**","secrets/**"];
 
 /// O cache de contexto mais curto que o núcleo aceita, em segundos.
+/// O teto de pedidos ao mesmo tempo, o mesmo do banco (`plans.max_concurrent_turns`).
+pub const MAX_CONCURRENT_TURNS:u32=8;
 pub const MIN_CACHE_TTL:u64=300;
 
 pub use crate::cloud::remote::{PlanLimits, RemoteFeatures};
@@ -89,6 +91,10 @@ impl Entitlements {
     pub fn locks(&self,feature:&str)->bool { self.locked.contains(feature) }
 
     pub fn limits(&self)->&PlanLimits { &self.limits }
+
+    /// Quantos pedidos de chats diferentes correm ao mesmo tempo: o número do
+    /// plano, entre 1 e 8; sem plano (ou sem a migração), um de cada vez.
+    pub fn concurrent_turns(&self)->usize { self.limits.max_concurrent_turns.map_or(1,|turns|turns.clamp(1,MAX_CONCURRENT_TURNS) as usize) }
 
     /// As configurações do Jev sem os recursos que o plano não tem.
     pub fn restrict_core(&self,settings:&CoreSettings)->CoreSettings {
@@ -207,6 +213,17 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         settings.adaptive_routing=false; settings.keep_session_model=false; settings.cache_ttl=0;
         settings.privacy.redact_secrets=false; settings.privacy.deny=vec![];
         settings
+    }
+
+    /// Quantos pedidos ao mesmo tempo: o número do plano, entre 1 e 8; sem
+    /// número, um de cada vez.
+    #[test] fn the_plan_says_how_many_turns_run_at_once() {
+        let with=|turns:Option<u32>|Entitlements::from_remote(&RemoteFeatures{limits:crate::cloud::remote::PlanLimits{max_concurrent_turns:turns,..Default::default()},..remote(&[])});
+        assert_eq!(Entitlements::default().concurrent_turns(),1);
+        assert_eq!(with(None).concurrent_turns(),1);
+        assert_eq!(with(Some(3)).concurrent_turns(),3);
+        assert_eq!(with(Some(0)).concurrent_turns(),1);
+        assert_eq!(with(Some(50)).concurrent_turns(),8);
     }
 
     #[test] fn without_a_list_everything_is_allowed() {

@@ -195,6 +195,27 @@ pub fn next_queued(connection:&Connection)->Result<Option<Turn>> {
     ).optional()?.transpose()
 }
 
+/// O próximo da fila cujo projeto não tem pedido no ar. Os pedidos de um
+/// mesmo chat saem em ordem, um de cada vez; os de outro chat do mesmo projeto
+/// também esperam — dois agentes escrevendo na mesma pasta ao mesmo tempo
+/// pisariam um no outro, e a portaria de saída não saberia de quem é cada
+/// mudança. Os de outros projetos não esperam.
+pub fn next_queued_free(connection:&Connection)->Result<Option<Turn>> {
+    connection.query_row(
+        "SELECT t.id,t.chat_id,c.code,t.ordinal,t.status,t.created_at FROM turns t JOIN chats c ON c.id=t.chat_id
+         WHERE t.status=?1 AND t.local=1
+           AND NOT EXISTS (SELECT 1 FROM turns f JOIN chats fc ON fc.id=f.chat_id
+                           WHERE (f.chat_id=t.chat_id OR fc.project_id=c.project_id) AND f.status=?2 AND f.local=1)
+         ORDER BY t.created_at,t.ordinal LIMIT 1",
+        [TurnStatus::Queued.as_str(),TurnStatus::Flying.as_str()],read_turn,
+    ).optional()?.transpose()
+}
+
+/// Quantos pedidos desta máquina estão no ar.
+pub fn flying_count(connection:&Connection)->Result<usize> {
+    Ok(connection.query_row("SELECT COUNT(*) FROM turns WHERE status=?1 AND local=1",[TurnStatus::Flying.as_str()],|row|row.get::<_,i64>(0))? as usize)
+}
+
 /// Se há um pedido desta máquina no ar agora — o de outro computador não
 /// segura a fila daqui. Enquanto houver, a fila não chama o seguinte:
 /// um pedido de cada vez é o que mantém o histórico do chat numa ordem que o

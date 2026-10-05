@@ -9,7 +9,7 @@ auditoria. A entrega vem em três ondas, cada uma um PR por repositório:
 |---|---|---|---|
 | 1 | 0.59.1 | correções, sem mudar o que funciona | L3, L4, L12, B1, B4, B5, B6, B7, B8, B12, S4 |
 | 2 | 0.60.0 | funcionalidade nova compatível | F1, S1, S3, S5, L2, L5, L6, L7, L8, L9, B9 e o resto |
-| 3 | 0.61.0 | arquitetura da fila | L1 |
+| 3 | 0.62.0 | arquitetura da fila | L1 (e o que ficou de L6 e L8) |
 
 ## Princípios
 
@@ -258,6 +258,28 @@ O atendente monta o `TurnContext` com o cadeado do banco, solta tudo e chama
 `process(ctx, &shared, pulse, cancel)`. Pedidos de chats diferentes correm em
 paralelo até `max_concurrent_turns` do plano (semáforo); pedidos do mesmo chat
 continuam em ordem.
+
+### Como ficou (0.62.0)
+
+- O `Orchestrator` não foi partido em `TurnContext` + `Shared`: ele inteiro
+  já é o contexto do pedido (pasta, agentes, índice, firewall, `pending_*`).
+  Saiu dele só o que os pedidos dividem — `orchestrator::Shared` (`Arc`):
+  desempenho dos modelos (gravado no disco sob o cadeado), plano guardado,
+  reclamações seguidas e "preso no planejamento" por chat. A memória das
+  conversas fica por atendente, relida do banco a cada pedido; a sessão do
+  agente também passa a vir sempre do banco.
+- `desktop::Lanes`: um orquestrador por pedido no ar. O primeiro é o de
+  sempre (as telas e os comandos o usam); os outros nascem sob demanda com o
+  mesmo `Shared` e vão embora na troca de usuário (`adopt` segura todos).
+- A fila (`claim_next_turn_within`) chama até `max_concurrent_turns` do plano
+  (1 sem plano). Pedidos do **mesmo projeto** — não só do mesmo chat — saem
+  um de cada vez: dois agentes na mesma pasta pisariam um no outro, e a
+  portaria de saída não saberia de quem é cada mudança. O projeto volta ao
+  atendente que já leu a pasta dele (`pick_lane`).
+- Entraram também os dois itens que tinham ficado da onda 2: `get_workspace`
+  leve (sem mensagens, com `lastPrompt` e `messageCount`; a conversa vem por
+  `get_chat` quando o chat abre) e o plano do `planFirst` na faixa, linha a
+  linha (`Pulse::as_lines`).
 
 ## Compatibilidade
 
