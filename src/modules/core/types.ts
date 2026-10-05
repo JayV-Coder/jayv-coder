@@ -52,6 +52,15 @@ export interface TurnView {
   route: TurnRoute | null;
 }
 
+/** O que sustenta a resposta de um turno, lido sob demanda. As portarias são
+ * o que o JayV observou; a segunda opinião é a leitura de outro modelo. */
+export interface TurnEvidence {
+  entry: { score: number; demand: number; verdict: EntryVerdict; scopeLevel: number; doneCriterion: boolean } | null;
+  exits: { kind: string; target: string; rule: string | null; verdict: ExitVerdict }[];
+  /** `arrived` é falso enquanto a revisão não chegou ou quando o revisor falhou. */
+  review: { provider: string; model: string; files: number; arrived: boolean } | null;
+}
+
 export type RouteMode = "plan" | "build";
 
 export interface TurnRoute {

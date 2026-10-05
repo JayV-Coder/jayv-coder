@@ -1,12 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { CheckIcon, CopyIcon, RotateCcwIcon, Undo2Icon, XIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, ListChecksIcon, RotateCcwIcon, Undo2Icon, XIcon } from "lucide-react";
 import type { TurnView } from "@/modules/core";
-import { answerLines, messageLight, routeHint, routeLabel, shownText } from "@/modules/conversation";
+import { answerLines, messageLight, routeHint, routeLabel, shownText, type MessageLight } from "@/modules/conversation";
 import { ChevronIcon } from "@/components/atoms";
 import { formatClock, useT } from "@/modules/i18n";
 import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { EvidencePanel } from "./EvidencePanel";
 
 /** Onde uma mensagem do agente termina e a próxima começa (o
  * `MESSAGE_BREAK` do núcleo). */
@@ -18,9 +19,18 @@ function splitMessages(text: string): string[] {
 }
 
 /** A cor que a portaria deu, escrita como no terminal: a luz e o veredito,
- * na cor da vez. */
-function Verdict({ light }: { light: NonNullable<ReturnType<typeof messageLight>> }) {
+ * na cor da vez. A resposta não verificada não tem cor: o ponto fica vazado,
+ * e passar o mouse diz por quê. */
+function Verdict({ light }: { light: MessageLight }) {
   const t = useT();
+  if (light.aspect === null) {
+    return (
+      <span title={t("verdict.unverified.hint")} className="inline-flex items-center gap-1.5 text-muted-foreground">
+        <span aria-hidden="true" className="size-1.5 rounded-full border border-current" />
+        {t(light.label)}
+      </span>
+    );
+  }
   return (
     <span data-aspect={light.aspect} className="inline-flex items-center gap-1.5 text-[var(--aspect)]">
       <span aria-hidden="true" className="size-1.5 rounded-full bg-[var(--aspect)]" />
@@ -64,6 +74,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   const answers = role === "user" ? answerLines(content) : null;
   const foldable = answers !== null && answers.length > 1;
   const [unfolded, setUnfolded] = useState(false);
+  const [checked, setChecked] = useState(false);
   const light = turn ? messageLight(role, turn) : null;
   const user = role === "user";
   // Pedido barrado, falha e resposta a uma pergunta ficam gravados como aviso
@@ -82,8 +93,10 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   const earlier = thoughts ? 0 : Math.max(0, said.length - 1);
   const shown = [...said.slice(earlier), answer];
   // Pedido novo, balão recolhido de novo.
-  useEffect(() => { setThoughts(false); setUnfolded(false); }, [turn?.id]);
-  const tinted = light !== null && light.aspect !== "go";
+  useEffect(() => { setThoughts(false); setUnfolded(false); setChecked(false); }, [turn?.id]);
+  const tinted = light !== null && light.aspect !== null && light.aspect !== "go";
+  // O que foi conferido só existe para a resposta que chegou ao fim.
+  const checkable = !user && !pending && turn?.status === "answered";
   const animate = pending && "animate-pending-in motion-reduce:animate-none";
 
   const copy = async () => {
@@ -209,8 +222,21 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
           </div>
         )}
         {children}
-        {!pending && (meta || answer) && (
+        {checkable && checked && <EvidencePanel turnId={turn.id} />}
+        {!pending && (meta || answer || checkable) && (
           <div className="flex min-h-6 items-center gap-2 text-caption text-muted-foreground">
+            {checkable && (
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-expanded={checked}
+                onClick={() => setChecked(!checked)}
+                className="h-5 text-caption font-normal text-muted-foreground"
+              >
+                <ListChecksIcon aria-hidden="true" />
+                {t("evidence.toggle")}
+              </Button>
+            )}
             {answer && (
               <Button
                 variant="outline"

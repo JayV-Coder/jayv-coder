@@ -43,8 +43,8 @@ export function blocksOf(messages: Message[], turns: Map<string, TurnView>): Blo
  * atenção — como o Warp pinta só o comando que falhou. */
 export function blockAspect(turn: TurnView | null): Aspect | null {
   if (!turn) return null;
-  const lights = [messageLight("user", turn), messageLight("assistant", turn)].filter((light) => light !== null);
-  const worst = lights.reduce<Aspect>((found, light) => (WEIGHT[light.aspect] > WEIGHT[found] ? light.aspect : found), "go");
+  const aspects = [messageLight("user", turn)?.aspect, messageLight("assistant", turn)?.aspect].filter((aspect) => aspect != null);
+  const worst = aspects.reduce<Aspect>((found, aspect) => (WEIGHT[aspect] > WEIGHT[found] ? aspect : found), "go");
   return worst === "go" ? null : worst;
 }
 

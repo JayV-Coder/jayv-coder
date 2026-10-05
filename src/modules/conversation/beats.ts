@@ -136,14 +136,20 @@ export const EXIT_VERDICTS: Record<ExitVerdict, { aspect: Aspect; label: Key }> 
   held: { aspect: "stop", label: "verdict.exit.held" },
 };
 
+/** A luz de um balão. `aspect` nulo é a resposta sem cor: nada a segurou, e
+ * nada a provou. */
+export type MessageLight = { aspect: Aspect | null; label: Key };
+
 /** O semáforo do balão. O pedido mostra o que o portão de entrada decidiu sobre
- * ele; a resposta, o que o portão de saída viu nela — vermelho quando alguma
- * coisa foi segurada, verde quando nada foi. Um pedido barrado tinge os dois
- * balões: quem respondeu foi a própria portaria. */
-export function messageLight(role: "user" | "assistant", turn: { status: TurnStatus; entry: EntryVerdict | null; exit: ExitVerdict | null }): { aspect: Aspect; label: Key } | null {
+ * ele; a resposta, vermelho quando a portaria de saída segurou alguma coisa.
+ * Resposta que passou pelas regras não é resposta verificada: o JayV não rodou
+ * teste, build nem lint, então ela não fica verde — fica "não verificada", sem
+ * cor. Um pedido barrado tinge os dois balões: quem respondeu foi a própria
+ * portaria. */
+export function messageLight(role: "user" | "assistant", turn: { status: TurnStatus; entry: EntryVerdict | null; exit: ExitVerdict | null }): MessageLight | null {
   if (role === "user") return turn.entry ? ENTRY_VERDICTS[turn.entry] : null;
   if (turn.status === "blocked") return { aspect: "stop", label: "verdict.blocked" };
   if (turn.status === "failed") return { aspect: "ask", label: "verdict.failed" };
   if (turn.status === "flying" || turn.status === "queued") return null;
-  return turn.exit ? EXIT_VERDICTS[turn.exit] : { aspect: "go", label: "verdict.nothing" };
+  return turn.exit === "held" ? EXIT_VERDICTS.held : { aspect: null, label: "verdict.unverified" };
 }

@@ -500,7 +500,10 @@ fn review_in_background(app:AppHandle,workspace:SharedWorkspace,turn:Turn,review
     let scope=usage::current_scope();
     tauri::async_runtime::spawn(usage::within(scope,async move {
         let Some(section)=review.run().await else { return };
-        if workspace.lock().await.append_answer(&turn.chat_id,&turn.id,section.trim()).is_ok() {
+        let mut workspace=workspace.lock().await;
+        if workspace.append_answer(&turn.chat_id,&turn.id,section.trim()).is_ok() {
+            // A narração só dizia que a revisão foi pedida; agora ela chegou.
+            if let Err(error)=workspace.record_beat(&turn.id,crate::turns::REVIEWED_EVENT,&serde_json::json!({})) { eprintln!("revisão: não consegui marcar a chegada no turno `{}` ({error:#})",turn.id); }
             let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
         }
     }));

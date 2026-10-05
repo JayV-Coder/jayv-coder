@@ -181,7 +181,7 @@ pub fn is_continuation(prompt:&str)->bool {
 #[serde(rename_all="camelCase")]
 pub struct Criterion{pub id:String,pub label:String,pub percent:u8,pub band:Option<[u8;2]>,pub reading:String,pub inverted:bool}
 impl Criterion {
-    fn within_band(&self)->bool{self.band.is_none_or(|[from,to]|(from..=to).contains(&self.percent))}
+    pub(crate) fn within_band(&self)->bool{self.band.is_none_or(|[from,to]|(from..=to).contains(&self.percent))}
 }
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
