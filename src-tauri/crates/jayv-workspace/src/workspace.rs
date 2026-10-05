@@ -67,6 +67,24 @@ pub const MODE_BUILD:&str="build";
 /// O chat sem modo fixo: o Jev escolhe planejamento ou build a cada pedido.
 pub const MODE_AUTO:&str="auto";
 /// O modo como o chat o guarda, ou nada se o valor não é um dos três.
+/// As sessões dos agentes por chat, guardadas para sobreviver ao reinício do
+/// app. Não sobem para o Supabase: a sessão mora no disco do agente desta
+/// máquina. `instructions` é a impressão, em hexadecimal, das instruções com
+/// que ela começou.
+const AGENT_SESSIONS:&str="CREATE TABLE IF NOT EXISTS agent_sessions (
+    chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    root TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    turns INTEGER NOT NULL,
+    writes INTEGER NOT NULL,
+    instructions TEXT NOT NULL DEFAULT '0',
+    updated_at TEXT NOT NULL
+);";
+/// Por quanto tempo uma sessão guardada ainda é retomada.
+const AGENT_SESSION_HOURS:i64=24;
+
 pub fn work_mode(value:&str)->Option<&'static str> { [MODE_AUTO,MODE_PLAN,MODE_BUILD].into_iter().find(|mode|*mode==value) }
 
 fn auto_mode()->String { MODE_AUTO.into() }
@@ -179,6 +197,7 @@ impl WorkspaceStore {
         connection.execute_batch(crate::features::SCHEMA)?;
         connection.execute_batch(crate::project_memory::SCHEMA)?;
         crate::search::ensure(&connection)?;
+        connection.execute_batch(AGENT_SESSIONS)?;
         crate::local::outbox::install(&connection)?;
         fail_interrupted_turns(&connection)?;
         let mut store=Self{connection,path};
@@ -424,7 +443,39 @@ impl WorkspaceStore {
         // pedido escrito, a fila não teria o que mandar ao agente.
         transaction.execute("UPDATE turns SET status=?1 WHERE chat_id=?2 AND status=?3",params![TurnStatus::Failed.as_str(),chat_id,TurnStatus::Queued.as_str()])?;
         transaction.execute("UPDATE chats SET title='',named=0,updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
+        // Chat limpo é conversa nova: a sessão do agente fica para trás.
+        transaction.execute("DELETE FROM agent_sessions WHERE chat_id=?1",[chat_id])?;
         transaction.commit()?;
+        Ok(())
+    }
+
+    /// A sessão do agente guardada para o chat, se ainda vale: com mais de um
+    /// dia sem uso ela é esquecida, porque o agente pode já tê-la apagado.
+    pub fn agent_session(&self, chat_id:&str) -> Result<Option<crate::memory::AgentSession>> {
+        let row:Option<(String,String,String,String,i64,bool,String,String)>=self.connection.query_row(
+            "SELECT provider,model,root,session_id,turns,writes,instructions,updated_at FROM agent_sessions WHERE chat_id=?1",[chat_id],
+            |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?)),
+        ).optional()?;
+        let Some((provider,model,root,id,turns,writes,instructions,updated_at))=row else { return Ok(None) };
+        let fresh=DateTime::parse_from_rfc3339(&updated_at).is_ok_and(|at|Utc::now()-at.with_timezone(&Utc)<=chrono::Duration::hours(AGENT_SESSION_HOURS));
+        if !fresh { self.connection.execute("DELETE FROM agent_sessions WHERE chat_id=?1",[chat_id])?; return Ok(None); }
+        Ok(Some(crate::memory::AgentSession{provider,model,root,id,turns:turns.max(0) as usize,writes,instructions:u64::from_str_radix(&instructions,16).unwrap_or(0)}))
+    }
+
+    /// Guarda a sessão do agente do chat, para ela sobreviver ao reinício do
+    /// app. Fica só nesta máquina: a sessão mora no disco do agente daqui.
+    pub fn keep_agent_session(&mut self, chat_id:&str, session:&crate::memory::AgentSession) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO agent_sessions(chat_id,provider,model,root,session_id,turns,writes,instructions,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(chat_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,root=excluded.root,session_id=excluded.session_id,
+               turns=excluded.turns,writes=excluded.writes,instructions=excluded.instructions,updated_at=excluded.updated_at",
+            params![chat_id,session.provider,session.model,session.root,session.id,session.turns as i64,session.writes,format!("{:x}",session.instructions),Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn forget_agent_session(&mut self, chat_id:&str) -> Result<()> {
+        self.connection.execute("DELETE FROM agent_sessions WHERE chat_id=?1",[chat_id])?;
         Ok(())
     }
 
@@ -1148,6 +1199,31 @@ mod tests {
         assert!(store.settle_question(&follow.id,turns::QUESTION_ANSWERED,Some(&confirmed.id)).expect("encerrar"));
         assert!(store.answers_gate(&confirmed.id).expect("leitura"),"a resposta é da confirmação da portaria");
         assert!(!store.answers_gate(&follow.id).expect("leitura"));
+    }
+
+    /// A sessão do agente volta depois de fechar e abrir o app, some com o
+    /// chat limpo e expira depois de um dia.
+    #[test]
+    fn the_agent_session_survives_a_restart_and_expires() {
+        let root=tempfile::tempdir().expect("root");
+        let session=crate::memory::AgentSession{provider:"claude".into(),model:"sonnet".into(),root:"/repo".into(),id:"s-1".into(),turns:2,writes:true,instructions:0xabc};
+        let chat_id={
+            let mut store=store(&root);
+            let project=store.create_project("Produto",None).expect("project");
+            let chat=store.create_chat(&project.id,None).expect("chat");
+            store.keep_agent_session(&chat.id,&session).expect("guarda");
+            chat.id
+        };
+        let mut store=store(&root);
+        assert_eq!(store.agent_session(&chat_id).expect("leitura"),Some(session.clone()),"reabrir o banco traz a sessão");
+        store.connection.execute("UPDATE agent_sessions SET updated_at='2000-01-01T00:00:00Z'",[]).expect("envelhece");
+        assert_eq!(store.agent_session(&chat_id).expect("leitura"),None,"depois de um dia o agente pode já tê-la apagado");
+        store.keep_agent_session(&chat_id,&session).expect("guarda de novo");
+        store.clear_chat(&chat_id).expect("limpa");
+        assert_eq!(store.agent_session(&chat_id).expect("leitura"),None,"chat limpo começa sessão nova");
+        store.keep_agent_session(&chat_id,&session).expect("guarda de novo");
+        store.forget_agent_session(&chat_id).expect("esquece");
+        assert_eq!(store.agent_session(&chat_id).expect("leitura"),None);
     }
 
     #[test]

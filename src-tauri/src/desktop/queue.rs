@@ -275,7 +275,17 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // O modo do chat é lido agora, na vez do pedido: trocar de modo com
     // pedidos na fila vale para eles também.
     state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
+    // A sessão do agente sobrevive ao reinício do app: a guardada volta para a
+    // memória antes do pedido, e a de depois dele é guardada de novo.
+    if state.orchestrator.memory.agent_session(chat_id).is_none() {
+        if let Ok(Some(kept))=workspace.lock().await.agent_session(chat_id) { state.orchestrator.memory.keep_agent_session(chat_id,kept); }
+    }
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
+    {
+        let mut workspace=workspace.lock().await;
+        let saved=match state.orchestrator.memory.agent_session(chat_id) { Some(kept)=>workspace.keep_agent_session(chat_id,kept), None=>workspace.forget_agent_session(chat_id) };
+        if let Err(error)=saved { eprintln!("sessão do agente: não consegui guardar ({error:#})"); }
+    }
     // O Jev tirou o chat do planejamento: o chat fica em build até o
     // desenvolvedor desfazer ou escolher outro modo.
     if state.orchestrator.mode_switch.take().is_some() {

@@ -53,7 +53,13 @@ pub struct CoreSettings {
     /// Num pedido complexo do modo build, partes do pedido vão a agentes
     /// diferentes ao mesmo tempo.
     #[serde(default)] pub parallel_tasks:bool,
+    /// Num chat com sessão viva, o modelo da sessão fica (ligado por padrão).
+    #[serde(default="keep_by_default")] pub keep_session_model:bool,
+    /// A sessão do agente atravessa a troca entre planejamento e build.
+    #[serde(default)] pub resume_across_modes:bool,
 }
+
+fn keep_by_default()->bool { true }
 
 impl CoreSettings {
     /// Os valores de partida: os do `config.yaml` ou, sem ele, os padrões.
@@ -70,6 +76,8 @@ impl CoreSettings {
             review_changes:config.jev.review_changes,
             plan_first:config.jev.plan_first,
             parallel_tasks:config.jev.parallel_tasks,
+            keep_session_model:config.jev.keep_session_model,
+            resume_across_modes:config.jev.resume_across_modes,
         }
     }
 
@@ -90,6 +98,8 @@ impl CoreSettings {
         config.jev.review_changes=self.review_changes;
         config.jev.plan_first=self.plan_first;
         config.jev.parallel_tasks=self.parallel_tasks;
+        config.jev.keep_session_model=self.keep_session_model;
+        config.jev.resume_across_modes=self.resume_across_modes;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,
@@ -182,6 +192,7 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         connection.execute("INSERT INTO app_metadata(key,value) VALUES(?1,?2)",params![KEY,old.to_string()]).expect("grava");
         let loaded=load(&connection,&CoreSettings::from_config(&Config::default())).expect("load");
         assert_eq!((loaded.confidence_threshold,loaded.agent_order.len()),(0.8,0));
+        assert!(loaded.keep_session_model&&!loaded.resume_across_modes,"o gravado antes das opções de sessão abre com os padrões");
     }
 
     #[test] fn values_outside_the_ranges_never_reach_the_database() {

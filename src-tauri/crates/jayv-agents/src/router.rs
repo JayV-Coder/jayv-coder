@@ -118,6 +118,27 @@ pub fn rank_models(config:&Config,intent:&str,complexity:&str,context:&Context,p
     choices.into_iter().map(|(name,model,score)|ModelSelection{model_name:effective_model_id(name,model).to_string(),provider:model.provider.clone(),estimated_tokens:context.estimated_tokens.min(budget),score,reason:format!("{intent}/{complexity} wants a {} model; matched {} capabilities within {budget}-token budget",["local","small","mid-size","large"][wanted_tier(intent,complexity)],required.len()),..Default::default()}).collect()
 }
 
+/// O porte de um modelo já escolhido (1 pequeno, 2 médio, 3 grande; o local
+/// conta como pequeno), lido da configuração dele.
+pub fn selection_tier(config:&Config,selection:&ModelSelection)->Option<usize> {
+    config.models.iter().find(|(name,model)|model.provider==selection.provider&&effective_model_id(name,model)==selection.model_name)
+        .and_then(|(_,model)|cost_rank(&model.cost_class)).map(|rank|rank.max(1))
+}
+
+/// Dentro de um chat com sessão viva, o modelo da sessão vem primeiro: trocar
+/// de modelo abre sessão nova, e o agente relê o projeto do zero — o que custa
+/// mais que a diferença entre um modelo pequeno e um médio. O porte escolhe o
+/// modelo no primeiro pedido; os seguintes ficam nele, salvo um pedido
+/// complexo que peça porte maior que o da sessão. O esforço continua variando
+/// por pedido, porque não quebra a sessão.
+pub fn keep_session_model(mut ranked:Vec<ModelSelection>,config:&Config,sticky:Option<(&str,&str)>,intent:&str,complexity:&str)->Vec<ModelSelection> {
+    let Some((provider,model))=sticky else { return ranked };
+    let Some(index)=ranked.iter().position(|candidate|candidate.provider==provider&&candidate.model_name==model) else { return ranked };
+    let outgrown=complexity=="complex"&&selection_tier(config,&ranked[index]).is_some_and(|tier|tier<wanted_tier(intent,complexity));
+    if !outgrown { let kept=ranked.remove(index); ranked.insert(0,kept); }
+    ranked
+}
+
 /// O que nenhum modelo configurado atende: o Jev explica como configurar.
 pub fn configuration_selection(config:&Config,complexity:&str,context:&Context)->ModelSelection {
     let budget=*config.budgets.get(complexity).unwrap_or(&12_000);
@@ -181,6 +202,39 @@ fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&
         // Um disabled sai da conta, e o porte vizinho assume.
         config.models.get_mut("claude:large").expect("large").enabled=false;
         assert_eq!(pick(&config,"refactor","complex"),"mid");
+    }
+
+    /// O chat de iniciante do relatório: com o porte decidindo cada pedido, o
+    /// modelo troca a cada volta; com o modelo da sessão na frente, só o
+    /// pedido complexo que pede porte maior troca.
+    #[test]
+    fn the_session_model_stays_unless_a_complex_request_outgrows_it() {
+        let mut config=bare();
+        config.providers.insert("claude".into(),crate::config::ProviderConfig { enabled:true, kind:"openai".into(), api_key:Some("configured".into()), ..Default::default() });
+        let all=vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()];
+        for (id,cost,speed) in [("haiku","low","fast"),("sonnet","medium","medium"),("opus","high","slow")] {
+            config.models.insert(format!("claude:{id}"),ModelConfig{enabled:true,provider:"claude".into(),model:id.into(),capabilities:all.clone(),cost_class:cost.into(),speed:speed.into(),context_window:200_000});
+        }
+        let chat=[("frontend","medium"),("code","simple"),("analysis","simple"),("code","simple"),("code","simple"),("code","simple"),("refactor","medium"),("test","medium")];
+        let run=|keep:bool|{
+            let mut previous:Option<String>=None; let mut switches=0;
+            for (intent,complexity) in chat {
+                let ranked=rank_models(&config,intent,complexity,&Context::default(),&PerformanceTracker::default(),&Tiebreak::default());
+                let ranked=if keep { keep_session_model(ranked,&config,previous.as_deref().map(|model|("claude",model)),intent,complexity) } else { ranked };
+                let chosen=ranked[0].model_name.clone();
+                if previous.as_ref().is_some_and(|before|*before!=chosen) { switches+=1; }
+                previous=Some(chosen);
+            }
+            switches
+        };
+        assert!(run(false)>=2,"sem a regra, o modelo troca a cada porte: {}",run(false));
+        assert_eq!(run(true),0,"com a regra, o chat fica no modelo do primeiro pedido");
+
+        let ranked=rank_models(&config,"refactor","complex",&Context::default(),&PerformanceTracker::default(),&Tiebreak::default());
+        assert_eq!(keep_session_model(ranked.clone(),&config,Some(("claude","haiku")),"refactor","complex")[0].model_name,"opus","o complexo que pede porte maior troca");
+        assert_eq!(keep_session_model(ranked.clone(),&config,Some(("claude","opus")),"refactor","complex")[0].model_name,"opus");
+        assert_eq!(keep_session_model(ranked.clone(),&config,Some(("other","x")),"refactor","complex")[0].model_name,"opus","sessão de modelo fora da lista não muda nada");
+        assert_eq!(selection_tier(&config,&ranked[0]),Some(3));
     }
 
     #[test]

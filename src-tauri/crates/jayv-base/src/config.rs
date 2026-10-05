@@ -34,8 +34,15 @@ pub struct JevConfig {
     /// partes que agentes fazem ao mesmo tempo, cada um numa `git worktree`
     /// (ver `parallel`).
     #[serde(default)] pub parallel_tasks: bool,
+    /// Num chat com sessão viva, o modelo da sessão vale mais que o porte do
+    /// pedido: trocar de modelo abre sessão nova (ver `router::keep_session_model`).
+    #[serde(default = "yes")] pub keep_session_model: bool,
+    /// A sessão aberta no planejamento é retomada no build (e o contrário),
+    /// com uma nota dizendo que o modo mudou. Desligado, cada lado da escrita
+    /// tem a sua sessão — o comportamento desde a v0.52.4.
+    #[serde(default)] pub resume_across_modes: bool,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {
