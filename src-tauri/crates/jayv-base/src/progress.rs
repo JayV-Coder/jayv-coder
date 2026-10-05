@@ -133,6 +133,35 @@ impl Debounce {
     pub fn waiting(&self)->usize { self.waiting }
 }
 
+/// De quanto em quanto tempo os pedaços da resposta vão juntos para a tela,
+/// e quanto texto basta para ir antes disso.
+pub const FRAME_EVERY:Duration=Duration::from_millis(50);
+pub const FRAME_BYTES:usize=4096;
+
+/// Os pedaços da resposta que esperam o próximo quadro da tela. O disco tem a
+/// sua folga (`Debounce`); a tela tem esta, bem mais curta: o texto continua
+/// crescendo enquanto chega, sem um aviso — e um redesenho — por token.
+#[derive(Debug,Default)]
+pub struct Frame { text:String, since:Option<tokio::time::Instant> }
+
+impl Frame {
+    /// Junta o pedaço. Devolve o quadro inteiro quando ele encheu e tem de ir já.
+    pub fn push(&mut self,text:&str,now:tokio::time::Instant)->Option<String> {
+        if self.since.is_none() { self.since=Some(now); }
+        self.text.push_str(text);
+        if self.text.len()>=FRAME_BYTES { self.take() } else { None }
+    }
+
+    /// Quando o quadro em espera tem de ir, se há um.
+    pub fn due(&self)->Option<tokio::time::Instant> { self.since.map(|since|since+FRAME_EVERY) }
+
+    /// O texto em espera, e o quadro recomeça vazio.
+    pub fn take(&mut self)->Option<String> {
+        self.since=None;
+        (!self.text.is_empty()).then(||std::mem::take(&mut self.text))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +212,20 @@ mod tests {
 
     /// Muitos pedaços pequenos e nenhum tempo decorrido dão uma escrita só. Era
     /// isto que faltava para o texto parcial não virar um log de tokens.
+    /// Os tokens de um quadro vão juntos, na ordem; o quadro cheio vai na hora.
+    #[test] fn pieces_wait_for_the_frame_and_keep_their_order() {
+        let now=tokio::time::Instant::now();
+        let mut frame=Frame::default();
+        assert_eq!(frame.due(),None,"sem texto, nada a esperar");
+        assert_eq!(frame.push("um ",now),None);
+        assert_eq!(frame.push("dois",now+Duration::from_millis(10)),None);
+        assert_eq!(frame.due(),Some(now+FRAME_EVERY),"o prazo conta do primeiro pedaço");
+        assert_eq!(frame.take().as_deref(),Some("um dois"));
+        assert_eq!(frame.take(),None);
+        assert_eq!(frame.push(&"x".repeat(FRAME_BYTES),now).map(|text|text.len()),Some(FRAME_BYTES),"quadro cheio vai já");
+        assert_eq!(frame.due(),None);
+    }
+
     #[test] fn many_small_chunks_make_a_single_write() {
         let now=Instant::now();
         let mut slack=Debounce::start(now);

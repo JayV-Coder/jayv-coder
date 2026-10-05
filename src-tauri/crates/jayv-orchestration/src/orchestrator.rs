@@ -292,6 +292,9 @@ impl Orchestrator {
         // Pedido complexo no build, com a divisão ligada: partes do pedido vão
         // a agentes diferentes ao mesmo tempo. Sem divisão possível, segue
         // inteiro com o agente escolhido.
+        // A janela do plano B conta a partir de cada tentativa: o plano e a
+        // divisão que vêm antes do construtor não gastam a vez dele.
+        let mut attempt=Instant::now();
         let split=if self.config.jev.parallel_tasks&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity)&&self.config.permissions.write!="deny" {
             self.run_parallel(brief.as_deref().unwrap_or(&normalized),&context,&ranked,session_id,pulse).await
         } else { None };
@@ -308,6 +311,7 @@ impl Orchestrator {
                 if self.config.jev.plan_first&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity) {
                     if let Some(plan)=self.plan_first(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await { extras.push(plan); }
                 }
+                attempt=Instant::now();
                 self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await
             }
         };
@@ -317,12 +321,13 @@ impl Orchestrator {
         // encontraria o projeto pela metade.
         let mut tried=vec![selection.provider.clone()];
         while let Err(error)=&execution {
-            if started.elapsed()>FALLBACK_WINDOW || !could_not_start(error) { break; }
+            if attempt.elapsed()>FALLBACK_WINDOW || !could_not_start(error) { break; }
             let Some(next)=ranked.iter().find(|candidate|!tried.contains(&candidate.provider)&&self.pool(mode).contains_key(&candidate.provider)) else { break };
             pulse.beat(Beat::Fallback{provider:selection.provider.clone(),error:crate::i18n::notice(&[crate::i18n::failure(anyhow!("{error:#}"))])});
             selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..next.clone()};
             tried.push(selection.provider.clone());
             pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
+            attempt=Instant::now();
             execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await;
         }
         if let (Some(watch),Ok((response,_,_)))=(watch,&mut execution) {
@@ -364,7 +369,7 @@ impl Orchestrator {
             RoutingMode::Failed(error)=>local_routing(input,Some(error.clone())),
             RoutingMode::Auto=>{
                 if let Some(ahead)=ahead { return match ahead { Ok(decision)=>self.jev_routing(&decision), Err(error)=>local_routing(input,Some(error)) }; }
-                if !jev::is_configured() { return local_routing(input,None); }
+                if !jev::reachable() { return local_routing(input,None); }
                 match jev::route(&self.routing_input(input,session_id)).await {
                     Ok(decision)=>self.jev_routing(&decision),
                     Err(error)=>local_routing(input,Some(error.to_string())),
@@ -381,7 +386,7 @@ impl Orchestrator {
 
     /// Quer o Jev a leitura de roteamento deste pedido? Só no modo automático
     /// e com credencial; nos outros modos ela não é pedida.
-    pub fn routes_with_jev(&self)->bool { matches!(self.routing_mode,RoutingMode::Auto)&&jev::is_configured() }
+    pub fn routes_with_jev(&self)->bool { matches!(self.routing_mode,RoutingMode::Auto)&&jev::reachable() }
 
     fn routing_input_after(&self,input:&str,session_id:&str,current:usize)->jev::RoutingInput {
         let project=self.rag.project_info();
@@ -872,7 +877,10 @@ fn short_history(conversation:&[ChatMessage])->Vec<ChatMessage> {
 /// A falha que vem da sessão retomada — apagada, de outra pasta, expirada —, e
 /// não do pedido: com ela, vale começar outra sessão.
 /// Até quando depois da largada uma falha ainda conta como "não começou".
-const FALLBACK_WINDOW:std::time::Duration=std::time::Duration::from_secs(30);
+#[cfg(not(test))] const FALLBACK_WINDOW:std::time::Duration=std::time::Duration::from_secs(30);
+/// Nos testes a janela é curta: o que se prova é que ela conta a partir de
+/// cada tentativa, não o tamanho dela.
+#[cfg(test)] const FALLBACK_WINDOW:std::time::Duration=std::time::Duration::from_secs(1);
 
 /// O agente falhou antes de trabalhar: não está instalado, não abriu, ou
 /// recusou de cara por login, chave ou cota.
@@ -884,9 +892,13 @@ fn agent_name(provider:&str)->String {
 pub fn could_not_start(error:&anyhow::Error)->bool {
     static REFUSAL:std::sync::OnceLock<regex::Regex>=std::sync::OnceLock::new();
     let refusal=REFUSAL.get_or_init(||regex::Regex::new(r"(?i)not logged in|log ?in|sign ?in|authenticat|unauthori[sz]ed|api key|credential|quota|rate.?limit|usage limit|credit|billing|subscription|\b(?:401|402|403|429)\b").expect("refusal regex"));
+    // O motivo que veio só do fim da resposta não conta: um pedido sobre a tela
+    // de login que falhou no meio fala de login sem ser recusa nenhuma, e o
+    // próximo agente encontraria o projeto pela metade.
+    let from_output=|text:&Text|matches!(text.params.get("origin"),Some(crate::i18n::Param::Plain(origin)) if origin==crate::providers::FAILURE_OUTPUT);
     error.chain().filter_map(|cause|cause.downcast_ref::<Text>()).any(|text|match text.key.as_str() {
         "provider.notInstalled"|"provider.start"=>true,
-        "provider.failed"=>matches!(text.params.get("reason"),Some(crate::i18n::Param::Plain(reason)) if refusal.is_match(reason)),
+        "provider.failed"=>!from_output(text)&&matches!(text.params.get("reason"),Some(crate::i18n::Param::Plain(reason)) if refusal.is_match(reason)),
         _=>false,
     })
 }
@@ -897,7 +909,8 @@ pub fn could_not_start(error:&anyhow::Error)->bool {
 /// numa árvore já meio mexida.
 fn lost_session(error:&anyhow::Error)->bool {
     static LOST:std::sync::OnceLock<regex::Regex>=std::sync::OnceLock::new();
-    let lost=LOST.get_or_init(||regex::Regex::new(r"(?i)no conversation found|conversation (?:id )?not found|session (?:id )?not found|no such session|unknown session|invalid session(?: id)?|session (?:\S+ )?(?:does not exist|has expired|expired)|could not (?:find|resume|load) (?:the )?(?:session|conversation)|failed to resume").expect("lost session regex"));
+    // O Codex 0.160 diz `thread/resume failed: no rollout found for thread id …`.
+    let lost=LOST.get_or_init(||regex::Regex::new(r"(?i)no conversation found|conversation (?:id )?not found|session (?:id )?not found|no such session|unknown session|invalid session(?: id)?|session (?:\S+ )?(?:does not exist|has expired|expired)|could not (?:find|resume|load) (?:the )?(?:session|conversation)|failed to resume|no rollout found|thread/resume failed").expect("lost session regex"));
     lost.is_match(&format!("{error:#}"))
 }
 
@@ -1450,6 +1463,57 @@ mod tests {
         let broken=orchestrator.process("adicione um teste ao roteador",Some("broken"),&Pulse::silent()).await;
         assert!(broken.error.is_some(),"a falha de quem trabalhou fica com ele");
         assert_eq!(broken.model_selection.provider,"first");
+    }
+
+    /// O plano demorado de um pedido complexo não tira o plano B do
+    /// construtor: a janela conta a partir da tentativa dele.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_fallback_window_starts_at_the_build() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=|build:&str,plan:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build.into()],plan_args:vec!["-c".into(),plan.into()],..Default::default()};
+        let providers=HashMap::from([
+            ("thinker".to_string(),agent("cat >/dev/null; echo thinker","sleep 1.5; cat >/dev/null; echo '1. PLANO-X'")),
+            ("maker".to_string(),agent("cat >/dev/null; echo 'Error: not logged in. Run /login' >&2; exit 1","cat >/dev/null; echo plano")),
+            ("spare".to_string(),agent("cat >/dev/null; echo do-reserva","cat >/dev/null; echo plano")),
+        ]);
+        let caps=|list:&[&str]|list.iter().map(|cap|cap.to_string()).collect::<Vec<_>>();
+        let builder=|provider:&str|crate::config::ModelConfig{enabled:true,provider:provider.into(),model:"coder".into(),capabilities:caps(&["chat","code","tools"]),cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([
+            ("thinker/m".to_string(),crate::config::ModelConfig{enabled:true,provider:"thinker".into(),model:"deep".into(),capabilities:caps(&["chat","reasoning"]),cost_class:"high".into(),speed:"slow".into(),context_window:200_000}),
+            ("maker/m".to_string(),builder("maker")),
+            ("spare/m".to_string(),builder("spare")),
+        ]);
+        orchestrator.config.jev.agent_order=vec!["maker".into(),"spare".into()];
+        orchestrator.config.jev.plan_first=true;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"complex",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        let result=orchestrator.process("reescreva o roteador inteiro",Some("slow-plan"),&Pulse::silent()).await;
+        assert_eq!(result.model_selection.provider,"spare","o construtor sem login passou a vez mesmo depois do plano demorado");
+        assert_eq!(result.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("do-reserva"));
+    }
+
+    /// O Codex 0.160 diz que não achou a sessão com estas palavras; o pedido
+    /// recomeça do zero em vez de falhar.
+    #[test] fn a_lost_codex_thread_starts_a_new_session() {
+        let codex=anyhow!("thread/resume: thread/resume failed: no rollout found for thread id 0199a213-81c0-7800-8aa1-bbab2a035a53 (code -32600)");
+        assert!(lost_session(&codex));
+        assert!(!lost_session(&anyhow!("error[E0425]: cannot find value `session`")));
+    }
+
+    /// Só o que o agente anunciou ou escreveu no canal de erro decide que ele
+    /// nem começou; o fim da resposta falando de login não decide.
+    #[test] fn only_an_announced_refusal_means_the_agent_could_not_start() {
+        let failed=|origin:&str|anyhow::Error::new(Text::new("provider.failed").with("provider","claude").with("reason","please log in again").with("origin",origin));
+        assert!(could_not_start(&failed(crate::providers::FAILURE_STDERR)));
+        assert!(could_not_start(&failed(crate::providers::FAILURE_ANNOUNCED)));
+        assert!(!could_not_start(&failed(crate::providers::FAILURE_OUTPUT)),"o texto da resposta não é recusa");
+        let legacy=anyhow::Error::new(Text::new("provider.failed").with("reason","not logged in"));
+        assert!(could_not_start(&legacy),"sem origem, vale como antes");
     }
 
     /// Com a revisão ligada, o que o modo build mudou vai a um agente de

@@ -387,6 +387,12 @@ impl Provider for HttpProvider {
 
 struct CliProvider { name:String, config:ProviderConfig, workdir:Workdir }
 
+/// De onde veio o motivo de um `provider.failed`: o evento de erro do próprio
+/// agente, o canal de erro ou só o fim da resposta.
+pub const FAILURE_ANNOUNCED:&str="announced";
+pub const FAILURE_STDERR:&str="stderr";
+pub const FAILURE_OUTPUT:&str="output";
+
 /// O argumento que vira o texto do pedido.
 const PROMPT:&str="{prompt}";
 /// O argumento que vira o arquivo onde o agente grava a conta do fim.
@@ -401,13 +407,21 @@ const INLINE_LIMIT:usize=8_000;
 /// está na linha. Texto que não é JSON de evento é resposta; evento com fala do
 /// assistente é resposta; escrituração do agente não é nada; todo o resto é
 /// relato.
-fn classify(line:&str)->Option<Beat> {
-    let event=serde_json::from_str::<Value>(line.trim()).ok().filter(Value::is_object);
-    let Some((event,kind))=event.and_then(|event|event.get("type").and_then(Value::as_str).map(str::to_string).map(|kind|(event,kind)))
+#[cfg(test)]
+fn classify(line:&str)->Option<Beat> { classify_parsed(line,parse(line).as_ref()) }
+
+/// A linha lida como JSON, uma vez só: a conta, a sessão, a recusa, a fala e o
+/// relato leem todos o mesmo evento. Ler cinco vezes cada linha de um agente
+/// que narra centenas de eventos por pedido era trabalho jogado fora.
+fn parse(line:&str)->Option<Value> { serde_json::from_str::<Value>(line.trim()).ok() }
+
+/// `classify` com o evento já lido.
+fn classify_parsed(line:&str,event:Option<&Value>)->Option<Beat> {
+    let Some((event,kind))=event.filter(|event|event.is_object()).and_then(|event|event.get("type").and_then(Value::as_str).map(|kind|(event,kind)))
         else { return Some(Beat::Chunk{text:format!("{line}\n")}) };
-    if let Some(text)=said(&event) { return Some(Beat::Chunk{text}); }
-    if bookkeeping(&kind,&event) { return None; }
-    Some(Beat::Agent{line:reported(&kind,&event)})
+    if let Some(text)=said(event) { return Some(Beat::Chunk{text}); }
+    if bookkeeping(kind,event) { return None; }
+    Some(Beat::Agent{line:reported(kind,event)})
 }
 
 /// O que o agente escreve para si mesmo. Em `stream-json` a contagem de tokens
@@ -417,9 +431,71 @@ fn classify(line:&str)->Option<Beat> {
 /// que importam. O texto da resposta não se perde nisso: ele volta inteiro no
 /// evento do assistente, e é de lá que `said` o tira. O `thinking` é o
 /// raciocínio do Cursor, um pedaço por evento.
-const BOOKKEEPING:[&str;10]=["rate_limit_event","stream_event","thinking_tokens","thinking","hook_started","hook_progress","hook_response","thread.started","turn.started","turn.completed"];
+///
+/// O `system` só é etapa no `init`: a tela diz "o agente começou" para todo
+/// `system`, e o Claude 2.1 manda vários outros por pedido (`status`,
+/// `commands_changed`, `post_turn_summary`), cada um repetindo o começo e
+/// subindo na sincronização. `active_goal` e `autocompact_state` são estado
+/// interno dele.
+const BOOKKEEPING:[&str;12]=["rate_limit_event","stream_event","thinking_tokens","thinking","hook_started","hook_progress","hook_response","thread.started","turn.started","turn.completed","active_goal","autocompact_state"];
 fn bookkeeping(kind:&str,event:&Value)->bool {
-    BOOKKEEPING.contains(&kind)||event.get("subtype").and_then(Value::as_str).is_some_and(|subtype|BOOKKEEPING.contains(&subtype))
+    let subtype=event.get("subtype").and_then(Value::as_str);
+    BOOKKEEPING.contains(&kind)
+        ||subtype.is_some_and(|subtype|BOOKKEEPING.contains(&subtype))
+        ||(kind=="system"&&subtype!=Some("init"))
+}
+
+/// O pedaço da fala do Claude que chegou agora, em `stream_event` (com
+/// `--include-partial-messages`). Só o texto da conversa principal: o
+/// raciocínio (`thinking_delta`), o JSON das ferramentas (`input_json_delta`)
+/// e o que um subagente diz (`parent_tool_use_id`) não são a resposta.
+fn partial_text(event:&Value)->Option<&str> {
+    if event.get("type").and_then(Value::as_str)!=Some("stream_event") { return None; }
+    if event.get("parent_tool_use_id").is_some_and(|parent|!parent.is_null()) { return None; }
+    let inner=event.get("event")?;
+    if inner.get("type").and_then(Value::as_str)!=Some("content_block_delta") { return None; }
+    let delta=inner.get("delta")?;
+    if delta.get("type").and_then(Value::as_str)!=Some("text_delta") { return None; }
+    delta.get("text").and_then(Value::as_str).filter(|text|!text.is_empty())
+}
+
+/// A mensagem do assistente que está chegando aos pedaços. Os pedaços vão
+/// para a tela na hora; quando a mensagem inteira chega no evento `assistant`,
+/// ela fecha o que os pedaços abriram em vez de ser somada de novo.
+#[derive(Default)]
+struct Speech { open:bool, start:usize, draft:String }
+
+impl Speech {
+    /// Um pedaço novo. O primeiro de uma mensagem abre o balão dela, como a
+    /// mensagem inteira abria.
+    fn piece(&mut self,response:&mut String,text:&str,pulse:&Pulse) {
+        if !self.open {
+            if !response.trim().is_empty() {
+                let gap=format!("\n{}\n",MESSAGE_BREAK);
+                response.push_str(&gap);
+                pulse.beat(Beat::Chunk{text:gap});
+            }
+            self.open=true;
+            self.start=response.len();
+            self.draft.clear();
+        }
+        response.push_str(text);
+        self.draft.push_str(text);
+        pulse.beat(Beat::Chunk{text:text.to_string()});
+    }
+
+    /// A mensagem inteira (`said`, já com a quebra de linha do fim). Se os
+    /// pedaços disseram o mesmo, só falta a quebra; se disseram o começo, falta
+    /// o resto; se divergiram, a resposta gravada fica com a mensagem inteira e
+    /// a tela se acerta quando o turno fecha e ela relê o banco.
+    fn close(&mut self,response:&mut String,whole:&str,pulse:&Pulse) {
+        self.open=false;
+        let draft=std::mem::take(&mut self.draft);
+        match whole.strip_prefix(draft.as_str()) {
+            Some(rest)=>{ response.push_str(rest); if !rest.is_empty() { pulse.beat(Beat::Chunk{text:rest.to_string()}); } }
+            None=>{ response.truncate(self.start); response.push_str(whole); }
+        }
+    }
 }
 
 /// A fala do assistente dentro de um evento, se houver. Uma mensagem inteira
@@ -440,9 +516,11 @@ fn said(event:&Value)->Option<String> {
 
 /// Se a linha traz uma mensagem inteira do assistente — e não um pedaço dela
 /// nem uma linha de texto puro, que continua a anterior.
-fn whole_message(line:&str)->bool {
-    let Ok(event)=serde_json::from_str::<Value>(line.trim()) else { return false };
-    if crate::usage::codex::said(&event).is_some() { return true; }
+#[cfg(test)]
+fn whole_message(line:&str)->bool { parse(line).as_ref().is_some_and(whole_message_in) }
+
+fn whole_message_in(event:&Value)->bool {
+    if crate::usage::codex::said(event).is_some() { return true; }
     event.get("type").and_then(Value::as_str)!=Some("user")
         && event.pointer("/message/content").and_then(Value::as_array).is_some_and(|parts|parts.iter().any(|part|part.get("type").and_then(Value::as_str)==Some("text")))
 }
@@ -452,9 +530,11 @@ fn whole_message(line:&str)->bool {
 /// marcado `is_error`, e o motivo — modelo inexistente, cota estourada, login
 /// vencido — está no texto desse evento. Sem lê-lo, a falha chegava à tela
 /// como `CLI provider failed: ` e nada mais.
-fn refusal(line:&str)->Option<String> {
-    let event=serde_json::from_str::<Value>(line.trim()).ok()?;
-    if let Some(reason)=crate::usage::codex::failure(&event) { return Some(reason); }
+#[cfg(test)]
+fn refusal(line:&str)->Option<String> { refusal_in(&parse(line)?) }
+
+fn refusal_in(event:&Value)->Option<String> {
+    if let Some(reason)=crate::usage::codex::failure(event) { return Some(reason); }
     if event.get("type").and_then(Value::as_str)!=Some("result")||event.get("is_error").and_then(Value::as_bool)!=Some(true) { return None; }
     let reason=event.get("result").and_then(Value::as_str).map(str::trim).filter(|reason|!reason.is_empty())
         .map(str::to_string)
@@ -569,13 +649,17 @@ impl CliProvider {
     /// anunciou como erro, o que escreveu no canal de erro, o fim do que
     /// escreveu na saída — nessa ordem. Nenhuma das três é garantida, então o
     /// código de saída vai sempre junto.
+    ///
+    /// O motivo leva junto de onde veio (`origin`): o plano B só troca de
+    /// agente por login ou cota que o agente anunciou ou escreveu no canal de
+    /// erro — o fim da resposta pode falar de login sem ser recusa nenhuma.
     fn failure(&self,status:Option<std::process::ExitStatus>,refused:Option<String>,complaint:&str,response:&str)->anyhow::Error {
         let exit=match status.and_then(|status|status.code()) { Some(code)=>Text::new("provider.exit.code").with("code",code), None if status.is_some()=>Text::new("provider.exit.signal"), None=>Text::new("provider.exit.announced") };
-        let reason=refused.filter(|reason|!reason.trim().is_empty())
-            .or_else(||Some(tail(complaint,800).to_string()).filter(|text|!text.is_empty()))
-            .or_else(||Some(tail(response,800).to_string()).filter(|text|!text.is_empty()));
+        let reason=refused.filter(|reason|!reason.trim().is_empty()).map(|reason|(reason,FAILURE_ANNOUNCED))
+            .or_else(||Some(tail(complaint,800).to_string()).filter(|text|!text.is_empty()).map(|reason|(reason,FAILURE_STDERR)))
+            .or_else(||Some(tail(response,800).to_string()).filter(|text|!text.is_empty()).map(|reason|(reason,FAILURE_OUTPUT)));
         match reason {
-            Some(reason)=>Text::new("provider.failed").with("provider",&self.name).with("exit",exit).with("reason",reason).into(),
+            Some((reason,origin))=>Text::new("provider.failed").with("provider",&self.name).with("exit",exit).with("reason",reason).with("origin",origin).into(),
             None=>Text::new("provider.failedSilent").with("provider",&self.name).with("exit",exit).with("command",self.config.command.as_deref().unwrap_or(&self.name)).into(),
         }
     }
@@ -619,44 +703,72 @@ impl Provider for CliProvider {
         let usage_file=std::env::temp_dir().join(format!("jayv-usage-{}.json",uuid::Uuid::new_v4()));
         let mut meter=crate::usage::Meter::new(&self.name,model,self.config.command.as_deref().unwrap_or(&self.name));
         let mut child=self.open(model,effort,resume,&prompt,&usage_file)?;
-        // O agente que sai antes de ler o pedido — falha de modelo, de login —
-        // fecha a ponta dele; o motivo vem na saída e no código de saída, não
-        // num "Broken pipe" daqui.
-        if let Some(mut stdin)=child.stdin.take() { match stdin.write_all(prompt.as_bytes()).await { Err(error) if error.kind()!=std::io::ErrorKind::BrokenPipe=>return Err(error.into()), _=>{} } }
-        let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).lines();
-        let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).lines();
+        // O pedido entra pela entrada padrão ao mesmo tempo que a saída é lida.
+        // Escrito antes, um agente que enche o cano de saída antes de ler o
+        // pedido inteiro travava os dois lados fora do relógio do silêncio.
+        // O agente que sai antes de ler — falha de modelo, de login — fecha a
+        // ponta dele; o motivo vem na saída e no código de saída, não num
+        // "Broken pipe" daqui.
+        let feeder=child.stdin.take().map(|mut stdin|{
+            let bytes=prompt.clone().into_bytes();
+            Feeder(tokio::spawn(async move { let written=stdin.write_all(&bytes).await; drop(stdin); written }))
+        });
+        // Em bytes, não em texto: uma linha fora do UTF-8 — a mensagem do git ou
+        // do `cmd` no Windows, em CP-1252 — derrubava o pedido inteiro.
+        let mut talk=BufReader::new(child.stdout.take().ok_or_else(||anyhow!("CLI provider gave no output channel"))?).split(b'\n');
+        let mut grumble=BufReader::new(child.stderr.take().ok_or_else(||anyhow!("CLI provider gave no error channel"))?).split(b'\n');
         let (mut response,mut complaint,mut refused)=(String::new(),String::new(),None::<String>);
         let mut session=None::<String>;
+        let mut speech=Speech::default();
         let (mut talking,mut grumbling)=(true,true);
         let silence=self.silence();
         while talking||grumbling {
             // As duas leituras podem ser largadas pelo relógio no meio do
-            // caminho: `next_line` guarda a linha pela metade e a devolve
+            // caminho: `next_segment` guarda a linha pela metade e a devolve
             // inteira na volta, então um sinal de vida nunca se perde aqui.
             let heard=timeout(silence,async {
                 tokio::select! {
-                    line=talk.next_line(),if talking=>match line.context("CLI provider returned non-UTF-8 output")? {
+                    line=talk.next_segment(),if talking=>match line? {
                         None=>talking=false,
-                        Some(line)=>if let Some(reason)={ meter.read(&line); if let Some(id)=session_of(&line) { session=Some(id); } refusal(&line) } { refused=Some(reason); } else if let Some(beat)=classify(&line) {
-                            if let Beat::Chunk{text}=&beat {
-                                // Cada mensagem inteira do agente fica no seu balão.
-                                if whole_message(&line)&&!response.trim().is_empty() {
-                                    let gap=format!("\n{}\n",MESSAGE_BREAK);
-                                    response.push_str(&gap);
-                                    pulse.beat(Beat::Chunk{text:gap});
-                                }
-                                response.push_str(text);
+                        Some(bytes)=>{
+                            let line=text_of(&bytes);
+                            let event=parse(&line);
+                            if let Some(event)=&event {
+                                meter.read_event(event);
+                                if let Some(id)=session_in(event) { session=Some(id); }
                             }
-                            pulse.beat(beat);
-                        },
+                            if let Some(reason)=event.as_ref().and_then(refusal_in) { refused=Some(reason); }
+                            else if let Some(piece)=event.as_ref().and_then(partial_text) { speech.piece(&mut response,piece,pulse); }
+                            else if let Some(beat)=classify_parsed(&line,event.as_ref()) {
+                                match &beat {
+                                    // A mensagem inteira que os pedaços já mostraram fecha
+                                    // o balão deles em vez de entrar de novo.
+                                    Beat::Chunk{text} if speech.open&&event.as_ref().is_some_and(whole_message_in)=>speech.close(&mut response,text,pulse),
+                                    Beat::Chunk{text}=>{
+                                        // Cada mensagem inteira do agente fica no seu balão.
+                                        if event.as_ref().is_some_and(whole_message_in)&&!response.trim().is_empty() {
+                                            let gap=format!("\n{}\n",MESSAGE_BREAK);
+                                            response.push_str(&gap);
+                                            pulse.beat(Beat::Chunk{text:gap});
+                                        }
+                                        response.push_str(text);
+                                        pulse.beat(beat);
+                                    }
+                                    _=>pulse.beat(beat),
+                                }
+                            }
+                        }
                     },
-                    line=grumble.next_line(),if grumbling=>match line.context("CLI provider returned non-UTF-8 output")? {
+                    line=grumble.next_segment(),if grumbling=>match line? {
                         None=>grumbling=false,
-                        Some(line)=>if !line.trim().is_empty() {
-                            complaint.push_str(&line);
-                            complaint.push('\n');
-                            pulse.beat(Beat::Agent{line});
-                        },
+                        Some(bytes)=>{
+                            let line=text_of(&bytes);
+                            if !line.trim().is_empty() {
+                                complaint.push_str(&line);
+                                complaint.push('\n');
+                                pulse.beat(Beat::Agent{line});
+                            }
+                        }
                     },
                 }
                 Ok::<(),anyhow::Error>(())
@@ -681,16 +793,48 @@ impl Provider for CliProvider {
         let failed=!status.success()||refused.is_some();
         // A conta vai mesmo na falha: o agente que recusou no fim já gastou.
         let (input,output)=settle_meter(meter,&prompt,&response,!failed,&usage_file);
-        if failed { return Err(self.failure(Some(status),refused,&complaint,&response)); }
+        // Um erro de escrita que não seja o cano fechado só conta se o agente
+        // também falhou: aí ele é o melhor motivo que há.
+        let unwritten=match feeder { Some(feeder)=>feeder.finish().await, None=>None };
+        if failed {
+            if let Some(error)=unwritten.filter(|_|refused.is_none()&&complaint.trim().is_empty()) { return Err(error.into()); }
+            return Err(self.failure(Some(status),refused,&complaint,&response));
+        }
+        if let Some(error)=unwritten { eprintln!("{}: o pedido não foi escrito inteiro na entrada padrão ({error})",self.name); }
         Ok(ProviderResponse{response,input_tokens:input as usize,output_tokens:output as usize,model:model.into(),provider:self.name.clone(),latency_ms:started.elapsed().as_millis(),session})
     }
 }
 /// A sessão que o agente anuncia na própria saída: o `session_id` do Claude
 /// (no `init` e no `result`) e o `thread_id` do Codex (`thread.started`).
-fn session_of(line:&str)->Option<String> {
-    let event=serde_json::from_str::<Value>(line.trim()).ok()?;
+#[cfg(test)]
+fn session_of(line:&str)->Option<String> { session_in(&parse(line)?) }
+
+fn session_in(event:&Value)->Option<String> {
     ["session_id","thread_id"].iter().find_map(|key|event.get(key).and_then(Value::as_str)).map(str::trim).filter(|id|!id.is_empty()).map(str::to_string)
 }
+
+/// Uma linha da saída em texto, sem a quebra. O que não é UTF-8 vira o
+/// caractere de substituição em vez de derrubar o pedido.
+fn text_of(bytes:&[u8])->String {
+    let bytes=bytes.strip_suffix(b"\r").unwrap_or(bytes);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// A escrita do pedido na entrada padrão, correndo ao lado da leitura. Largada
+/// no meio (o agente calou, o pedido falhou), ela para junto.
+struct Feeder(tokio::task::JoinHandle<std::io::Result<()>>);
+
+impl Feeder {
+    /// O erro da escrita, se houve um que não seja o cano fechado pelo agente.
+    async fn finish(mut self)->Option<std::io::Error> {
+        match (&mut self.0).await {
+            Ok(Err(error)) if error.kind()!=std::io::ErrorKind::BrokenPipe=>Some(error),
+            _=>None,
+        }
+    }
+}
+
+impl Drop for Feeder { fn drop(&mut self) { self.0.abort(); } }
 
 /// Fecha a conta da execução com o que o agente gravou no arquivo de uso, se
 /// gravou, e apaga o arquivo.
@@ -963,6 +1107,119 @@ mod tests {
         while let Some(beat)=beats.recv().await { if let Beat::Chunk{text}=beat { announced.push_str(&text); } }
         assert_eq!(announced,answer.response,"o que a tela viu e o que ficou gravado sao o mesmo texto");
         assert!(answer.response.contains("uma linha"),"a resposta chegou: {:?}",answer.response);
+    }
+
+    /// Um agente que fala em `stream-json`, linha a linha, como o script recebe.
+    fn speaking(lines:&[&str])->CliProvider {
+        let body=lines.iter().map(|line|format!("printf '%s\\n' '{line}'")).collect::<Vec<_>>().join("; ");
+        script(&format!("cat >/dev/null; {body}"))
+    }
+
+    async fn heard(provider:&CliProvider)->(ProviderResponse,Vec<Beat>) {
+        let (pulse,mut beats)=Pulse::channel();
+        let answer=provider.chat_stream(&ask(),"modelo",&pulse).await.expect("o agente respondeu");
+        drop(pulse);
+        let mut all=Vec::new();
+        while let Some(beat)=beats.recv().await { all.push(beat); }
+        (answer,all)
+    }
+
+    fn chunks(beats:&[Beat])->Vec<String> { beats.iter().filter_map(|beat|match beat { Beat::Chunk{text}=>Some(text.clone()), _=>None }).collect() }
+    fn steps(beats:&[Beat])->Vec<String> { beats.iter().filter_map(|beat|match beat { Beat::Agent{line}=>Some(line.clone()), _=>None }).collect() }
+
+    fn delta(text:&str)->String { format!(r#"{{"type":"stream_event","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}},"parent_tool_use_id":null}}"#) }
+    fn whole(text:&str)->String { format!(r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{text}"}}]}},"parent_tool_use_id":null}}"#) }
+
+    /// Com `--include-partial-messages` o Claude manda a fala aos pedaços antes
+    /// da mensagem inteira. Os pedaços vão para a tela na hora; a mensagem
+    /// inteira só fecha o balão. A resposta gravada é a mesma de antes.
+    #[tokio::test] async fn claude_partial_text_reaches_the_screen_before_the_message_ends() {
+        let provider=speaking(&[
+            r#"{"type":"system","subtype":"init","session_id":"s1"}"#,
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":2}}}}"#,
+            &delta("Hi"), &delta(" there"),
+            r#"{"type":"system","subtype":"status","status":"requesting"}"#,
+            &whole("Hi there"),
+            r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
+            r#"{"type":"result","subtype":"success","result":"Hi there","session_id":"s1"}"#,
+        ]);
+        let (answer,beats)=heard(&provider).await;
+        assert_eq!(answer.response,"Hi there\n","a resposta gravada não muda");
+        assert_eq!(chunks(&beats),["Hi"," there","\n"],"os pedaços chegam antes da mensagem inteira, e ela não entra de novo");
+        assert_eq!(steps(&beats),["system: init","result: success"],"o `system` que não é o começo é escrituração");
+        assert_eq!(answer.session.as_deref(),Some("s1"));
+    }
+
+    /// Se a mensagem inteira diz mais do que os pedaços, entra o resto; se diz
+    /// outra coisa, a gravada é a inteira.
+    #[tokio::test] async fn the_whole_message_settles_what_the_pieces_said() {
+        let (longer,beats)=heard(&speaking(&[&delta("Hel"),&whole("Hello world")])).await;
+        assert_eq!(longer.response,"Hello world\n");
+        assert_eq!(chunks(&beats),["Hel","lo world\n"]);
+        let (other,_)=heard(&speaking(&[&delta("abc"),&whole("xyz")])).await;
+        assert_eq!(other.response,"xyz\n","a mensagem inteira vence a prévia");
+    }
+
+    /// Duas mensagens aos pedaços, com uma ferramenta no meio, ficam em dois
+    /// balões — como ficavam quando só a mensagem inteira contava.
+    #[tokio::test] async fn each_streamed_message_keeps_its_own_balloon() {
+        let tool=r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#;
+        let (answer,beats)=heard(&speaking(&[&delta("One"),&whole("One"),tool,&delta("Two"),&whole("Two")])).await;
+        assert_eq!(answer.response,format!("One\n\n{MESSAGE_BREAK}\nTwo\n"));
+        let announced:String=chunks(&beats).concat();
+        assert_eq!(announced,answer.response,"a tela viu o mesmo texto que ficou gravado");
+        assert_eq!(steps(&beats),["assistant: Read"]);
+    }
+
+    /// O que um subagente diz e o raciocínio não são a resposta.
+    #[test] fn only_the_main_conversation_text_is_a_piece_of_the_answer() {
+        let event=|json:&str|serde_json::from_str::<Value>(json).expect("json");
+        assert_eq!(partial_text(&event(&delta("ok"))),Some("ok"));
+        assert_eq!(partial_text(&event(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"sub"}},"parent_tool_use_id":"toolu_1"}"#)),None);
+        assert_eq!(partial_text(&event(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}}"#)),None);
+        assert_eq!(partial_text(&event(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}"#)),None);
+    }
+
+    /// O Claude 2.1 manda estado interno e vários `system` por pedido; cada um
+    /// virava "o agente começou" de novo na tela e subia na sincronização.
+    #[test] fn claude_status_events_are_bookkeeping() {
+        for line in [
+            r#"{"type":"active_goal","value":null}"#,
+            r#"{"type":"autocompact_state","value":{"enabled":true}}"#,
+            r#"{"type":"system","subtype":"status","status":"requesting"}"#,
+            r#"{"type":"system","subtype":"commands_changed"}"#,
+            r#"{"type":"system","subtype":"post_turn_summary"}"#,
+        ] { assert_eq!(classify(line),None,"{line}"); }
+        assert_eq!(classify(r#"{"type":"system","subtype":"init"}"#),Some(Beat::Agent{line:"system: init".into()}));
+    }
+
+    /// Uma linha fora do UTF-8 (o git ou o `cmd` em CP-1252) não derruba o
+    /// pedido: vira o caractere de substituição.
+    #[tokio::test] async fn non_utf8_output_does_not_fail_the_turn() {
+        let (answer,beats)=heard(&script(r"cat >/dev/null; printf 'caf\351\n' >&2; printf 'ol\341\n'")).await;
+        assert_eq!(answer.response,"ol\u{FFFD}\n");
+        assert!(steps(&beats).iter().any(|line|line=="caf\u{FFFD}"),"{beats:?}");
+    }
+
+    /// O agente que escreve muito antes de ler o pedido não trava mais os dois
+    /// lados: o pedido entra enquanto a saída é lida.
+    #[tokio::test] async fn a_long_request_and_a_chatty_agent_do_not_block_each_other() {
+        let provider=script("head -c 300000 /dev/zero | tr '\\0' 'a'; echo; wc -c");
+        let long=vec![ChatMessage{role:"user".into(),content:"z".repeat(400_000)}];
+        let answer=tokio::time::timeout(Duration::from_secs(20),provider.chat(&long,"modelo")).await.expect("sem impasse").expect("o agente respondeu");
+        assert!(answer.response.trim_end().ends_with("400006"),"o pedido chegou inteiro: {}",tail(&answer.response,40));
+    }
+
+    /// O motivo diz de onde veio: o plano B só confia no que o agente anunciou
+    /// ou escreveu no canal de erro.
+    #[tokio::test] async fn a_failure_says_where_its_reason_came_from() {
+        let origin=|error:anyhow::Error|error.chain().find_map(|cause|cause.downcast_ref::<Text>().cloned()).and_then(|text|text.params.get("origin").cloned());
+        let output=script("cat >/dev/null; echo 'please log in to continue'; exit 1").chat(&ask(),"modelo").await.unwrap_err();
+        assert_eq!(origin(output),Some(crate::i18n::Param::Plain(FAILURE_OUTPUT.into())));
+        let stderr=script("cat >/dev/null; echo 'not logged in' >&2; exit 1").chat(&ask(),"modelo").await.unwrap_err();
+        assert_eq!(origin(stderr),Some(crate::i18n::Param::Plain(FAILURE_STDERR.into())));
+        let announced=script(r#"cat >/dev/null; echo '{"type":"result","is_error":true,"result":"Invalid API key"}'"#).chat(&ask(),"modelo").await.unwrap_err();
+        assert_eq!(origin(announced),Some(crate::i18n::Param::Plain(FAILURE_ANNOUNCED.into())));
     }
 
     #[tokio::test] async fn stops_immediately_on_fatal_errors() {

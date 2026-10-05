@@ -127,7 +127,25 @@ pub fn call_body(set:&str,state:Value,include:Option<&[&str]>)->Value {
     body
 }
 
-pub struct Client{http:reqwest::Client,token:String,attempts:u32}
+/// Os conjuntos que ficam no caminho do pedido: o agente não começa enquanto
+/// eles não respondem.
+const HOT_SETS:[&str;2]=["entry","routing"];
+/// No caminho do pedido, uma repetição e só, dentro do prazo.
+pub const HOT_ATTEMPTS:u32=2;
+/// O cabeçalho que identifica a chamada. É o mesmo em todas as repetições: a
+/// função conta a chamada uma vez no limite do dia.
+pub const REQUEST_HEADER:&str="x-jev-request";
+
+/// Um cliente HTTP só para o app inteiro: cada chamada abria uma conexão e
+/// pagava o TLS de novo. O prazo de cada chamada vai no pedido.
+fn shared_http()->Result<reqwest::Client> {
+    static HTTP:std::sync::OnceLock<reqwest::Client>=std::sync::OnceLock::new();
+    if let Some(client)=HTTP.get() { return Ok(client.clone()); }
+    let client=crate::lockdown::http_client(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("could not build the Jev HTTP client")?;
+    Ok(HTTP.get_or_init(||client).clone())
+}
+
+pub struct Client{http:reqwest::Client,token:String,attempts:u32,deadline:Option<Duration>,base:String}
 impl Client {
     pub fn from_session()->Result<Self> {
         let token=crate::cloud::session::current().ok_or_else(||anyhow!("no session: sign in for the Jev to evaluate requests"))?;
@@ -136,11 +154,22 @@ impl Client {
     pub fn for_session(token:impl Into<String>)->Result<Self> {
         let token=token.into().trim().to_string();
         if token.is_empty(){return Err(anyhow!("no session to reach the Jev"));}
-        let http=crate::lockdown::http_client(Duration::from_secs(DEFAULT_TIMEOUT)).build().context("could not build the Jev HTTP client")?;
-        Ok(Self{http,token,attempts:DEFAULT_ATTEMPTS})
+        Ok(Self{http:shared_http()?,token,attempts:DEFAULT_ATTEMPTS,deadline:None,base:crate::cloud::PROJECT_URL.to_string()})
     }
     pub fn with_attempts(mut self,attempts:u32)->Self{self.attempts=attempts.max(1);self}
-    pub fn endpoint(&self)->String{format!("{}/functions/v1/jev",crate::cloud::PROJECT_URL)}
+    /// O prazo total da chamada, repetições incluídas.
+    pub fn with_deadline(mut self,deadline:Duration)->Self{self.deadline=Some(deadline);self}
+    pub fn endpoint(&self)->String{format!("{}/functions/v1/jev",self.base)}
+    /// Outro servidor no lugar do projeto, para os testes.
+    #[cfg(test)] fn at(mut self,base:&str)->Self{self.base=base.trim_end_matches('/').to_string();self}
+
+    /// O cliente com o orçamento do conjunto: no caminho do pedido, o prazo de
+    /// `jev_parameters` e uma repetição; fora dele, o de sempre.
+    fn budgeted(self,set:&str)->Self {
+        if !HOT_SETS.contains(&set) { return self; }
+        let seconds=crate::gatekeeper::current_parameters().deadline_seconds;
+        self.with_attempts(HOT_ATTEMPTS).with_deadline(Duration::from_secs_f64(seconds))
+    }
 
     /// Pede ao Jev a avaliação de `state` pelas perguntas do conjunto `set`,
     /// guardadas no Supabase.
@@ -162,18 +191,88 @@ impl Client {
     async fn send(&self,body:&Value)->Result<Evaluation> {
         let endpoint=self.endpoint();
         let endpoint=endpoint.as_str();
-        with_retry(retry_policy(self.attempts),move |_attempt| async move {
-            let response=self.http.post(endpoint).header("apikey",crate::cloud::PUBLISHABLE_KEY).bearer_auth(&self.token).json(body).send().await.map_err(|error|RetryError::retryable(transport_error(error),None))?;
+        let request_id=uuid::Uuid::new_v4().to_string();
+        let request_id=request_id.as_str();
+        let started=std::time::Instant::now();
+        // Como terminou a última tentativa, para o disjuntor.
+        let last=std::sync::atomic::AtomicU8::new(OUTCOME_OK);
+        let last=&last;
+        let deadline=self.deadline;
+        let work=with_retry(retry_policy(self.attempts),move |_attempt| async move {
+            let mut request=self.http.post(endpoint).header("apikey",crate::cloud::PUBLISHABLE_KEY).header(REQUEST_HEADER,request_id).bearer_auth(&self.token).json(body);
+            if let Some(deadline)=deadline { request=request.timeout(deadline.saturating_sub(started.elapsed()).max(Duration::from_millis(1))); }
+            let response=match request.send().await {
+                Ok(response)=>response,
+                Err(error)=>{ last.store(OUTCOME_UNREACHABLE,std::sync::atomic::Ordering::Relaxed); return Err(RetryError::retryable(transport_error(error),None)); }
+            };
             let status=response.status().as_u16();
             let pause=retry_after(response.headers());
             if let Some(quota)=daily_quota(response.headers(),chrono::Utc::now()) { crate::usage::quota(quota); }
             let body=response.text().await.unwrap_or_default();
-            if (200..300).contains(&status){return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("the Jev returned an unexpected response: {}",error_detail(&body)))));}
+            if (200..300).contains(&status){
+                last.store(OUTCOME_OK,std::sync::atomic::Ordering::Relaxed);
+                return serde_json::from_str::<Evaluation>(&body).map_err(|error|RetryError::fatal(anyhow::Error::new(error).context(format!("the Jev returned an unexpected response: {}",error_detail(&body)))));
+            }
+            let outcome=if is_daily_limit(&body) {OUTCOME_DAILY_LIMIT} else if retryable_status(status) {OUTCOME_UNREACHABLE} else {OUTCOME_OK};
+            last.store(outcome,std::sync::atomic::Ordering::Relaxed);
             let failure=status_error(status,&body);
             Err(if worth_retrying(status,&body){RetryError::retryable(failure,pause)}else{RetryError::fatal(failure)})
-        }).await
+        });
+        let result=match deadline {
+            Some(deadline)=>match tokio::time::timeout(deadline,work).await {
+                Ok(result)=>result,
+                Err(_)=>{ last.store(OUTCOME_UNREACHABLE,std::sync::atomic::Ordering::Relaxed); Err(anyhow!("the Jev did not answer within {:.0}s; the gate uses the local heuristics",deadline.as_secs_f64())) }
+            },
+            None=>work.await,
+        };
+        breaker_record(match last.load(std::sync::atomic::Ordering::Relaxed) { OUTCOME_UNREACHABLE=>Outcome::Unreachable, OUTCOME_DAILY_LIMIT=>Outcome::DailyLimit, _=>Outcome::Answered },std::time::Instant::now(),chrono::Utc::now());
+        result
     }
 }
+
+const OUTCOME_OK:u8=0;
+const OUTCOME_UNREACHABLE:u8=1;
+const OUTCOME_DAILY_LIMIT:u8=2;
+
+/// Como uma chamada ao Jev terminou, para o disjuntor: respondeu (mesmo que
+/// com recusa), não respondeu (rede, prazo, 5xx), ou bateu no limite do dia.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum Outcome { Answered, Unreachable, DailyLimit }
+
+/// Quantas falhas seguidas abrem o circuito, e por quanto tempo.
+pub const BREAKER_FAILURES:u32=3;
+pub const BREAKER_PAUSE:Duration=Duration::from_secs(300);
+
+/// O disjuntor do Jev. Fora do ar, cada pedido esperava o prazo inteiro antes
+/// de ir à heurística; com o circuito aberto, ele vai direto, e o Jev volta a
+/// ser chamado depois da pausa. O limite do dia abre até a meia-noite UTC.
+#[derive(Debug,Default,Clone,PartialEq)]
+pub struct Breaker { failures:u32, open_until:Option<std::time::Instant> }
+
+impl Breaker {
+    pub fn record(&mut self,outcome:Outcome,now:std::time::Instant,utc:chrono::DateTime<chrono::Utc>) {
+        match outcome {
+            Outcome::Answered=>{ self.failures=0; self.open_until=None; }
+            Outcome::Unreachable=>{ self.failures+=1; if self.failures>=BREAKER_FAILURES { self.open_until=Some(now+BREAKER_PAUSE); } }
+            Outcome::DailyLimit=>{
+                let midnight=(utc.date_naive()+chrono::Days::new(1)).and_hms_opt(0,0,0).map(|moment|moment.and_utc());
+                let wait=midnight.and_then(|midnight|(midnight-utc).to_std().ok()).unwrap_or(BREAKER_PAUSE);
+                self.open_until=Some(now+wait);
+            }
+        }
+    }
+    pub fn is_open(&self,now:std::time::Instant)->bool { self.open_until.is_some_and(|until|now<until) }
+}
+
+static BREAKER:std::sync::Mutex<Breaker>=std::sync::Mutex::new(Breaker{failures:0,open_until:None});
+
+fn breaker_record(outcome:Outcome,now:std::time::Instant,utc:chrono::DateTime<chrono::Utc>) {
+    BREAKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner).record(outcome,now,utc);
+}
+
+/// O Jev vale ser chamado agora: há sessão e o circuito está fechado. A
+/// portaria e o roteamento perguntam isto antes de esperar por ele.
+pub fn reachable()->bool { is_configured()&&!BREAKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_open(std::time::Instant::now()) }
 
 /// O gasto de uma chamada ao Jev. Sem avaliação, a chamada falhou: conta
 /// como chamada, sem tokens.
@@ -196,8 +295,8 @@ pub fn daily_quota(headers:&reqwest::header::HeaderMap,now:chrono::DateTime<chro
     Some(crate::usage::Quota{agent:"jev".into(),window:"day".into(),used_percent:Some((used as f64*100.0/limit as f64).min(100.0)),resets_at:Some(midnight.to_rfc3339_opts(chrono::SecondsFormat::Secs,true)),plan:Some(format!("{used}/{limit}"))})
 }
 
-pub async fn evaluate(set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation>{Client::from_session()?.evaluate(set,state,include).await}
-pub async fn route(input:&RoutingInput)->Result<RoutingDecision>{Client::from_session()?.route(input).await}
+pub async fn evaluate(set:&str,state:impl Into<Value>,include:Option<&[&str]>)->Result<Evaluation>{Client::from_session()?.budgeted(set).evaluate(set,state,include).await}
+pub async fn route(input:&RoutingInput)->Result<RoutingDecision>{Client::from_session()?.budgeted("routing").route(input).await}
 
 #[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
 pub struct RoutingInput {
@@ -599,6 +698,86 @@ impl RoutingDecision {
         assert!(policy.delay(1,None)<=backoff(0));
         assert!(policy.delay(20,None)<=backoff(9));
         assert_eq!(policy.delay(1,Some(Duration::from_secs(600))),backoff(9));
+    }
+
+    /// Três falhas seguidas de rede abrem o circuito por cinco minutos; uma
+    /// resposta fecha; o limite do dia abre até a meia-noite UTC.
+    #[test]
+    fn the_breaker_opens_after_three_failures_and_on_the_daily_limit() {
+        let now=std::time::Instant::now();
+        let utc=chrono::DateTime::parse_from_rfc3339("2026-10-05T21:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let mut breaker=Breaker::default();
+        breaker.record(Outcome::Unreachable,now,utc);
+        breaker.record(Outcome::Unreachable,now,utc);
+        assert!(!breaker.is_open(now),"duas falhas ainda chamam o Jev");
+        breaker.record(Outcome::Unreachable,now,utc);
+        assert!(breaker.is_open(now));
+        assert!(!breaker.is_open(now+BREAKER_PAUSE+Duration::from_secs(1)),"depois da pausa o Jev é chamado de novo");
+        breaker.record(Outcome::Answered,now,utc);
+        assert!(!breaker.is_open(now),"uma resposta fecha o circuito");
+        breaker.record(Outcome::DailyLimit,now,utc);
+        assert!(breaker.is_open(now+Duration::from_secs(3*3600-1)));
+        assert!(!breaker.is_open(now+Duration::from_secs(3*3600+1)),"abre de novo à meia-noite UTC");
+    }
+
+    /// No caminho do pedido o Jev tem prazo e uma repetição; o resto mantém o
+    /// orçamento de sempre.
+    #[test]
+    fn the_request_path_sets_get_a_deadline_and_one_retry() {
+        let entry=Client::for_session("jwt").expect("cliente").budgeted("entry");
+        assert_eq!((entry.attempts,entry.deadline),(HOT_ATTEMPTS,Some(Duration::from_secs_f64(crate::gatekeeper::DEADLINE_SECONDS))));
+        let asking=Client::for_session("jwt").expect("cliente").budgeted("asking");
+        assert_eq!((asking.attempts,asking.deadline),(DEFAULT_ATTEMPTS,None));
+    }
+
+    /// Um servidor local que lê cada pedido e responde o que o teste mandar —
+    /// ou nada. Devolve o endereço e os cabeçalhos de identificação recebidos.
+    async fn server(reply:Option<&'static str>)->(String,std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt,AsyncWriteExt};
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("porta");
+        let address=format!("http://{}",listener.local_addr().expect("endereço"));
+        let seen=std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept=seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket,_))=listener.accept().await else { return };
+                let kept=kept.clone();
+                tokio::spawn(async move {
+                    let mut buffer=vec![0u8;64*1024];
+                    let read=socket.read(&mut buffer).await.unwrap_or(0);
+                    let head=String::from_utf8_lossy(&buffer[..read]).to_lowercase();
+                    if let Some(id)=head.lines().find_map(|line|line.strip_prefix(&format!("{REQUEST_HEADER}: "))) { kept.lock().unwrap().push(id.trim().to_string()); }
+                    match reply {
+                        Some(reply)=>{ let _=socket.write_all(reply.as_bytes()).await; }
+                        None=>tokio::time::sleep(Duration::from_secs(30)).await,
+                    }
+                });
+            }
+        });
+        (address,seen)
+    }
+
+    /// O Jev mudo não segura o pedido além do prazo.
+    #[tokio::test]
+    async fn a_silent_jev_gives_up_at_the_deadline() {
+        let (address,_)=server(None).await;
+        let client=Client::for_session("jwt").expect("cliente").at(&address).with_attempts(HOT_ATTEMPTS).with_deadline(Duration::from_millis(800));
+        let started=std::time::Instant::now();
+        let error=client.evaluate("entry",json!({"user_request":"oi"}),None).await.unwrap_err();
+        assert!(started.elapsed()<Duration::from_millis(2_000),"esperou {:?}",started.elapsed());
+        assert!(error.to_string().contains("did not answer"),"{error:#}");
+    }
+
+    /// A repetição leva o mesmo identificador: a função conta a chamada uma vez.
+    #[tokio::test]
+    async fn a_retry_carries_the_same_request_id() {
+        let (address,seen)=server(Some("HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")).await;
+        let client=Client::for_session("jwt").expect("cliente").at(&address).with_attempts(HOT_ATTEMPTS).with_deadline(Duration::from_secs(5));
+        assert!(client.evaluate("routing",json!({}),None).await.is_err());
+        let seen=seen.lock().unwrap().clone();
+        assert_eq!(seen.len(),2,"uma tentativa e uma repetição: {seen:?}");
+        assert_eq!(seen[0],seen[1]);
+        assert!(uuid::Uuid::parse_str(&seen[0]).is_ok());
     }
 
     #[test]

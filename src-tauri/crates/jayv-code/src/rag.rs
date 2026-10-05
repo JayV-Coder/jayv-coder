@@ -3,7 +3,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, HashSet}, fs, path::{Path, PathBuf}};
-use walkdir::{DirEntry, WalkDir};
+use walkdir::DirEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedFile { pub path: String, pub language: String, pub hash: String, pub content: String, pub tokens: HashSet<String> }
@@ -19,18 +19,31 @@ pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, repository_ha
 impl RepositoryRag {
     pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false, repositories:vec![], symbols:SymbolIndex::default() } }
     pub fn with_budget(mut self, budget: u64) -> Self { self.budget=budget; self }
+    /// Lê a pasta. Primeiro a lista dos arquivos, sem abrir nenhum, e só
+    /// então o conteúdo, gastando o orçamento por prioridade: código, depois
+    /// configuração, depois documentação, depois JSON. Lido em ordem
+    /// alfabética até estourar, um `.venv` ou um `coverage/` gigantes vinham
+    /// antes de `src/` e o código do projeto nem entrava.
     pub fn index(&mut self, firewall: &ContextFirewall) -> Result<usize> {
         self.files.clear();
         self.indexed=true;
         self.repositories=crate::checkout::nested(&self.root);
+        let mut found=Vec::new();
+        for entry in walk(&self.root).filter_map(Result::ok).filter(|entry|entry.file_type().is_some_and(|kind|kind.is_file())) {
+            let relative=entry.path().strip_prefix(&self.root).unwrap_or(entry.path()).to_path_buf();
+            if firewall.check_file(&relative).is_sensitive { continue; }
+            let Some(size)=entry.metadata().ok().map(|meta|meta.len()).filter(|size|*size<=MAX_FILE_BYTES) else { continue; };
+            let Some(language)=language_for(entry.path()) else { continue; };
+            found.push((priority(language),relative,entry.into_path(),size,language));
+        }
+        found.sort_by(|a,b|(a.0,&a.1).cmp(&(b.0,&b.1)));
         let mut spent=0u64;
-        for entry in WalkDir::new(&self.root).follow_links(false).sort_by_file_name().into_iter().filter_entry(allowed_entry).filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
-            let relative = entry.path().strip_prefix(&self.root).unwrap_or(entry.path());
-            if firewall.check_file(relative).is_sensitive || entry.metadata().map(|m| m.len()>512_000).unwrap_or(true) { continue; }
-            let Some(language) = language_for(entry.path()) else { continue; };
-            let Ok(content) = fs::read_to_string(entry.path()) else { continue; };
+        for (_,relative,path,size,language) in found {
+            // O que não cabe é pulado, não interrompe: um arquivo grande no meio
+            // não tira os pequenos que vêm depois.
+            if spent.saturating_add(size)>self.budget { continue; }
+            let Ok(content) = fs::read_to_string(&path) else { continue; };
             spent+=content.len() as u64;
-            if spent>self.budget { break; }
             let hash = hex::encode(Sha256::digest(content.as_bytes()));
             self.files.push(IndexedFile { path:relative.to_string_lossy().to_string(), language:language.into(), hash, tokens:tokenize(&content), content });
         }
@@ -88,7 +101,36 @@ impl RepositoryRag {
     pub fn paths(&self) -> impl Iterator<Item=&str> { self.files.iter().map(|file|file.path.as_str()) }
 }
 
-pub fn allowed_entry(entry:&DirEntry)->bool { let name=entry.file_name().to_string_lossy(); !matches!(name.as_ref(),".git"|"target"|"node_modules"|"dist"|"build"|"__pycache__"|".jev"|".jev_cache"|".jev_performance.json") }
+pub fn allowed_entry(entry:&DirEntry)->bool { allowed_name(entry.file_name()) }
+
+/// As pastas que nenhum projeto quer no contexto: o que o git, os pacotes, os
+/// ambientes virtuais e os builds geram, e o que é do próprio JayV.
+const SKIPPED:[&str;23]=[".git","target","node_modules","dist","build","__pycache__",".jev",".jev_cache",".jev_performance.json",
+    ".venv","venv",".next",".nuxt","coverage","vendor",".tox",".mypy_cache",".pytest_cache",".turbo",".gradle",".svelte-kit",".parcel-cache",".cache"];
+
+fn allowed_name(name:&std::ffi::OsStr)->bool { let name=name.to_string_lossy(); !SKIPPED.contains(&name.as_ref()) }
+
+/// A varredura da pasta: respeita o `.gitignore` (e o `.ignore`) mesmo fora
+/// de um repositório git, mantém os arquivos ocultos que ninguém ignorou —
+/// `.github/` diz muito de um projeto — e não segue atalhos.
+fn walk(root:&Path)->ignore::Walk {
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(false)
+        .require_git(false)
+        .follow_links(false)
+        .sort_by_file_name(|a,b|a.cmp(b))
+        .filter_entry(|entry|entry.depth()==0||allowed_name(entry.file_name()))
+        .build()
+}
+
+/// O tamanho máximo de um arquivo no índice.
+const MAX_FILE_BYTES:u64=512_000;
+
+/// A ordem em que o orçamento é gasto: código primeiro, JSON por último.
+fn priority(language:&str)->u8 { match language { "Markdown"=>2, "JSON"=>3, "TOML"|"YAML"=>1, _=>0 } }
 fn language_for(path:&Path)->Option<&'static str> { match path.extension()?.to_str()?.to_lowercase().as_str() { "rs"=>Some("Rust"),"py"=>Some("Python"),"js"|"mjs"|"cjs"=>Some("JavaScript"),"ts"|"tsx"=>Some("TypeScript"),"go"=>Some("Go"),"html"=>Some("HTML"),"css"=>Some("CSS"),"json"=>Some("JSON"),"yaml"|"yml"=>Some("YAML"),"toml"=>Some("TOML"),"md"=>Some("Markdown"),"sh"=>Some("Shell"),_=>None } }
 const SNIPPET_CHARS:usize=12_000;
 const DOCUMENTATION_WEIGHT:f64=0.5;
@@ -221,6 +263,37 @@ fn best_window(content:&str,weights:&[(&str,f64)],max:usize)->String {
     #[test] fn skips_the_performance_history() { let dir=tempfile::tempdir().unwrap(); fs::write(dir.path().join("main.rs"),"fn important_router() {}").unwrap(); fs::write(dir.path().join(".jev_performance.json"),"[]").unwrap(); let mut rag=RepositoryRag::new(dir.path().into()); rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap(); assert_eq!(rag.len(),1); assert!(!rag.file_hashes().contains_key(".jev_performance.json")); }
     #[test] fn indexes_text_files() { let dir=tempfile::tempdir().unwrap(); fs::write(dir.path().join("main.rs"),"fn important_router() {}").unwrap(); let mut rag=RepositoryRag::new(dir.path().into()); rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap(); assert_eq!(rag.len(),1); assert_eq!(rag.search("router",3)[0].path,"main.rs"); }
     #[test] fn stops_reading_once_the_budget_is_spent() { let dir=tempfile::tempdir().unwrap(); for name in ["a.md","b.md","c.md"] { fs::write(dir.path().join(name),"x".repeat(400)).unwrap(); } let mut rag=RepositoryRag::new(dir.path().into()).with_budget(1_000); rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap(); assert_eq!(rag.file_hashes().keys().collect::<Vec<_>>(),["a.md","b.md"]); }
+    /// O orçamento vai primeiro para o código: documentação e dados grandes
+    /// que vêm antes na ordem alfabética não tiram `src/` do índice.
+    #[test] fn the_budget_goes_to_code_first() {
+        let dir=tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("aaa_docs")).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("aaa_docs/manual.md"),"x".repeat(900)).unwrap();
+        fs::write(dir.path().join("aaa_docs/data.json"),"[1]".repeat(100)).unwrap();
+        fs::write(dir.path().join("src/app.py"),"def handle_order(): pass").unwrap();
+        let mut rag=RepositoryRag::new(dir.path().into()).with_budget(1_000);
+        rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap();
+        let paths=rag.file_hashes().into_keys().collect::<Vec<_>>();
+        assert!(paths.contains(&"src/app.py".to_string()),"o código entra: {paths:?}");
+        assert!(paths.contains(&"aaa_docs/manual.md".to_string()),"a documentação cabe no que sobrou: {paths:?}");
+        assert!(!paths.contains(&"aaa_docs/data.json".to_string()),"o JSON que não cabe fica de fora: {paths:?}");
+    }
+
+    /// O `.gitignore` vale, mesmo sem `.git`; um ambiente virtual nunca entra;
+    /// a pasta oculta que ninguém ignorou entra.
+    #[test] fn a_virtualenv_and_ignored_files_stay_out_of_the_index() {
+        let dir=tempfile::tempdir().unwrap();
+        for folder in [".venv/lib","generated","src",".github/workflows"] { fs::create_dir_all(dir.path().join(folder)).unwrap(); }
+        fs::write(dir.path().join(".gitignore"),"generated/\n").unwrap();
+        fs::write(dir.path().join(".venv/lib/site.py"),"def vendored(): pass").unwrap();
+        fs::write(dir.path().join("generated/out.rs"),"fn generated() {}").unwrap();
+        fs::write(dir.path().join("src/main.rs"),"fn main() {}").unwrap();
+        fs::write(dir.path().join(".github/workflows/ci.yml"),"on: push").unwrap();
+        let mut rag=RepositoryRag::new(dir.path().into());
+        rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap();
+        assert_eq!(rag.file_hashes().into_keys().collect::<Vec<_>>(),[".github/workflows/ci.yml","src/main.rs"]);
+    }
     #[test] fn focusing_on_the_starting_root_indexes_it_the_first_time() { let dir=tempfile::tempdir().unwrap(); fs::write(dir.path().join("main.rs"),"fn router() {}").unwrap(); let mut rag=RepositoryRag::new(dir.path().into()); assert_eq!(rag.len(),0); rag.focus_on(dir.path().into(),&ContextFirewall::new(PrivacyConfig::default())).unwrap(); assert_eq!(rag.len(),1); }
     #[test] fn a_stale_index_reads_the_folder_again() { let firewall=ContextFirewall::new(PrivacyConfig::default()); let dir=tempfile::tempdir().unwrap(); fs::write(dir.path().join("main.rs"),"fn router() {}").unwrap(); let mut rag=RepositoryRag::new(dir.path().into()); rag.index(&firewall).unwrap(); fs::write(dir.path().join("added.rs"),"fn added_by_agent() {}").unwrap(); rag.refresh(&firewall).unwrap(); assert_eq!(rag.len(),1,"índice em dia não varre de novo"); rag.invalidate(); rag.refresh(&firewall).unwrap(); assert_eq!(rag.len(),2,"o arquivo que o agente criou entra"); assert!(rag.search("added_by_agent",1).first().is_some_and(|hit|hit.path=="added.rs")); rag.focus_on(dir.path().into(),&firewall).unwrap(); assert_eq!(rag.len(),2); }
     #[test] fn following_the_project_reindexes_the_new_folder() { let firewall=ContextFirewall::new(PrivacyConfig::default()); let first=tempfile::tempdir().unwrap(); let second=tempfile::tempdir().unwrap(); fs::write(first.path().join("main.rs"),"fn old_router() {}").unwrap(); fs::write(second.path().join("lib.rs"),"fn new_router() {}").unwrap(); let mut rag=RepositoryRag::new(first.path().into()); rag.index(&firewall).unwrap(); rag.focus_on(second.path().into(),&firewall).unwrap(); assert_eq!(rag.project_info().root,second.path().to_string_lossy()); assert_eq!(rag.file_hashes().keys().collect::<Vec<_>>(),["lib.rs"]); } }
