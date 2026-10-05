@@ -45,10 +45,16 @@ impl RepositoryRag {
     /// dizem nada; o nome de uma função diz. Palavras de ligação ficam de fora,
     /// documentação pesa metade de código, e de um arquivo grande vai o trecho
     /// onde as palavras do pedido se concentram, não o começo dele.
+    ///
+    /// Código costuma ser escrito em inglês e o pedido, no idioma de quem
+    /// pede: as palavras genéricas de programação em português e espanhol
+    /// entram também com o equivalente em inglês (`botão` busca `button`).
     pub fn search(&self, query: &str, limit: usize) -> Vec<ContextSnippet> {
-        let query_tokens=tokenize(query).into_iter().filter(|token|!STOPWORDS.contains(&token.as_str())).collect::<Vec<_>>();
+        let query_tokens=with_english(tokenize(query).into_iter().filter(|token|!STOPWORDS.contains(&token.as_str())).collect::<Vec<_>>());
         let total=self.files.len() as f64;
-        let weights=query_tokens.iter().map(|token|{ let found=self.files.iter().filter(|file|file.tokens.contains(token)).count() as f64; (token.as_str(),(1.0+total/(1.0+found)).ln()) }).collect::<Vec<_>>();
+        // A palavra genérica que tem equivalente em inglês pesa menos que ele:
+        // no código ela costuma aparecer só em comentário e em texto de tela.
+        let weights=query_tokens.iter().map(|token|{ let found=self.files.iter().filter(|file|file.tokens.contains(token)).count() as f64; let translated=if has_english(token) {TRANSLATED_WEIGHT} else {1.0}; (token.as_str(),(1.0+total/(1.0+found)).ln()*translated) }).collect::<Vec<_>>();
         let mut scored=self.files.iter().map(|file| {
             let overlap=weights.iter().filter(|(token,_)|file.tokens.contains(*token)).map(|(_,weight)|weight).sum::<f64>();
             let path=file.path.to_lowercase();
@@ -92,6 +98,45 @@ const WINDOW_LINES:usize=40;
 /// Palavras de ligação, em inglês e em português, que casam com qualquer arquivo.
 const STOPWORDS:[&str;64]=["the","and","for","that","this","with","from","are","was","not","but","you","have","has","can","will","what","when","where","which","how","why","all","any","into","use","make","need","want","should","would","please",
     "como","para","que","uma","com","por","não","nao","mais","dos","das","isso","esse","essa","este","esta","quando","onde","qual","quais","ser","tem","está","sobre","fazer","faça","preciso","quero","todo","toda","pelo","pela"];
+
+/// Palavras genéricas de programação em português e espanhol e o que elas
+/// costumam ser no código, em inglês. Só vocabulário de qualquer projeto:
+/// nenhuma regra ou nome de um projeto em particular.
+const ENGLISH:[(&str,&[&str]);75]=[
+    ("botão",&["button"]),("botao",&["button"]),("botón",&["button"]),("boton",&["button"]),
+    ("tela",&["screen","view","page"]),("pantalla",&["screen","view","page"]),("página",&["page"]),("pagina",&["page"]),
+    ("aviso",&["notice","banner","warning"]),("alerta",&["alert","warning"]),("mensagem",&["message"]),("mensaje",&["message"]),
+    ("fechar",&["close","dismiss"]),("cerrar",&["close","dismiss"]),("abrir",&["open"]),("salvar",&["save"]),("guardar",&["save"]),
+    ("atualização",&["update"]),("atualizacao",&["update"]),("actualización",&["update"]),("actualizacion",&["update"]),("atualizar",&["update","refresh"]),
+    ("texto",&["text","label"]),("rótulo",&["label"]),("rotulo",&["label"]),("etiqueta",&["label","tag"]),
+    ("usuário",&["user"]),("usuario",&["user"]),("senha",&["password"]),("contraseña",&["password"]),("entrar",&["login","signin"]),
+    ("arquivo",&["file"]),("archivo",&["file"]),("pasta",&["folder","directory"]),("carpeta",&["folder","directory"]),
+    ("sessão",&["session"]),("sessao",&["session"]),("sesión",&["session"]),("sesion",&["session"]),
+    ("contexto",&["context"]),("semântico",&["semantic"]),("semantico",&["semantic"]),("invalida",&["invalidate"]),("invalidar",&["invalidate"]),
+    ("erro",&["error"]),("falha",&["failure","error"]),("fallo",&["failure","error"]),("teste",&["test"]),("prueba",&["test"]),("testes",&["tests"]),
+    ("pedido",&["request"]),("solicitud",&["request"]),("resposta",&["response","answer","reply"]),("respostas",&["responses","answers","replies"]),("respuesta",&["response","answer","reply"]),
+    ("portaria",&["gate","gatekeeper"]),("portería",&["gate","gatekeeper"]),("porteria",&["gate","gatekeeper"]),("barra",&["block"]),("barrar",&["block"]),("bloquear",&["block"]),
+    ("curta",&["short"]),("curtas",&["short"]),("corta",&["short"]),("busca",&["search"]),("buscar",&["search","find"]),("pesquisa",&["search"]),
+    ("configuração",&["config","settings"]),("configuracao",&["config","settings"]),("configuración",&["config","settings"]),("configuracion",&["config","settings"]),
+    ("formulário",&["form"]),("formulario",&["form"]),("validação",&["validation"]),("validacao",&["validation"]),
+];
+
+/// O peso da palavra do pedido que tem equivalente em inglês.
+const TRANSLATED_WEIGHT:f64=0.25;
+
+fn has_english(token:&str)->bool { ENGLISH.iter().any(|(word,_)|*word==token) }
+
+/// As palavras do pedido mais o equivalente em inglês das que estão em
+/// [`ENGLISH`], sem repetir.
+fn with_english(tokens:Vec<String>)->Vec<String> {
+    let mut all=tokens.clone();
+    for token in &tokens {
+        if let Some((_,english))=ENGLISH.iter().find(|(word,_)|*word==token.as_str()) {
+            for word in english.iter() { if !all.iter().any(|known|known==word) { all.push(word.to_string()); } }
+        }
+    }
+    all
+}
 
 /// As palavras que dizem do que um texto trata: as de [`tokenize`] sem as de
 /// ligação. É com elas que dois pedidos são comparados.
@@ -151,6 +196,20 @@ fn best_window(content:&str,weights:&[(&str,f64)],max:usize)->String {
         let mut rag=RepositoryRag::new(dir.path().into()); rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap();
         let found=rag.search("how should the request handle a refresh token?",2);
         assert_eq!(found[0].path,"d.rs","o código com o identificador raro vem antes da documentação que fala dele");
+    }
+    /// O pedido em português acha o código escrito em inglês: as palavras
+    /// genéricas ganham o equivalente.
+    #[test] fn a_portuguese_request_finds_code_written_in_english() {
+        let dir=tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/update_banner.ts"),"export function UpdateBanner() { return dismissLabel(); }\nconst dismissLabel = () => 'Close';").unwrap();
+        fs::write(dir.path().join("src/workspace.rs"),"fn texto_de_ajuda() { let texto = \"fechar\"; }").unwrap();
+        fs::write(dir.path().join("src/cache.rs"),"fn invalidate_semantic_context() {}").unwrap();
+        fs::write(dir.path().join("src/router.rs"),"fn route() { let contexto = 1; }").unwrap();
+        let mut rag=RepositoryRag::new(dir.path().into()); rag.index(&ContextFirewall::new(PrivacyConfig::default())).unwrap();
+        assert_eq!(rag.search("Corrija o texto do botão de fechar o aviso de atualização",2)[0].path,"src/update_banner.ts");
+        assert_eq!(rag.search("Explique como o cache semântico invalida o contexto",2)[0].path,"src/cache.rs");
+        assert_eq!(with_english(vec!["botão".into(),"button".into()]),["botão","button"],"sem repetir o que já está no pedido");
     }
     #[test] fn identifiers_are_split_into_their_words() { assert!(tokenize("fetchUserName").is_superset(&["fetchusername","fetch","user","name"].map(String::from).into_iter().collect())); }
     #[test] fn a_large_file_sends_the_part_that_matches() {

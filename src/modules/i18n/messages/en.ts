@@ -1602,4 +1602,10 @@ export const en = {
   "whatsNew.item.sessionModel.detail": "Picking a model by the size of every request meant a new agent session almost every time, and each new session reads the project again. Now the first request picks the model and the next ones stay on it, unless a complex request needs a bigger one. Effort still follows each request. You can turn this off in Settings › Jev › Routing.",
   "whatsNew.item.sessionsKept.title": "Agent sessions survive a restart, and Codex resumes too",
   "whatsNew.item.sessionsKept.detail": "The agent session of each chat is now saved on this computer for a day, so closing and opening JayV no longer starts every chat from scratch. Codex resumes its session as Claude already did, and a resumed request no longer repeats the system instructions. Resuming across planning and build is available as an experimental option in Settings › Jev › Routing.",
+  "whatsNew.item.planToBuild.title": "The build gets the whole plan",
+  "whatsNew.item.planToBuild.detail": "When you plan in a chat and then ask to implement, the agent that builds now receives the plan in full. Before, a new session only saw the start of it, because old answers are shortened in the history.",
+  "whatsNew.item.betterRetry.title": "\"It didn't work\" no longer retries the same way",
+  "whatsNew.item.betterRetry.detail": "A complaint about the last answer now tells the agent to check what its previous change did and reproduce the failure before changing anything again. From the second complaint in a row, it also thinks one step harder.",
+  "whatsNew.item.smallCuts.title": "Searches in your language, cheaper titles and honest savings",
+  "whatsNew.item.smallCuts.detail": "Requests written in Portuguese or Spanish now find code written in English, because common programming words are searched in English too. With only Copilot set up, chats keep the local title instead of spending a premium request on it. And a blocked request you resend within 15 minutes no longer counts as tokens saved.",
 } satisfies Record<string, Message>;
