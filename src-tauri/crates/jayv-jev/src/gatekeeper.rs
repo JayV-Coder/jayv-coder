@@ -31,6 +31,12 @@ pub const WEIGHTS:[(&str,f64);4]=[("goal_is_clear",0.40),("says_where",0.25),("s
 pub const CONTINUATION_MINUTES:f64=30.0;
 /// O teto da janela: um dia. Além disso não é continuação, é outra conversa.
 const CONTINUATION_MAX_MINUTES:f64=1_440.0;
+/// Quanto a portaria e o roteamento esperam o Jev, em segundos, repetição
+/// incluída, antes de decidir pelas heurísticas locais.
+pub const DEADLINE_SECONDS:f64=8.0;
+/// O prazo aceito: menos que 2 s derruba o Jev que está respondendo; mais que
+/// 30 s deixa o pedido parado sem que ninguém veja por quê.
+pub const DEADLINE_RANGE:(f64,f64)=(2.0,30.0);
 
 /// Os números do Jev como vão para o seed de `jev_parameters`. São também o
 /// padrão quando o cache não tem um valor válido.
@@ -47,6 +53,9 @@ pub struct JevParameters {
     /// A janela, em minutos, em que um pedido curto ainda continua a
     /// resposta anterior do chat.
     pub continuation_minutes:f64,
+    /// O prazo total de uma chamada do caminho do pedido (`entry`,
+    /// `routing`), em segundos.
+    pub deadline_seconds:f64,
 }
 
 impl Default for JevParameters {
@@ -63,6 +72,7 @@ impl JevParameters {
         let levels=|value:Value|->Option<[String;3]> { let list:Vec<String>=serde_json::from_value(value).ok()?; list.try_into().ok() };
         let weights=|value:Value|->Option<BTreeMap<String,f64>> { let map:BTreeMap<String,f64>=serde_json::from_value(value).ok()?; (!map.is_empty() && map.values().all(|weight|*weight>=0.0)).then_some(map) };
         let minutes=|value:&Value|value.as_f64().filter(|minutes|*minutes>0.0&&*minutes<=CONTINUATION_MAX_MINUTES);
+        let seconds=|value:&Value|value.as_f64().filter(|seconds|(DEADLINE_RANGE.0..=DEADLINE_RANGE.1).contains(seconds));
         Self {
             scope_demand:demand(pick("scope_demand")).or_else(||demand(fallback("scope_demand"))).expect("default scope_demand"),
             block_margin:unit(&pick("block_margin")).or_else(||unit(&fallback("block_margin"))).expect("default block_margin"),
@@ -70,6 +80,7 @@ impl JevParameters {
             scope_levels:levels(pick("scope_levels")).or_else(||levels(fallback("scope_levels"))).expect("default scope_levels"),
             noul_line:unit(&pick("noul_line")).or_else(||unit(&fallback("noul_line"))).expect("default noul_line"),
             continuation_minutes:minutes(&pick("continuation_minutes")).or_else(||minutes(&fallback("continuation_minutes"))).expect("default continuation_minutes"),
+            deadline_seconds:seconds(&pick("deadline_seconds")).or_else(||seconds(&fallback("deadline_seconds"))).expect("default deadline_seconds"),
         }
     }
 }
@@ -90,6 +101,7 @@ pub fn parameters()->BTreeMap<String,serde_json::Value> {
         ("scope_levels".to_string(),json!(SCOPE_LEVELS)),
         ("noul_line".to_string(),json!(crate::asking::NOUL_LINE)),
         ("continuation_minutes".to_string(),json!(CONTINUATION_MINUTES)),
+        ("deadline_seconds".to_string(),json!(DEADLINE_SECONDS)),
     ])
 }
 const PROMPT_PREVIEW:usize=600;

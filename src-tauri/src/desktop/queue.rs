@@ -2,10 +2,10 @@
 //! chama o orquestrador e narra o caminho para a tela e para o disco.
 
 use super::events::*;
-use super::{DesktopState, QueueBell, SharedDesktopState, SharedWorkspace};
+use super::{DesktopState, QueueBell, SharedDesktopState, SharedForget, SharedWorkspace};
 use crate::sync::{Connectivity, Link};
 use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict};
-use crate::progress::{Beat, Debounce, Pulse};
+use crate::progress::{Beat, Debounce, Frame, Pulse};
 use crate::turns::{Turn, TurnStatus};
 use crate::i18n::{self, Text};
 use crate::{asking, jev, model, project_memory, search, usage};
@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 /// aplicativo, e é por isso que dois envios seguidos nunca disputam o
 /// orquestrador: o segundo não é uma chamada esperando na porta, é uma linha no
 /// banco esperando a vez.
-pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity) {
+pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity,forget:SharedForget) {
     loop {
         // O Jev mora no Supabase: sem conexão e sessão válida os pedidos
         // esperam na fila, e o sino da volta da rede os chama em ordem.
@@ -31,7 +31,7 @@ pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,worksp
             };
             let (turn,prompt)=next;
             let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
-            serve(&app,&desk,&workspace,&turn,&prompt).await;
+            serve(&app,&desk,&workspace,&forget,&turn,&prompt).await;
             let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
         }
         bell.notified().await;
@@ -43,14 +43,14 @@ pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,worksp
 /// apagar o rascunho antes de ela terminar deixaria a tela com duas versões do
 /// mesmo texto. Por isso o rascunho é apagado no fim, depois de a resposta
 /// definitiva estar em `messages` e de a narradora ter se despedido.
-async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,turn:&Turn,prompt:&str) {
+async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,turn:&Turn,prompt:&str) {
     let (pulse,beats)=Pulse::channel();
     let narrator=tauri::async_runtime::spawn(narrate(app.clone(),workspace.clone(),turn.clone(),beats));
     // Tudo que o atendimento gastar — o Jev, o modelo, o batismo — é deste
     // turno, deste chat e deste projeto.
     let project_id=workspace.lock().await.chat_project(&turn.chat_id).unwrap_or(None);
     let scope=usage::Scope{project_id,chat_id:Some(turn.chat_id.clone()),turn_id:Some(turn.id.clone())};
-    usage::within(scope,attend(app,desk,workspace,turn,prompt,&pulse)).await;
+    usage::within(scope,attend(app,desk,workspace,forget,turn,prompt,&pulse)).await;
     drop(pulse);
     let _=narrator.await;
     let _=workspace.lock().await.clear_turn_partial(&turn.id);
@@ -67,10 +67,23 @@ async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspac
 async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mpsc::UnboundedReceiver<Beat>) {
     let mut answer=String::new();
     let mut slack=Debounce::start(Instant::now());
-    while let Some(beat)=beats.recv().await {
+    // Os pedaços que ainda não foram para a tela. Com o Claude transmitindo
+    // token a token, um aviso por pedaço era um redesenho da conversa por
+    // token; juntos num quadro, o texto cresce igual e a tela não engasga.
+    let mut frame=Frame::default();
+    let emit=|text:String|{ let _=app.emit(CHUNK_EVENT,ChunkEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone(),text}); };
+    loop {
+        let beat=match frame.due() {
+            None=>beats.recv().await,
+            Some(due)=>tokio::select! {
+                beat=beats.recv()=>beat,
+                _=tokio::time::sleep_until(due)=>{ if let Some(text)=frame.take() { emit(text); } continue; }
+            },
+        };
+        let Some(beat)=beat else { break };
         if let Beat::Chunk{text}=&beat {
             answer.push_str(text);
-            let _=app.emit(CHUNK_EVENT,ChunkEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone(),text:text.clone()});
+            if let Some(text)=frame.push(text,tokio::time::Instant::now()) { emit(text); }
             let now=Instant::now();
             if slack.accept(text.len(),now) {
                 let _=workspace.lock().await.set_turn_partial(&turn.id,&answer);
@@ -78,6 +91,9 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
             }
             continue;
         }
+        // O texto que esperava o quadro vai antes da etapa: a tela vê as duas
+        // coisas na ordem em que aconteceram.
+        if let Some(text)=frame.take() { emit(text); }
         let (kind,mut detail,settles)=(beat.kind().to_string(),beat.detail(),beat.settles());
         // O fim de um turno medido leva a marca: a importação dos turnos
         // antigos, numa máquina que atualizar depois, não o conta de novo.
@@ -97,6 +113,7 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
     }
     // O canal fechou. Nem todo caminho passa por um desfecho anunciado — uma
     // pasta que sumiu, um portão que barrou —, então a descarga final é aqui.
+    if let Some(text)=frame.take() { emit(text); }
     if slack.waiting()>0 {
         let _=workspace.lock().await.set_turn_partial(&turn.id,&answer);
     }
@@ -105,7 +122,7 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
 /// Atende um pedido do começo ao fim. O texto vem do banco, não da tela, e o
 /// turno sai daqui sempre fechado — respondido, barrado ou falho. Um turno que
 /// saísse em aberto travaria a fila inteira atrás dele.
-async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,turn:&Turn,prompt:&str,pulse:&Pulse) {
+async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,turn:&Turn,prompt:&str,pulse:&Pulse) {
     let chat_id=turn.chat_id.as_str();
     // O que está gravado pode ser um aviso para a tela (a resposta a uma
     // pergunta); a portaria e o modelo o leem em inglês.
@@ -113,6 +130,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let prompt=i18n::for_model(prompt);
     let prompt=prompt.as_str();
     let mut state=desk.lock().await;
+    forget_pending(&mut state,workspace,forget).await;
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
     // computador pela sincronização, vale já para o próximo.
@@ -389,6 +407,19 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     state.orchestrator.policy_scope=policy.map(|project|project.org_slug);
 }
 
+/// Os chats apagados ou limpos enquanto o orquestrador atendia outro pedido.
+/// A memória da conversa sai, e a sessão do agente que aquele pedido possa ter
+/// guardado no banco depois da limpeza também: o chat limpo é conversa nova.
+async fn forget_pending(state:&mut DesktopState,workspace:&SharedWorkspace,forget:&SharedForget) {
+    let chat_ids:Vec<String>=forget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain().collect();
+    if chat_ids.is_empty() { return; }
+    let mut workspace=workspace.lock().await;
+    for chat_id in chat_ids {
+        state.orchestrator.memory.clear_session(&chat_id);
+        let _=workspace.forget_agent_session(&chat_id);
+    }
+}
+
 /// O pedido está gravado desde o envio, e o `process` torna a anotá-lo na
 /// memória da sessão: sem isto o modelo receberia a mesma linha duas vezes no
 /// histórico.
@@ -405,7 +436,7 @@ fn jev_reading(result:&model::ProcessResult)->String{format!("{} task, {} comple
 /// Pontua o pedido no Jev quando há credencial e nas heurísticas locais quando
 /// não há — ou quando a chamada falha, para que o portão nunca trave o envio.
 async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str,level:crate::expertise::Expertise,covered:&[String],recent:&[String])->EntryCheck {
-    if jev::is_configured() {
+    if jev::reachable() {
         match gatekeeper::evaluate_entry(input,&project.name,&project.languages,recent).await {
             Ok(reading)=>return gatekeeper::judge_for(turn,input,&gatekeeper::with_notes(reading,covered),"jev",level),
             Err(error)=>eprintln!("portaria: o Jev não respondeu, usando heurísticas locais ({error})"),

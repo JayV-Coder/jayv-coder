@@ -69,6 +69,21 @@ pub(crate) fn when_free(desk:&SharedDesktopState,apply:impl FnOnce(&mut Orchestr
 /// desenvolvedor tinha acabado de escrever.
 pub type SharedWorkspace=Arc<Mutex<WorkspaceStore>>;
 
+/// Os chats que o orquestrador tem de esquecer — memória da conversa e sessão
+/// do agente — porque foram apagados ou limpos enquanto ele atendia outro
+/// pedido. Apagar e limpar não esperam o agente: gravam no banco na hora e
+/// deixam o esquecimento aqui, para o começo do próximo atendimento.
+pub type SharedForget=Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
+/// Esquece os chats agora, se o orquestrador está livre, ou no começo do
+/// próximo atendimento. Nunca espera.
+pub(crate) fn forget_chats(desk:&SharedDesktopState,forget:&SharedForget,chat_ids:Vec<String>) {
+    match desk.try_lock() {
+        Ok(mut desk)=>for chat_id in &chat_ids { desk.orchestrator.memory.clear_session(chat_id); },
+        Err(_)=>forget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(chat_ids),
+    }
+}
+
 /// Toca quando entra pedido novo. O atendente dorme nele em vez de ficar
 /// perguntando ao banco se chegou alguma coisa.
 pub type QueueBell=Arc<Notify>;
@@ -142,6 +157,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         .plugin(tauri_plugin_process::init())
         .manage(desk).manage(facts).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
         .manage(live::SharedLive::default())
+        .manage(SharedForget::default())
         .manage(tray::TrayReady::default())
         .on_window_event(tray::on_window_event)
         .setup(move |app|{
@@ -168,7 +184,8 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             let (sink,entries)=tokio::sync::mpsc::unbounded_channel();
             crate::usage::install(sink);
             tauri::async_runtime::spawn(books::keep_the_books(handle.clone(),workspace.clone(),entries));
-            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity));
+            let forget=app.state::<SharedForget>().inner().clone();
+            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity,forget));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -197,6 +214,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     /// O seletor de pastas já ficou mudo uma vez: no Linux o backend gtk3 do rfd
     /// abre a janela pela thread GTK dele, que disputa o loop de eventos do
     /// Tauri, e a chamada volta vazia sem nada aparecer. Quem voltar a declarar
@@ -211,6 +229,38 @@ mod tests {
         let signature=command.split(')').next().expect("assinatura");
         assert!(!signature.contains("SharedDesktopState"),"o envio voltou a depender do cadeado do modelo: {signature}");
         assert!(signature.contains("SharedWorkspace"),"o envio precisa do banco, e só dele: {signature}");
+    }
+
+    /// Apagar e limpar um chat gravam no banco e não esperam o agente que
+    /// atende outro pedido. Quem voltar a pegar o cadeado do orquestrador
+    /// nesses comandos traz de volta o clique que fica parado minutos.
+    #[test] fn deleting_and_clearing_do_not_wait_for_the_orchestrator() {
+        let source=include_str!("commands/workspace.rs");
+        for command in ["async fn clear_chat","async fn delete_chat","async fn delete_project"] {
+            let body=source.split(command).nth(1).expect(command).split("#[tauri::command]").next().expect("corpo");
+            assert!(!body.contains("both(")&&!body.contains("state.lock()"),"{command} voltou a esperar o orquestrador");
+            assert!(body.contains("forget_chats("),"{command} precisa fazer o orquestrador esquecer o chat");
+        }
+    }
+
+    /// Com o orquestrador ocupado, o chat fica na lista e é esquecido no
+    /// começo do próximo atendimento; livre, é esquecido na hora.
+    #[tokio::test] async fn a_busy_orchestrator_forgets_the_chat_later() {
+        let dir=tempfile::tempdir().expect("pasta");
+        let mut orchestrator=Orchestrator::unindexed(dir.path().join("missing.yaml"),dir.path().to_path_buf()).expect("orquestrador");
+        orchestrator.memory.add_message("busy","user","oi");
+        orchestrator.memory.add_message("free","user","oi");
+        let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:dir.path().to_path_buf()}));
+        let forget=SharedForget::default();
+        {
+            let _serving=desk.lock().await;
+            forget_chats(&desk,&forget,vec!["busy".into()]);
+        }
+        assert!(forget.lock().unwrap().contains("busy"),"ocupado: fica para depois");
+        assert_eq!(desk.lock().await.orchestrator.memory.conversation("busy").len(),1);
+        forget_chats(&desk,&forget,vec!["free".into()]);
+        assert!(desk.lock().await.orchestrator.memory.conversation("free").is_empty(),"livre: esquece na hora");
+        assert!(!forget.lock().unwrap().contains("free"));
     }
 
     /// O ambiente só pode mudar enquanto o processo tem uma thread só. Quem

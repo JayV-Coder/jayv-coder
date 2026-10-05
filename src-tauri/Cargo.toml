@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.59.0"
+version = "0.59.1"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -34,6 +34,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
 globset = "0.4"
 hex = "0.4"
+ignore = "0.4"
 jsonwebtoken = "9"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

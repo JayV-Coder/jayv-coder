@@ -153,18 +153,24 @@ impl Meter {
     /// Lê uma linha da saída. Texto que não é JSON não conta nada.
     pub fn read(&mut self,line:&str) {
         let Ok(event)=serde_json::from_str::<serde_json::Value>(line.trim()) else { return };
+        self.read_event(&event);
+    }
+
+    /// O mesmo, com a linha já lida como JSON: quem lê a saída do agente faz o
+    /// parse uma vez e entrega o evento a cada leitor.
+    pub fn read_event(&mut self,event:&serde_json::Value) {
         let elapsed=self.elapsed();
         match self.agent.as_str() {
             "claude"=>{
-                if let Some(found)=claude::spends(&event,&self.model,elapsed) { self.spends.extend(found); }
-                if claude::is_rate_limit(&event) { self.rate_limited=true; }
+                if let Some(found)=claude::spends(event,&self.model,elapsed) { self.spends.extend(found); }
+                if claude::is_rate_limit(event) { self.rate_limited=true; }
             }
             "codex"=>{
-                if let Some(mut found)=codex::spend(&event,&self.model) { found.duration_ms=elapsed; self.spends.push(found); }
-                self.quotas.extend(codex::quotas(&event));
+                if let Some(mut found)=codex::spend(event,&self.model) { found.duration_ms=elapsed; self.spends.push(found); }
+                self.quotas.extend(codex::quotas(event));
             }
             "cursor"=>{
-                if let Some(mut found)=cursor::spend(&event,&self.model) { if found.duration_ms==0 { found.duration_ms=elapsed; } self.spends.push(found); }
+                if let Some(mut found)=cursor::spend(event,&self.model) { if found.duration_ms==0 { found.duration_ms=elapsed; } self.spends.push(found); }
             }
             _=>{}
         }
