@@ -88,23 +88,84 @@ impl Beat {
 /// de ler a rede enquanto o disco não acompanhasse — o modelo esperaria pelo
 /// SQLite. Os pedaços são pequenos, a consumidora grava com folga, e um envio
 /// que nunca bloqueia é mais importante aqui do que um teto de memória.
-#[derive(Clone)]
-pub struct Pulse(Option<mpsc::UnboundedSender<Beat>>);
+#[derive(Clone,Default)]
+pub struct Pulse { sender:Option<mpsc::UnboundedSender<Beat>>, stop:Stop }
 
 impl Pulse {
-    pub fn channel()->(Self,mpsc::UnboundedReceiver<Beat>) {
+    pub fn channel()->(Self,mpsc::UnboundedReceiver<Beat>) { Self::channel_with(Stop::default()) }
+
+    /// O canal de um pedido que pode ser parado por `stop`.
+    pub fn channel_with(stop:Stop)->(Self,mpsc::UnboundedReceiver<Beat>) {
         let (sender,receiver)=mpsc::unbounded_channel();
-        (Self(Some(sender)),receiver)
+        (Self{sender:Some(sender),stop},receiver)
     }
 
-    pub fn silent()->Self { Self(None) }
+    pub fn silent()->Self { Self::default() }
+
+    /// O mesmo pedido sem narração: as chamadas de apoio (plano, revisão,
+    /// divisão) não falam na tela, mas param junto quando ele é parado.
+    pub fn quiet(&self)->Self { Self{sender:None,stop:self.stop.clone()} }
 
     /// Engole erro de envio. Um canal fechado — a janela que sumiu, a
     /// consumidora que morreu — não pode derrubar o pedido que está sendo
     /// atendido; o turno vale mais que a narração dele.
-    pub fn beat(&self,beat:Beat) { if let Some(sender)=&self.0 { let _=sender.send(beat); } }
+    pub fn beat(&self,beat:Beat) { if let Some(sender)=&self.sender { let _=sender.send(beat); } }
 
-    pub fn is_silent(&self)->bool { self.0.is_none() }
+    pub fn is_silent(&self)->bool { self.sender.is_none() }
+
+    /// A parada do pedido.
+    pub fn stop(&self)->&Stop { &self.stop }
+}
+
+/// Por que um pedido parou antes de terminar.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum StopReason {
+    /// Quem pediu mandou parar.
+    Asked,
+    /// O pedido passou do teto total de minutos.
+    Ceiling{minutes:u64},
+}
+
+impl StopReason {
+    /// O erro que o pedido parado devolve, para o chat e para o reenvio.
+    pub fn text(&self)->crate::i18n::Text {
+        match self {
+            Self::Asked=>crate::i18n::Text::new("turn.cancelled"),
+            Self::Ceiling{minutes}=>crate::i18n::Text::new("turn.ceiling").with("minutes",*minutes),
+        }
+    }
+}
+
+/// O sinal de parar um pedido: quem atende a tela o dispara (o botão "Parar",
+/// o teto de minutos), e cada agente que o pedido abriu o escuta e encerra a
+/// árvore de processos dele. Disparar duas vezes guarda o primeiro motivo.
+#[derive(Clone,Default,Debug)]
+pub struct Stop(std::sync::Arc<StopState>);
+
+#[derive(Default,Debug)]
+struct StopState { reason:std::sync::Mutex<Option<StopReason>>, notify:tokio::sync::Notify }
+
+impl Stop {
+    pub fn stop(&self,reason:StopReason) {
+        {
+            let mut current=self.0.reason.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if current.is_none() { *current=Some(reason); }
+        }
+        self.0.notify.notify_waiters();
+    }
+
+    pub fn reason(&self)->Option<StopReason> { *self.0.reason.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
+
+    /// Espera o pedido ser parado e diz por quê. Já parado, volta na hora.
+    pub async fn stopped(&self)->StopReason {
+        loop {
+            let notified=self.0.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(reason)=self.reason() { return reason; }
+            notified.await;
+        }
+    }
 }
 
 /// Quanto tempo e quantos bytes a resposta parcial espera antes de ir ao disco.
@@ -224,6 +285,21 @@ mod tests {
         assert_eq!(frame.take(),None);
         assert_eq!(frame.push(&"x".repeat(FRAME_BYTES),now).map(|text|text.len()),Some(FRAME_BYTES),"quadro cheio vai já");
         assert_eq!(frame.due(),None);
+    }
+
+    /// Parar acorda quem espera, guarda o primeiro motivo e vale para as
+    /// chamadas de apoio do mesmo pedido.
+    #[tokio::test] async fn a_stop_reaches_every_call_of_the_request() {
+        let (pulse,_beats)=Pulse::channel();
+        let support=pulse.quiet();
+        assert!(support.is_silent()&&!pulse.is_silent());
+        let waiting=tokio::spawn({ let stop=support.stop().clone(); async move { stop.stopped().await } });
+        tokio::task::yield_now().await;
+        pulse.stop().stop(StopReason::Asked);
+        pulse.stop().stop(StopReason::Ceiling{minutes:30});
+        assert_eq!(waiting.await.expect("acordou"),StopReason::Asked);
+        assert_eq!(support.stop().stopped().await,StopReason::Asked,"já parado, volta na hora");
+        assert_eq!(StopReason::Ceiling{minutes:30}.text().key,"turn.ceiling");
     }
 
     #[test] fn many_small_chunks_make_a_single_write() {

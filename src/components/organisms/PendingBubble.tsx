@@ -12,7 +12,8 @@ import { MessageBubble } from "./MessageBubble";
  * faixa colada à caixa de escrita (`PendingBanner`), e não soltas na conversa. */
 export function PendingBubble({ turn, place }: { turn: TurnView; place: number }) {
   const t = useT();
-  const live = useConversation((state) => state.live);
+  // Só o pedido deste balão: o pedaço de outro turno não o redesenha.
+  const live = useConversation((state) => state.live[turn.id]);
   const { text } = liveOf(turn, live);
   if (!text) return null;
   return <MessageBubble role="assistant" content={text} turn={turn} meta={place > 1 ? t("pending.ahead", { count: place - 1 }) : ""} pending />;

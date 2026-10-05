@@ -2,6 +2,7 @@ import type { CoreSettings, CoreSnapshot } from "@/modules/core";
 import { formatClock, useT } from "@/modules/i18n";
 import { showChanges } from "@/modules/changelog";
 import { updateCore } from "@/modules/settings";
+import { locks, SENSITIVE_PATTERNS, toggleState, useEntitlements } from "@/modules/plans";
 import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,11 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   const checking = useUpdate((state) => isUpdateBusy(state.phase));
   const check = () => checkForUpdate(true);
   const checkedAt = useUpdate((state) => state.checkedAt);
+  const entitlements = useEntitlements();
+  // A redação de segredos e os arquivos sensíveis são núcleo: ligados, sem
+  // interruptor, com a lista padrão sempre por baixo do que quem usa escreve.
+  const redact = toggleState(entitlements, "secretRedaction", core.privacy.redactSecrets);
+  const sensitive = locks(entitlements, "sensitiveFiles");
 
   return (
     <div className="grid gap-5">
@@ -32,10 +38,12 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
 
       <SettingsSection title={t("app.section.privacy")} description={t("app.section.privacy.description")}>
         <div className="grid gap-4">
-          <ToggleRow id="app-redact" label={t("app.redact")} hint={t("app.redact.hint")} checked={core.privacy.redactSecrets}
+          <ToggleRow id="app-redact" label={t("app.redact")} hint={redact.reason === "required" ? `${t("plans.required")} · ${t("app.redact.hint")}` : t("app.redact.hint")}
+            checked={redact.checked} disabled={redact.disabled}
             onChange={(redactSecrets) => updateCore({ privacy: { ...core.privacy, redactSecrets } })} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <FormField label={t("app.deny")} htmlFor="app-deny" hint={t("app.deny.hint")}>
+            <FormField label={t("app.deny")} htmlFor="app-deny"
+              hint={`${t("app.deny.hint")} ${sensitive ? `${t("plans.sensitiveAlways", { patterns: SENSITIVE_PATTERNS.join(", ") })} ` : ""}${t("app.deny.agents")}`}>
               <Textarea id="app-deny" rows={6} spellCheck={false} className="font-mono text-xs" value={core.privacy.deny.join("\n")}
                 onChange={(event) => updateCore({ privacy: { ...core.privacy, deny: lines(event.target.value) } })} />
             </FormField>

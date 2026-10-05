@@ -154,7 +154,11 @@ export async function checkAgent(id: AgentId, quiet = false) {
   if (!quiet) setProbe("checking");
   let probe: ProbeState;
   try {
-    probe = await commands.checkAgent(agent.command);
+    // O login é perguntado só na conferência pedida: na de fundo, a última
+    // resposta continua valendo.
+    probe = await commands.checkAgent(agent.command, quiet ? null : id);
+    const before = useSettings.getState().probes[id];
+    if (quiet && before && before !== "checking" && before.path === probe.path && before.loggedIn !== undefined) probe = { ...probe, loggedIn: before.loggedIn };
   } catch {
     probe = { path: null, version: null };
   }
@@ -165,7 +169,7 @@ export async function checkAgent(id: AgentId, quiet = false) {
 
 function sameProbe(a: ProbeState, b: ProbeState) {
   if (a === null || b === null || a === "checking" || b === "checking") return a === b;
-  return a.path === b.path && a.version === b.version;
+  return a.path === b.path && a.version === b.version && a.loggedIn === b.loggedIn;
 }
 
 /** Confere todos os agentes agora (o botão da página Sistema). */

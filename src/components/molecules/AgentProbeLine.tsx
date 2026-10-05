@@ -10,7 +10,17 @@ export function AgentProbeLine({ probe }: { probe: ProbeState }) {
   // Achado e respondendo; achado mas mudo (o script do npm sem Node, por
   // exemplo); ou não achado.
   const found = probe.path !== null;
-  const healthy = found && !!probe.version;
+  const signedOut = found && !!probe.version && probe.loggedIn === false;
+  const healthy = found && !!probe.version && !signedOut;
+  if (signedOut) {
+    return (
+      <p className="flex flex-wrap items-center gap-x-2 text-xs text-warning" role="status">
+        <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />
+        {t("agent.loggedOut", { path: probe.path! })}
+        <span className="font-mono text-muted-foreground">{probe.version}</span>
+      </p>
+    );
+  }
   return (
     <p className={cn("flex flex-wrap items-center gap-x-2 text-xs", healthy ? "text-success" : "text-warning")} role="status">
       <span aria-hidden="true" className={cn("size-1.5 rounded-full", healthy ? "bg-success" : "bg-warning")} />

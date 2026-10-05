@@ -1,12 +1,14 @@
 import type { AgentSettings, ClaudeOptions, Mechanism } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { updateOptions, type ModelDraft } from "@/modules/settings";
+import { toggleState, useEntitlements } from "@/modules/plans";
 import { CheckList, FormField, OptionSelect, ToggleRow } from "@/components/molecules";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { MechanismsField } from "./MechanismsField";
 
-const PERMISSIONS: ClaudeOptions["permissionMode"][] = ["default", "plan", "acceptEdits", "auto", "bypassPermissions"];
+type Mode = Exclude<ClaudeOptions["permissionMode"], "default">;
+const PERMISSIONS: Mode[] = ["manual", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"];
 const EFFORTS: ClaudeOptions["effort"][] = ["auto", "low", "medium", "high", "xhigh", "max"];
 const TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
 const NONE = "__none__";
@@ -19,11 +21,20 @@ export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSet
   const options = agent.options;
   const set = (patch: Partial<ClaudeOptions>) => updateOptions("claude", patch);
   const reserves = [...new Set(models.map((model) => model.model.trim()).filter(Boolean))];
+  const entitlements = useEntitlements();
+  // Guardar as sessões é núcleo; o índice de símbolos segue o plano.
+  const persist = toggleState(entitlements, "agentSessions", options.persistSessions);
+  const symbols = toggleState(entitlements, "symbolIndex", options.symbolTools ?? false);
+  // O modo seguro não sobe servidor MCP: o índice de símbolos não teria como chegar.
+  const symbolsOff = options.safeMode && !symbols.disabled;
+  // `default` é o nome antigo do `manual`.
+  const mode: Mode = options.permissionMode === "default" ? "manual" : options.permissionMode;
+  const hint = (reason: "required" | "outside" | null, text: string) => (reason ? `${t(reason === "required" ? "plans.required" : "plans.jevLocked")} · ${text}` : text);
 
   return (
     <div className="grid gap-5 sm:grid-cols-2">
-      <FormField label={t("claude.permission")} htmlFor="claude-permission" hint={t(`claude.permission.${options.permissionMode}.hint`)} wide>
-        <OptionSelect id="claude-permission" value={options.permissionMode} onChange={(permissionMode) => set({ permissionMode })}
+      <FormField label={t("claude.permission")} htmlFor="claude-permission" hint={t(`claude.permission.${mode}.hint`)} wide>
+        <OptionSelect id="claude-permission" value={mode} onChange={(permissionMode) => set({ permissionMode })}
           options={PERMISSIONS.map((value) => ({ value, label: t(`claude.permission.${value}`) }))} />
       </FormField>
       <FormField label={t("agent.effort")} htmlFor="claude-effort" hint={t("agent.effort.hint.auto")}>
@@ -59,9 +70,10 @@ export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSet
         <Textarea id="claude-prompt" rows={3} maxLength={4000} value={options.appendSystemPrompt} placeholder={t("claude.prompt.placeholder")}
           onChange={(event) => set({ appendSystemPrompt: event.target.value })} />
       </FormField>
-      <ToggleRow id="claude-persist" label={t("claude.persist")} hint={t("claude.persist.hint")} checked={options.persistSessions} onChange={(persistSessions) => set({ persistSessions })} />
-      <ToggleRow id="claude-safe" label={t("claude.safe")} hint={t("claude.safe.hint")} checked={options.safeMode} onChange={(safeMode) => set({ safeMode })} />
-      <ToggleRow id="claude-symbols" label={t("claude.symbols")} hint={t("claude.symbols.hint")} checked={options.symbolTools ?? false} onChange={(symbolTools) => set({ symbolTools })} />
+      <ToggleRow id="claude-persist" label={t("claude.persist")} hint={hint(persist.reason, t("claude.persist.hint"))} checked={persist.checked} disabled={persist.disabled} onChange={(persistSessions) => set({ persistSessions })} />
+      <ToggleRow id="claude-safe" label={t("claude.safe")} hint={t("claude.safe.hint")} checked={options.safeMode} onChange={(safeMode) => set(safeMode ? { safeMode, symbolTools: false } : { safeMode })} />
+      <ToggleRow id="claude-symbols" label={t("claude.symbols")} hint={symbolsOff ? `${t("claude.symbols.safeMode")} · ${t("claude.symbols.hint")}` : hint(symbols.reason, t("claude.symbols.hint"))}
+        checked={symbolsOff ? false : symbols.checked} disabled={symbols.disabled || symbolsOff} onChange={(symbolTools) => set({ symbolTools })} />
     </div>
   );
 }

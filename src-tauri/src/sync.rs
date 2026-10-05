@@ -226,6 +226,14 @@ pub async fn run<F>(store:SharedWorkspace,backend:F,connectivity:Connectivity,be
 where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
     let mut pause:Option<Duration>=None;
     loop {
+        // Com um pedido no ar a volta espera: baixar turnos e mensagens no
+        // meio dele disputaria o banco com a narração e poderia mexer no
+        // turno que está sendo atendido. A fila é olhada de novo a cada dois
+        // segundos.
+        if backend().is_some() && store.lock().await.turn_in_flight().unwrap_or(false) {
+            tokio::select!{_=bell.notified()=>{},_=tokio::time::sleep(Duration::from_secs(2))=>{}}
+            continue;
+        }
         match backend() {
             None=>connectivity.set(Link::SignedOut),
             Some(backend)=>match round(&store,backend.as_ref()).await {
@@ -240,6 +248,8 @@ where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
                     if !matches!(error,RemoteError::Offline(_)|RemoteError::Server(_)) {eprintln!("sincronização: {error}");}
                     pause=Some(backoff(pause));
                     connectivity.set(Link::Offline);
+                    // Sem rede, mas com sessão: a fila anda pela heurística.
+                    queue.notify_one();
                 }
             },
         }

@@ -4,8 +4,8 @@
 
 use crate::i18n::{failure, Text};
 use crate::desktop::events::*;
-use crate::desktop::{QueueBell, SharedWorkspace};
-use crate::turns::{self, Turn};
+use crate::desktop::{Cancels, QueueBell, SharedWorkspace};
+use crate::turns::{self, Turn, TurnStatus};
 use crate::asking;
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
@@ -98,5 +98,30 @@ pub(crate) async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWork
     let chat_id=store.chat_of_turn(&question_turn_id).map_err(failure)?.unwrap_or_default();
     drop(store);
     let _=app.emit(TURN_EVENT,TurnEvent{chat_id,turn_id:question_turn_id});
+    Ok(())
+}
+
+/// Para um pedido. O que espera na fila sai dela como falho, com o motivo no
+/// chat e o reenvio no balão; o que está no ar recebe o sinal, e o agente cai
+/// junto com tudo o que abriu. O pedido já fechado não muda.
+///
+/// A leitura e a mudança de estado acontecem sob o cadeado do banco — o mesmo
+/// com que a fila chama o próximo —, então o pedido nunca é dado por falho e
+/// atendido ao mesmo tempo.
+#[tauri::command]
+pub(crate) async fn cancel_turn(app:AppHandle,workspace:State<'_,SharedWorkspace>,cancels:State<'_,Cancels>,turn_id:String)->Result<(),Text>{crate::desktop::require_session()?;
+    let mut store=workspace.lock().await;
+    let Some(turn)=store.turn(&turn_id).map_err(failure)? else { return Ok(()) };
+    match turn.status {
+        TurnStatus::Queued=>{
+            let notice=crate::i18n::notice(&[Text::new("turn.cancelled")]);
+            store.append_answer(&turn.chat_id,&turn.id,&notice).map_err(failure)?;
+            store.set_turn_status(&turn.id,TurnStatus::Failed).map_err(failure)?;
+        }
+        TurnStatus::Flying=>cancels.stop(&turn.id,crate::progress::StopReason::Asked),
+        _=>return Ok(()),
+    }
+    drop(store);
+    let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id,turn_id});
     Ok(())
 }

@@ -538,6 +538,70 @@ fn escapes_root(root:&Path,path:&str)->bool {
     candidate.is_absolute() && !candidate.starts_with(root)
 }
 
+// ─── arquivos protegidos ─────────────────────────────────────────────────────
+
+/// O que a varredura dos protegidos pula: pastas geradas, que não guardam
+/// segredo do projeto e podem ter centenas de milhares de arquivos.
+const GUARD_SKIPPED:[&str;12]=[".git","node_modules","target","dist","build","__pycache__",".venv","venv",".next",".cache",".jev",".gradle"];
+/// Quantas entradas a varredura olha no máximo, e até que profundidade.
+const GUARD_LIMIT:usize=50_000;
+const GUARD_DEPTH:usize=8;
+
+/// A marca de cada arquivo protegido (`privacy.deny`) da pasta do projeto —
+/// tamanho, data e, nos pequenos, a impressão do conteúdo (a gravação no mesmo
+/// segundo e do mesmo tamanho também conta) —, tirada antes e depois do pedido. O `git status` não serve
+/// aqui: o `.env` quase sempre está no `.gitignore`, e é justamente ele que o
+/// agente não pode tocar.
+#[derive(Debug,Clone,Default,PartialEq,Eq)]
+pub struct Guarded(BTreeMap<String,(u64,Option<std::time::SystemTime>,Option<u64>)>);
+
+/// Até que tamanho o conteúdo do protegido entra na marca.
+const GUARD_PRINT_BYTES:u64=256*1024;
+
+/// A foto dos protegidos da pasta. Sem regra de proteção, nada a olhar.
+pub fn guarded(root:&Path,firewall:&ContextFirewall)->Guarded {
+    let mut found=BTreeMap::new();
+    if !firewall.guards_files() || !root.is_dir() { return Guarded(found); }
+    let walker=walkdir::WalkDir::new(root).max_depth(GUARD_DEPTH).into_iter()
+        .filter_entry(|entry|entry.depth()==0||!(entry.file_type().is_dir()&&GUARD_SKIPPED.contains(&entry.file_name().to_string_lossy().as_ref())));
+    for entry in walker.take(GUARD_LIMIT).filter_map(Result::ok) {
+        if !entry.file_type().is_file() { continue; }
+        let Ok(relative)=entry.path().strip_prefix(root) else { continue };
+        let relative=relative.to_string_lossy().replace('\\',"/");
+        if !firewall.check_file(&relative).is_sensitive { continue; }
+        let meta=entry.metadata().ok();
+        let size=meta.as_ref().map_or(0,|meta|meta.len());
+        let print=(size<=GUARD_PRINT_BYTES).then(||std::fs::read(entry.path()).ok()).flatten().map(|bytes|{
+            use std::hash::{Hash, Hasher};
+            let mut hasher=std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            hasher.finish()
+        });
+        found.insert(relative,(size,meta.and_then(|meta|meta.modified().ok()),print));
+    }
+    Guarded(found)
+}
+
+/// Os protegidos que o pedido criou, mudou ou apagou.
+pub fn touched(before:&Guarded,after:&Guarded)->Vec<String> {
+    let mut changed:Vec<String>=after.0.iter().filter(|(path,stamp)|before.0.get(*path)!=Some(*stamp)).map(|(path,_)|path.clone()).collect();
+    changed.extend(before.0.keys().filter(|path|!after.0.contains_key(*path)).cloned());
+    changed.sort();
+    changed
+}
+
+/// Um protegido que o agente mexeu fica segurado na saída, com a regra que o
+/// protege — mesmo que a resposta não fale dele.
+pub fn guarded_exits(turn:&Turn,changed:&[String],firewall:&ContextFirewall)->Vec<ExitCheck> {
+    changed.iter().map(|path|{
+        let rule=firewall.check_file(path).matched_rule.unwrap_or_else(||"privacy.deny".into());
+        ExitCheck::new(turn,EXIT_CHANGED,path,Some(rule))
+    }).collect()
+}
+
+/// O tipo da saída de um arquivo protegido que o agente mudou.
+pub const EXIT_CHANGED:&str="changed";
+
 /// As pastas onde cada agente guarda o próprio estado, na home do usuário.
 const AGENT_HOMES:[&str;6]=[".claude",".codex",".cursor",".copilot",".agent",".agents"];
 
@@ -884,6 +948,28 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         let relaxed=scan_answer(&turn_at("chat"),answer,&open,&firewall(),Path::new("/projeto"));
         assert!(relaxed.iter().filter(|check|check.target=="cargo test --lib").all(|check|check.verdict==ExitVerdict::Cleared));
         assert_eq!(relaxed.iter().find(|check|check.target==".env").expect("env").verdict,ExitVerdict::Held);
+    }
+
+    /// O `.env` fora do git mudado pelo agente é segurado, mesmo sem a
+    /// resposta citá-lo; o que não é protegido não entra.
+    #[test]
+    fn a_protected_file_the_agent_changed_is_held() {
+        let root=tempfile::tempdir().expect("pasta");
+        std::fs::write(root.path().join(".env"),"A=1").expect("env");
+        std::fs::create_dir_all(root.path().join("node_modules/x")).expect("pasta");
+        std::fs::write(root.path().join("node_modules/x/.env"),"B=1").expect("env gerado");
+        std::fs::write(root.path().join("main.rs"),"fn main(){}").expect("código");
+        let wall=firewall();
+        let before=guarded(root.path(),&wall);
+        assert_eq!(before.0.keys().collect::<Vec<_>>(),vec![".env"],"a pasta gerada fica de fora");
+        std::fs::write(root.path().join(".env"),"A=1\nTOKEN=xyz").expect("env mudado");
+        std::fs::write(root.path().join("main.rs"),"fn main(){ }").expect("código mudado");
+        std::fs::write(root.path().join("server.pem"),"---").expect("chave nova");
+        let changed=touched(&before,&guarded(root.path(),&wall));
+        assert_eq!(changed,vec![".env","server.pem"]);
+        let exits=guarded_exits(&turn_at("chat"),&changed,&wall);
+        assert!(exits.iter().all(|exit|exit.kind==EXIT_CHANGED&&exit.verdict==ExitVerdict::Held));
+        assert_eq!(exits[0].rule.as_deref(),Some("privacy.deny · .env"));
     }
 
     /// Pedir só uma análise já pôs dez arquivos na coluna de saída como

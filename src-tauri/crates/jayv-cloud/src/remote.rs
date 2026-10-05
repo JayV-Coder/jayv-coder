@@ -14,10 +14,25 @@ use serde_json::{json, Value};
 #[derive(Debug,Clone,Deserialize)]
 pub struct RemotePolicy { pub project_id:String, pub org_slug:String, pub policy:Value }
 
-/// O que `my_features` devolve; quem o lê é o catálogo de recursos.
+/// O que `my_features` devolve; quem o lê é o catálogo de recursos. Os campos
+/// da v0.60.0 (`locked`, `defaults`, `limits`) faltam no servidor antigo e
+/// chegam vazios.
 #[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
 #[serde(default)]
-pub struct RemoteFeatures { pub plan:Option<String>, pub features:Vec<String> }
+pub struct RemoteFeatures {
+    pub plan:Option<String>,
+    pub features:Vec<String>,
+    /// O que está ligado sem interruptor: o núcleo e o que o admin travou.
+    pub locked:Vec<String>,
+    /// O valor de partida dos recursos opcionais do plano.
+    pub defaults:BTreeMap<String,bool>,
+    pub limits:PlanLimits,
+}
+
+/// Os números do plano. Nulo é "sem limite próprio".
+#[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
+#[serde(default,rename_all="camelCase")]
+pub struct PlanLimits { pub jev_daily_limit:Option<u32>, pub max_concurrent_turns:Option<u32> }
 use std::collections::BTreeMap;
 
 #[derive(Debug,Clone,PartialEq,thiserror::Error)]

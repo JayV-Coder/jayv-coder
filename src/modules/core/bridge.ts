@@ -11,6 +11,7 @@ import type { Text } from "@/modules/i18n";
  * fica escrita uma vez só. */
 export const commands = {
   getWorkspace: () => invoke<WorkspaceData>("get_workspace"),
+  getChat: (chatId: string) => invoke<Chat | null>("get_chat", { chatId }),
   createProject: (name: string, rootPath: string | null) => invoke<Project>("create_project", { name, rootPath }),
   organizationProject: (orgId: string, name: string, folder: string) => invoke<Project>("organization_project", { orgId, name, folder }),
   createChat: (projectId: string, title: string | null = null) => invoke<Chat>("create_chat", { projectId, title }),
@@ -23,6 +24,7 @@ export const commands = {
   answerQuestion: (questionTurnId: string, picked: string[], text: string | null) =>
     invoke<Turn>("answer_question", { answer: { questionTurnId, picked, text } }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
+  cancelTurn: (turnId: string) => invoke<void>("cancel_turn", { turnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
   scopedGateFeed: (projectIds: string[], chatId: string | null) => invoke<GateFeed>("scoped_gate_feed", { projectIds, chatId }),
   openFile: (chatId: string, path: string) => invoke<void>("open_file", { chatId, path }),
@@ -43,7 +45,7 @@ export const commands = {
   saveExpertise: (level: Expertise) => invoke<CoreSnapshot>("save_expertise", { level }),
   saveLeanCode: (enabled: boolean) => invoke<CoreSnapshot>("save_lean_code", { enabled }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
-  checkAgent: (command: string) => invoke<AgentProbe>("check_agent", { command }),
+  checkAgent: (command: string, agent: AgentId | null = null) => invoke<AgentProbe>("check_agent", { command, agent }),
   refreshModels: (agent: AgentId) => invoke<ModelsRefresh>("refresh_models", { agent }),
   setSession: (token: string) => invoke<SessionView>("set_session", { token }),
   clearSession: () => invoke<void>("clear_session"),

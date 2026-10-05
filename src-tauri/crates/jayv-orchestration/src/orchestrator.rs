@@ -147,6 +147,14 @@ pub struct Orchestrator {
     /// índice: os dois descrevem o projeto do chat que está sendo atendido.
     workdir: Workdir,
     last_decision: Option<Decision>,
+    /// A impressão dos agentes em uso (as configurações e os arquivos
+    /// protegidos) e quando foram montados: o mesmo conjunto não é remontado a
+    /// cada pedido.
+    llm_built: Option<(u64,Instant)>,
+    /// A revisão do que o pedido mudou, pronta para sair depois da resposta
+    /// (`ReviewRequest`): quem atende a fila a leva e a roda fora do
+    /// cadeado, e o pedido seguinte não espera a segunda opinião.
+    pub pending_review: Option<ReviewRequest>,
 }
 
 impl Orchestrator {
@@ -167,7 +175,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, stuck_in_plan:HashSet::new(), plans:HashMap::new(), pending_retry:false, complaints:HashMap::new(), performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, stuck_in_plan:HashSet::new(), plans:HashMap::new(), pending_retry:false, complaints:HashMap::new(), performance_path, last_decision:None, llm_built:None, pending_review:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -184,6 +192,9 @@ impl Orchestrator {
     /// Passa a usar as configurações do Jev e do app. Privacidade nova é
     /// firewall novo, e a pasta é lida de novo no próximo pedido; validade nova
     /// é cache novo.
+    /// Força a próxima montagem dos agentes (`use_llm`).
+    pub fn rebuild_llm(&mut self) { self.llm_built=None; }
+
     pub fn use_core(&mut self,settings:&crate::core_settings::CoreSettings) {
         let privacy=self.config.privacy.clone();
         let ttl=self.config.jev.context.cache_ttl;
@@ -192,9 +203,30 @@ impl Orchestrator {
         if self.config.jev.context.cache_ttl!=ttl { self.cache=SemanticCache::new(self.config.jev.context.cache_ttl,1000); }
     }
 
+    /// Os agentes das configurações, montados de novo só quando mudam (ou a
+    /// cada `LLM_REFRESH`, para achar o agente instalado com o app aberto).
+    /// O Claude recebe os arquivos protegidos como regras das ferramentas
+    /// dele (`llm::guarding`): por isso a privacidade entra antes, no
+    /// `use_core`.
     pub fn use_llm(&mut self,settings:&crate::llm::LlmSettings) {
+        let print={
+            use std::hash::{Hash, Hasher};
+            let mut hasher=std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(settings).unwrap_or_default().hash(&mut hasher);
+            self.config.privacy.deny.hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.llm_built.is_some_and(|(built,at)|built==print&&at.elapsed()<LLM_REFRESH) { return; }
+        self.llm_built=Some((print,Instant::now()));
         let (mut providers,models)=crate::llm::to_config(settings);
-        set_aside_missing(&mut providers,|command|crate::llm::locate(command).is_some());
+        if let Some(claude)=providers.get_mut(crate::llm::AgentId::Claude.key()) {
+            claude.args=crate::llm::guarding(&claude.args,&self.config.privacy.deny);
+            claude.plan_args=crate::llm::guarding(&claude.plan_args,&self.config.privacy.deny);
+        }
+        // O agente sem programa, ou sabidamente sem login, sai da disputa
+        // (enquanto houver outro): abri-lo só daria o erro, e o do Codex
+        // leva segundos para chegar.
+        set_aside_missing(&mut providers,|command|crate::llm::locate(command).is_some()&&!crate::llm::logged_out(command));
         self.providers=build_providers(&providers,&self.workdir);
         self.planners=build_planners(&providers,&self.workdir);
         self.config.providers=providers;
@@ -212,6 +244,36 @@ impl Orchestrator {
         anyhow::ensure!(root.is_dir(),crate::i18n::Text::new("project.folderMissing").with("path",root.display().to_string()));
         self.workdir.focus(root.to_path_buf());
         self.rag.focus_on(root.to_path_buf(),&self.firewall)
+    }
+
+    /// O mesmo `focus_on`, com a leitura da pasta numa thread de bloqueio: a
+    /// varredura do disco não segura a thread que atende a tela e a rede.
+    pub async fn focus(&mut self,root:&Path)->Result<()> {
+        anyhow::ensure!(root.is_dir(),crate::i18n::Text::new("project.folderMissing").with("path",root.display().to_string()));
+        self.workdir.focus(root.to_path_buf());
+        if self.rag.root()==root && self.rag.is_fresh() { return Ok(()); }
+        let firewall=ContextFirewall::new(self.config.privacy.clone());
+        let root=root.to_path_buf();
+        self.off_thread(move |rag|rag.focus_on(root,&firewall)).await
+    }
+
+    /// Lê de novo a pasta do índice velho (um build mexeu nela, a privacidade
+    /// mudou), fora da thread do pedido.
+    async fn refresh_index(&mut self) {
+        if self.rag.is_fresh() { return; }
+        let firewall=ContextFirewall::new(self.config.privacy.clone());
+        if let Err(error)=self.off_thread(move |rag|rag.refresh(&firewall)).await { eprintln!("índice: não consegui ler a pasta de novo ({error:#})"); }
+    }
+
+    /// Roda `work` no índice numa thread de bloqueio. Se a thread cair, fica
+    /// um índice vazio da mesma pasta, por ler no próximo pedido.
+    async fn off_thread(&mut self,work:impl FnOnce(&mut RepositoryRag)->Result<()>+Send+'static)->Result<()> {
+        let placeholder=self.rag.placeholder();
+        let mut rag=std::mem::replace(&mut self.rag,placeholder);
+        match tokio::task::spawn_blocking(move ||{ let done=work(&mut rag); (rag,done) }).await {
+            Ok((rag,done))=>{ self.rag=rag; done }
+            Err(error)=>Err(anyhow!("index thread failed: {error}")),
+        }
     }
 
     /// Os agentes do modo: em build, os que escrevem no projeto — menos quando
@@ -242,7 +304,7 @@ impl Orchestrator {
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
             return result;
         }
-        if let Err(error)=self.rag.refresh(&self.firewall) { eprintln!("índice: não consegui ler a pasta de novo ({error:#})"); }
+        self.refresh_index().await;
         self.memory.add_message(session_id,"user",normalized.clone());
         let brief=self.pending_brief.take();
         let mut extras=std::mem::take(&mut self.pending_context);
@@ -287,7 +349,10 @@ impl Orchestrator {
         pulse.beat(Beat::Running);
         // A revisão compara o projeto de antes com o de depois: a largada é
         // tirada antes de o agente começar.
-        let watch=if self.config.jev.review_changes&&mode==MODE_BUILD { self.start_watch().await } else { None };
+        // Só o pedido médio ou complexo ganha a segunda opinião: no simples, ela
+        // custava mais que a mudança.
+        self.pending_review=None;
+        let watch=if self.config.jev.review_changes&&mode==MODE_BUILD&&wants_review(&complexity) { self.start_watch().await } else { None };
         let started=Instant::now();
         // Pedido complexo no build, com a divisão ligada: partes do pedido vão
         // a agentes diferentes ao mesmo tempo. Sem divisão possível, segue
@@ -321,7 +386,8 @@ impl Orchestrator {
         // encontraria o projeto pela metade.
         let mut tried=vec![selection.provider.clone()];
         while let Err(error)=&execution {
-            if attempt.elapsed()>FALLBACK_WINDOW || !could_not_start(error) { break; }
+            // Parado não é "não conseguiu começar": ninguém mais é chamado.
+            if pulse.stop().reason().is_some() || attempt.elapsed()>FALLBACK_WINDOW || !could_not_start(error) { break; }
             let Some(next)=ranked.iter().find(|candidate|!tried.contains(&candidate.provider)&&self.pool(mode).contains_key(&candidate.provider)) else { break };
             pulse.beat(Beat::Fallback{provider:selection.provider.clone(),error:crate::i18n::notice(&[crate::i18n::failure(anyhow!("{error:#}"))])});
             selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..next.clone()};
@@ -330,12 +396,9 @@ impl Orchestrator {
             attempt=Instant::now();
             execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await;
         }
-        if let (Some(watch),Ok((response,_,_)))=(watch,&mut execution) {
+        if let (Some(watch),Ok((response,_,_)))=(watch,&execution) {
             if usable_response(response) {
-                if let Some(review)=self.review(&normalized,&complexity,&context,&selection,session_id,watch,pulse).await {
-                    pulse.beat(Beat::Chunk{text:review.clone()});
-                    response.response.push_str(&review);
-                }
+                self.pending_review=self.review(&normalized,&complexity,&context,&selection,session_id,watch,pulse).await;
             }
         }
         // No build o agente mexe nos arquivos: o índice lido antes dele já não
@@ -552,7 +615,7 @@ impl Orchestrator {
         let system=format!("{}\n{}",context.system_instructions,language_note());
         let messages=[ChatMessage{role:"system".into(),content:system},ChatMessage{role:"user".into(),content:crate::split::prompt(request,&agent_name(&builder.provider))}];
         pulse.beat(Beat::Plan{provider:planner.provider.clone(),model:planner.model_name.clone()});
-        match provider.chat_turn(&messages,&planner.model_name,Some("high"),None,&Pulse::silent()).await {
+        match provider.chat_once(&messages,&planner.model_name,Some("high"),&pulse.quiet()).await {
             Ok(response)=>crate::split::handoff(&response.response,&agent_name(&planner.provider)),
             Err(error)=>{ eprintln!("plano: {} não planejou ({error:#})",planner.provider); None }
         }
@@ -572,7 +635,7 @@ impl Orchestrator {
         let planner=planners.iter().find(|candidate|self.planners.contains_key(&candidate.provider))?;
         let system=format!("{}\n{}",context.system_instructions,language_note());
         let asked=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:crate::parallel::split_prompt(request)}];
-        let answer=match self.planners.get(&planner.provider)?.chat_turn(&asked,&planner.model_name,Some("high"),None,&Pulse::silent()).await {
+        let answer=match self.planners.get(&planner.provider)?.chat_once(&asked,&planner.model_name,Some("high"),&pulse.quiet()).await {
             Ok(answer)=>answer,
             Err(error)=>{ eprintln!("divisão: {} não dividiu ({error:#})",planner.provider); return None; }
         };
@@ -599,14 +662,21 @@ impl Orchestrator {
             let others:Vec<&crate::parallel::Subtask>=tasks.iter().enumerate().filter(|(other,_)|*other!=index).map(|(_,other)|other).collect();
             let messages=vec![ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:crate::parallel::task_message(request,task,&others)}];
             let (worker,pool)=(&workers[index],&pools[index]);
+            let quiet=pulse.quiet();
             async move {
                 match pool.get(&worker.provider) {
-                    Some(provider)=>provider.chat_turn(&messages,&worker.model_name,Some("medium"),None,&Pulse::silent()).await,
+                    Some(provider)=>provider.chat_once(&messages,&worker.model_name,Some("medium"),&quiet).await,
                     None=>Err(anyhow!("no executable provider named '{}' is configured",worker.provider)),
                 }
             }
         });
         let results=futures_util::future::join_all(runs).await;
+        // Parado no meio: as cópias saem e nada volta ao projeto. O pedido
+        // segue para o `execute`, que devolve a parada sem abrir agente.
+        if pulse.stop().reason().is_some() {
+            for dir in &copies { let (top,dir)=(top.clone(),dir.clone()); let _=tokio::task::spawn_blocking(move ||crate::parallel::remove_worktree(&top,&dir)).await; }
+            return None;
+        }
         let mut text=String::new();
         let (mut input_tokens,mut output_tokens)=(0,0);
         for (index,((task,worker),result)) in tasks.iter().zip(&workers).zip(results).enumerate() {
@@ -645,22 +715,26 @@ impl Orchestrator {
     }
 
     /// A segunda opinião sobre o que o pedido mudou: um agente de outro
-    /// provedor, em somente leitura, lê o diff e aponta problemas. Devolve a
-    /// seção que entra no fim da resposta, ou nada — sem mudança, sem outro
-    /// provedor ou com a revisão falhando, a resposta segue como veio.
+    /// provedor, em somente leitura, lê o diff e aponta problemas. Aqui sai só
+    /// o pedido pronto — o diff tirado agora, antes de outro pedido mexer na
+    /// pasta —; a conversa com o revisor corre depois da resposta. Sem
+    /// mudança ou sem outro provedor, nada.
     #[allow(clippy::too_many_arguments)]
-    async fn review(&self,request:&str,complexity:&str,context:&Context,executor:&ModelSelection,session_id:&str,mut watch:crate::live_files::Session,pulse:&Pulse)->Option<String> {
+    async fn review(&self,request:&str,complexity:&str,context:&Context,executor:&ModelSelection,session_id:&str,mut watch:crate::live_files::Session,pulse:&Pulse)->Option<ReviewRequest> {
         let (watch,diff)=tokio::task::spawn_blocking(move ||{ watch.poll(); let diff=crate::review::diff(&watch); (watch,diff) }).await.ok()?;
         let diff=diff?;
         let ranked=rank_models(&self.config,"review",complexity,context,&self.performance,&Tiebreak{sticky:None,seed:session_id});
         let reviewer=crate::review::pick(&ranked,&executor.provider,|provider|self.planners.contains_key(provider))?;
-        let provider=self.planners.get(&reviewer.provider)?;
         pulse.beat(Beat::Review{provider:reviewer.provider.clone(),model:reviewer.model_name.clone(),files:watch.changes().len()});
-        let messages=[ChatMessage{role:"system".into(),content:language_note()},ChatMessage{role:"user".into(),content:crate::review::prompt(request,&diff,&agent_name(&executor.provider),&agent_name(&reviewer.provider))}];
-        match provider.chat_turn(&messages,&reviewer.model_name,Some(effort_for(complexity)),None,&Pulse::silent()).await {
-            Ok(response)=>crate::review::section(&response.response),
-            Err(error)=>{ eprintln!("revisão: {} não revisou ({error:#})",reviewer.provider); None }
-        }
+        let messages=vec![ChatMessage{role:"system".into(),content:language_note()},ChatMessage{role:"user".into(),content:crate::review::prompt(request,&diff,&agent_name(&executor.provider),&agent_name(&reviewer.provider))}];
+        // Um provedor só dela, preso à pasta deste pedido: a revisão roda fora
+        // do cadeado do orquestrador, e o pedido seguinte pode ser de outro
+        // projeto.
+        let config=self.config.providers.get(&reviewer.provider)?;
+        let pinned=Workdir::default();
+        pinned.focus(PathBuf::from(self.rag.project_info().root));
+        let own=build_planners(&HashMap::from([(reviewer.provider.clone(),config.clone())]),&pinned).into_values().next();
+        Some(ReviewRequest{provider:own?,name:reviewer.provider.clone(),model:reviewer.model_name.clone(),messages,effort:effort_for(complexity)})
     }
 
     /// O pedido anterior deste chat não resolveu: a nota do modelo que o
@@ -877,6 +951,9 @@ fn short_history(conversation:&[ChatMessage])->Vec<ChatMessage> {
 /// A falha que vem da sessão retomada — apagada, de outra pasta, expirada —, e
 /// não do pedido: com ela, vale começar outra sessão.
 /// Até quando depois da largada uma falha ainda conta como "não começou".
+/// De quanto em quanto tempo os agentes são montados de novo mesmo sem mudar
+/// nada: é assim que o agente instalado com o app aberto aparece.
+const LLM_REFRESH:std::time::Duration=std::time::Duration::from_secs(60);
 #[cfg(not(test))] const FALLBACK_WINDOW:std::time::Duration=std::time::Duration::from_secs(30);
 /// Nos testes a janela é curta: o que se prova é que ela conta a partir de
 /// cada tentativa, não o tamanho dela.
@@ -938,6 +1015,23 @@ pub fn language_note()->String {
 /// O que volta do modelo raramente é só o título: vem entre aspas, com marca
 /// de lista, às vezes com um parágrafo de justificativa embaixo. Fica a
 /// primeira linha limpa, e só se ela couber numa aba da barra lateral.
+/// A revisão pronta para sair depois da resposta, já sem depender do
+/// orquestrador. Devolve o texto que entra no chat, no mesmo turno, como uma
+/// mensagem própria — ou nada, se o revisor falhar.
+pub struct ReviewRequest { provider:Box<dyn Provider>, name:String, model:String, messages:Vec<ChatMessage>, effort:&'static str }
+
+impl ReviewRequest {
+    pub async fn run(self)->Option<String> {
+        match self.provider.chat_once(&self.messages,&self.model,Some(self.effort),&Pulse::silent()).await {
+            Ok(response)=>crate::review::section(&response.response),
+            Err(error)=>{ eprintln!("revisão: {} não revisou ({error:#})",self.name); None }
+        }
+    }
+}
+
+/// Os portes que pedem segunda opinião.
+fn wants_review(complexity:&str)->bool { matches!(complexity,"medium"|"complex") }
+
 /// O batismo pronto para sair, já sem depender do orquestrador.
 pub struct TitleRequest { provider:Box<dyn Provider>, model:String, messages:Vec<ChatMessage> }
 
@@ -1497,6 +1591,48 @@ mod tests {
         assert_eq!(result.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("do-reserva"));
     }
 
+    /// "Parar" no meio do plano: o planejador cai, o construtor nem abre e
+    /// nenhum outro agente é chamado no lugar.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_during_the_plan_ends_the_request_without_building() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let built=dir.path().join("construiu");
+        let agent=|build:String,plan:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build],plan_args:vec!["-c".into(),plan.into()],..Default::default()};
+        let providers=HashMap::from([
+            ("thinker".to_string(),agent("cat >/dev/null; echo thinker".into(),"cat >/dev/null; sleep 30; echo '1. PLANO'")),
+            ("maker".to_string(),agent(format!("cat >/dev/null; touch '{}'; echo feito",built.display()),"cat >/dev/null; echo plano")),
+        ]);
+        let caps=|list:&[&str]|list.iter().map(|cap|cap.to_string()).collect::<Vec<_>>();
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([
+            ("thinker/m".to_string(),crate::config::ModelConfig{enabled:true,provider:"thinker".into(),model:"deep".into(),capabilities:caps(&["chat","reasoning"]),cost_class:"high".into(),speed:"slow".into(),context_window:200_000}),
+            ("maker/m".to_string(),crate::config::ModelConfig{enabled:true,provider:"maker".into(),model:"coder".into(),capabilities:caps(&["chat","code","tools"]),cost_class:"medium".into(),speed:"medium".into(),context_window:200_000}),
+        ]);
+        orchestrator.config.jev.agent_order=vec!["maker".into()];
+        orchestrator.config.jev.plan_first=true;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"complex",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        let pulse=Pulse::silent();
+        let stop=pulse.stop().clone();
+        tokio::spawn(async move { tokio::time::sleep(std::time::Duration::from_millis(300)).await; stop.stop(crate::progress::StopReason::Asked); });
+        let started=Instant::now();
+        let result=orchestrator.process("reescreva o roteador inteiro",Some("stopped"),&pulse).await;
+        assert!(started.elapsed()<std::time::Duration::from_secs(10),"não esperou o planejador terminar");
+        assert!(result.result.is_none());
+        assert!(result.error.as_deref().is_some_and(|error|error.contains("turn.cancelled")),"{:?}",result.error);
+        assert!(!built.exists(),"o construtor não foi aberto");
+        assert_eq!(result.model_selection.provider,"maker","ninguém entrou no lugar");
+    }
+
+    #[test] fn only_medium_and_complex_requests_get_a_second_opinion() {
+        assert!(!wants_review("trivial")&&!wants_review("simple"));
+        assert!(wants_review("medium")&&wants_review("complex"));
+    }
+
     /// O Codex 0.160 diz que não achou a sessão com estas palavras; o pedido
     /// recomeça do zero em vez de falhar.
     #[test] fn a_lost_codex_thread_starts_a_new_session() {
@@ -1537,14 +1673,16 @@ mod tests {
         orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
         orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
         orchestrator.config.providers=providers;
-        orchestrator.config.models=HashMap::from([("maker/m".to_string(),model("maker","low")),("checker/m".to_string(),model("checker","medium"))]);
+        orchestrator.config.models=HashMap::from([("maker/m".to_string(),model("maker","medium")),("checker/m".to_string(),model("checker","high"))]);
         orchestrator.config.jev.review_changes=true;
-        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"medium",0.9)));
         let (pulse,mut beats)=Pulse::channel();
         let result=orchestrator.process("adicione um teste ao roteador",Some("review"),&pulse).await;
         drop(pulse);
         let answer=result.result.expect("resposta").response;
-        assert!(answer.starts_with("feito")&&answer.contains("---")&&answer.trim_end().ends_with("nada a corrigir"),"{answer}");
+        assert_eq!(answer.trim(),"feito","a resposta sai sem esperar a revisão");
+        let review=orchestrator.pending_review.take().expect("revisão pronta").run().await.expect("revisou");
+        assert!(review.trim_end().ends_with("nada a corrigir"),"{review}");
         let mut reviewed=None;
         while let Some(beat)=beats.recv().await { if let Beat::Review{provider,files,..}=beat { reviewed=Some((provider,files)); } }
         assert_eq!(reviewed,Some(("checker".to_string(),1)));

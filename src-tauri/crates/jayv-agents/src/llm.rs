@@ -89,7 +89,8 @@ pub struct LlmSettings { pub agents:Vec<AgentSettings>, pub models:Vec<AgentMode
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
 pub struct ClaudeOptions {
-    /// `default`, `plan`, `acceptEdits`, `auto` ou `bypassPermissions`.
+    /// `manual`, `plan`, `acceptEdits`, `auto`, `dontAsk` ou
+    /// `bypassPermissions`. `default` é o nome antigo do `manual`.
     pub permission_mode:String,
     /// `auto` (o Jev escolhe por pedido), `low`, `medium`, `high`, `xhigh`
     /// ou `max`.
@@ -106,7 +107,7 @@ pub struct ClaudeOptions {
     /// Os mecanismos liberados sem pergunta (`CLAUDE_MECHANISMS`).
     pub mechanisms:Vec<String>,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:"default".into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH])} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH])} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -150,7 +151,28 @@ pub struct CursorOptions {
 }
 impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false} } }
 
-const CLAUDE_PERMISSIONS:[&str;5]=["default","plan","acceptEdits","auto","bypassPermissions"];
+const CLAUDE_PERMISSIONS:[&str;6]=[MANUAL,"plan","acceptEdits","auto","dontAsk","bypassPermissions"];
+/// O modo que pergunta antes de cada ferramenta. Sem terminal, ninguém
+/// responde, e o que pediria aprovação é negado. O Claude chamava de `default`
+/// até a 2.1.200; a linha de comando só o recebe como padrão, sem a flag.
+const MANUAL:&str="manual";
+/// Os modos que não escrevem no projeto sem aprovação: no modo
+/// desenvolvimento eles sobem para o `acceptEdits`.
+const READ_ONLY_MODES:[&str;4]=["default",MANUAL,"plan","dontAsk"];
+/// Quem responde aos pedidos de aprovação do Claude no `--print`: ninguém. O
+/// que pediria aprovação é negado na hora, em vez de esperar um anfitrião
+/// que não existe. As versões que não conhecem a flag a perdem (`OPTIONAL_FLAGS`).
+pub const PERMISSION_PROMPTS:&str="--permission-prompts";
+/// O lugar da flag que não guarda a sessão em disco. A chamada de apoio (o
+/// plano, a divisão, a revisão, o título) não vira sessão que ninguém vai
+/// retomar; o pedido do chat continua guardando. O argumento seguinte é a flag
+/// do agente, e os dois somem quando a chamada é do chat.
+pub const EPHEMERAL:&str="{ephemeral}";
+/// As flags que só as versões mais novas das CLIs conhecem, com quantos
+/// valores cada uma leva. Antes de abrir o agente, a ajuda dele diz se a flag
+/// existe; se não existir, ela sai da linha de comando em vez de derrubar o
+/// pedido com "unknown option".
+pub const OPTIONAL_FLAGS:[(&str,usize);2]=[(PERMISSION_PROMPTS,1),("--ephemeral",0)];
 /// O esforço que o Jev escolhe a cada pedido, pelo tamanho do que foi pedido.
 pub const AUTO_EFFORT:&str="auto";
 /// O argumento que vira o esforço escolhido pelo Jev.
@@ -216,7 +238,11 @@ fn tools_in(field:&str,tools:&[String],allowed:&[&str])->Result<Vec<String>> {
 
 impl ClaudeOptions {
     fn checked(mut self,models:&HashSet<&str>)->Result<Self> {
+        if self.permission_mode=="default" { self.permission_mode=MANUAL.into(); }
         one_of("claude.permissionMode",&self.permission_mode,&CLAUDE_PERMISSIONS)?;
+        // O `--safe-mode` não sobe servidor MCP nenhum: o índice de símbolos
+        // ligado junto seria uma promessa que o agente não cumpre.
+        if self.safe_mode { self.symbol_tools=false; }
         self.effort=effort_of(&self.effort);
         one_of("claude.effort",&self.effort,&CLAUDE_EFFORTS)?;
         self.fallback_model=self.fallback_model.trim().to_string();
@@ -233,7 +259,8 @@ impl ClaudeOptions {
     }
     fn args(&self)->Vec<String> {
         let mut args=strings(&["--print","--output-format","stream-json","--verbose","--include-partial-messages","--model","{model}"]);
-        if self.permission_mode!="default" { args.extend(strings(&["--permission-mode",&self.permission_mode])); }
+        if !matches!(self.permission_mode.as_str(),"default"|MANUAL) { args.extend(strings(&["--permission-mode",&self.permission_mode])); }
+        args.extend(strings(&[PERMISSION_PROMPTS,"none"]));
         let effort=effort_of(&self.effort);
         args.extend(strings(&["--effort",if effort==AUTO_EFFORT {EFFORT} else {&effort}]));
         if !self.fallback_model.is_empty() { args.extend(strings(&["--fallback-model",&self.fallback_model])); }
@@ -248,14 +275,14 @@ impl ClaudeOptions {
         // aprovação — a busca na web inclusive — é negado.
         let mut allowed=self.mechanisms.iter().filter_map(|mechanism|claude_tool(mechanism))
             .filter(|tool|!self.blocked_tools.iter().any(|item|item==tool)).map(str::to_string).collect::<Vec<_>>();
-        let symbols=if self.symbol_tools { symbol_server_config() } else { None };
+        let symbols=if self.symbol_tools&&!self.safe_mode { symbol_server_config() } else { None };
         if symbols.is_some() { allowed.push(SYMBOL_SERVER_TOOLS.to_string()); }
         if !allowed.is_empty() { args.extend(["--allowedTools".to_string(),allowed.join(",")]); }
         if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
         // Com as sessões guardadas, o pedido seguinte do mesmo chat retoma a
         // sessão do anterior: o agente já leu o que leu e não explora tudo de
         // novo. Sem elas não há o que retomar.
-        if self.persist_sessions { args.extend(["--resume".to_string(),RESUME.to_string()]); } else { args.push("--no-session-persistence".into()); }
+        if self.persist_sessions { args.extend(["--resume".to_string(),RESUME.to_string(),EPHEMERAL.to_string(),"--no-session-persistence".to_string()]); } else { args.push("--no-session-persistence".into()); }
         if self.safe_mode { args.push("--safe-mode".into()); }
         // O índice de símbolos do próprio JayV, como servidor MCP só de
         // leitura: o Claude pergunta onde algo mora em vez de varrer a pasta.
@@ -289,7 +316,10 @@ impl CodexOptions {
         // `--json` narra em eventos: a fala do agente, os passos e a conta
         // dos tokens chegam separados, e é dela que sai o uso informado.
         let mut args=strings(&["exec","--json","--model","{model}","--sandbox",&self.sandbox]);
-        if self.skip_git_repo_check { args.push("--skip-git-repo-check".into()); }
+        // Fora de um repositório git o Codex recusa o pedido: a pasta do
+        // projeto nem sempre é um. A opção antiga (`skip_git_repo_check`) não
+        // desliga mais isto.
+        args.push("--skip-git-repo-check".into());
         let effort=effort_of(&self.reasoning_effort);
         args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",if effort==AUTO_EFFORT {EFFORT} else {&effort})]);
         // A chave só existe no `workspace-write`: no `read-only` não há rede,
@@ -299,6 +329,8 @@ impl CodexOptions {
         // que o Codex usa quando ninguém diz nada.
         let search=if self.mechanisms.iter().any(|mechanism|mechanism==WEB_SEARCH) {"live"} else {"disabled"};
         args.extend(["-c".to_string(),format!("web_search=\"{search}\"")]);
+        // A chamada de apoio não grava sessão.
+        args.extend(strings(&[EPHEMERAL,"--ephemeral"]));
         // A sessão do chat, quando há uma para retomar: o agente não relê o
         // projeto do zero.
         args.push(RESUME_THREAD.into());
@@ -332,7 +364,9 @@ impl CopilotOptions {
         // A negação vence a liberação no Copilot, então o bloqueio continua
         // valendo mesmo com o mecanismo ligado.
         for tool in &self.blocked_tools { args.extend(["--deny-tool".to_string(),tool.clone()]); }
-        if self.silent { args.push("--silent".into()); }
+        // Sem o `--silent` o resumo de uso entra na saída — e a saída é a
+        // resposta. A opção antiga (`silent`) não desliga mais isto.
+        args.push("--silent".into());
         // A conta do fim vai para um arquivo, que o provedor lê e apaga: o
         // `--silent` esconde o resumo da saída, e a saída é a resposta.
         args.extend(strings(&["--usage-output-file","{usage_file}"]));
@@ -408,7 +442,7 @@ impl AgentSettings {
         match self.id {
             AgentId::Claude=>{
                 let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                if matches!(options.permission_mode.as_str(),"default"|"plan") { options.permission_mode="acceptEdits".into(); }
+                if READ_ONLY_MODES.contains(&options.permission_mode.as_str()) { options.permission_mode="acceptEdits".into(); }
                 options.args()
             }
             AgentId::Codex=>{
@@ -455,7 +489,7 @@ impl AgentSettings {
         let options=match self.id {
             AgentId::Claude=>{
                 let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                if options.permission_mode=="bypassPermissions" { options.permission_mode="default".into(); }
+                if options.permission_mode=="bypassPermissions" { options.permission_mode=MANUAL.into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
                 serde_json::to_value(options)
             }
@@ -801,6 +835,27 @@ fn write(connection:&Connection,settings:&LlmSettings)->Result<()> {
 /// O nome com que o roteador conhece o modelo: único entre os agentes.
 pub fn model_key(model:&AgentModel)->String { format!("{}/{}",model.agent.key(),model.model) }
 
+/// A linha do Claude com os arquivos protegidos (`privacy.deny`) fora do
+/// alcance das ferramentas dele: `Read(padrão)` e `Edit(padrão)` entram no
+/// `--disallowed-tools`. O padrão segue o `.gitignore` nos dois lados — `.env`
+/// vale em qualquer pasta, `secrets/**` também. Padrão com vírgula, parêntese
+/// ou espaço não cabe na lista e fica só com o firewall do Jev; o que começa
+/// com `/` é da raiz do projeto (`./`). Os outros agentes não têm flag para
+/// isto: neles a proteção é o firewall, que tira os arquivos do contexto, e a
+/// portaria de saída, que segura o que o agente mexeu.
+pub fn guarding(args:&[String],deny:&[String])->Vec<String> {
+    let rules:Vec<String>=deny.iter().map(|pattern|pattern.trim()).filter(|pattern|!pattern.is_empty()&&!pattern.starts_with('!')&&!pattern.contains([',','(',')',' ','\t']))
+        .map(|pattern|match pattern.strip_prefix('/') { Some(rest)=>format!("./{rest}"), None=>pattern.to_string() })
+        .flat_map(|pattern|[format!("Read({pattern})"),format!("Edit({pattern})")]).collect();
+    if rules.is_empty() { return args.to_vec(); }
+    let mut guarded=args.to_vec();
+    match guarded.iter().position(|arg|arg=="--disallowed-tools") {
+        Some(index) if index+1<guarded.len()=>{ let joined=format!("{},{}",guarded[index+1],rules.join(",")); guarded[index+1]=joined; }
+        _=>guarded.extend(["--disallowed-tools".to_string(),rules.join(",")]),
+    }
+    guarded
+}
+
 /// Os provedores e modelos no formato que o orquestrador já entende.
 pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap<String,ModelConfig>) {
     let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),ProviderConfig{
@@ -818,10 +873,75 @@ fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude C
 /// Onde o executável está, procurando como o shell faria: no PATH e, depois,
 /// nas pastas onde os instaladores dos agentes os põem — o app aberto pelo menu
 /// não herda o PATH do terminal. No Windows, com as extensões do `PATHEXT`.
+///
+/// A resposta fica guardada por `LOCATE_TTL`: cada pedido conferia os quatro
+/// agentes no disco — o PATH, as pastas dos instaladores, as versões do nvm —
+/// antes de começar. O caminho guardado que sumiu é procurado de novo na hora.
 pub fn locate(command:&str)->Option<PathBuf> {
+    let now=std::time::Instant::now();
+    if let Some((at,found))=located().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(command).cloned() {
+        let fresh=now.duration_since(at)<LOCATE_TTL;
+        if fresh && found.as_ref().is_none_or(|path|path.is_file()) { return found; }
+    }
+    locate_fresh(command)
+}
+
+/// A procura sem a lembrança, para quem precisa da resposta de agora — a
+/// tela que confere o agente recém-instalado. Ela também renova a lembrança.
+pub fn locate_fresh(command:&str)->Option<PathBuf> {
     let mut dirs:Vec<PathBuf>=env::var_os("PATH").map(|path|env::split_paths(&path).collect()).unwrap_or_default();
     dirs.extend(install_dirs());
-    search(command,&dirs,&extensions())
+    let found=search(command,&dirs,&extensions());
+    located().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(command.to_string(),(std::time::Instant::now(),found.clone()));
+    found
+}
+
+const LOCATE_TTL:Duration=Duration::from_secs(30);
+type Located=std::sync::Mutex<HashMap<String,(std::time::Instant,Option<PathBuf>)>>;
+fn located()->&'static Located { static LOCATED:std::sync::OnceLock<Located>=std::sync::OnceLock::new(); LOCATED.get_or_init(Default::default) }
+
+/// A linha de comando sem as flags que este executável não conhece
+/// (`OPTIONAL_FLAGS`). Uma flag nova numa CLI antiga derrubava o pedido com
+/// "unknown option"; aqui ela só sai. A ajuda do executável (do subcomando,
+/// no `codex exec`) é lida uma vez por instalação.
+pub async fn understood(program:&Path,args:Vec<String>)->Vec<String> {
+    let used:Vec<(&str,usize)>=OPTIONAL_FLAGS.iter().copied().filter(|(flag,_)|args.iter().any(|arg|arg==flag)).collect();
+    if used.is_empty() { return args; }
+    let subcommands:Vec<String>=args.iter().take_while(|arg|!arg.starts_with('-')&&!arg.starts_with('{')).cloned().collect();
+    let help=help_of(program,&subcommands).await;
+    let unknown:Vec<(&str,usize)>=used.into_iter().filter(|(flag,_)|!help.contains(flag)).collect();
+    if unknown.is_empty() { return args; }
+    let mut kept=Vec::with_capacity(args.len());
+    let mut given=args.into_iter();
+    while let Some(arg)=given.next() {
+        match unknown.iter().find(|(flag,_)|*flag==arg) {
+            Some((_,values))=>{ for _ in 0..*values { given.next(); } }
+            None=>kept.push(arg),
+        }
+    }
+    kept
+}
+
+type Helps=tokio::sync::Mutex<HashMap<(PathBuf,Vec<String>),(Option<std::time::SystemTime>,String)>>;
+fn helps()->&'static Helps { static HELPS:std::sync::OnceLock<Helps>=std::sync::OnceLock::new(); HELPS.get_or_init(Default::default) }
+
+/// O texto do `--help`, guardado por caminho e data do executável. Sem
+/// resposta em dez segundos, vazio: a flag opcional sai, o que é o lado seguro.
+async fn help_of(program:&Path,subcommands:&[String])->String {
+    let stamp=program.metadata().ok().and_then(|meta|meta.modified().ok());
+    let key=(program.to_path_buf(),subcommands.to_vec());
+    let mut known=helps().lock().await;
+    if let Some((_,text))=known.get(&key).filter(|(at,_)|*at==stamp) { return text.clone(); }
+    let (launch,lead)=launcher(program);
+    let mut command=tokio::process::Command::new(&launch);
+    if let Some(search)=agent_path(program) { command.env("PATH",search); }
+    let run=crate::providers::quiet(&mut command).args(lead).args(subcommands).arg("--help").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
+    let text=match tokio::time::timeout(Duration::from_secs(10),run).await {
+        Ok(Ok(output))=>format!("{}{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr)),
+        _=>String::new(),
+    };
+    known.insert(key,(stamp,text.clone()));
+    text
 }
 
 /// A busca em si, sem ler o ambiente. Quem já escreveu a extensão, ou um
@@ -938,14 +1058,82 @@ pub fn agent_path(program:&Path)->Option<std::ffi::OsString> {
 #[cfg(unix)] fn executable(path:&Path)->bool { use std::os::unix::fs::PermissionsExt; path.metadata().is_ok_and(|meta|meta.permissions().mode()&0o111!=0) }
 #[cfg(not(unix))] fn executable(_:&Path)->bool { true }
 
+/// Se o agente está logado, segundo ele mesmo (`claude auth status`,
+/// `codex login status`). O Copilot e o Cursor não dizem: ficam sem resposta.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum Login { In, Out }
+
+/// Quanto tempo a resposta do login vale. O Codex leva seis segundos para
+/// dizer que não está logado: perguntar a cada pedido era pior que o erro.
+const LOGIN_TTL:Duration=Duration::from_secs(10*60);
+type Logins=std::sync::Mutex<HashMap<String,(std::time::Instant,Option<Login>)>>;
+fn logins()->&'static Logins { static LOGINS:std::sync::OnceLock<Logins>=std::sync::OnceLock::new(); LOGINS.get_or_init(Default::default) }
+
+/// O agente sabidamente sem login: o roteamento o deixa de lado (enquanto
+/// houver outro), em vez de abri-lo só para ouvir que falta entrar. Sem
+/// resposta guardada, ou com ela vencida, não é "sem login".
+pub fn logged_out(command:&str)->bool {
+    logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(command).is_some_and(|(at,login)|*login==Some(Login::Out)&&at.elapsed()<LOGIN_TTL)
+}
+
+/// Pergunta ao agente se está logado e guarda a resposta.
+pub async fn check_login(agent:AgentId,command:&str)->Option<Login> {
+    let ask:&[&str]=match agent { AgentId::Claude=>&["auth","status","--json"], AgentId::Codex=>&["login","status"], _=>return None };
+    // Marca a pergunta em andamento: outro pedido não pergunta de novo.
+    logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(command.to_string(),(std::time::Instant::now(),None));
+    let path=locate(command)?;
+    let (program,lead)=launcher(&path);
+    let mut run=tokio::process::Command::new(&program);
+    if let Some(search)=agent_path(&path) { run.env("PATH",search); }
+    let output=crate::providers::quiet(&mut run).args(lead).args(ask).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
+    let login=match tokio::time::timeout(Duration::from_secs(20),output).await {
+        Ok(Ok(output))=>read_login(agent,output.status.success(),&String::from_utf8_lossy(&output.stdout),&String::from_utf8_lossy(&output.stderr)),
+        _=>None,
+    };
+    logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(command.to_string(),(std::time::Instant::now(),login));
+    login
+}
+
+fn read_login(agent:AgentId,success:bool,stdout:&str,stderr:&str)->Option<Login> {
+    let said=format!("{stdout}\n{stderr}").to_lowercase();
+    match agent {
+        AgentId::Claude=>match serde_json::from_str::<Value>(stdout.trim()).ok().and_then(|status|status.get("loggedIn").and_then(Value::as_bool)) {
+            Some(true)=>Some(Login::In),
+            Some(false)=>Some(Login::Out),
+            None=>None,
+        },
+        AgentId::Codex if said.contains("not logged in")=>Some(Login::Out),
+        AgentId::Codex if success&&said.contains("logged in")=>Some(Login::In),
+        _=>None,
+    }
+}
+
+/// Lê de antemão a ajuda dos agentes ligados que levam flag opcional, para o
+/// primeiro pedido não esperar o `--help` (`understood`). Sem esperar.
+pub fn warm_up(settings:&LlmSettings) {
+    for agent in settings.agents.iter().filter(|agent|agent.enabled) {
+        let subcommands:Vec<String>=match agent.id { AgentId::Claude=>vec![], AgentId::Codex=>vec!["exec".into()], _=>continue };
+        let command=agent.command.clone();
+        tokio::spawn(async move { if let Some(path)=locate(&command) { help_of(&path,&subcommands).await; } });
+    }
+}
+
+/// Renova, sem esperar, o login dos agentes ligados cuja resposta venceu.
+pub fn refresh_logins(settings:&LlmSettings) {
+    let stale:Vec<(AgentId,String)>=settings.agents.iter().filter(|agent|agent.enabled&&matches!(agent.id,AgentId::Claude|AgentId::Codex))
+        .filter(|agent|logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&agent.command).is_none_or(|(at,_)|at.elapsed()>=LOGIN_TTL))
+        .map(|agent|(agent.id,agent.command.clone())).collect();
+    for (agent,command) in stale { tokio::spawn(async move { check_login(agent,&command).await; }); }
+}
+
 /// O que a tela mostra ao conferir um agente: onde ele está e qual versão
 /// responde. Sem o binário, a tela avisa antes de o pedido falhar.
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct Probe { pub path:Option<String>, pub version:Option<String> }
+pub struct Probe { pub path:Option<String>, pub version:Option<String>, #[serde(skip_serializing_if="Option::is_none")] pub logged_in:Option<bool> }
 
 pub async fn probe(command:&str)->Probe {
-    let Some(path)=locate(command) else { return Probe{path:None,version:None} };
+    let Some(path)=locate_fresh(command) else { return Probe{path:None,version:None,logged_in:None} };
     // O mesmo arranque do pedido: se a versão responde aqui, o pedido também abre.
     let (program,lead)=launcher(&path);
     let mut command=tokio::process::Command::new(&program);
@@ -958,7 +1146,14 @@ pub async fn probe(command:&str)->Probe {
         }
         _=>None,
     };
-    Probe{path:Some(path.display().to_string()),version}
+    Probe{path:Some(path.display().to_string()),version,logged_in:None}
+}
+
+/// A conferência da tela com o login junto, para o agente que sabe dizer.
+pub async fn probe_agent(agent:AgentId,command:&str)->Probe {
+    let mut found=probe(command).await;
+    if found.version.is_some() { found.logged_in=check_login(agent,command).await.map(|login|login==Login::In); }
+    found
 }
 
 #[cfg(test)]
@@ -1158,13 +1353,52 @@ mod tests {
     #[test] fn claude_always_speaks_stream_json() {
         let args=agent(AgentId::Claude,json!({"permissionMode":"plan","maxBudgetUsd":2.5})).args();
         for fixed in ["--print","stream-json","--include-partial-messages","{model}"] { assert!(args.iter().any(|arg|arg==fixed),"falta {fixed}"); }
-        assert!(!args.iter().any(|arg|arg=="--no-session-persistence"),"guardar sessões é o padrão");
+        assert!(args.windows(2).any(|pair|pair==[EPHEMERAL,"--no-session-persistence"]),"guardar sessões é o padrão: só a chamada de apoio não guarda");
+        assert!(!args.windows(2).any(|pair|pair[0]!=EPHEMERAL&&pair[1]=="--no-session-persistence"));
+        assert!(args.windows(2).any(|pair|pair==[PERMISSION_PROMPTS,"none"]),"ninguém responde à aprovação no --print");
         let forgetful=agent(AgentId::Claude,json!({"persistSessions":false})).args();
         assert!(forgetful.iter().any(|arg|arg=="--no-session-persistence"));
         assert!(args.windows(2).any(|pair|pair==["--resume",RESUME]),"com sessões guardadas, o pedido seguinte retoma a do chat");
         assert!(!forgetful.iter().any(|arg|arg=="--resume"),"sem sessão guardada não há o que retomar");
         assert!(args.windows(2).any(|pair|pair==["--permission-mode","plan"]));
         assert!(args.windows(2).any(|pair|pair==["--max-budget-usd","2.50"]));
+    }
+
+    /// `default` é o nome antigo do `manual`; os dois saem sem a flag, e no
+    /// modo desenvolvimento os modos que só leem — o `dontAsk` também — sobem
+    /// para o `acceptEdits`.
+    #[test] fn the_manual_and_dont_ask_modes() {
+        let cleaned=|options:Value|->ClaudeOptions { serde_json::from_value(validate(&settings(vec![agent(AgentId::Claude,options)])).expect("válido").agents[0].options.clone()).expect("opções") };
+        assert_eq!(cleaned(json!({"permissionMode":"default"})).permission_mode,"manual");
+        assert_eq!(cleaned(json!({"permissionMode":"dontAsk"})).permission_mode,"dontAsk");
+        let manual=agent(AgentId::Claude,json!({"permissionMode":"manual"})).args();
+        assert!(!manual.iter().any(|arg|arg=="--permission-mode"),"o padrão vai sem flag: a CLI antiga não conhece `manual`");
+        let dont=agent(AgentId::Claude,json!({"permissionMode":"dontAsk"}));
+        assert!(dont.args().windows(2).any(|pair|pair==["--permission-mode","dontAsk"]));
+        assert!(dont.build_args().windows(2).any(|pair|pair==["--permission-mode","acceptEdits"]));
+        let safe=cleaned(json!({"safeMode":true,"symbolTools":true}));
+        assert!(safe.safe_mode&&!safe.symbol_tools,"o modo seguro não sobe MCP: o índice de símbolos sai");
+    }
+
+    /// Os arquivos protegidos ficam fora das ferramentas do Claude.
+    #[test] fn protected_files_are_off_limits_to_claude_tools() {
+        let args=agent(AgentId::Claude,Value::Null).build_args();
+        let guarded=guarding(&args,&[".env".into(),"secrets/**".into(),"/config/prod.yml".into(),"bad,pattern".into(),"!keep.env".into()]);
+        let denied=guarded.windows(2).find(|pair|pair[0]=="--disallowed-tools").map(|pair|pair[1].clone()).expect("lista");
+        let rules:Vec<&str>=denied.split(',').collect();
+        for rule in ["AskUserQuestion","Read(.env)","Edit(.env)","Read(secrets/**)","Edit(secrets/**)","Read(./config/prod.yml)"] { assert!(rules.contains(&rule),"falta {rule}: {denied}"); }
+        assert!(!denied.contains("bad")&&!denied.contains("keep"),"o que não cabe na lista fica com o firewall: {denied}");
+        assert_eq!(guarding(&args,&[]),args);
+    }
+
+    /// O login lido da resposta de cada agente.
+    #[test] fn the_login_state_is_read_from_each_agent() {
+        assert_eq!(read_login(AgentId::Claude,true,r#"{"loggedIn": true, "authMethod": "oauth_token"}"#,""),Some(Login::In));
+        assert_eq!(read_login(AgentId::Claude,true,r#"{"loggedIn": false}"#,""),Some(Login::Out));
+        assert_eq!(read_login(AgentId::Claude,false,"error","boom"),None,"sem resposta clara, ninguém sai do roteamento");
+        assert_eq!(read_login(AgentId::Codex,false,"","Not logged in"),Some(Login::Out));
+        assert_eq!(read_login(AgentId::Codex,true,"Logged in using ChatGPT",""),Some(Login::In));
+        assert!(!logged_out("agente-nunca-perguntado"));
     }
 
     #[test] fn codex_reads_stdin_and_only_opens_the_network_when_it_can_write() {

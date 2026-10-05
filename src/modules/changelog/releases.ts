@@ -26,6 +26,19 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.60.0", date: "2026-10-05",
+    items: [
+      { kind: "feature", id: "requiredFeatures" },
+      { kind: "feature", id: "stopRequest" },
+      { kind: "feature", id: "protectedFiles" },
+      { kind: "feature", id: "backgroundReview" },
+      { kind: "fix", id: "fasterRequests" },
+      { kind: "fix", id: "agentLogin" },
+      { kind: "fix", id: "offlineQueue" },
+      { kind: "fix", id: "agentFlags" },
+    ],
+  },
+  {
     version: "0.59.1", date: "2026-10-05",
     items: [
       { kind: "fix", id: "liveClaudeText" },

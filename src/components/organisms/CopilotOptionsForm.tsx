@@ -1,7 +1,7 @@
 import type { AgentSettings, CopilotOptions } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { updateOptions } from "@/modules/settings";
-import { CheckList, FormField, OptionSelect, ToggleRow } from "@/components/molecules";
+import { CheckList, FormField, OptionSelect } from "@/components/molecules";
 import { MechanismsField } from "./MechanismsField";
 
 const ACCESS: CopilotOptions["toolAccess"][] = ["read", "edits", "all"];
@@ -26,7 +26,6 @@ export function CopilotOptionsForm({ agent }: { agent: AgentSettings<"copilot"> 
           onChange={(blockedTools) => set({ blockedTools, mechanisms: blockedTools.includes("shell") ? (options.mechanisms ?? []).filter((mechanism) => mechanism !== "shell") : options.mechanisms ?? [] })}
           items={TOOLS.map((value) => ({ value, label: t(`tool.${value}` as Key) }))} />
       </FormField>
-      <ToggleRow id="copilot-silent" label={t("copilot.silent")} hint={t("copilot.silent.hint")} checked={options.silent} onChange={(silent) => set({ silent })} className="sm:col-span-2" />
     </div>
   );
 }

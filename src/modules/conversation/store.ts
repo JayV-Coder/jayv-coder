@@ -42,8 +42,8 @@ export const useConversation = create<ConversationState>(() => ({ live: {}, answ
  * pelo barramento. O banco escreve o rascunho com folga, então o que está na
  * tela pode estar à frente dele: fica o mais longo dos dois, nunca a soma —
  * somar escreveria a resposta duas vezes. */
-export function liveOf(turn: TurnView, live: Record<string, Live>) {
-  const known = live[turn.id] ?? { text: "", beats: {} };
+export function liveOf(turn: TurnView, live: Live | undefined) {
+  const known = live ?? { text: "", beats: {} };
   const partial = turn.partial ?? "";
   const text = partial.length > known.text.length ? partial : known.text;
   const beats: Record<number, Activity> = { ...known.beats };
@@ -148,6 +148,17 @@ export async function dismissQuestion(question: Question, chatId: string) {
   }
 }
 
+/** Para o pedido: o que está no ar cai junto com o agente; o que espera na
+ * fila sai dela. Os dois ficam no chat como falhos, com o reenvio. */
+export async function cancelTurn(turnId: string, chatId: string) {
+  try {
+    await commands.cancelTurn(turnId);
+    bus.emit("prompt:sent", { chatId });
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 export async function clearChat(chatId: string) {
   try {
     await commands.clearChat(chatId);
@@ -155,6 +166,30 @@ export async function clearChat(chatId: string) {
   } catch (error) {
     reportError(error);
   }
+}
+
+/** O que chegou do núcleo e ainda não foi para a tela. Os pedaços e as etapas
+ * de um quadro entram juntos, num `setState` só: com o Claude transmitindo, um
+ * redesenho por evento engasgava a conversa. */
+let waiting: Array<{ turnId: string; apply: (live: Live) => Live }> = [];
+let scheduled = false;
+
+function queue(turnId: string, apply: (live: Live) => Live) {
+  waiting.push({ turnId, apply });
+  if (scheduled) return;
+  scheduled = true;
+  const flush = () => {
+    scheduled = false;
+    const batch = waiting;
+    waiting = [];
+    useConversation.setState((state) => {
+      const live = { ...state.live };
+      for (const { turnId: id, apply: change } of batch) live[id] = change(live[id] ?? { text: "", beats: {} });
+      return { live };
+    });
+  };
+  if (typeof requestAnimationFrame === "function" && typeof document !== "undefined" && !document.hidden) requestAnimationFrame(flush);
+  else setTimeout(flush, 16);
 }
 
 /** O pedido contado enquanto acontece. Estes dois avisos não redesenham a
@@ -166,18 +201,10 @@ export async function clearChat(chatId: string) {
  * do mesmo texto, e uma delas envelhece. */
 export function connectConversation() {
   const offs = [
-    onCore("turn-chunk", ({ turnId, text }) => {
-      useConversation.setState((state) => {
-        const live = state.live[turnId] ?? { text: "", beats: {} };
-        return { live: { ...state.live, [turnId]: { ...live, text: live.text + text } } };
-      });
-    }),
+    onCore("turn-chunk", ({ turnId, text }) => queue(turnId, (live) => ({ ...live, text: live.text + text }))),
     onCore("turn-beat", ({ turnId, seq, kind, detail }) => {
-      useConversation.setState((state) => {
-        const live = state.live[turnId] ?? { text: "", beats: {} };
-        const beat: Activity = { at: new Date().toISOString(), seq, kind, detail };
-        return { live: { ...state.live, [turnId]: { ...live, beats: { ...live.beats, [seq]: beat } } } };
-      });
+      const beat: Activity = { at: new Date().toISOString(), seq, kind, detail };
+      queue(turnId, (live) => ({ ...live, beats: { ...live.beats, [seq]: beat } }));
     }),
   ];
   const offLoaded = bus.on("workspace:loaded", ({ chats }) => {

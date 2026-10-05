@@ -17,6 +17,7 @@ pub const PERMISSIONS:[&str;3]=["allow","ask","deny"];
 pub const CONFIDENCE_RANGE:(f64,f64)=(0.5,0.95);
 pub const BUDGET_RANGE:(usize,usize)=(500,200_000);
 pub const CACHE_TTL_RANGE:(u64,u64)=(0,86_400);
+pub const TURN_CEILING_RANGE:(u64,u64)=(5,240);
 const PATTERN_MAX:usize=200;
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
@@ -57,6 +58,8 @@ pub struct CoreSettings {
     #[serde(default="keep_by_default")] pub keep_session_model:bool,
     /// A sessão do agente atravessa a troca entre planejamento e build.
     #[serde(default)] pub resume_across_modes:bool,
+    /// O teto total de um pedido, em minutos (30 por padrão).
+    #[serde(default="crate::config::default_turn_ceiling")] pub turn_ceiling_minutes:u64,
 }
 
 fn keep_by_default()->bool { true }
@@ -78,6 +81,7 @@ impl CoreSettings {
             parallel_tasks:config.jev.parallel_tasks,
             keep_session_model:config.jev.keep_session_model,
             resume_across_modes:config.jev.resume_across_modes,
+            turn_ceiling_minutes:config.jev.turn_ceiling_minutes,
         }
     }
 
@@ -100,6 +104,7 @@ impl CoreSettings {
         config.jev.parallel_tasks=self.parallel_tasks;
         config.jev.keep_session_model=self.keep_session_model;
         config.jev.resume_across_modes=self.resume_across_modes;
+        config.jev.turn_ceiling_minutes=self.turn_ceiling_minutes;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,
@@ -116,6 +121,9 @@ impl CoreSettings {
         }
         self.budgets.retain(|level,_|COMPLEXITIES.contains(&level.as_str()));
         if !(CACHE_TTL_RANGE.0..=CACHE_TTL_RANGE.1).contains(&self.cache_ttl) { bail!(Text::new("core.cacheTtl").with("max",CACHE_TTL_RANGE.1)); }
+        if !(TURN_CEILING_RANGE.0..=TURN_CEILING_RANGE.1).contains(&self.turn_ceiling_minutes) {
+            bail!(Text::new("core.turnCeiling").with("min",TURN_CEILING_RANGE.0).with("max",TURN_CEILING_RANGE.1));
+        }
         for (rule,value) in [("read",&self.exit_rules.read),("write",&self.exit_rules.write),("shell",&self.exit_rules.shell)] {
             if !PERMISSIONS.contains(&value.as_str()) { bail!(Text::new("core.permission").with("rule",rule).with("value",value)); }
         }
@@ -193,6 +201,7 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         let loaded=load(&connection,&CoreSettings::from_config(&Config::default())).expect("load");
         assert_eq!((loaded.confidence_threshold,loaded.agent_order.len()),(0.8,0));
         assert!(loaded.keep_session_model&&!loaded.resume_across_modes,"o gravado antes das opções de sessão abre com os padrões");
+        assert_eq!(loaded.turn_ceiling_minutes,30,"o gravado antes do teto abre com 30 minutos");
     }
 
     #[test] fn values_outside_the_ranges_never_reach_the_database() {
@@ -204,5 +213,7 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         assert_eq!(key(CoreSettings{exit_rules:ExitRules{shell:"maybe".into(),..base.exit_rules.clone()},..base.clone()}),"core.permission");
         assert_eq!(key(CoreSettings{privacy:Privacy{deny:vec!["[".into()],..base.privacy.clone()},..base.clone()}),"core.patternInvalid");
         assert_eq!(key(CoreSettings{agent_order:vec!["gemini".into()],..base.clone()}),"core.agentOrder");
+        assert_eq!(key(CoreSettings{turn_ceiling_minutes:1,..base.clone()}),"core.turnCeiling");
+        assert_eq!(key(CoreSettings{turn_ceiling_minutes:600,..base.clone()}),"core.turnCeiling");
     }
 }

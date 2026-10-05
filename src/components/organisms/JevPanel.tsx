@@ -1,7 +1,7 @@
 import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId, type CoreSettings, type CoreSnapshot, type Permission } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { useEntitlements, allows, type FeatureKey } from "@/modules/plans";
+import { useEntitlements, locks, toggleState, MIN_CACHE_TTL, type FeatureKey } from "@/modules/plans";
 import { AGENTS, AGENT_LABELS, updateCore } from "@/modules/settings";
 import { AgentIcon } from "@/components/atoms";
 import { FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 
 const THRESHOLDS = ["0.5", "0.55", "0.6", "0.65", "0.7", "0.75", "0.8", "0.85", "0.9", "0.95"];
 const CACHE_TTLS = [0, 300, 900, 1800, 3600, 7200, 21600, 86400];
+/** O teto total de um pedido, em minutos (o núcleo aceita de 5 a 240). */
+const CEILINGS = [10, 15, 30, 60, 120, 240];
 const PERMISSIONS: Permission[] = ["allow", "ask", "deny"];
 const EXIT_RULES = ["read", "write", "shell"] as const;
 const SCOPE_KEYS: Key[] = ["scope.0", "scope.1", "scope.2"];
@@ -21,33 +23,41 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: CoreSnapshot }) {
   const t = useT();
   const entitlements = useEntitlements();
-  // A opção fora do plano fica à vista, desligada e marcada: o núcleo também a
-  // ignora, mesmo que o valor gravado diga ligada.
-  const gated = (feature: FeatureKey, hint: string) => {
-    const on = allows(entitlements, feature);
-    return { disabled: !on, hint: on ? hint : `${t("plans.jevLocked")} · ${hint}` };
+  // A opção fora do plano fica à vista, desabilitada e marcada: o núcleo também
+  // a ignora, mesmo que o valor gravado diga ligada. A travada pelo plano (ou
+  // pelo núcleo) aparece ligada e sem interruptor: o núcleo a liga por cima do
+  // que estiver gravado.
+  const gated = (feature: FeatureKey, checked: boolean, hint: string) => {
+    const state = toggleState(entitlements, feature, checked);
+    const why = state.reason === "required" ? t("plans.required") : state.reason === "outside" ? t("plans.jevLocked") : null;
+    return { checked: state.checked, disabled: state.disabled, hint: why ? `${why} · ${hint}` : hint };
   };
+  const cacheFloor = locks(entitlements, "contextCache") ? MIN_CACHE_TTL : 0;
   const [minBudget, maxBudget] = snapshot.budgetRange;
   const duration = (seconds: number) =>
     seconds === 0 ? t("jev.cache.off") : seconds % 3600 === 0 ? t("jev.cache.hours", { count: seconds / 3600 }) : t("jev.cache.minutes", { count: Math.round(seconds / 60) });
-  const ttls = [...new Set([...CACHE_TTLS, core.cacheTtl])].sort((a, b) => a - b);
+  const ttls = [...new Set([...CACHE_TTLS, core.cacheTtl])].filter((seconds) => seconds >= cacheFloor).sort((a, b) => a - b);
 
   return (
     <div className="grid gap-5">
       <SettingsSection title={t("jev.section.routing")} description={t("jev.section.routing.description")}>
         <div className="grid gap-3">
-          <ToggleRow id="jev-adaptive" label={t("jev.adaptive")} {...gated("adaptiveRouting", t("jev.adaptive.hint"))} checked={core.adaptiveRouting} onChange={(adaptiveRouting) => updateCore({ adaptiveRouting })} />
+          <ToggleRow id="jev-adaptive" label={t("jev.adaptive")} {...gated("adaptiveRouting", core.adaptiveRouting, t("jev.adaptive.hint"))} onChange={(adaptiveRouting) => updateCore({ adaptiveRouting })} />
           <ToggleRow id="jev-local" label={t("jev.preferLocal")} hint={t("jev.preferLocal.hint")} checked={core.preferLocal} onChange={(preferLocal) => updateCore({ preferLocal })} />
           <FormField label={t("jev.confidence")} htmlFor="jev-confidence" hint={t("jev.confidence.hint")}>
             <OptionSelect id="jev-confidence" value={String(core.confidenceThreshold)} onChange={(value) => updateCore({ confidenceThreshold: Number(value) })}
               options={[...new Set([...THRESHOLDS, String(core.confidenceThreshold)])].map((value) => ({ value, label: percent(Number(value)) }))} />
           </FormField>
-          <ToggleRow id="jev-review" label={t("jev.review")} {...gated("secondOpinion", t("jev.review.hint"))} checked={core.reviewChanges} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
-          <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} {...gated("planFirst", t("jev.planFirst.hint"))} checked={core.planFirst} onChange={(planFirst) => updateCore({ planFirst })} />
-          <ToggleRow id="jev-parallel" label={t("jev.parallel")} {...gated("parallelTasks", t("jev.parallel.hint"))} checked={core.parallelTasks} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
-          <ToggleRow id="jev-keep-session" label={t("jev.keepSession")} hint={t("jev.keepSession.hint")} checked={core.keepSessionModel} onChange={(keepSessionModel) => updateCore({ keepSessionModel })} />
+          <ToggleRow id="jev-review" label={t("jev.review")} {...gated("secondOpinion", core.reviewChanges, t("jev.review.hint"))} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
+          <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} {...gated("planFirst", core.planFirst, t("jev.planFirst.hint"))} onChange={(planFirst) => updateCore({ planFirst })} />
+          <ToggleRow id="jev-parallel" label={t("jev.parallel")} {...gated("parallelTasks", core.parallelTasks, t("jev.parallel.hint"))} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
+          <ToggleRow id="jev-keep-session" label={t("jev.keepSession")} {...gated("agentSessions", core.keepSessionModel, t("jev.keepSession.hint"))} onChange={(keepSessionModel) => updateCore({ keepSessionModel })} />
           <ToggleRow id="jev-resume-modes" label={t("jev.resumeModes")} hint={t("jev.resumeModes.hint")} checked={core.resumeAcrossModes} onChange={(resumeAcrossModes) => updateCore({ resumeAcrossModes })} />
           <AgentOrderField order={core.agentOrder} />
+          <FormField label={t("jev.ceiling")} htmlFor="jev-ceiling" hint={t("jev.ceiling.hint")}>
+            <OptionSelect id="jev-ceiling" value={String(core.turnCeilingMinutes)} onChange={(value) => updateCore({ turnCeilingMinutes: Number(value) })}
+              options={[...new Set([...CEILINGS, core.turnCeilingMinutes])].sort((a, b) => a - b).map((minutes) => ({ value: String(minutes), label: duration(minutes * 60) }))} />
+          </FormField>
         </div>
       </SettingsSection>
 
@@ -68,8 +78,8 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
       </SettingsSection>
 
       <SettingsSection title={t("jev.section.cache")} description={t("jev.section.cache.description")}>
-        <FormField label={t("jev.cache")} htmlFor="jev-cache">
-          <OptionSelect id="jev-cache" value={String(core.cacheTtl)} onChange={(value) => updateCore({ cacheTtl: Number(value) })}
+        <FormField label={t("jev.cache")} htmlFor="jev-cache" hint={cacheFloor ? t("plans.cacheFloor", { minutes: cacheFloor / 60 }) : undefined}>
+          <OptionSelect id="jev-cache" value={String(Math.max(core.cacheTtl, cacheFloor))} onChange={(value) => updateCore({ cacheTtl: Number(value) })}
             options={ttls.map((seconds) => ({ value: String(seconds), label: duration(seconds) }))} />
         </FormField>
       </SettingsSection>

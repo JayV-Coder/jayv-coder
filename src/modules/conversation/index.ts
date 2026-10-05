@@ -1,6 +1,6 @@
 export {
   useConversation, liveOf, answeringFor, setDraft, setWriting, pick, formItems, answerForm, setStep, setFolded, sendPrompt, answerQuestion,
-  dismissQuestion, clearChat, connectConversation,
+  dismissQuestion, cancelTurn, clearChat, connectConversation,
 } from "./store";
 export { highlight, type Token, type TokenKind } from "./highlight";
 export { beatLine, beatLines, pendingWord, messageLight, routeLabel, routeHint, ENTRY_VERDICTS, EXIT_VERDICTS } from "./beats";

@@ -34,6 +34,8 @@ impl ContextFirewall {
             digits: Regex::new(r"\b\d{3,6}(?:[ -]\d{2,6}){1,5}\b|\b\d{13,19}\b").unwrap(),
         }
     }
+    /// Se há arquivo protegido a vigiar (`privacy.deny` com alguma regra).
+    pub fn guards_files(&self) -> bool { !self.deny_patterns.is_empty() }
     pub fn check_file(&self, path: impl AsRef<Path>) -> FilePrivacyInfo {
         let normalized = path.as_ref().to_string_lossy().replace('\\', "/");
         let file_name = path.as_ref().file_name().map(|x| x.to_string_lossy()).unwrap_or_default();

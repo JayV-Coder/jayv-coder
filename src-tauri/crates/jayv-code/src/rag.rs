@@ -2,7 +2,7 @@ use crate::{firewall::ContextFirewall, model::{ContextSnippet, ProjectInfo}, sym
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::{BTreeMap, HashSet}, fs, path::{Path, PathBuf}};
+use std::{collections::{BTreeMap, HashMap, HashSet}, fs, path::{Path, PathBuf}, time::SystemTime};
 use walkdir::DirEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,38 +14,70 @@ pub struct IndexedFile { pub path: String, pub language: String, pub hash: Strin
 /// vários gigabytes. Um repositório comum cabe folgado.
 pub const DEFAULT_BUDGET: u64 = 48 * 1024 * 1024;
 
+/// Quantas pastas ficam lidas além da do pedido atual: trocar entre os chats
+/// de dois ou três projetos não relê nenhum deles do zero.
+const PARKED:usize=2;
+
+/// A marca de um arquivo lido: tamanho e data. Igual à da varredura nova, o
+/// arquivo não é aberto de novo.
+type Stamp=(u64,Option<SystemTime>);
+
+/// O índice de uma pasta que saiu de foco, guardado para a volta.
 #[derive(Debug)]
-pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, repository_hash: String, budget: u64, indexed: bool, repositories: Vec<String>, symbols: SymbolIndex }
+struct Parked { root: PathBuf, files: Vec<IndexedFile>, stamps: HashMap<String,Stamp>, repository_hash: String, repositories: Vec<String>, symbols: SymbolIndex }
+
+#[derive(Debug)]
+pub struct RepositoryRag { root: PathBuf, files: Vec<IndexedFile>, stamps: HashMap<String,Stamp>, repository_hash: String, budget: u64, indexed: bool, repositories: Vec<String>, symbols: SymbolIndex, parked: Vec<Parked> }
 impl RepositoryRag {
-    pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false, repositories:vec![], symbols:SymbolIndex::default() } }
+    pub fn new(root: PathBuf) -> Self { Self { root, files: vec![], stamps:HashMap::new(), repository_hash:String::new(), budget:DEFAULT_BUDGET, indexed:false, repositories:vec![], symbols:SymbolIndex::default(), parked:vec![] } }
+    /// Um índice vazio da mesma pasta e com o mesmo orçamento: o lugar que
+    /// fica enquanto o índice de verdade é lido noutra thread.
+    pub fn placeholder(&self) -> Self { Self::new(self.root.clone()).with_budget(self.budget) }
+    /// Se o índice está em dia: nada a ler antes do pedido.
+    pub fn is_fresh(&self) -> bool { self.indexed }
     pub fn with_budget(mut self, budget: u64) -> Self { self.budget=budget; self }
     /// Lê a pasta. Primeiro a lista dos arquivos, sem abrir nenhum, e só
     /// então o conteúdo, gastando o orçamento por prioridade: código, depois
     /// configuração, depois documentação, depois JSON. Lido em ordem
     /// alfabética até estourar, um `.venv` ou um `coverage/` gigantes vinham
     /// antes de `src/` e o código do projeto nem entrava.
+    ///
+    /// Só o que mudou é aberto: o arquivo com o mesmo tamanho e a mesma data
+    /// da leitura anterior entra como estava (o índice de símbolos também
+    /// reaproveita o que já tinha, pela impressão do conteúdo).
     pub fn index(&mut self, firewall: &ContextFirewall) -> Result<usize> {
-        self.files.clear();
+        let mut previous:HashMap<String,IndexedFile>=std::mem::take(&mut self.files).into_iter().map(|file|(file.path.clone(),file)).collect();
+        let stamps=std::mem::take(&mut self.stamps);
         self.indexed=true;
         self.repositories=crate::checkout::nested(&self.root);
         let mut found=Vec::new();
         for entry in walk(&self.root).filter_map(Result::ok).filter(|entry|entry.file_type().is_some_and(|kind|kind.is_file())) {
             let relative=entry.path().strip_prefix(&self.root).unwrap_or(entry.path()).to_path_buf();
             if firewall.check_file(&relative).is_sensitive { continue; }
-            let Some(size)=entry.metadata().ok().map(|meta|meta.len()).filter(|size|*size<=MAX_FILE_BYTES) else { continue; };
+            let Some(meta)=entry.metadata().ok().filter(|meta|meta.len()<=MAX_FILE_BYTES) else { continue; };
             let Some(language)=language_for(entry.path()) else { continue; };
-            found.push((priority(language),relative,entry.into_path(),size,language));
+            let stamp:Stamp=(meta.len(),meta.modified().ok());
+            found.push((priority(language),relative,entry.into_path(),stamp,language));
         }
         found.sort_by(|a,b|(a.0,&a.1).cmp(&(b.0,&b.1)));
         let mut spent=0u64;
-        for (_,relative,path,size,language) in found {
+        for (_,relative,path,stamp,language) in found {
             // O que não cabe é pulado, não interrompe: um arquivo grande no meio
             // não tira os pequenos que vêm depois.
-            if spent.saturating_add(size)>self.budget { continue; }
-            let Ok(content) = fs::read_to_string(&path) else { continue; };
-            spent+=content.len() as u64;
-            let hash = hex::encode(Sha256::digest(content.as_bytes()));
-            self.files.push(IndexedFile { path:relative.to_string_lossy().to_string(), language:language.into(), hash, tokens:tokenize(&content), content });
+            if spent.saturating_add(stamp.0)>self.budget { continue; }
+            let key=relative.to_string_lossy().to_string();
+            let kept=previous.remove(&key).filter(|_|stamp.1.is_some()&&stamps.get(&key)==Some(&stamp));
+            let file=match kept {
+                Some(file)=>file,
+                None=>{
+                    let Ok(content) = fs::read_to_string(&path) else { continue; };
+                    let hash = hex::encode(Sha256::digest(content.as_bytes()));
+                    IndexedFile { path:key.clone(), language:language.into(), hash, tokens:tokenize(&content), content }
+                }
+            };
+            spent+=file.content.len() as u64;
+            self.stamps.insert(key,stamp);
+            self.files.push(file);
         }
         self.files.sort_by(|a,b| a.path.cmp(&b.path));
         let hashes = self.files.iter().map(|f| format!("{}:{}",f.path,f.hash)).collect::<Vec<_>>().join("|");
@@ -83,6 +115,8 @@ impl RepositoryRag {
     pub fn project_info(&self) -> ProjectInfo { let mut languages=self.files.iter().map(|f|f.language.clone()).collect::<Vec<_>>(); languages.sort(); languages.dedup(); ProjectInfo { root:self.root.to_string_lossy().to_string(), name:self.root.file_name().unwrap_or_default().to_string_lossy().to_string(), languages, repositories:self.repositories.clone() } }
     pub fn root(&self) -> &Path { &self.root }
     /// Força a próxima leitura da pasta: as regras de privacidade mudaram.
+    /// As pastas guardadas não precisam: a volta a uma delas sempre passa
+    /// pela varredura, com o firewall de agora.
     pub fn invalidate(&mut self) { self.indexed=false; }
     /// Lê a pasta de novo se o índice foi dado por velho: privacidade nova, ou
     /// um build que mexeu nos arquivos.
@@ -91,7 +125,22 @@ impl RepositoryRag {
     /// Jev olhar o repositório dele. Reindexar custa uma varredura inteira do
     /// disco, então só acontece quando o caminho muda de verdade — ou na
     /// primeira vez, se a raiz de partida nunca chegou a ser lida.
-    pub fn focus_on(&mut self, root: PathBuf, firewall: &ContextFirewall) -> Result<()> { if root==self.root && self.indexed {return Ok(());} self.root=root; self.index(firewall)?; Ok(()) }
+    ///
+    /// A pasta que sai de foco fica guardada (até `PARKED` delas, a usada há
+    /// mais tempo sai primeiro); voltar a ela relê só o que mudou.
+    pub fn focus_on(&mut self, root: PathBuf, firewall: &ContextFirewall) -> Result<()> {
+        if root==self.root && self.indexed {return Ok(());}
+        if root!=self.root {
+            let back=self.parked.iter().position(|parked|parked.root==root).map(|index|self.parked.remove(index));
+            let leaving=Parked{root:std::mem::replace(&mut self.root,root),files:std::mem::take(&mut self.files),stamps:std::mem::take(&mut self.stamps),repository_hash:std::mem::take(&mut self.repository_hash),repositories:std::mem::take(&mut self.repositories),symbols:std::mem::take(&mut self.symbols)};
+            if !leaving.files.is_empty() { self.parked.insert(0,leaving); self.parked.truncate(PARKED); }
+            if let Some(back)=back {
+                self.files=back.files; self.stamps=back.stamps; self.repository_hash=back.repository_hash; self.repositories=back.repositories; self.symbols=back.symbols;
+            }
+        }
+        self.index(firewall)?;
+        Ok(())
+    }
     pub fn repository_hash(&self) -> &str { &self.repository_hash }
     pub fn file_hashes(&self) -> BTreeMap<String,String> { self.files.iter().map(|f|(f.path.clone(),f.hash.clone())).collect() }
     pub fn len(&self) -> usize { self.files.len() }
@@ -296,4 +345,43 @@ fn best_window(content:&str,weights:&[(&str,f64)],max:usize)->String {
     }
     #[test] fn focusing_on_the_starting_root_indexes_it_the_first_time() { let dir=tempfile::tempdir().unwrap(); fs::write(dir.path().join("main.rs"),"fn router() {}").unwrap(); let mut rag=RepositoryRag::new(dir.path().into()); assert_eq!(rag.len(),0); rag.focus_on(dir.path().into(),&ContextFirewall::new(PrivacyConfig::default())).unwrap(); assert_eq!(rag.len(),1); }
     #[test] fn a_stale_index_reads_the_folder_again() { let firewall=ContextFirewall::new(PrivacyConfig::default()); let dir=tempfile::tempdir().unwrap(); fs::write(dir.path().join("main.rs"),"fn router() {}").unwrap(); let mut rag=RepositoryRag::new(dir.path().into()); rag.index(&firewall).unwrap(); fs::write(dir.path().join("added.rs"),"fn added_by_agent() {}").unwrap(); rag.refresh(&firewall).unwrap(); assert_eq!(rag.len(),1,"índice em dia não varre de novo"); rag.invalidate(); rag.refresh(&firewall).unwrap(); assert_eq!(rag.len(),2,"o arquivo que o agente criou entra"); assert!(rag.search("added_by_agent",1).first().is_some_and(|hit|hit.path=="added.rs")); rag.focus_on(dir.path().into(),&firewall).unwrap(); assert_eq!(rag.len(),2); }
+    /// Ler de novo só abre o que mudou: o arquivo igual entra como estava, o
+    /// mudado é relido e o apagado sai.
+    #[test] fn reindexing_reads_only_what_changed() {
+        let firewall=ContextFirewall::new(PrivacyConfig::default());
+        let dir=tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.rs"),"fn alpha() {}").unwrap();
+        fs::write(dir.path().join("b.rs"),"fn beta() {}").unwrap();
+        fs::write(dir.path().join("c.rs"),"fn gamma() {}").unwrap();
+        let mut rag=RepositoryRag::new(dir.path().into());
+        rag.index(&firewall).unwrap();
+        // O conteúdo guardado de `a.rs` é trocado por um marcador: se ele
+        // voltar da leitura nova, o arquivo não foi aberto de novo.
+        rag.files.iter_mut().find(|file|file.path=="a.rs").unwrap().content="KEPT".into();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(dir.path().join("b.rs"),"fn beta_changed() { let x = 1; }").unwrap();
+        fs::remove_file(dir.path().join("c.rs")).unwrap();
+        rag.invalidate();
+        rag.refresh(&firewall).unwrap();
+        let content=|path:&str|rag.files.iter().find(|file|file.path==path).map(|file|file.content.clone());
+        assert_eq!(content("a.rs").as_deref(),Some("KEPT"),"o arquivo igual não foi aberto");
+        assert!(content("b.rs").is_some_and(|text|text.contains("beta_changed")),"o mudado foi relido");
+        assert_eq!(content("c.rs"),None,"o apagado saiu");
+    }
+
+    /// Voltar a uma pasta guardada não a lê do zero.
+    #[test] fn switching_back_to_a_folder_reuses_its_index() {
+        let firewall=ContextFirewall::new(PrivacyConfig::default());
+        let first=tempfile::tempdir().unwrap(); let second=tempfile::tempdir().unwrap();
+        fs::write(first.path().join("main.rs"),"fn first_router() {}").unwrap();
+        fs::write(second.path().join("lib.rs"),"fn second_router() {}").unwrap();
+        let mut rag=RepositoryRag::new(first.path().into());
+        rag.index(&firewall).unwrap();
+        rag.files[0].content="KEPT".into();
+        rag.focus_on(second.path().into(),&firewall).unwrap();
+        assert_eq!(rag.file_hashes().keys().collect::<Vec<_>>(),["lib.rs"]);
+        rag.focus_on(first.path().into(),&firewall).unwrap();
+        assert_eq!(rag.files[0].content,"KEPT","a pasta guardada voltou sem ser relida");
+    }
+
     #[test] fn following_the_project_reindexes_the_new_folder() { let firewall=ContextFirewall::new(PrivacyConfig::default()); let first=tempfile::tempdir().unwrap(); let second=tempfile::tempdir().unwrap(); fs::write(first.path().join("main.rs"),"fn old_router() {}").unwrap(); fs::write(second.path().join("lib.rs"),"fn new_router() {}").unwrap(); let mut rag=RepositoryRag::new(first.path().into()); rag.index(&firewall).unwrap(); rag.focus_on(second.path().into(),&firewall).unwrap(); assert_eq!(rag.project_info().root,second.path().to_string_lossy()); assert_eq!(rag.file_hashes().keys().collect::<Vec<_>>(),["lib.rs"]); } }

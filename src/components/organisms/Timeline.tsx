@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import type { Aspect, Chat, Message, Project, TurnView } from "@/modules/core";
-import { messageLight, sendPrompt, useConversation } from "@/modules/conversation";
+import { cancelTurn, messageLight, sendPrompt, useConversation } from "@/modules/conversation";
 import { useLocale, useT } from "@/modules/i18n";
 import { formatCost, formatDuration, formatTokens, useUsage } from "@/modules/usage";
 import { openFile, openTurns, setWorkMode } from "@/modules/workspace";
@@ -59,7 +59,6 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
   const [away, setAway] = useState(false);
   const t = useT();
   const locale = useLocale();
-  const live = useConversation((state) => state.live);
   const spent = useUsage((state) => (chat ? state.turns[chat.id] : undefined));
   // O rodapé da resposta: os tokens e o tempo do turno, com `≈` quando a
   // ferramenta não os informou.
@@ -95,7 +94,13 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
 
   useEffect(() => {
     if (pinned.current) toBottom();
-  }, [chat, live]);
+  }, [chat]);
+
+  // O texto que chega rola a conversa sem redesenhá-la: a linha do tempo
+  // inteira não renasce a cada quadro, só o balão em aberto.
+  useEffect(() => useConversation.subscribe((state, before) => {
+    if (state.live !== before.live && pinned.current) toBottom();
+  }), []);
 
   const onScroll = () => {
     const element = scroller.current;
@@ -135,6 +140,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
                         turn={turn}
                         meta={message.role === "assistant" && message.turnId ? meta(message.turnId) : undefined}
                         onRetry={turn ? () => retry(turn.id) : undefined}
+                        onCancel={chat && turn ? () => void cancelTurn(turn.id, chat.id) : undefined}
                         onUndoMode={chat && turn && turn.id === undoable && turn.route?.switched ? () => void setWorkMode(chat.id, turn.route?.switched?.from ?? "auto") : undefined}
                         onOpenFile={project?.rootPath ? (path) => void openFile(chat.id, path) : undefined}
                       />

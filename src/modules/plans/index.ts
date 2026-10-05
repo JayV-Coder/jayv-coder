@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { supabase } from "@/modules/auth/client";
 import { notify, reportError } from "@/modules/feedback";
 import { t } from "@/modules/i18n";
-import { FEATURES, type FeatureKey } from "./catalog";
+import { CORE_FEATURES, FEATURES, type FeatureKey } from "./catalog";
 
 export * from "./catalog";
 
@@ -15,11 +15,30 @@ interface EntitlementsState {
   plan: string | null;
   admin: boolean;
   features: Set<string> | null;
+  /** Ligado sem interruptor: o núcleo e o que o admin travou no plano. */
+  locked: Set<string>;
 }
 
-export const useEntitlements = create<EntitlementsState>(() => ({ plan: null, admin: false, features: null }));
+const coreLocked = () => new Set<string>(CORE_FEATURES);
 
-export const allows = (state: EntitlementsState, feature: FeatureKey) => state.features === null || state.features.has(feature);
+/** O que as regras leem do estado. Sem `locked`, vale o núcleo. */
+type Rights = { features: Set<string> | null; locked?: Set<string> };
+
+export const useEntitlements = create<EntitlementsState>(() => ({ plan: null, admin: false, features: null, locked: coreLocked() }));
+
+/** Travado ligado pelo plano (ou pelo núcleo). */
+export const locks = (state: Pick<Rights, "locked">, feature: FeatureKey) => (state.locked ?? coreLocked()).has(feature);
+
+export const allows = (state: Rights, feature: FeatureKey) =>
+  locks(state, feature) || state.features === null || state.features.has(feature);
+
+/** Como um interruptor ligado a um recurso aparece: travado ligado, fora do
+ * plano (desabilitado, com o valor de quem usa) ou livre. */
+export function toggleState(state: Rights, feature: FeatureKey, checked: boolean) {
+  if (locks(state, feature)) return { checked: true, disabled: true, reason: "required" as const };
+  if (!allows(state, feature)) return { checked, disabled: true, reason: "outside" as const };
+  return { checked, disabled: false, reason: null };
+}
 
 /** O recurso está no plano e ligado pelo admin. */
 export function useFeature(feature: FeatureKey) {
@@ -85,8 +104,14 @@ export async function loadEntitlements() {
     console.error("plans", error);
     return;
   }
-  const answer = data as { plan: string | null; admin: boolean; features: string[] };
-  useEntitlements.setState({ plan: answer.plan, admin: answer.admin, features: new Set(answer.features) });
+  // `locked` chega a partir da v0.60.0 do servidor; sem ele, o núcleo vale.
+  const answer = data as { plan: string | null; admin: boolean; features: string[]; locked?: string[] };
+  useEntitlements.setState({
+    plan: answer.plan,
+    admin: answer.admin,
+    features: new Set([...answer.features, ...CORE_FEATURES]),
+    locked: new Set([...CORE_FEATURES, ...(answer.locked ?? [])]),
+  });
 }
 
 /** Planos, catálogo e a assinatura de quem usa. */
@@ -138,7 +163,7 @@ export async function startEntitlements() {
 export function clearEntitlements() {
   if (channel) void supabase.removeChannel(channel);
   channel = null;
-  useEntitlements.setState({ plan: null, admin: false, features: null });
+  useEntitlements.setState({ plan: null, admin: false, features: null, locked: coreLocked() });
   useCatalog.setState({ loaded: false, plans: [], features: [], subscription: null, busy: null });
 }
 
