@@ -10,13 +10,25 @@ use serde::Serialize;
 use std::{fs, path::{Path, PathBuf}, process::Stdio};
 use tokio::{process::Command, time::{timeout, Duration}};
 
-/// Um clone achado na pasta: a chave do repositório e onde ele está.
+/// Um clone achado na pasta: onde ele está e as chaves dos remotes dele
+/// (vazia num repositório sem remote dos três provedores).
 #[derive(Debug,Clone,PartialEq,Eq,Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct FoundRepository{pub key:String,pub path:String}
+pub struct LocalClone{pub path:String,pub keys:Vec<String>}
 
-/// Até onde a busca desce: a pasta, as filhas e as netas (`acme/backend/api`).
+/// O que a busca de clones achou na pasta. `truncated` diz que ela parou num
+/// dos limites antes de olhar tudo.
+#[derive(Debug,Clone,Default,PartialEq,Eq,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct FolderScan{pub clones:Vec<LocalClone>,pub truncated:bool}
+
+/// Até onde o painel do chat da organização desce: a pasta, as filhas e as
+/// netas (`acme/backend/api`).
 const SCAN_DEPTH:usize=2;
+/// A busca de clones desce a pasta inteira, com dois freios para uma pasta
+/// enorme (o disco todo, um monorepo de dependências) não travar o app.
+const DEEP_DEPTH:usize=16;
+const DEEP_DIRS:usize=20_000;
 /// Um clone grande demora; um que não anda em meia hora travou.
 const CLONE_LIMIT:Duration=Duration::from_secs(30*60);
 
@@ -99,54 +111,66 @@ pub async fn clone(key:&str,parent:&Path)->Result<PathBuf> {
     anyhow::bail!(Text::new("repos.clone.denied").with("repo",key).with("reason",last))
 }
 
-fn skipped(name:&str)->bool {name.starts_with('.')||matches!(name,"node_modules"|"target"|"vendor"|"dist"|"build")}
+fn skipped(name:&str)->bool {
+    name.starts_with('.')||matches!(name,"node_modules"|"target"|"vendor"|"dist"|"build"|"venv"|"__pycache__"|"Pods"|"bower_components")
+}
 
-/// As pastas de repositório dentro de `folder` — a própria pasta, as filhas e
-/// as netas —, com as chaves dos remotes de cada uma. Não desce dentro de um
-/// repositório nem em pasta oculta.
-fn repositories(folder:&Path)->Vec<(PathBuf,Vec<String>)> {
+/// As pastas de repositório dentro de `folder`, da mais rasa à mais funda,
+/// com as chaves dos remotes de cada uma, até `depth` níveis abaixo dela e
+/// olhando no máximo `limit` pastas. Não desce dentro de um repositório, em
+/// pasta oculta ou de dependências, nem segue atalho (link simbólico). O
+/// `bool` diz que um dos limites cortou a busca.
+fn walk(folder:&Path,depth:usize,limit:usize)->(Vec<(PathBuf,Vec<String>)>,bool) {
     let mut found=Vec::new();
     let mut level=vec![folder.to_path_buf()];
-    for depth in 0..=SCAN_DEPTH {
+    let mut seen=0usize;
+    let mut cut=false;
+    for current in 0..=depth {
         let mut next=Vec::new();
         for dir in level {
+            seen+=1;
+            if seen>limit {return (found,true);}
             let keys=repo_keys::of_folder(&dir.to_string_lossy());
             if !keys.is_empty() || dir.join(".git").exists() {
                 found.push((dir,keys));
                 continue;
             }
-            if depth==SCAN_DEPTH {continue;}
             let Ok(entries)=fs::read_dir(&dir) else {continue};
+            // `file_type` da entrada não segue o link: um atalho para outra
+            // pasta não é pasta aqui.
             let mut children:Vec<PathBuf>=entries.filter_map(Result::ok)
                 .filter(|entry|entry.file_type().map(|kind|kind.is_dir()).unwrap_or(false))
                 .filter(|entry|!skipped(&entry.file_name().to_string_lossy()))
                 .map(|entry|entry.path()).collect();
+            if current==depth {
+                cut|=!children.is_empty();
+                continue;
+            }
             children.sort();
             next.extend(children);
         }
+        if next.is_empty() {break;}
         level=next;
     }
-    found
+    (found,cut)
 }
+
+/// As pastas de repositório dentro de `folder` — a própria pasta, as filhas e
+/// as netas —, com as chaves dos remotes de cada uma.
+fn repositories(folder:&Path)->Vec<(PathBuf,Vec<String>)> {walk(folder,SCAN_DEPTH,usize::MAX).0}
 
 /// As pastas de repositório dentro de `folder` (ela mesma, as filhas e as
 /// netas), sem descer dentro de um repositório.
 pub fn repository_dirs(folder:&Path)->Vec<PathBuf> {repositories(folder).into_iter().map(|(dir,_)|dir).collect()}
 
-/// Os clones dos repositórios `wanted` dentro de `folder`. Cada chave aparece
-/// uma vez, no clone mais raso.
-pub fn scan(folder:&Path,wanted:&[String])->Vec<FoundRepository> {
-    let wanted:Vec<String>=wanted.iter().map(|key|key.trim().to_lowercase()).collect();
-    let mut found:Vec<FoundRepository>=Vec::new();
-    for (dir,keys) in repositories(folder) {
-        for key in keys {
-            if wanted.contains(&key) && !found.iter().any(|item|item.key==key) {
-                found.push(FoundRepository{key,path:dir.display().to_string()});
-            }
-        }
-    }
-    found.sort_by(|a,b|a.key.cmp(&b.key));
-    found
+/// Todos os clones dentro de `folder`, em qualquer profundidade, com as chaves
+/// dos remotes: a tela compara com os repositórios que a organização
+/// configurou no site. Ordenados pelo caminho.
+pub fn scan(folder:&Path)->FolderScan {
+    let (found,truncated)=walk(folder,DEEP_DEPTH,DEEP_DIRS);
+    let mut clones:Vec<LocalClone>=found.into_iter().map(|(dir,keys)|LocalClone{path:dir.display().to_string(),keys}).collect();
+    clones.sort_by(|a,b|a.path.cmp(&b.path));
+    FolderScan{clones,truncated}
 }
 
 /// Os repositórios de uma pasta que junta vários (a pasta da organização),
@@ -252,33 +276,63 @@ mod tests {
         dir
     }
 
-    #[test] fn the_scan_finds_clones_of_wanted_repositories_only() {
+    fn paths(scan:&FolderScan,root:&Path)->Vec<String> {
+        scan.clones.iter().map(|clone|Path::new(&clone.path).strip_prefix(root).unwrap().to_string_lossy().replace('\\',"/")).collect()
+    }
+
+    #[test] fn the_scan_finds_every_clone_with_its_remotes() {
         let root=tempfile::tempdir().unwrap();
         clone_of(root.path(),"api","git@github.com:acme/api.git");
         clone_of(root.path(),"backend/worker","https://gitlab.com/acme/worker");
         clone_of(root.path(),"other","https://github.com/someone/else");
         clone_of(root.path(),".hidden/web","https://github.com/acme/web");
-        let wanted=["github.com/acme/api".to_string(),"gitlab.com/acme/worker".into(),"github.com/acme/web".into()];
-        let found=scan(root.path(),&wanted);
-        let keys:Vec<&str>=found.iter().map(|item|item.key.as_str()).collect();
-        assert_eq!(keys,["github.com/acme/api","gitlab.com/acme/worker"]);
-        assert!(found[1].path.ends_with("worker"));
+        clone_of(root.path(),"node_modules/dep","https://github.com/acme/dep");
+        fs::create_dir_all(root.path().join("scratch/.git")).unwrap();
+        let found=scan(root.path());
+        assert_eq!(paths(&found,root.path()),["api","backend/worker","other","scratch"]);
+        assert_eq!(found.clones[1].keys,["gitlab.com/acme/worker"]);
+        assert!(found.clones[3].keys.is_empty(),"repositório sem remote entra sem chave");
+        assert!(!found.truncated);
     }
 
-    #[test] fn the_scan_stops_inside_a_repository_and_at_its_depth() {
+    #[test] fn the_scan_goes_deep_but_not_inside_a_repository() {
         let root=tempfile::tempdir().unwrap();
         let outer=clone_of(root.path(),"mono","https://github.com/acme/mono");
         clone_of(&outer,"nested","https://github.com/acme/nested");
+        clone_of(root.path(),"a/b/c/d/e/deep","https://github.com/acme/deep");
+        let found=scan(root.path());
+        assert_eq!(paths(&found,root.path()),["a/b/c/d/e/deep","mono"]);
+        // O painel do chat continua olhando só até as netas.
+        assert_eq!(repository_dirs(root.path()),[outer]);
+    }
+
+    #[test] fn the_walk_says_when_a_limit_cut_it() {
+        let root=tempfile::tempdir().unwrap();
         clone_of(root.path(),"a/b/c","https://github.com/acme/deep");
-        let wanted=["github.com/acme/mono".to_string(),"github.com/acme/nested".into(),"github.com/acme/deep".into()];
-        let keys:Vec<String>=scan(root.path(),&wanted).into_iter().map(|item|item.key).collect();
-        assert_eq!(keys,["github.com/acme/mono"]);
+        clone_of(root.path(),"x","https://github.com/acme/x");
+        let (shallow,cut)=walk(root.path(),1,usize::MAX);
+        assert_eq!(shallow.len(),1);
+        assert!(cut,"a/b passou do fundo");
+        let (_,cut)=walk(root.path(),SCAN_DEPTH,2);
+        assert!(cut,"o limite de pastas também corta");
+        assert!(!walk(root.path(),DEEP_DEPTH,DEEP_DIRS).1);
+    }
+
+    #[cfg(unix)]
+    #[test] fn the_scan_does_not_follow_links() {
+        let root=tempfile::tempdir().unwrap();
+        let elsewhere=tempfile::tempdir().unwrap();
+        clone_of(elsewhere.path(),"api","https://github.com/acme/api");
+        std::os::unix::fs::symlink(elsewhere.path(),root.path().join("link")).unwrap();
+        assert!(scan(root.path()).clones.is_empty());
     }
 
     #[test] fn the_folder_itself_can_be_the_clone() {
         let root=tempfile::tempdir().unwrap();
         clone_of(root.path(),"","https://bitbucket.org/acme/site.git");
-        assert_eq!(scan(root.path(),&["bitbucket.org/acme/site".into()]).len(),1);
+        let found=scan(root.path());
+        assert_eq!(found.clones.len(),1);
+        assert_eq!(found.clones[0].keys,["bitbucket.org/acme/site"]);
     }
 
     #[test] fn the_organization_folder_lists_its_repositories() {

@@ -8,5 +8,5 @@
   ],
   "title": "Organizations",
   "summary": "Organizations group people, repositories and the LLM policy the whole team follows.",
-  "usage": "Create an organization and invite members on the JayV site dashboard. In the app, Ctrl+2 (⌘2 on Mac) opens your organizations and their repositories."
+  "usage": "Create an organization, invite members and link its repositories on the JayV site dashboard. In the app, Ctrl+2 (⌘2 on Mac) opens your organizations and their repositories."
 }

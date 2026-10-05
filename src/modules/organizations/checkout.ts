@@ -1,4 +1,4 @@
-import type { FoundRepository, Project } from "@/modules/core";
+import type { LocalClone, Project } from "@/modules/core";
 
 /** Um caminho comparável: sem espaço nas pontas e sem barra no fim. */
 const pathKey = (path: string) => path.trim().replace(/[\\/]+$/, "");
@@ -9,11 +9,48 @@ export function localCopy<P extends Pick<Project, "rootPath" | "repoKeys">>(repo
   return projects.find((project) => project.rootPath.trim() && (project.repoKeys ?? []).includes(repoKey)) ?? null;
 }
 
-/** Dos clones achados na pasta, os que ainda não são projeto: nem a pasta é de
- * um projeto, nem o repositório já está neste computador em outra pasta. */
-export function newClones(found: FoundRepository[], projects: Pick<Project, "rootPath" | "repoKeys">[]): FoundRepository[] {
-  const folders = new Set(projects.map((project) => pathKey(project.rootPath)).filter(Boolean));
-  return found.filter((clone) => !folders.has(pathKey(clone.path)) && !localCopy(clone.key, projects));
+/** Um clone da pasta que é de um repositório da organização: `project`, a
+ * pasta já é um projeto; `elsewhere`, o repositório já é projeto em outra
+ * pasta deste computador (trazer de novo faria dois); `new`, dá para trazer. */
+export type FoundState = "project" | "elsewhere" | "new";
+
+/** A pasta da organização comparada com o que o owner configurou no site. */
+export interface FolderComparison<R> {
+  /** Os repositórios da organização que têm clone na pasta. */
+  found: { repository: R; path: string; state: FoundState; elsewhere: string | null }[];
+  /** Os que não têm: para clonar. `local` é a pasta de um projeto deste
+   * computador com o repositório, fora da pasta da organização. */
+  missing: { repository: R; local: string | null }[];
+  /** Os clones da pasta que a organização não tem. */
+  outside: LocalClone[];
+}
+
+const depth = (path: string) => comparable(path).split("/").length;
+
+/** Junta a busca na pasta (em qualquer profundidade) com os repositórios da
+ * organização e os projetos deste computador. Um repositório clonado duas
+ * vezes vale pelo clone mais raso. */
+export function compareFolder<R extends { repoKey: string }>(
+  repositories: R[],
+  clones: LocalClone[],
+  projects: Pick<Project, "rootPath" | "repoKeys">[],
+): FolderComparison<R> {
+  const folders = new Set(projects.map((project) => comparable(project.rootPath)).filter(Boolean));
+  const configured = new Set(repositories.map((repository) => repository.repoKey));
+  const ordered = [...clones].sort((a, b) => depth(a.path) - depth(b.path) || a.path.localeCompare(b.path));
+  const comparison: FolderComparison<R> = { found: [], missing: [], outside: [] };
+  for (const repository of repositories) {
+    const clone = ordered.find((item) => item.keys.includes(repository.repoKey));
+    const copy = localCopy(repository.repoKey, projects);
+    if (!clone) {
+      comparison.missing.push({ repository, local: copy?.rootPath ?? null });
+      continue;
+    }
+    const state: FoundState = folders.has(comparable(clone.path)) ? "project" : copy ? "elsewhere" : "new";
+    comparison.found.push({ repository, path: clone.path, state, elsewhere: state === "elsewhere" ? copy!.rootPath : null });
+  }
+  comparison.outside = clones.filter((clone) => !clone.keys.some((key) => configured.has(key)));
+  return comparison;
 }
 
 const FOLDER_KEY = "jayv.organizationFolder.";

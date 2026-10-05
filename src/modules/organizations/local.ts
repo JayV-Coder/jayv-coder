@@ -1,4 +1,4 @@
-import { commands, type FoundRepository } from "@/modules/core";
+import { commands } from "@/modules/core";
 import { navigate } from "@/modules/navigation";
 import { chatsOf, folderName, loadWorkspace, openChat, useWorkspace } from "@/modules/workspace";
 import { organizationChatOf } from "./scope";
@@ -15,16 +15,16 @@ export function repositoryStates(folder: string) {
   return commands.repositoryStates(folder);
 }
 
-/** Os clones dos repositórios dentro da pasta. */
-export function scanFolder(folder: string, repoKeys: string[]) {
-  return commands.scanRepositories(folder, repoKeys);
+/** Todos os clones dentro da pasta, em qualquer profundidade. */
+export function scanFolder(folder: string) {
+  return commands.scanRepositories(folder);
 }
 
 /** Cria um projeto para cada clone, com o nome da pasta, sem abrir chat: a
  * pessoa está trazendo vários de uma vez. */
-export async function importClones(clones: FoundRepository[]) {
+export async function importClones(paths: string[]) {
   try {
-    for (const clone of clones) await commands.createProject(folderName(clone.path), clone.path);
+    for (const path of paths) await commands.createProject(folderName(path), path);
   } finally {
     await loadWorkspace();
   }
