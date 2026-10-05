@@ -1608,4 +1608,6 @@ export const en = {
   "whatsNew.item.betterRetry.detail": "A complaint about the last answer now tells the agent to check what its previous change did and reproduce the failure before changing anything again. From the second complaint in a row, it also thinks one step harder.",
   "whatsNew.item.smallCuts.title": "Searches in your language, cheaper titles and honest savings",
   "whatsNew.item.smallCuts.detail": "Requests written in Portuguese or Spanish now find code written in English, because common programming words are searched in English too. With only Copilot set up, chats keep the local title instead of spending a premium request on it. And a blocked request you resend within 15 minutes no longer counts as tokens saved.",
+  "whatsNew.item.benchRounds.title": "jayv bench measures rounds until done",
+  "whatsNew.item.benchRounds.detail": "The command-line benchmark now runs a task file: each task has a beginner's script and a command that tells when it is done. JayV and the agent alone each work in their own copy of the project, in alternating order, with the gatehouse on for JayV, and the result is how many requests and how many dollars each side needed. An example with ten tasks comes in src-tauri/bench.",
 } satisfies Record<string, Message>;
