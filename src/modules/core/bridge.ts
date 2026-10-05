@@ -28,7 +28,7 @@ export const commands = {
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
   scopedGateFeed: (projectIds: string[], chatId: string | null) => invoke<GateFeed>("scoped_gate_feed", { projectIds, chatId }),
   openFile: (chatId: string, path: string) => invoke<void>("open_file", { chatId, path }),
-  scanRepositories: (folder: string, keys: string[]) => invoke<FoundRepository[]>("scan_repositories", { folder, keys }),
+  scanRepositories: (folder: string) => invoke<FolderScan>("scan_repositories", { folder }),
   cloneRepository: (key: string, folder: string) => invoke<Project>("clone_repository", { key, folder }),
   folderRepoKeys: (path: string) => invoke<string[]>("folder_repo_keys", { path }),
   repositoryStates: (folder: string) => invoke<RepositoryState[]>("repository_states", { folder }),
@@ -61,8 +61,13 @@ export const commands = {
   searchChats: (projectId: string, query: string) => invoke<SearchHit[]>("search_chats", { projectId, query }),
 };
 
-/** Um clone de repositório da organização achado numa pasta. */
-export interface FoundRepository { key: string; path: string }
+/** Um clone achado numa pasta, com as chaves dos remotes dele (vazia num
+ * repositório sem remote do GitHub, do GitLab ou do Bitbucket). */
+export interface LocalClone { path: string; keys: string[] }
+
+/** Os clones de uma pasta, em qualquer profundidade. `truncated`: a busca
+ * parou num dos limites (pasta funda ou grande demais) antes de olhar tudo. */
+export interface FolderScan { clones: LocalClone[]; truncated: boolean }
 
 /** Um repositório dentro da pasta de um chat, com o que o `git status` diz.
  * `relative` vazio é a própria pasta; `readable` falso, o git não respondeu. */

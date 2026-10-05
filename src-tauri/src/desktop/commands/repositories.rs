@@ -1,19 +1,20 @@
 //! Os repositórios da organização neste computador: achar os clones numa
 //! pasta, clonar um que falta e conferir de que repositório é uma pasta.
 
-use crate::checkout::{self, FoundRepository};
+use crate::checkout::{self, FolderScan};
 use crate::desktop::SharedWorkspace;
 use crate::i18n::{failure, Text};
 use crate::workspace::ProjectRecord;
 use std::path::PathBuf;
 use tauri::State;
 
-/// Os clones de `keys` dentro de `folder`, até as netas da pasta.
+/// Todos os clones dentro de `folder`, em qualquer profundidade, com os
+/// remotes de cada um: a tela compara com os repositórios da organização.
 #[tauri::command]
-pub(crate) async fn scan_repositories(folder:String,keys:Vec<String>)->Result<Vec<FoundRepository>,Text>{
+pub(crate) async fn scan_repositories(folder:String)->Result<FolderScan,Text>{
     let folder=PathBuf::from(folder.trim());
     if !folder.is_dir() {return Err(Text::new("repos.folder.missing").with("path",folder.display().to_string()));}
-    tauri::async_runtime::spawn_blocking(move ||checkout::scan(&folder,&keys)).await.map_err(Text::unexpected)
+    tauri::async_runtime::spawn_blocking(move ||checkout::scan(&folder)).await.map_err(Text::unexpected)
 }
 
 /// Clona o repositório dentro de `folder` e já cria o projeto na pasta nova,

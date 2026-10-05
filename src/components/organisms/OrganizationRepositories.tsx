@@ -1,45 +1,39 @@
-import { useState, type FormEvent } from "react";
-import { FolderSearchIcon, LoaderCircleIcon } from "lucide-react";
-import type { FoundRepository } from "@/modules/core";
+import { useState } from "react";
+import { ExternalLinkIcon, FolderSearchIcon, GitBranchIcon, GlobeIcon, LoaderCircleIcon, LockIcon } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { notify, reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import {
-  addRepository, can, cloneRepository, forgetOrganizationFolder, linkFolder, localCopy, newClones, organizationFolder, parseRepoUrl, pickFolder,
-  rememberOrganizationFolder, removeRepository, scanFolder, type OrganizationDetail, type Repository, type Role,
+  cloneRepository, compareFolder, forgetOrganizationFolder, linkFolder, localCopy, organizationFolder, pickFolder,
+  rememberOrganizationFolder, scanFolder, type OrganizationDetail, type Repository, type Role,
 } from "@/modules/organizations";
 import { openProject, useWorkspace } from "@/modules/workspace";
 import { FolderIcon, PathText, PROVIDER_NAMES, ProviderIcon } from "@/components/atoms";
 import { ConfirmAction, SettingsSection } from "@/components/molecules";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { ImportClonesDialog } from "./ImportClonesDialog";
+import { FolderCompareDialog, type FolderReport } from "./FolderCompareDialog";
+import { SiteDashboardButton } from "./SiteDashboardButton";
 
-/** Os repositórios da organização e onde cada um está neste computador. Um
- * projeto local entra na organização quando um remote do git da pasta casa
- * com um deles. Quem não tem o repositório clona por aqui; quem já tem aponta
- * a pasta, um por um ou a pasta da organização inteira. */
+/** Os repositórios da organização e onde cada um está neste computador. Quem
+ * escolhe os repositórios é o owner, no site, pelo GitHub, GitLab ou
+ * Bitbucket; o app recebe a lista ao vivo e cada membro clona com o próprio
+ * acesso git. Um projeto local entra na organização quando um remote do git
+ * da pasta casa com um deles. "Procurar clones" olha a pasta da organização
+ * inteira e compara com a lista do site. */
 export function OrganizationRepositories({ detail, role, name }: { detail: OrganizationDetail; role: Role; name: string }) {
   const t = useT();
-  const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   // O repositório que está clonando agora: um por vez, para o erro de um não
   // se misturar com o de outro.
   const [cloning, setCloning] = useState<string | null>(null);
   const [folder, setFolder] = useState(() => organizationFolder(detail.id));
-  const [found, setFound] = useState<FoundRepository[] | null>(null);
+  const [report, setReport] = useState<FolderReport | null>(null);
   const projects = useWorkspace((state) => state.data.projects);
-  const parsed = parseRepoUrl(url);
-  const manages = can.manage(role);
 
   const run = (action: () => Promise<void>) => {
     setBusy(true);
     return action().catch(reportError).finally(() => setBusy(false));
-  };
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!parsed) return;
-    void run(async () => { await addRepository(detail.id, parsed.provider, parsed.path); setUrl(""); });
   };
 
   /** A pasta da organização: a guardada ou, na primeira vez, a que a pessoa
@@ -51,14 +45,19 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
     return chosen;
   };
 
-  const scan = (target: string) => run(async () => {
-    const clones = await scanFolder(target, detail.repositories.map((repository) => repository.repoKey));
-    setFound(newClones(clones, projects));
-  });
+  /** Busca os clones na pasta e compara com a lista do site. Os projetos são
+   * lidos na hora: um clone ou uma importação acabou de mudá-los. */
+  const compare = async (target: string) => {
+    const scan = await scanFolder(target);
+    const current = useWorkspace.getState().data.projects;
+    setReport({ comparison: compareFolder(detail.repositories, scan.clones, current), truncated: scan.truncated });
+  };
+
+  const scan = (target: string) => run(() => compare(target));
 
   const changeFolder = () => run(async () => {
     const chosen = await chooseFolder(true);
-    if (chosen && detail.repositories.length) await scan(chosen);
+    if (chosen) await compare(chosen);
   });
 
   const clone = async (repository: Repository) => {
@@ -84,20 +83,24 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
 
   return (
     <SettingsSection title={t("org.repos.title")} description={t("org.repos.description")}>
-      {manages && (
-        <form onSubmit={submit} className="grid gap-2">
-          <div className="flex flex-wrap gap-2">
-            <Input aria-label={t("org.repos.url")} placeholder="https://github.com/acme/api" spellCheck={false} autoCapitalize="none"
-              className="min-w-[240px] flex-1 font-mono text-sm" aria-invalid={url.trim() && !parsed ? true : undefined} value={url} onChange={(event) => setUrl(event.target.value)} />
-            <Button type="submit" disabled={busy || !parsed}>{t("org.repos.add")}</Button>
-          </div>
-          <p className={url.trim() && !parsed ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
-            {parsed
-              ? <span className="inline-flex items-center gap-1.5"><ProviderIcon provider={parsed.provider} className="size-3.5" />{PROVIDER_NAMES[parsed.provider]} · <span className="font-mono">{parsed.path}</span></span>
-              : url.trim() ? t("org.repos.invalid") : t("org.repos.hint")}
-          </p>
-        </form>
-      )}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-md border border-border bg-secondary/40 px-3 py-3">
+        <div className="grid min-w-[min(100%,16rem)] flex-1 gap-1.5">
+          <span className="text-sm">{t(role === "owner" ? "repos.site.owner" : "repos.site.member")}</span>
+          {detail.connections.length > 0
+            ? (
+              <span className="flex flex-wrap gap-1.5">
+                {detail.connections.map((connection) => (
+                  <Badge key={connection.provider} variant="outline" className="max-w-full">
+                    <ProviderIcon provider={connection.provider} />
+                    <span className="truncate">{PROVIDER_NAMES[connection.provider]} · {connection.account}</span>
+                  </Badge>
+                ))}
+              </span>
+            )
+            : <span className="text-xs text-muted-foreground">{t("repos.site.none")}</span>}
+        </div>
+        <SiteDashboardButton path={`/organizations/${detail.id}?tab=repositories`} size="sm" />
+      </div>
       <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-secondary/40 px-3 py-3">
         <FolderIcon className="size-5 flex-none text-muted-foreground" />
         <div className="grid min-w-0 flex-1 gap-0.5">
@@ -111,7 +114,7 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
             {folder ? t("repos.folder.change") : t("repos.folder.choose")}
           </Button>
           {folder && (
-            <Button variant="outline" size="sm" disabled={busy || detail.repositories.length === 0} onClick={() => void scan(folder)}>
+            <Button variant="outline" size="sm" disabled={busy || cloning !== null} aria-busy={busy || undefined} onClick={() => void scan(folder)}>
               <FolderSearchIcon />{t("repos.folder.scan")}
             </Button>
           )}
@@ -126,15 +129,22 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
       {detail.repositories.length === 0
         ? <p className="text-sm text-muted-foreground">{t("org.repos.empty")}</p>
         : (
-          <ul className="grid gap-2">
+          <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
             {detail.repositories.map((repository) => {
               const local = localCopy(repository.repoKey, projects);
               const working = cloning === repository.id;
               return (
                 <li key={repository.id} className="flex flex-wrap items-center gap-3 rounded-md border border-border/60 px-3 py-2.5">
                   <ProviderIcon provider={repository.provider} className="size-5" />
-                  <div className="grid min-w-0 flex-1 gap-0.5">
-                    <p className="truncate font-mono text-sm">{repository.path}</p>
+                  <div className="grid min-w-[min(100%,14rem)] flex-1 grid-cols-[minmax(0,1fr)] gap-0.5">
+                    <p className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-mono text-sm" title={repository.repoKey}>{repository.path}</span>
+                      {repository.private !== null && (
+                        <Badge variant="outline" className="flex-none">{repository.private ? <LockIcon /> : <GlobeIcon />}{t(repository.private ? "repos.private" : "repos.public")}</Badge>
+                      )}
+                      {repository.defaultBranch && <Badge variant="secondary" className="hidden min-w-0 sm:inline-flex"><GitBranchIcon /><span className="truncate">{repository.defaultBranch}</span></Badge>}
+                    </p>
+                    {repository.description && <p className="truncate text-xs text-muted-foreground" title={repository.description}>{repository.description}</p>}
                     {local
                       ? (
                         <p className="flex min-w-0 items-center gap-1.5 text-xs">
@@ -151,6 +161,12 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
                       )}
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    {repository.webUrl && (
+                      <Button variant="ghost" size="icon-sm" aria-label={t("repos.openWeb", { provider: PROVIDER_NAMES[repository.provider] })}
+                        title={t("repos.openWeb", { provider: PROVIDER_NAMES[repository.provider] })} onClick={() => void openUrl(repository.webUrl!).catch(reportError)}>
+                        <ExternalLinkIcon />
+                      </Button>
+                    )}
                     {local
                       ? <Button variant="outline" size="sm" onClick={() => openProject(local.id)}>{t("repos.open")}</Button>
                       : (
@@ -162,19 +178,14 @@ export function OrganizationRepositories({ detail, role, name }: { detail: Organ
                           <Button variant="ghost" size="sm" disabled={busy || cloning !== null} onClick={() => void link(repository)}>{t("repos.link")}</Button>
                         </>
                       )}
-                    {manages && (
-                      <ConfirmAction title={t("org.repos.remove.title")} description={t("org.repos.remove.description", { repo: repository.repoKey })}
-                        confirm={t("org.repos.remove")} onConfirm={() => void run(() => removeRepository(repository.id))}>
-                        <Button variant="ghost" size="sm" disabled={busy} className="text-muted-foreground hover:text-destructive">{t("org.repos.remove")}</Button>
-                      </ConfirmAction>
-                    )}
                   </div>
                 </li>
               );
             })}
           </ul>
         )}
-      <ImportClonesDialog org={name} folder={folder ?? ""} clones={found} onClose={() => setFound(null)} />
+      <FolderCompareDialog org={name} folder={folder ?? ""} report={report}
+        onChanged={() => (folder ? compare(folder) : Promise.resolve())} onClose={() => setReport(null)} />
     </SettingsSection>
   );
 }

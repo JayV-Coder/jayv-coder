@@ -6,7 +6,9 @@ import { chatRepositories, repositoryLabel } from "./repositories";
 const state = (relative: string, key: string | null, changed = 0): RepositoryState => ({
   path: `/code/acme/${relative}`, relative, key, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, changed, readable: true,
 });
-const repo = (id: string, repoKey: string) => ({ id, provider: "github" as const, path: repoKey.split("/").slice(1).join("/"), repoKey });
+const repo = (id: string, repoKey: string) => ({
+  id, provider: "github" as const, path: repoKey.split("/").slice(1).join("/"), repoKey, defaultBranch: null, private: null, description: null, webUrl: null,
+});
 const policy = (repositoryId: string | null): StoredPolicy => ({ ...emptyPolicy(), repositoryId, updatedAt: "" });
 
 describe("chatRepositories", () => {

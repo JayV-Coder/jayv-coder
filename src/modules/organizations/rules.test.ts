@@ -1,22 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { can, parseRepoUrl, slugify, slugOk } from "./rules";
-
-describe("parseRepoUrl", () => {
-  it("cada forma de URL dá a mesma chave (igual ao núcleo)", () => {
-    for (const url of ["git@github.com:Acme/API.git", "https://github.com/acme/api", "https://user@github.com/acme/api.git/", "ssh://git@github.com:22/Acme/Api.git", "git://github.com/acme/api", "github.com/acme/api"]) {
-      expect(parseRepoUrl(url), url).toEqual({ provider: "github", path: "acme/api", key: "github.com/acme/api" });
-    }
-  });
-  it("subgrupos do GitLab e o host do Bitbucket", () => {
-    expect(parseRepoUrl("git@gitlab.com:grupo/sub/app.git")).toEqual({ provider: "gitlab", path: "grupo/sub/app", key: "gitlab.com/grupo/sub/app" });
-    expect(parseRepoUrl("https://bitbucket.org/acme/web.git")?.provider).toBe("bitbucket");
-  });
-  it("recusa o resto", () => {
-    for (const url of ["git@git.empresa.local:acme/api.git", "https://github.com/acme", "/home/dev/repo.git", "https://github.com/acme/ap i", ""]) {
-      expect(parseRepoUrl(url), url).toBeNull();
-    }
-  });
-});
+import { can, slugify, slugOk } from "./rules";
 
 describe("slug", () => {
   it("sugere a partir do nome", () => {
