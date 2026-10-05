@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Chat, Question } from "@/modules/core";
-import { useT } from "@/modules/i18n";
-import { answerForm, answerQuestion, answeringFor, dismissQuestion, formItems, pick, setDraft, setFolded, setStep, setWriting, useConversation, sourceLabel } from "@/modules/conversation";
+import { useT, type Key } from "@/modules/i18n";
+import { answerForm, answerQuestion, answeringFor, dismissQuestion, formItems, pick, setDraft, setFolded, setStep, setWriting, shownText, useConversation, sourceLabel } from "@/modules/conversation";
 import { ChevronIcon } from "@/components/atoms";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,6 +31,11 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
   const answering = answeringFor(question, useConversation((state) => state.answering));
   const multiple = question.kind === "multiple";
   const form = question.kind === "form";
+  // A portaria perguntou no lugar do agente: o enunciado é um aviso (cada um
+  // o lê no seu idioma) e as saídas são enviar como está, enviar reescrito ou
+  // completar o pedido.
+  const gate = question.source === "gate";
+  const prompt = gate ? shownText(question.prompt) : question.prompt;
   const items = form ? formItems(question) : [];
   const step = Math.min(answering.step, Math.max(0, items.length - 1));
   const last = step >= items.length - 1;
@@ -40,7 +45,7 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
   const act = "h-8 rounded-md px-3 text-caption font-semibold tracking-wider uppercase";
   const toggle = t(folded ? "ask.expand" : "ask.collapse");
   // A linha que fica à vista com o painel recolhido: a pergunta da vez.
-  const headline = form && !answering.writing && items.length > 0 ? items[step]?.prompt ?? question.prompt : question.prompt;
+  const headline = form && !answering.writing && items.length > 0 ? items[step]?.prompt ?? prompt : prompt;
 
   return (
     <div className={cn("border-b border-border px-[18px]", folded ? "py-2" : "pt-2.5 pb-3")}>
@@ -64,7 +69,7 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
         // Uma pergunta por etapa, como o formulário do Claude: as alternativas
         // dela, e um campo para responder com outras palavras.
         <div className="mb-2 grid max-h-[46vh] gap-2.5 overflow-y-auto pe-1">
-          {answering.writing && <p className="leading-relaxed whitespace-pre-wrap text-foreground">{question.prompt}</p>}
+          {answering.writing && <p className="leading-relaxed whitespace-pre-wrap text-foreground">{prompt}</p>}
           {!answering.writing && items.length > 1 && (
             // Uma marca por pergunta: a da vez acesa, as já respondidas cheias.
             <ol aria-label={t("ask.form.step", { current: step + 1, total: items.length })} className="flex gap-1">
@@ -119,9 +124,10 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
           })}
         </div>
       ) : (
-        <p className="mb-2 leading-relaxed whitespace-pre-wrap text-foreground">{question.prompt}</p>
+        <p className="mb-2 leading-relaxed whitespace-pre-wrap text-foreground">{prompt}</p>
       )}
-      {!form && question.kind !== "noul" && (
+      {gate && answering.writing && <small className="mb-2 block text-caption text-muted-foreground">{t("gate.confirm.completeHint")}</small>}
+      {!form && !gate && question.kind !== "noul" && (
         <div className="mb-2 grid gap-1.5">
           {multiple ? question.options.map((option, index) => (
             <Label key={option} htmlFor={`pick-${index}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-secondary">
@@ -145,6 +151,15 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
       <div className="mt-3 flex flex-wrap gap-2">
         {answering.writing ? (
           <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}>{t("ask.back")}</Button>
+        ) : gate ? (
+          <>
+            {question.options.map((option, index) => (
+              <Button key={option} type="button" disabled={busy} variant={index === 0 ? "default" : "outline"} className={act} onClick={() => run(() => answerQuestion(question, chat.id, [option]))}>
+                {t(`gate.confirm.option.${option}` as Key)}
+              </Button>
+            ))}
+            <Button type="button" variant="outline" className={act} onClick={() => setWriting(question, true)}>{t("gate.confirm.complete")}</Button>
+          </>
         ) : form ? (
           <>
             {step > 0 && <Button type="button" variant="outline" className={act} onClick={() => setStep(question, step - 1)}>{t("ask.form.previous")}</Button>}

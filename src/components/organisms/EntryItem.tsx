@@ -27,7 +27,10 @@ export function EntryItem({ check }: { check: EntryCheck }) {
   // aqui a partir do veredito, no idioma de quem lê.
   const known = scopeKey(check.scope);
   const scope = known ? t(known) : check.scope;
-  const note = known ? t(NOTES[check.verdict] ?? "entry.note.block", { scope }) : check.note;
+  // O pedido que o desenvolvedor confirmou depois de a portaria perguntar
+  // passa com a nota própria.
+  const confirmed = check.note === "entry.note.confirmed";
+  const note = known ? t(confirmed ? "entry.note.confirmed" : NOTES[check.verdict] ?? "entry.note.block", { scope }) : check.note;
   return (
     <GateItem id={check.id} aspect={aspect}>
       <button

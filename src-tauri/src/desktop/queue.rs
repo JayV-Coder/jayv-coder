@@ -109,6 +109,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let chat_id=turn.chat_id.as_str();
     // O que está gravado pode ser um aviso para a tela (a resposta a uma
     // pergunta); a portaria e o modelo o leem em inglês.
+    let stored=prompt;
     let prompt=i18n::for_model(prompt);
     let prompt=prompt.as_str();
     let mut state=desk.lock().await;
@@ -157,7 +158,15 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // A corrente inteira vai junto: numa pergunta feita depois de outra
     // resposta, só a resposta anterior não diz qual era o pedido.
     let origin=workspace.lock().await.question_origin(&turn.id).unwrap_or_default();
-    let paired=(!origin.is_empty()).then(||asking::pair(&origin.iter().map(|said|i18n::for_model(said)).collect::<Vec<_>>().join("\n\n"),prompt));
+    // A resposta à confirmação da portaria: a escolha manda o pedido de
+    // origem como estava (ou reescrito); o texto livre o completa e é julgado
+    // de novo, em par com ele.
+    let gate=workspace.lock().await.answers_gate(&turn.id).unwrap_or(false);
+    let choice=if gate { gatekeeper::gate_choice(stored) } else { None };
+    let paired=(!origin.is_empty()).then(||{
+        let origin=origin.iter().map(|said|i18n::for_model(said)).collect::<Vec<_>>().join("\n\n");
+        if choice.is_some() { origin } else { asking::pair(&origin,prompt) }
+    });
     let request=paired.as_deref().unwrap_or(prompt);
     // O `process` torna a anotar o pedido na memória da sessão, e ele já está
     // no banco desde o envio: sem esta poda o modelo receberia a mesma linha
@@ -168,17 +177,33 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // Se a portaria barrar, a leitura de roteamento é descartada.
     let routing=state.orchestrator.routes_with_jev().then(||state.orchestrator.routing_input_ahead(request,chat_id));
     let covered=project_memory::covered(&notes);
+    let recent=state.orchestrator.recent_turns_ahead(chat_id);
     let (mut entry,routing)=tokio::join!(
-        entry_check(&project,turn,request,state.orchestrator.expertise,&covered),
+        entry_check(&project,turn,request,state.orchestrator.expertise,&covered,&recent),
         async { match &routing { Some(input)=>Some(jev::route(input).await.map_err(|error|error.to_string())), None=>None } },
     );
-    // Responder ao agente não é pedir de novo: a resposta herda a passagem
-    // do pedido que levantou a pergunta.
-    if paired.is_some() {
-        // Sem leitura gravada (um turno de antes da portaria), vale o que a
-        // pergunta prova: o modelo respondeu aquele pedido.
+    if choice.is_some() {
+        // O desenvolvedor confirmou o pedido que a portaria segurou: ele vai
+        // ao agente liberado de vez.
+        usage::mark(usage::JevMark::count("entry:confirmed",1));
+        entry=entry.confirmed();
+    } else if paired.is_some() {
+        // Responder ao agente não é pedir de novo: a resposta herda a passagem
+        // do pedido que levantou a pergunta. Sem leitura gravada (um turno de
+        // antes da portaria), vale o que a pergunta prova: o modelo respondeu
+        // aquele pedido.
         let origin=workspace.lock().await.question_verdict(&turn.id).ok().flatten().unwrap_or(EntryVerdict::Pass);
         entry=entry.inherit(origin);
+    } else if gatekeeper::is_continuation(prompt) {
+        // A continuação digitada ("pode implementar", "não funcionou") logo
+        // depois de uma resposta herda o veredito do pedido que ela atendeu.
+        // A leitura própria fica gravada na marca, para medir o efeito.
+        let previous=workspace.lock().await.previous_answer(&turn.id).ok().flatten();
+        let window=chrono::Duration::seconds((gatekeeper::current_parameters().continuation_minutes*60.0) as i64);
+        if let Some((verdict,_))=previous.filter(|(verdict,at)|chrono::Utc::now()-*at<=window&&verdict.rank()>entry.verdict.rank()) {
+            usage::mark(usage::JevMark::count(format!("entry_followed:{}",entry.verdict.as_str()),1));
+            entry=entry.inherit(verdict);
+        }
     }
     {
         let mut workspace=workspace.lock().await;
@@ -204,9 +229,30 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         let _=workspace.set_turn_status(&turn.id,TurnStatus::Blocked);
         return;
     }
+    if entry.verdict==EntryVerdict::Ask {
+        // A portaria já sabe o que falta: ela mesma pergunta, com o que
+        // faltou e o pedido reescrito à mão, em vez de pagar uma sessão de
+        // agente só para ele fazer a pergunta. Enviar como está ou reescrito
+        // libera o pedido de vez; completar o texto o julga de novo.
+        let question=entry.confirmation();
+        pulse.beat(Beat::Chunk{text:question.clone()});
+        pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
+        state.orchestrator.memory.add_message(chat_id,"user",prompt.trim().to_string());
+        state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&question));
+        usage::mark(usage::JevMark::count("entry:confirm_asked",1));
+        {
+            let mut workspace=workspace.lock().await;
+            let _=workspace.append_answer(chat_id,&turn.id,&question);
+            let _=workspace.ask_question(&turn.id,"single",&question,&gatekeeper::CONFIRM_OPTIONS.map(String::from),gatekeeper::GATE_SOURCE);
+            let _=workspace.set_turn_status(&turn.id,TurnStatus::Answered);
+        }
+        let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+        return;
+    }
     state.orchestrator.pending_gate_note=entry.clarifying_note();
     state.orchestrator.pending_gate_passed=Some(entry.verdict==EntryVerdict::Pass);
-    state.orchestrator.pending_brief=entry.refined_prompt(request);
+    // "Enviar como está" é o texto do desenvolvedor, sem a reescrita.
+    state.orchestrator.pending_brief=if choice==Some(gatekeeper::GateChoice::AsIs) { None } else { entry.refined_prompt(request) };
     state.orchestrator.pending_routing=routing;
 
     // A portaria cobrou, no pedido anterior, onde fica ou como conferir, e
@@ -344,9 +390,9 @@ fn jev_reading(result:&model::ProcessResult)->String{format!("{} task, {} comple
 
 /// Pontua o pedido no Jev quando há credencial e nas heurísticas locais quando
 /// não há — ou quando a chamada falha, para que o portão nunca trave o envio.
-async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str,level:crate::expertise::Expertise,covered:&[String])->EntryCheck {
+async fn entry_check(project:&model::ProjectInfo,turn:&Turn,input:&str,level:crate::expertise::Expertise,covered:&[String],recent:&[String])->EntryCheck {
     if jev::is_configured() {
-        match gatekeeper::evaluate_entry(input,&project.name,&project.languages).await {
+        match gatekeeper::evaluate_entry(input,&project.name,&project.languages,recent).await {
             Ok(reading)=>return gatekeeper::judge_for(turn,input,&gatekeeper::with_notes(reading,covered),"jev",level),
             Err(error)=>eprintln!("portaria: o Jev não respondeu, usando heurísticas locais ({error})"),
         }

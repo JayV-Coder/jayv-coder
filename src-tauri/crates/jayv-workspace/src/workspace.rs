@@ -531,6 +531,10 @@ impl WorkspaceStore {
 
     pub fn question_verdict(&self, turn_id:&str) -> Result<Option<crate::gatekeeper::EntryVerdict>> {turns::question_verdict(&self.connection,turn_id)}
 
+    pub fn previous_answer(&self, turn_id:&str) -> Result<Option<(crate::gatekeeper::EntryVerdict,chrono::DateTime<Utc>)>> {turns::previous_answer(&self.connection,turn_id)}
+
+    pub fn answers_gate(&self, turn_id:&str) -> Result<bool> {turns::answers_gate(&self.connection,turn_id)}
+
     /// Os agentes e modelos que a tela Configuração do LLM grava.
     pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
 
@@ -1114,6 +1118,36 @@ mod tests {
         assert_eq!(store.question_verdict(&first.id).expect("veredito"),Some(crate::gatekeeper::EntryVerdict::Pass));
         assert_eq!(store.question_verdict(&second.id).expect("veredito"),None,"a primeira resposta ainda não tem leitura gravada");
         assert_eq!(store.question_verdict(&request.id).expect("veredito"),None,"o pedido de origem não responde a nada");
+    }
+
+    /// "Pode implementar" logo depois de uma resposta é continuação: o pedido
+    /// anterior do chat diz com que veredito ele foi atendido e quando. A
+    /// confirmação da portaria é reconhecida pela origem da pergunta.
+    #[test]
+    fn a_short_follow_up_finds_the_verdict_of_the_answered_request() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let request=store.enqueue_prompt(&chat.id,"Planeje o cache do roteador em src/router.rs",None).expect("pedido");
+        let mut passed=crate::gatekeeper::judge(&request,"Planeje o cache",&crate::gatekeeper::heuristic_entry("Planeje o cache"),"local");
+        passed.verdict=crate::gatekeeper::EntryVerdict::Pass;
+        store.record_entry_check(&passed).expect("leitura");
+        let follow=store.enqueue_prompt(&chat.id,"pode implementar",None).expect("continuação");
+        assert_eq!(store.previous_answer(&follow.id).expect("leitura"),None,"sem resposta ainda, não há o que continuar");
+
+        store.append_answer(&chat.id,&request.id,"1. criar o cache\n2. testar").expect("resposta");
+        store.set_turn_status(&request.id,TurnStatus::Answered).expect("respondido");
+        let (verdict,at)=store.previous_answer(&follow.id).expect("leitura").expect("a resposta anterior");
+        assert_eq!(verdict,crate::gatekeeper::EntryVerdict::Pass);
+        assert!((Utc::now()-at).num_seconds()<60,"a hora é a da resposta");
+        assert!(store.previous_answer(&request.id).expect("leitura").is_none(),"o primeiro pedido não continua nada");
+
+        store.ask_question(&follow.id,"single","?",&crate::gatekeeper::CONFIRM_OPTIONS.map(String::from),crate::gatekeeper::GATE_SOURCE).expect("confirmação");
+        let confirmed=store.enqueue_prompt(&chat.id,&crate::gatekeeper::gate_answer(&["send_as_is".into()],None).expect("escolha"),None).expect("resposta");
+        assert!(store.settle_question(&follow.id,turns::QUESTION_ANSWERED,Some(&confirmed.id)).expect("encerrar"));
+        assert!(store.answers_gate(&confirmed.id).expect("leitura"),"a resposta é da confirmação da portaria");
+        assert!(!store.answers_gate(&follow.id).expect("leitura"));
     }
 
     #[test]

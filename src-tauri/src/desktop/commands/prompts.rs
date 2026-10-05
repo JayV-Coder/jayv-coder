@@ -64,8 +64,14 @@ pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorks
     let mut store=workspace.lock().await;
     let question=store.question_of(&answer.question_turn_id).map_err(failure)?.ok_or_else(||Text::new("question.gone"))?;
     if question.status!=turns::QUESTION_PENDING {return Err(Text::new("question.closed"));}
-    let kind=asking::Shape::parse(&question.kind).map_err(failure)?;
-    let composed=asking::compose(&question.prompt,kind,&question.options,&answer.picked,answer.text.as_deref()).map_err(failure)?;
+    // A confirmação da portaria grava a escolha (ou o pedido completado), não
+    // "Resposta à pergunta…": a fila a lê para mandar o pedido de origem.
+    let composed=if question.source==crate::gatekeeper::GATE_SOURCE {
+        crate::gatekeeper::gate_answer(&answer.picked,answer.text.as_deref()).map_err(failure)?
+    } else {
+        let kind=asking::Shape::parse(&question.kind).map_err(failure)?;
+        asking::compose(&question.prompt,kind,&question.options,&answer.picked,answer.text.as_deref()).map_err(failure)?
+    };
     let chat_id=store.chat_of_turn(&question.turn_id).map_err(failure)?.ok_or_else(||Text::new("question.originGone"))?;
     let turn=store.enqueue_prompt(&chat_id,&composed,None).map_err(failure)?;
     // O vínculo é o que faz a Portaria julgar a resposta em par com a pergunta.
