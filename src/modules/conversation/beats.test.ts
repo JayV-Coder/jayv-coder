@@ -6,7 +6,7 @@ vi.hoisted(() => {
   globalThis.localStorage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => void stored.set(key, value) } as Storage;
 });
 
-const { agentLine, beatLine } = await import("./beats");
+const { agentLine, beatLine, messageLight } = await import("./beats");
 
 describe("beatLine", () => {
   it("says the intent and the complexity read by Jev as words, not identifiers", () => {
@@ -65,5 +65,23 @@ describe("agentLine", () => {
     expect(agentLine("tool_call: readToolCall")).toBe("The agent is using read");
     expect(agentLine("assistant")).toBe("The agent is working");
     expect(agentLine("")).toBeNull();
+  });
+});
+
+describe("messageLight", () => {
+  const answered = { status: "answered" as const, entry: "pass" as const, exit: null };
+
+  it("never paints an answer green: passing the house rules is not being verified", () => {
+    expect(messageLight("assistant", answered)).toEqual({ aspect: null, label: "verdict.unverified" });
+    expect(messageLight("assistant", { ...answered, exit: "cleared" })).toEqual({ aspect: null, label: "verdict.unverified" });
+  });
+
+  it("keeps red for what the exit gate held and for a blocked request", () => {
+    expect(messageLight("assistant", { ...answered, exit: "held" })?.aspect).toBe("stop");
+    expect(messageLight("assistant", { ...answered, status: "blocked" })?.aspect).toBe("stop");
+  });
+
+  it("still shows the entry verdict on the request", () => {
+    expect(messageLight("user", answered)?.aspect).toBe("go");
   });
 });

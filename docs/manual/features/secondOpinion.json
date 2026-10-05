@@ -6,5 +6,5 @@
   "commands": [],
   "title": "Second opinion",
   "summary": "After a request changes the project in build mode, an agent from another provider reads the diff without editing anything and lists the problems it finds.",
-  "usage": "Turn on Second opinion from another agent in Settings › Jev › Routing. It needs at least two agents enabled; the answer arrives first and the review follows in its own message."
+  "usage": "Turn on Second opinion from another agent in Settings › Jev › Routing. It needs at least two agents enabled; the answer arrives first and the review follows in its own message. The review is another model's reading, not a test: What was checked lists it under Said by a model, not checked."
 }

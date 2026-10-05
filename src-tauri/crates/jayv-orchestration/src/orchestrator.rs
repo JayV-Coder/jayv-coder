@@ -48,6 +48,10 @@ const RETRY_NOTE:&str="The developer says the previous attempt did not solve thi
 const PLAN_HANDOFF:&str="PLAN TO IMPLEMENT (written earlier in this chat in planning mode, in full; follow it unless the request above says otherwise):";
 const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Answer with a concrete step-by-step plan (files, changes, how to verify) in the reply, not in a file. Do not claim that any file was changed.";
 const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it. You run without a terminal: nobody can answer a permission prompt, change your permission mode or edit your settings files. If a write or command is denied, say exactly what was denied and that the developer can allow it in JayV under Settings > Agents; never offer to approve prompts, switch permission modes or edit .claude/settings.json, and never work around the denial with shell commands.";
+/// O relatório do build separa o que o agente rodou do que ele só supõe: o
+/// JayV mostra a resposta como não verificada, e o desenvolvedor precisa saber
+/// o que o agente diz ter visto acontecer.
+const REPORT_NOTE:&str="End with a short report in three labelled parts: what you ran in this session and what it returned (commands, tests, builds), what you assume without having checked it, and what is still not verified. Never say that tests pass, that the project builds or that the change works unless you ran it in this session and saw the result.";
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
 /// cada volta dessas é sessão gasta. Vai junto em todo pedido a um agente.
 const FOCUS_NOTE:&str="Be brief: read only what the task needs, never reread what this conversation already holds, and do not re-plan.";
@@ -1189,7 +1193,7 @@ pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_befor
 pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
     let notes=routing_notes(signals);
     let notes=if mode==MODE_BUILD { notes.replace(&format!("\n{TOOLS_NOTE}"),"") } else { notes };
-    format!("{notes}\n{}\n{FOCUS_NOTE}",if mode==MODE_BUILD {BUILD_NOTE} else {PLAN_NOTE})
+    format!("{notes}\n{}\n{FOCUS_NOTE}",if mode==MODE_BUILD {format!("{BUILD_NOTE}\n{REPORT_NOTE}")} else {PLAN_NOTE.to_string()})
 }
 /// O agente ligado cujo programa não está neste computador sai da disputa,
 /// desde que outro ligado esteja: assim o Jev não o escolhe para depois falhar.
@@ -1455,9 +1459,9 @@ mod tests {
         assert_eq!(select_mode("refactor","simple",&jev(0.9,0.25),true,Mid),MODE_BUILD);
 
         let build=mode_notes(&jev(0.9,0.0),MODE_BUILD);
-        assert!(build.contains(BUILD_NOTE)&&!build.contains(TOOLS_NOTE)&&!build.contains(PLAN_NOTE));
+        assert!(build.contains(BUILD_NOTE)&&build.contains(REPORT_NOTE)&&!build.contains(TOOLS_NOTE)&&!build.contains(PLAN_NOTE));
         let plan=mode_notes(&jev(0.9,0.0),MODE_PLAN);
-        assert!(plan.contains(PLAN_NOTE)&&plan.contains(TOOLS_NOTE));
+        assert!(plan.contains(PLAN_NOTE)&&plan.contains(TOOLS_NOTE)&&!plan.contains(REPORT_NOTE),"o planejamento não roda nada para relatar");
     }
 
     #[test]

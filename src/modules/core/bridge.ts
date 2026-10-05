@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
-  ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
+  ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
 
@@ -27,6 +27,7 @@ export const commands = {
   cancelTurn: (turnId: string) => invoke<void>("cancel_turn", { turnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
   scopedGateFeed: (projectIds: string[], chatId: string | null) => invoke<GateFeed>("scoped_gate_feed", { projectIds, chatId }),
+  turnEvidence: (turnId: string) => invoke<TurnEvidence>("turn_evidence", { turnId }),
   openFile: (chatId: string, path: string) => invoke<void>("open_file", { chatId, path }),
   scanRepositories: (folder: string) => invoke<FolderScan>("scan_repositories", { folder }),
   cloneRepository: (key: string, folder: string) => invoke<Project>("clone_repository", { key, folder }),

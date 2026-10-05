@@ -29,6 +29,7 @@
     "entryGate",
     "exitGate",
     "gateBoard",
+    "answerEvidence",
     "secretRedaction",
     "sensitiveFiles",
     "liveFiles",

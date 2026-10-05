@@ -1,0 +1,10 @@
+{
+  "id": "answerEvidence",
+  "category": "gate",
+  "since": "0.65.0",
+  "plan": null,
+  "commands": [],
+  "title": "What was checked",
+  "summary": "Each answer shows what JayV observed, what a model only said, and what is still not verified, instead of a green light that nobody measured.",
+  "usage": "An answer the exit gate did not hold shows as not verified, because JayV runs no test, build or lint on it. Click What was checked under the answer to see the entry gate score, the commands and files the exit gate checked, the second opinion if one ran, and what JayV did not verify, such as tests and the request's own done criterion. In Development mode the agent is asked to end with what it ran, what it assumes and what it did not verify."
+}

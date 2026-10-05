@@ -615,6 +615,8 @@ impl WorkspaceStore {
 
     pub fn turn_activity(&self, turn_id:&str) -> Result<Vec<turns::Activity>> {turns::activity(&self.connection,turn_id)}
 
+    pub fn turn_evidence(&self, turn_id:&str) -> Result<turns::TurnEvidence> {turns::evidence(&self.connection,turn_id)}
+
     pub fn set_turn_partial(&mut self, turn_id:&str, text:&str) -> Result<()> {turns::set_partial(&self.connection,turn_id,text)}
 
     pub fn clear_turn_partial(&mut self, turn_id:&str) -> Result<()> {turns::clear_partial(&self.connection,turn_id)}

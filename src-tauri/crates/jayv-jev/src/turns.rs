@@ -384,6 +384,77 @@ pub fn activity(connection:&Connection,turn_id:&str)->Result<Vec<Activity>> {
     })).collect()
 }
 
+/// O evento gravado quando a segunda opinião chega ao chat. O `review` da
+/// narração diz só que ela foi pedida: o revisor pode cair no caminho.
+pub const REVIEWED_EVENT:&str="reviewed";
+
+/// O que sustenta a resposta de um turno, separado pelo que o JayV viu com os
+/// próprios olhos. As duas portarias são observação: o JayV mediu o pedido e
+/// conferiu cada comando e arquivo da resposta contra as regras da casa. A
+/// segunda opinião é a leitura de outro modelo, não um teste. Teste, build e
+/// lint o JayV ainda não roda, e a tela diz isso em vez de pintar a resposta
+/// de verde.
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct TurnEvidence {
+    pub entry:Option<EntryEvidence>,
+    /// Cada comando e arquivo que a portaria de saída conferiu, na ordem.
+    pub exits:Vec<ExitEvidence>,
+    pub review:Option<ReviewEvidence>,
+}
+
+/// A nota da portaria de entrada, e se o pedido disse como saber que ficou
+/// pronto — o critério que, por enquanto, ninguém confere por ele.
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct EntryEvidence { pub score:u8, pub demand:u8, pub verdict:EntryVerdict, pub scope_level:usize, pub done_criterion:bool }
+
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct ExitEvidence { pub kind:String, pub target:String, pub rule:Option<String>, pub verdict:ExitVerdict }
+
+/// Quem deu a segunda opinião e sobre quantos arquivos. `arrived` é falso
+/// enquanto ela não chegou ou quando o revisor falhou.
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct ReviewEvidence { pub provider:String, pub model:String, pub files:usize, pub arrived:bool }
+
+/// As evidências de um turno, lidas sob demanda quando o desenvolvedor abre
+/// "o que foi conferido" no balão.
+pub fn evidence(connection:&Connection,turn_id:&str)->Result<TurnEvidence> {
+    let entry=connection.query_row(
+        "SELECT score,demand,verdict,scope,criteria FROM entry_checks WHERE turn_id=?1",[turn_id],
+        |row|Ok((row.get::<_,u8>(0)?,row.get::<_,u8>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?)),
+    ).optional()?;
+    let entry=entry.and_then(|(score,demand,verdict,scope,criteria)|{
+        let verdict=EntryVerdict::parse(&verdict).ok()?;
+        // Critérios ilegíveis: o pedido não declarou nada que se possa ler.
+        let criteria=serde_json::from_str::<Vec<Criterion>>(&criteria).unwrap_or_default();
+        let done_criterion=criteria.iter().any(|criterion|criterion.id=="says_when_done"&&criterion.within_band());
+        Some(EntryEvidence{score,demand,verdict,scope_level:crate::gatekeeper::scope_level_of(&scope),done_criterion})
+    });
+    let exits={
+        let mut statement=connection.prepare("SELECT kind,target,rule,verdict FROM exit_checks WHERE turn_id=?1 ORDER BY at,rowid")?;
+        statement.query_map([turn_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    // Veredito que esta versão não conhece sai da lista, não a lista inteira.
+    let exits=exits.into_iter().filter_map(|(kind,target,rule,verdict)|Some(ExitEvidence{kind,target,rule,verdict:ExitVerdict::parse(&verdict).ok()?})).collect();
+    let requested=connection.query_row(
+        "SELECT seq,detail FROM turn_events WHERE turn_id=?1 AND kind='review' ORDER BY seq DESC LIMIT 1",[turn_id],
+        |row|Ok((row.get::<_,u32>(0)?,row.get::<_,String>(1)?)),
+    ).optional()?;
+    let review=match requested {
+        Some((seq,detail))=>{
+            let detail:serde_json::Value=serde_json::from_str(&detail).unwrap_or_default();
+            let arrived=connection.query_row("SELECT COUNT(*) FROM turn_events WHERE turn_id=?1 AND kind=?2 AND seq>?3",params![turn_id,REVIEWED_EVENT,seq],|row|row.get::<_,u32>(0))?>0;
+            let text=|field:&str|detail.get(field).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+            Some(ReviewEvidence{provider:text("provider"),model:text("model"),files:detail.get("files").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,arrived})
+        }
+        None=>None,
+    };
+    Ok(TurnEvidence{entry,exits,review})
+}
+
 /// A resposta que já chegou. Escrita com folga pela consumidora do barramento,
 /// nunca a cada pedaço.
 pub fn set_partial(connection:&Connection,turn_id:&str,text:&str)->Result<()> {
@@ -737,6 +808,43 @@ mod tests {
         assert_eq!(feed.exits.len(),1,"o que a tentativa anterior pediu deixou de valer");
         assert_eq!(feed.exits[0].target,"cargo test");
         assert_eq!(feed.tally.held,0,"o placar não carrega uma regra que deixou de ser tocada");
+    }
+
+    #[test]
+    fn the_evidence_separates_what_the_gates_saw_from_the_second_opinion() {
+        use crate::gatekeeper::{heuristic_entry,judge};
+        let connection=bench("XY4T9B");
+        let this_turn=open_turn(&connection,"chat-1").expect("turno");
+        let request_text="Corrija o parser em src/lib.rs para aceitar chaves ausentes; pronto quando cargo test passar";
+        record_entry(&connection,&judge(&this_turn,request_text,&heuristic_entry(request_text),"heurística local")).expect("entrada");
+        record_exits(&connection,&this_turn,&[
+            ExitCheck::new(&this_turn,"command","cargo test",None),
+            ExitCheck::new(&this_turn,"file",".env",Some("privacy.deny · .env".into())),
+        ]).expect("saídas");
+        record_beat(&connection,&this_turn.id,"review",&serde_json::json!({"kind":"review","provider":"codex","model":"gpt-5.5","files":2})).expect("revisão pedida");
+
+        let asked=evidence(&connection,&this_turn.id).expect("evidências");
+        let entry=asked.entry.expect("a nota da entrada");
+        assert!(entry.done_criterion,"o pedido disse como saber que ficou pronto");
+        assert_eq!(asked.exits.iter().map(|exit|(exit.target.as_str(),exit.verdict)).collect::<Vec<_>>(),vec![("cargo test",ExitVerdict::Cleared),(".env",ExitVerdict::Held)]);
+        let review=asked.review.expect("a revisão foi pedida");
+        assert_eq!((review.provider.as_str(),review.model.as_str(),review.files),("codex","gpt-5.5",2));
+        assert!(!review.arrived,"pedida não é feita: o revisor pode cair no caminho");
+
+        record_beat(&connection,&this_turn.id,REVIEWED_EVENT,&serde_json::json!({})).expect("revisão feita");
+        assert!(evidence(&connection,&this_turn.id).expect("evidências").review.expect("revisão").arrived);
+    }
+
+    #[test]
+    fn a_request_without_a_done_criterion_and_without_checks_says_so() {
+        use crate::gatekeeper::{heuristic_entry,judge};
+        let connection=bench("XY4T9B");
+        let bare=open_turn(&connection,"chat-1").expect("turno sem nada");
+        assert_eq!(evidence(&connection,&bare.id).expect("evidências"),TurnEvidence{entry:None,exits:vec![],review:None});
+
+        let vague=open_turn(&connection,"chat-1").expect("turno");
+        record_entry(&connection,&judge(&vague,"melhore isso",&heuristic_entry("melhore isso"),"heurística local")).expect("entrada");
+        assert!(!evidence(&connection,&vague.id).expect("evidências").entry.expect("nota").done_criterion,"sem critério de pronto, nada a conferir");
     }
 
     #[test]

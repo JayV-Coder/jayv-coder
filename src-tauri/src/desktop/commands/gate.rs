@@ -3,6 +3,7 @@
 use crate::i18n::{failure, Text};
 use crate::desktop::SharedWorkspace;
 use crate::gatekeeper::GateFeed;
+use crate::turns::TurnEvidence;
 use tauri::State;
 
 /// Sem projeto, a portaria mostra a sessão inteira; com projeto, só os chats
@@ -23,4 +24,12 @@ pub(crate) async fn scoped_gate_feed(workspace:State<'_,SharedWorkspace>,project
     let workspace=workspace.lock().await;
     let chats=workspace.chat_ids_for_projects(&project_ids,chat_id.as_deref()).map_err(failure)?;
     workspace.gate_feed(Some(&chats)).map_err(failure)
+}
+
+/// O que foi conferido num turno, quando o desenvolvedor abre o balão para
+/// ver: o que o JayV observou, o que um modelo disse e o que ficou sem
+/// conferir.
+#[tauri::command]
+pub(crate) async fn turn_evidence(workspace:State<'_,SharedWorkspace>,turn_id:String)->Result<TurnEvidence,Text>{
+    workspace.lock().await.turn_evidence(&turn_id).map_err(failure)
 }
