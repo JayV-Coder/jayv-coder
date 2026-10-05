@@ -29,7 +29,8 @@ function remembered(): boolean {
  * como um `git status` de cada um: o branch, quanto está à frente ou atrás do
  * remoto, quantos arquivos mudaram e de onde vem a política de LLM dele. Os
  * repositórios da organização que não estão na pasta aparecem apagados, no
- * fim. Relê ao abrir o chat, quando um pedido termina e pelo botão. */
+ * fim. Mora no painel à esquerda do chat, cada repositório em um bloco
+ * empilhado. Relê ao abrir o chat, quando um pedido termina e pelo botão. */
 export function RepositoryPanel({ project, chat }: { project: Project; chat: Chat | null }) {
   const t = useT();
   const [states, setStates] = useState<RepositoryState[] | null>(null);
@@ -81,8 +82,8 @@ export function RepositoryPanel({ project, chat }: { project: Project; chat: Cha
   const changed = inside.filter((item) => (item.state?.changed ?? 0) > 0).length;
 
   return (
-    <section aria-label={t("chatRepos.title")} className="mt-2 flex-none rounded-sm border border-border bg-card font-mono text-small">
-      <header className="flex items-center gap-2 px-3 py-1.5">
+    <section aria-label={t("chatRepos.title")} className="flex max-h-[55%] min-h-0 flex-none flex-col border-t border-border font-mono text-small">
+      <header className="flex flex-none items-center gap-2 px-3 py-1.5">
         <button type="button" onClick={toggle} aria-expanded={open}
           className="flex min-w-0 flex-1 items-center gap-2 text-start outline-none focus-visible:ring-1 focus-visible:ring-ring">
           <span aria-hidden="true" className="text-primary">❯</span>
@@ -100,12 +101,12 @@ export function RepositoryPanel({ project, chat }: { project: Project; chat: Cha
         </Button>
       </header>
       {open && (
-        <div className="border-t border-border px-3 py-2">
+        <div className="min-h-0 overflow-y-auto border-t border-border px-3 py-2">
           {failed && <p className="text-muted-foreground">{t("chatRepos.failed")}</p>}
           {!failed && items === null && <p className="text-muted-foreground">{t("chatRepos.loading")}</p>}
           {!failed && items?.length === 0 && <p className="text-muted-foreground">{t("chatRepos.empty")}</p>}
           {!failed && items && items.length > 0 && (
-            <ul className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_auto] items-baseline gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,max-content)_minmax(0,1fr)_auto_auto]">
+            <ul className="grid gap-2.5">
               {items.map((item) => <RepositoryLine key={item.key} item={item} />)}
             </ul>
           )}
@@ -122,25 +123,25 @@ function RepositoryLine({ item }: { item: ChatRepository }) {
   const label = repositoryLabel(item);
   if (!state) {
     return (
-      <li className="contents text-faint">
+      <li className="grid gap-0.5 text-faint">
         <span className="truncate" title={item.key}>{label}</span>
-        <span className="col-span-2 sm:col-span-3">{t("chatRepos.outside")}</span>
+        <span>{t("chatRepos.outside")}</span>
       </li>
     );
   }
   const sync = [state.ahead > 0 && `↑${state.ahead}`, state.behind > 0 && `↓${state.behind}`].filter(Boolean).join(" ");
   return (
-    <li className="contents">
+    <li className="grid gap-0.5">
       <span className="truncate text-foreground" title={state.path}>{label || state.key || state.path}</span>
       <span className="truncate text-muted-foreground" title={state.upstream ?? undefined}>
         {state.readable ? (state.branch ?? t("chatRepos.detached")) : t("chatRepos.unreadable")}
         {sync && <span className="ms-2 text-ask">{sync}</span>}
       </span>
-      <span className={cn("whitespace-nowrap", state.changed > 0 ? "text-ask" : "text-go")}>
-        {!state.readable ? "" : state.changed > 0 ? `● ${t("chatRepos.changed", { count: state.changed })}` : `✓ ${t("chatRepos.clean")}`}
-      </span>
-      <span className="hidden whitespace-nowrap text-muted-foreground sm:inline">
-        {item.repository ? t(POLICY[item.policy]) : t("chatRepos.unregistered")}
+      <span className="flex flex-wrap gap-x-3 text-caption">
+        <span className={cn("whitespace-nowrap", state.changed > 0 ? "text-ask" : "text-go")}>
+          {!state.readable ? "" : state.changed > 0 ? `● ${t("chatRepos.changed", { count: state.changed })}` : `✓ ${t("chatRepos.clean")}`}
+        </span>
+        <span className="text-muted-foreground">{item.repository ? t(POLICY[item.policy]) : t("chatRepos.unregistered")}</span>
       </span>
     </li>
   );

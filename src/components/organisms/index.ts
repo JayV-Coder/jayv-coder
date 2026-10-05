@@ -27,6 +27,7 @@ export { UsageCharts } from "./UsageCharts";
 export { JevUsagePanel } from "./JevUsagePanel";
 export { UpdateDialog } from "./UpdateDialog";
 export { LivePanel } from "./LivePanel";
+export { ProgressPanel } from "./ProgressPanel";
 export { RepositoryPanel } from "./RepositoryPanel";
 export { UpdateBanner } from "./UpdateBanner";
 export { WhatsNewDialog } from "./WhatsNewDialog";
