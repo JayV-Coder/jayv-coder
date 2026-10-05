@@ -165,7 +165,7 @@ impl LlmPolicy {
     #[test] fn safe_agents_turns_off_the_unguarded_modes_of_all_four() {
         let restricted=policy(json!({"safe_agents":true})).restrict_llm(&settings());
         let options=|id:AgentId|restricted.agents.iter().find(|agent|agent.id==id).expect("agente").options.clone();
-        assert_eq!(options(AgentId::Claude)["permissionMode"],"default");
+        assert_eq!(options(AgentId::Claude)["permissionMode"],"manual");
         assert_eq!((options(AgentId::Codex)["sandbox"].clone(),options(AgentId::Codex)["networkAccess"].clone()),(json!("workspace-write"),json!(false)));
         assert_eq!(options(AgentId::Copilot)["toolAccess"],"edits");
         assert_eq!((options(AgentId::Cursor)["force"].clone(),options(AgentId::Cursor)["approveMcps"].clone(),options(AgentId::Cursor)["sandbox"].clone()),(json!(false),json!(false),json!("enabled")));

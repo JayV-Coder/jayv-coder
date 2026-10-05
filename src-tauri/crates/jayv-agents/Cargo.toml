@@ -23,5 +23,9 @@ tokio = { workspace = true, features = ["io-util", "sync"] }
 uuid.workspace = true
 walkdir.workspace = true
 
+# O grupo de processos do agente: parar um pedido derruba a árvore inteira.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

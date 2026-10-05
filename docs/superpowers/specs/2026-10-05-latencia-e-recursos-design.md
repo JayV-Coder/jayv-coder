@@ -203,6 +203,47 @@ chat afetado.
 - **B11** Chamadas de uma vez só (plano, revisão, divisão) com
   `--no-session-persistence`.
 
+### Decisões tomadas na implementação (0.60.0)
+
+O que mudou em relação ao desenho acima, e por quê:
+
+- **S3** Sem cache do plano, só o núcleo vale travado; os outros recursos
+  seguem como antes (liberados até a primeira lista). Um `FREE_DEFAULT`
+  embutido tiraria recursos de quem paga no primeiro arranque offline.
+- **L2** O teto é um ajuste só, `turn_ceiling_minutes` nas configurações do
+  Jev (padrão 30, entre 5 e 240), e conta o pedido inteiro — portaria, plano,
+  agente e revisão —, não cada agente. O sinal de parar viaja no `Pulse`
+  (`progress::Stop`): as chamadas de apoio usam `pulse.quiet()` e param
+  junto. O texto que o agente já tinha dito fica no chat antes do aviso.
+- **S1** O Claude recebe `Read(<padrão>)` e `Edit(<padrão>)`. Regra de
+  caminho em `Write` o Claude aceita e nunca consulta (a documentação de
+  permissões manda usar `Edit`), então ela não entra.
+- **S1** Codex, Copilot e Cursor não saem do roteamento quando há arquivo
+  protegido na pasta: quase todo projeto tem um `.env`, e quem só tem o
+  Codex ficaria sem agente. A proteção deles é o firewall (o arquivo não vai
+  no contexto) e o S2, que segura na saída qualquer protegido que o agente
+  mexer; a tela de privacidade diz isso.
+- **S2** O vigia não serve: o `git status` não lista o que está no
+  `.gitignore`, e é o caso do `.env`. A portaria tira uma foto dos protegidos
+  (tamanho, data e, nos pequenos, a impressão do conteúdo) antes do pedido e
+  compara depois, com a saída de tipo `changed`.
+- **L6** Entrou o `get_chat(chat_id)` e a tela relê só o chat do aviso
+  (`chat-prompt`, `turn-settled`, envio). O `get_workspace` sem mensagens
+  fica para a onda 3: os cartões e a lateral leem os turnos do retrato, e
+  tirar as mensagens pede campos de resumo que ainda não existem.
+- **L8** A revisão sai do pedido como `ReviewRequest` e corre depois da
+  resposta, presa à pasta daquele pedido. O plano do `planFirst`
+  transmitido ficou de fora desta versão.
+- **L10** O título continua com o agente de linha de comando no modelo mais
+  barato, agora sem guardar sessão (B11) e fora do cadeado. Tirar o agente
+  deixaria todo chat com o resumo local do primeiro pedido.
+- **B2** As flags novas (`--permission-prompts`, `--ephemeral`) passam por
+  `llm::understood`: a ajuda do executável instalado diz se ele as conhece;
+  se não, saem da linha de comando em vez de derrubar o pedido.
+- **B9** O login é perguntado em segundo plano (`claude auth status`,
+  `codex login status`) e vale 10 minutos; a conferência do agente na tela
+  pergunta na hora.
+
 ## Onda 3 — L1, pedidos em paralelo
 
 O `Orchestrator` vira dois pedaços:

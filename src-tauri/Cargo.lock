@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.59.1"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2192,6 +2192,7 @@ dependencies = [
  "chrono",
  "dirs",
  "jayv-base",
+ "libc",
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
@@ -2282,6 +2283,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]
@@ -2352,10 +2354,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "jayv-agents",
  "jayv-base",
  "jayv-cloud",
  "jayv-jev",
  "rusqlite",
+ "serde",
  "serde_json",
 ]
 

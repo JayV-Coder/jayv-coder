@@ -106,6 +106,8 @@ fn english(text:&Text)->String {
         "gate.confirm.option.send_rewritten"=>"Send the rewritten version".into(),
         "gate.missing.item"=>format!("- {}: {}",param("criterion"),param("reading")),
         "turn.noAnswer"=>"The run ended without an answer.".into(),
+        "turn.cancelled"=>"The developer stopped this request before it finished.".into(),
+        "turn.ceiling"=>format!("This request ran past its {}-minute limit and was stopped.",param("minutes")),
         "turn.interrupted"=>"The app closed while this request was running, so it stopped there and was not resumed.".into(),
         "guidance.failed"=>format!("The request could not run because {}.",param("problem")),
         "guidance.fix"=>"Open Settings, turn an agent on and keep at least one of its models active.".into(),

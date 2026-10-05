@@ -2,13 +2,13 @@
 //! chama o orquestrador e narra o caminho para a tela e para o disco.
 
 use super::events::*;
-use super::{DesktopState, QueueBell, SharedDesktopState, SharedForget, SharedWorkspace};
+use super::{Cancels, DesktopState, QueueBell, SharedDesktopState, SharedForget, SharedWorkspace};
 use crate::sync::{Connectivity, Link};
 use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict};
-use crate::progress::{Beat, Debounce, Frame, Pulse};
+use crate::progress::{Beat, Debounce, Frame, Pulse, Stop, StopReason};
 use crate::turns::{Turn, TurnStatus};
 use crate::i18n::{self, Text};
-use crate::{asking, jev, model, project_memory, search, usage};
+use crate::{asking, features, jev, model, project_memory, search, usage};
 use std::{path::Path, time::Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
@@ -18,11 +18,13 @@ use tokio::sync::mpsc;
 /// aplicativo, e é por isso que dois envios seguidos nunca disputam o
 /// orquestrador: o segundo não é uma chamada esperando na porta, é uma linha no
 /// banco esperando a vez.
-pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity,forget:SharedForget) {
+pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity,forget:SharedForget,cancels:Cancels) {
     loop {
-        // O Jev mora no Supabase: sem conexão e sessão válida os pedidos
-        // esperam na fila, e o sino da volta da rede os chama em ordem.
-        while connectivity.get()==Link::Online {
+        // Com a sessão válida a fila anda, com rede ou sem: sem o Supabase a
+        // portaria e o roteamento decidem pela heurística, e os agentes falam
+        // com os provedores deles. Sem sessão (ou com ela vencida) os pedidos
+        // esperam, e o sino da volta os chama em ordem.
+        while serves(connectivity.get()) {
             let claimed=workspace.lock().await.claim_next_turn();
             let next=match claimed {
                 Ok(Some(next))=>next,
@@ -31,20 +33,27 @@ pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,worksp
             };
             let (turn,prompt)=next;
             let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
-            serve(&app,&desk,&workspace,&forget,&turn,&prompt).await;
+            serve(&app,&desk,&workspace,&forget,&cancels,&turn,&prompt).await;
             let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
         }
         bell.notified().await;
     }
 }
 
+/// Se a fila anda com esta conexão.
+fn serves(link:Link)->bool { matches!(link,Link::Online|Link::Offline) }
+
 /// Abre o barramento do pedido, atende, e só então fecha o barramento. A ordem
 /// importa: a narradora ainda pode ter um rascunho da resposta para gravar, e
 /// apagar o rascunho antes de ela terminar deixaria a tela com duas versões do
 /// mesmo texto. Por isso o rascunho é apagado no fim, depois de a resposta
 /// definitiva estar em `messages` e de a narradora ter se despedido.
-async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,turn:&Turn,prompt:&str) {
-    let (pulse,beats)=Pulse::channel();
+///
+/// O pedido parado ("Parar", teto de minutos) termina com o aviso da parada;
+/// o que o agente já tinha dito entra antes dele, como a tela o mostrou.
+async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,cancels:&Cancels,turn:&Turn,prompt:&str) {
+    let stop=cancels.open(&turn.id);
+    let (pulse,beats)=Pulse::channel_with(stop.clone());
     let narrator=tauri::async_runtime::spawn(narrate(app.clone(),workspace.clone(),turn.clone(),beats));
     // Tudo que o atendimento gastar — o Jev, o modelo, o batismo — é deste
     // turno, deste chat e deste projeto.
@@ -52,9 +61,29 @@ async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspac
     let scope=usage::Scope{project_id,chat_id:Some(turn.chat_id.clone()),turn_id:Some(turn.id.clone())};
     usage::within(scope,attend(app,desk,workspace,forget,turn,prompt,&pulse)).await;
     drop(pulse);
-    let _=narrator.await;
-    let _=workspace.lock().await.clear_turn_partial(&turn.id);
+    let said=narrator.await.unwrap_or_default();
+    cancels.close(&turn.id);
+    let mut workspace=workspace.lock().await;
+    if stop.reason().is_some() && !said.trim().is_empty() && workspace.turn(&turn.id).ok().flatten().is_some_and(|now|now.status==TurnStatus::Failed) {
+        if let Err(error)=workspace.keep_said_before(&turn.chat_id,&turn.id,&said) { eprintln!("fila: o que o agente disse antes de parar não foi guardado ({error:#})"); }
+    }
+    let _=workspace.clear_turn_partial(&turn.id);
 }
+
+/// O relógio do teto total de um pedido. Passado o prazo, o pedido para com o
+/// motivo `turn.ceiling`; largado antes (o pedido acabou), o relógio para.
+struct Ceiling(tokio::task::JoinHandle<()>);
+
+impl Ceiling {
+    fn start(stop:Stop,minutes:u64)->Self {
+        Self(tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(minutes.saturating_mul(60))).await;
+            stop.stop(StopReason::Ceiling{minutes});
+        }))
+    }
+}
+
+impl Drop for Ceiling { fn drop(&mut self) { self.0.abort(); } }
 
 /// A consumidora do barramento. Ela é a única que sabe que existe tela e banco:
 /// o núcleo só empurra eventos. E trata os dois com ritmos diferentes de
@@ -64,7 +93,10 @@ async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspac
 ///
 /// Ela toca só o cadeado do banco, em trechos curtos, e nunca o do
 /// orquestrador: a ordem de cadeados continua a mesma.
-async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mpsc::UnboundedReceiver<Beat>) {
+///
+/// Devolve o texto inteiro que narrou: é ele que fica no chat quando o pedido
+/// para no meio.
+async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mpsc::UnboundedReceiver<Beat>)->String {
     let mut answer=String::new();
     let mut slack=Debounce::start(Instant::now());
     // Os pedaços que ainda não foram para a tela. Com o Claude transmitindo
@@ -117,6 +149,7 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
     if slack.waiting()>0 {
         let _=workspace.lock().await.set_turn_partial(&turn.id,&answer);
     }
+    answer
 }
 
 /// Atende um pedido do começo ao fim. O texto vem do banco, não da tela, e o
@@ -130,16 +163,18 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let prompt=i18n::for_model(prompt);
     let prompt=prompt.as_str();
     let mut state=desk.lock().await;
+    // O teto conta daqui: a portaria, o plano, o agente e a revisão cabem
+    // nele juntos.
+    let _ceiling=Ceiling::start(pulse.stop().clone(),state.orchestrator.config.jev.turn_ceiling_minutes);
     forget_pending(&mut state,workspace,forget).await;
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
+    // A política de LLM do projeto e o plano vêm antes da pasta: eles podem
+    // mudar a privacidade, e o índice da pasta é lido com o firewall já certo.
+    let plan=apply_project_policy(&mut state,workspace,chat_id).await;
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
     // computador pela sincronização, vale já para o próximo.
     state.orchestrator.expertise=workspace.lock().await.expertise().unwrap_or_default();
-    state.orchestrator.lean_code=workspace.lock().await.lean_code().unwrap_or(true);
-
-    // A política de LLM do projeto vem antes da pasta: ela pode mudar a
-    // privacidade, e o índice da pasta é lido com o firewall já certo.
-    apply_project_policy(&mut state,workspace,chat_id).await;
+    state.orchestrator.lean_code=plan.lean_code(workspace.lock().await.lean_code().unwrap_or(true));
 
     // O pedido é lido dentro da pasta do projeto. Se ela sumiu do disco, o
     // atendimento morre aqui — mas com a mensagem já escrita, o turno dado por
@@ -154,16 +189,23 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // tela vê cada arquivo que o agente mexer. O vigia para sozinho quando
     // este atendimento termina, por qualquer caminho.
     let chat_root=workspace.lock().await.chat_root(chat_id).unwrap_or(None);
+    // Sem "arquivos ao vivo" no plano, ninguém olha a pasta: o `git status`
+    // por segundo é custo que ninguém vê.
     let _live=match chat_root {
-        Some(root)=>{
+        Some(root) if plan.allows(features::LIVE_FILES)=>{
             let live=app.state::<super::live::SharedLive>().inner().clone();
             Some(super::live::watch(app,&live,chat_id,&turn.id,root,crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone())).await)
         }
-        None=>None,
+        _=>None,
     };
+    // A foto dos arquivos protegidos sai já, em paralelo com a portaria: no
+    // fim, o que o agente mexeu neles fica segurado na saída.
+    let guard=gatekeeper_guard(&state);
     let project=state.orchestrator.rag.project_info();
     let project_id=workspace.lock().await.chat_project(chat_id).unwrap_or(None);
-    let notes=match &project_id { Some(id)=>workspace.lock().await.project_notes(id).unwrap_or_default(), None=>vec![] };
+    // As notas do projeto só entram com o recurso no plano.
+    let notes_on=plan.allows(features::PROJECT_NOTES);
+    let notes=match &project_id { Some(id) if notes_on=>workspace.lock().await.project_notes(id).unwrap_or_default(), _=>vec![] };
 
     // O pedido barrado e reenviado em seguida não poupou nada: o painel
     // desconta a economia que o bloqueio tinha contado.
@@ -205,6 +247,13 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         entry_check(&project,turn,request,state.orchestrator.expertise,&covered,&recent),
         async { match &routing { Some(input)=>Some(jev::route(input).await.map_err(|error|error.to_string())), None=>None } },
     );
+    // Parado enquanto a portaria lia: nada de pergunta nem de agente.
+    if let Some(reason)=pulse.stop().reason() {
+        let error=i18n::notice(&[reason.text()]);
+        pulse.beat(Beat::Failed{error:error.clone()});
+        fail_turn(workspace,chat_id,turn,error).await;
+        return;
+    }
     if choice.is_some() {
         // O desenvolvedor confirmou o pedido que a portaria segurou: ele vai
         // ao agente liberado de vez.
@@ -282,12 +331,12 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // este pedido respondeu: a resposta vira nota do projeto, e a portaria
     // não cobra de novo.
     let mut notes=notes;
-    if let Some(project_id)=&project_id {
+    if let Some(project_id)=project_id.as_ref().filter(|_|notes_on) {
         if learn_from_gate(workspace,project_id,turn,prompt,&entry).await { notes=workspace.lock().await.project_notes(project_id).unwrap_or(notes); }
     }
     state.orchestrator.project_notes=project_memory::notes_prompt(&notes);
     state.orchestrator.pending_context=project_memory::recipe_for(&notes,prompt).map(project_memory::recipe_prompt).into_iter().collect();
-    if let Some(project_id)=&project_id {
+    if let Some(project_id)=project_id.as_ref().filter(|_|plan.allows(features::ANSWER_RECALL)) {
         match workspace.lock().await.recall(project_id,chat_id,prompt) {
             Ok(Some(recall))=>{ usage::mark(usage::JevMark::count("answer_recalled",1)); state.orchestrator.pending_context.push(search::recall_prompt(&recall)); }
             Ok(None)=>{}
@@ -302,7 +351,12 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // memória antes do pedido, e a de depois dele é guardada de novo.
     let restored=if state.orchestrator.memory.agent_session(chat_id).is_none() { workspace.lock().await.agent_session(chat_id).ok().flatten() } else { None };
     if let Some(kept)=restored { state.orchestrator.memory.keep_agent_session(chat_id,kept); }
+    let before=guard.before.await.unwrap_or_default();
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
+    let touched={
+        let (root,firewall)=(guard.root.clone(),crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone()));
+        tokio::task::spawn_blocking(move ||gatekeeper::touched(&before,&gatekeeper::guarded(&root,&firewall))).await.unwrap_or_default()
+    };
     {
         let mut workspace=workspace.lock().await;
         let saved=match state.orchestrator.memory.agent_session(chat_id) { Some(kept)=>workspace.keep_agent_session(chat_id,kept), None=>workspace.forget_agent_session(chat_id) };
@@ -317,7 +371,10 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&assistant));}
     // Só a resposta do modelo passa pelo portão de saída; um aviso de falha
     // não pede para rodar nem mexer em nada.
-    let exits=if result.result.is_some(){exit_checks(&state,turn,&assistant)}else{vec![]};
+    let mut exits=if result.result.is_some(){exit_checks(&state,turn,&assistant)}else{vec![]};
+    // O protegido mexido entra mesmo no pedido que falhou: o agente pode ter
+    // gravado antes de cair.
+    exits.extend(gatekeeper::guarded_exits(turn,&touched,&state.orchestrator.firewall));
     {
         let mut workspace=workspace.lock().await;
         let _=workspace.append_answer(chat_id,&turn.id,&assistant);
@@ -328,7 +385,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // A portaria de saída segurou o que o modelo devolveu: não resolveu.
     if exits.iter().any(|exit|exit.verdict==ExitVerdict::Held) { state.orchestrator.mark_last_failed(chat_id); }
     if !exits.is_empty(){let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits});}
+    let review=state.orchestrator.pending_review.take().filter(|_|result.result.is_some());
     drop(state);
+    // A segunda opinião chega depois da resposta, no mesmo turno: o próximo
+    // da fila não espera por ela.
+    if let Some(review)=review { review_in_background(app.clone(),workspace.clone(),turn.clone(),review); }
     // A ida ao Jev para achar a pergunta não segura o próximo da fila.
     if result.result.is_some() {
         let (app,workspace,turn)=(app.clone(),workspace.clone(),turn.clone());
@@ -371,6 +432,18 @@ fn name_in_background(app:AppHandle,desk:SharedDesktopState,workspace:SharedWork
     }));
 }
 
+/// Roda a revisão fora do cadeado e a põe no chat como mensagem do turno que
+/// ela revisou. O pedido seguinte do chat a lê no histórico.
+fn review_in_background(app:AppHandle,workspace:SharedWorkspace,turn:Turn,review:crate::orchestrator::ReviewRequest) {
+    let scope=usage::current_scope();
+    tauri::async_runtime::spawn(usage::within(scope,async move {
+        let Some(section)=review.run().await else { return };
+        if workspace.lock().await.append_answer(&turn.chat_id,&turn.id,section.trim()).is_ok() {
+            let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+        }
+    }));
+}
+
 /// O pedido que não sai do lugar: o turno é dado por falho e o motivo entra no
 /// chat como resposta. Sem isto ele ficaria voando até o aplicativo reabrir, e
 /// o balão não ofereceria o reenvio a quem acabou de ver o erro.
@@ -385,26 +458,38 @@ async fn fail_turn(workspace:&SharedWorkspace,chat_id:&str,turn:&Turn,error:Stri
 /// portaria e a varredura da saída. Projeto sem pasta cai na raiz de partida.
 async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->Result<(),Text> {
     let root=workspace.lock().await.chat_root(chat_id).map_err(i18n::failure)?.unwrap_or_else(||state.home_root.clone());
-    state.orchestrator.focus_on(&root).map_err(i18n::failure)
+    state.orchestrator.focus(&root).await.map_err(i18n::failure)
 }
 
-/// As configurações de quem usa, passadas pela política de LLM do projeto do
-/// chat. Lidas a cada pedido: a troca na tela, a política que a sincronização
-/// acabou de trazer e o chat de outro projeto valem já para este. Sem política,
-/// valem as configurações como estão.
-async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str) {
+/// As configurações de quem usa, passadas pelo plano e pela política de LLM
+/// do projeto do chat. Lidas a cada pedido: a troca na tela, a política ou o
+/// plano que a sincronização acabou de trazer e o chat de outro projeto valem
+/// já para este. A ordem é a que só aperta: o plano tira o que não tem, a
+/// política aperta por cima, e o que o plano trava liga por último — nada
+/// abaixo dele afrouxa o núcleo. Devolve o plano, que o atendimento consulta.
+async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->features::Entitlements {
     let defaults=state.orchestrator.core_defaults();
-    let (llm,core,policy)={
+    let (llm,core,policy,plan)={
         let workspace=workspace.lock().await;
-        (workspace.llm_settings(),workspace.core_settings(&defaults).map(|core|workspace.entitlements().unwrap_or_default().restrict_core(&core)),workspace.chat_policy(chat_id))
+        let plan=workspace.entitlements().unwrap_or_default();
+        (workspace.llm_settings(),workspace.core_settings(&plan.seed_core(&defaults)).map(|core|plan.restrict_core(&core)),workspace.chat_policy(chat_id),plan)
     };
-    let (Ok(llm),Ok(core))=(llm,core) else { eprintln!("política de LLM: configurações ilegíveis, mantidas as anteriores"); return };
+    let (Ok(llm),Ok(core))=(llm,core) else { eprintln!("política de LLM: configurações ilegíveis, mantidas as anteriores"); return plan };
+    // O login dos agentes, renovado em segundo plano: o pedido não espera, e
+    // o agente sem login sai do roteamento dos próximos.
+    crate::llm::refresh_logins(&llm);
+    crate::llm::warm_up(&llm);
     let policy=policy.unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});
-    match &policy {
-        Some(project)=>{ state.orchestrator.use_llm(&project.policy.restrict_llm(&llm)); state.orchestrator.use_core(&project.policy.restrict_core(&core)); }
-        None=>{ state.orchestrator.use_llm(&llm); state.orchestrator.use_core(&core); }
-    }
+    let (llm,core)=match &policy {
+        Some(project)=>(project.policy.restrict_llm(&llm),project.policy.restrict_core(&core)),
+        None=>(llm,core),
+    };
+    // A privacidade vem antes dos agentes: o Claude leva os arquivos
+    // protegidos na própria linha de comando.
+    state.orchestrator.use_core(&plan.enforce_core(&core));
+    state.orchestrator.use_llm(&plan.apply_llm(&llm));
     state.orchestrator.policy_scope=policy.map(|project|project.org_slug);
+    plan
 }
 
 /// Os chats apagados ou limpos enquanto o orquestrador atendia outro pedido.
@@ -464,7 +549,41 @@ async fn learn_from_gate(workspace:&SharedWorkspace,project_id:&str,turn:&Turn,p
     learned
 }
 
+/// A foto dos protegidos tirada antes do pedido, correndo fora do atendente.
+struct Guard { root:std::path::PathBuf, before:tokio::task::JoinHandle<gatekeeper::Guarded> }
+
+fn gatekeeper_guard(state:&DesktopState)->Guard {
+    let root=std::path::PathBuf::from(state.orchestrator.rag.project_info().root);
+    let firewall=crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone());
+    let before=tokio::task::spawn_blocking({ let root=root.clone(); move ||gatekeeper::guarded(&root,&firewall) });
+    Guard{root,before}
+}
+
 fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {
     let root=state.orchestrator.rag.project_info().root;
     gatekeeper::scan_answer(turn,answer,&state.orchestrator.config,&state.orchestrator.firewall,Path::new(&root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Com sessão, a fila anda com rede ou sem; sem sessão, espera.
+    #[test] fn the_queue_runs_with_a_session_even_offline() {
+        assert!(serves(Link::Online)&&serves(Link::Offline));
+        assert!(!serves(Link::SignedOut)&&!serves(Link::Expired));
+    }
+
+    /// O teto para o pedido com o motivo dele; o relógio largado não para nada.
+    #[tokio::test(start_paused=true)] async fn the_ceiling_stops_the_request_and_a_dropped_clock_does_not() {
+        let stop=Stop::default();
+        let clock=Ceiling::start(stop.clone(),1);
+        tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+        assert_eq!(stop.reason(),Some(StopReason::Ceiling{minutes:1}));
+        drop(clock);
+        let quiet=Stop::default();
+        drop(Ceiling::start(quiet.clone(),1));
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        assert_eq!(quiet.reason(),None);
+    }
 }

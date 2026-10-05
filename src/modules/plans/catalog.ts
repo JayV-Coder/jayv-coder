@@ -16,6 +16,15 @@ export const FEATURES = [
   "secondOpinion",
   "planFirst",
   "parallelTasks",
+  "entryGate",
+  "exitGate",
+  "secretRedaction",
+  "sensitiveFiles",
+  "agentSessions",
+  "contextCache",
+  "answerRecall",
+  "leanCode",
+  "symbolIndex",
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number];
@@ -29,3 +38,14 @@ export const VIEW_FEATURE: Partial<Record<View, FeatureKey>> = {
   stats: "stats",
   gate: "gateBoard",
 };
+
+/** O núcleo: está em todo plano, travado, e ninguém o desliga — nem o admin.
+ * A mesma lista da migração `core_features` e do `CORE` do Rust: sem a lista do
+ * servidor, ele continua travado. */
+export const CORE_FEATURES: readonly FeatureKey[] = ["entryGate", "exitGate", "secretRedaction", "sensitiveFiles", "agentSessions", "contextCache", "adaptiveRouting"];
+
+/** O que nunca vai para o contexto com `sensitiveFiles` travado. */
+export const SENSITIVE_PATTERNS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.secret", ".ssh/**", "secrets/**"] as const;
+
+/** O cache de contexto mais curto que o núcleo aceita, em segundos. */
+export const MIN_CACHE_TTL = 300;

@@ -13,7 +13,16 @@ use tauri::{AppHandle, Emitter, State};
 
 /// A sessão de cada chat: a do último pedido, que continua à mão depois que
 /// ele termina para a pessoa revisar.
-pub type SharedLive=Arc<Mutex<HashMap<String,Session>>>;
+///
+/// O mapa só guarda a sessão atrás do cadeado dela e a lista já pronta do que
+/// mudou. A olhada — o `git status`, a leitura dos arquivos — segura só a
+/// sessão do chat; a lista da tela, os outros chats e o comando que a tela
+/// chama na thread principal não esperam o git de ninguém.
+pub type SharedLive=Arc<Mutex<HashMap<String,Watched>>>;
+
+pub struct Watched { session:Arc<Mutex<Session>>, turn_id:String, running:bool, files:Vec<Change> }
+
+fn hold(session:&Mutex<Session>)->std::sync::MutexGuard<'_,Session> { session.lock().unwrap_or_else(|poisoned|poisoned.into_inner()) }
 
 /// Quantos chats guardam a última sessão: o "antes" ocupa memória.
 const KEPT:usize=6;
@@ -27,7 +36,10 @@ impl Drop for LiveWatch {
     fn drop(&mut self) {self.stop.store(true,Ordering::SeqCst);}
 }
 
-fn locked(live:&SharedLive)->std::sync::MutexGuard<'_,HashMap<String,Session>> {live.lock().unwrap_or_else(|poisoned|poisoned.into_inner())}
+fn locked(live:&SharedLive)->std::sync::MutexGuard<'_,HashMap<String,Watched>> {live.lock().unwrap_or_else(|poisoned|poisoned.into_inner())}
+
+/// A sessão do chat, para olhar ou ler sem segurar o mapa.
+fn session_of(live:&SharedLive,chat_id:&str)->Option<Arc<Mutex<Session>>> { locked(live).get(chat_id).map(|watched|watched.session.clone()) }
 
 /// Começa a olhar a pasta do chat para este pedido. A sessão anterior do chat
 /// dá lugar à nova, e a tela recebe o aviso de recomeço (`file` nulo). Volta só
@@ -38,11 +50,12 @@ pub(crate) async fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&
     let (app,live,chat,turn_id,flag)=(app.clone(),live.clone(),chat_id.to_string(),turn_id.to_string(),stop.clone());
     let turn=turn_id.clone();
     let Ok(session)=tauri::async_runtime::spawn_blocking(move ||Session::start(&turn,&folder,firewall)).await else {return LiveWatch{stop}};
+    let session=Arc::new(Mutex::new(session));
     {
         let mut sessions=locked(&live);
-        sessions.insert(chat.clone(),session);
+        sessions.insert(chat.clone(),Watched{session:session.clone(),turn_id:turn_id.clone(),running:true,files:vec![]});
         if sessions.len()>KEPT {
-            let idle:Vec<String>=sessions.iter().filter(|(id,session)|**id!=chat && !session.running).map(|(id,_)|id.clone()).collect();
+            let idle:Vec<String>=sessions.iter().filter(|(id,watched)|**id!=chat && !watched.running).map(|(id,_)|id.clone()).collect();
             for id in idle.into_iter().take(sessions.len()-KEPT) {sessions.remove(&id);}
         }
     }
@@ -50,17 +63,21 @@ pub(crate) async fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&
     tauri::async_runtime::spawn(async move {
         loop {
             let last=flag.load(Ordering::SeqCst);
-            let (live2,chat2,turn2)=(live.clone(),chat.clone(),turn_id.clone());
+            let (live2,chat2,turn2,mine)=(live.clone(),chat.clone(),turn_id.clone(),session.clone());
             let fresh=tauri::async_runtime::spawn_blocking(move ||{
+                // Outro pedido do mesmo chat já tomou o lugar: nada a olhar.
+                if !locked(&live2).get(&chat2).is_some_and(|watched|Arc::ptr_eq(&watched.session,&mine)) { return None; }
+                let (fresh,files)={
+                    let mut session=hold(&mine);
+                    let fresh=session.poll();
+                    if last {session.running=false;}
+                    (fresh,session.changes().to_vec())
+                };
                 let mut sessions=locked(&live2);
-                match sessions.get_mut(&chat2) {
-                    Some(session) if session.turn_id==turn2=>{
-                        let fresh=session.poll();
-                        if last {session.running=false;}
-                        Some(fresh)
-                    }
-                    _=>None,
-                }
+                let watched=sessions.get_mut(&chat2).filter(|watched|Arc::ptr_eq(&watched.session,&mine)&&watched.turn_id==turn2)?;
+                watched.files=files;
+                if last { watched.running=false; }
+                Some(fresh)
             }).await.ok().flatten();
             // Outro pedido do mesmo chat já tomou o lugar: este para aqui.
             let Some(fresh)=fresh else {break};
@@ -81,7 +98,7 @@ pub(crate) struct LiveList{turn_id:Option<String>,running:bool,files:Vec<Change>
 pub(crate) fn live_files(live:State<'_,SharedLive>,chat_id:String)->LiveList {
     let sessions=locked(&live);
     match sessions.get(&chat_id) {
-        Some(session)=>LiveList{turn_id:Some(session.turn_id.clone()),running:session.running,files:session.changes().to_vec()},
+        Some(watched)=>LiveList{turn_id:Some(watched.turn_id.clone()),running:watched.running,files:watched.files.clone()},
         None=>LiveList{turn_id:None,running:false,files:vec![]},
     }
 }
@@ -90,7 +107,7 @@ pub(crate) fn live_files(live:State<'_,SharedLive>,chat_id:String)->LiveList {
 #[tauri::command]
 pub(crate) async fn live_file(live:State<'_,SharedLive>,chat_id:String,path:String)->Result<Option<FileView>,Text> {
     let live=live.inner().clone();
-    tauri::async_runtime::spawn_blocking(move ||locked(&live).get(&chat_id).and_then(|session|session.view(&path))).await.map_err(Text::unexpected)
+    tauri::async_runtime::spawn_blocking(move ||session_of(&live,&chat_id).and_then(|session|hold(&session).view(&path))).await.map_err(Text::unexpected)
 }
 
 /// Os editores com linha de comando instalados (`code`, `cursor`…).
@@ -103,6 +120,6 @@ pub(crate) async fn editors()->Vec<String> {
 /// pedida. Só arquivos da lista: nada de fora da pasta do chat.
 #[tauri::command]
 pub(crate) fn open_in_editor(live:State<'_,SharedLive>,chat_id:String,path:String,line:u32,editor:String)->Result<(),Text> {
-    let file=locked(&live).get(&chat_id).and_then(|session|session.absolute(&path)).ok_or_else(||Text::new("live.notChanged").with("path",&path))?;
+    let file=session_of(&live,&chat_id).and_then(|session|hold(&session).absolute(&path)).ok_or_else(||Text::new("live.notChanged").with("path",&path))?;
     live_files::open_in_editor(&editor,&file,line).map_err(|error|Text::new("live.editor.failed").with("editor",&editor).with("reason",error.to_string()))
 }

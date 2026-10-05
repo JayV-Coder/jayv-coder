@@ -28,7 +28,6 @@ export function CodexOptionsForm({ agent }: { agent: AgentSettings<"codex"> }) {
       </FormField>
       <MechanismsField agent="codex" selected={options.mechanisms ?? []} onChange={(mechanisms) => set({ mechanisms })} />
       <ToggleRow id="codex-network" label={t("codex.network")} hint={t(open ? "codex.network.open" : "codex.network.hint")} checked={open || options.networkAccess} disabled={open} onChange={(networkAccess) => set({ networkAccess })} />
-      <ToggleRow id="codex-git" label={t("codex.git")} hint={t("codex.git.hint")} checked={options.skipGitRepoCheck} onChange={(skipGitRepoCheck) => set({ skipGitRepoCheck })} />
     </div>
   );
 }

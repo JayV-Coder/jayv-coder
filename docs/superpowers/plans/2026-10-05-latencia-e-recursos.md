@@ -62,11 +62,34 @@ falhar nos casos medidos e o plano mantém ligado o que protege o usuário.
 ## Onda 2 — 0.60.0
 
 ### Task 7: Recursos obrigatórios (`supabase`, `site`, app)
+- [x] `features.core`, `plan_features.mode`/`default_on`, limites do plano; `admin_*` e `my_features()`; pgTAP.
+- [x] Função `jev` com o limite diário do plano.
+- [x] `Entitlements` (`locked`, `defaults`, `limits`), `restrict_core`/`enforce_core`/`apply_llm`, `seed_core`; o núcleo respeita `liveFiles`, `projectNotes`, `answerRecall`.
+- [x] Tela do app com o travado desabilitado; site com cadeado no núcleo, três estados por recurso e os limites.
+
 ### Task 8: Cancelar e teto total
+- [x] `progress::Stop` no `Pulse`; `unless_stopped` no HTTP; `CliProvider` num grupo de processos e `Tree` que derruba a árvore (B10).
+- [x] `Cancels` + `cancel_turn`; botão "Parar" e "Tirar da fila"; teto `turn_ceiling_minutes`.
+- [x] O que o agente disse antes de parar fica no chat.
+
 ### Task 9: Privacidade nas CLIs (S1, S2)
+- [x] `llm::guarding`: `Read`/`Edit` no `--disallowed-tools` do Claude.
+- [x] `gatekeeper::guarded`/`touched`/`guarded_exits`: protegido mexido vira saída segurada.
+
 ### Task 10: Índice por pasta e tela por chat (L5, L6)
+- [x] Índice incremental por tamanho e data; até duas pastas guardadas; leitura em `spawn_blocking`.
+- [x] `get_chat` e `refreshChat` nos avisos. (Lista sem mensagens: onda 3.)
+
 ### Task 11: Vigia, revisão, fila sem sync, login das CLIs (L7, L8, L9, B9)
+- [x] Vigia: o `git status` segura só a sessão do chat.
+- [x] Revisão só em `medium`/`complex`, depois da resposta (`ReviewRequest`).
+- [x] A fila anda `Offline` com sessão; a sincronização espera o pedido no ar.
+- [x] Login dos agentes em cache, fora do roteamento quando sem login.
+
 ### Task 12: Custo e tela (L10, L11, B2, B3, B11)
+- [x] `locate` em cache; agentes remontados só quando mudam.
+- [x] Quadro por `requestAnimationFrame` e seletor por turno.
+- [x] `manual`/`dontAsk`, `--permission-prompts none` (com `llm::understood`), `safeMode` sem símbolos, chamadas de apoio sem sessão, `--silent` e `--skip-git-repo-check` fixos.
 
 ## Onda 3 — 0.61.0
 

@@ -185,7 +185,8 @@ export type Capability = "chat" | "code" | "reasoning" | "tools";
  * `src-tauri/crates/jayv-agents/src/llm.rs`). Nenhuma vira argumento cru: o núcleo monta a linha
  * de comando a partir delas. */
 export interface ClaudeOptions {
-  permissionMode: "default" | "plan" | "acceptEdits" | "auto" | "bypassPermissions";
+  /** `default` é o nome antigo do `manual`, gravado antes da v0.60.0. */
+  permissionMode: "manual" | "default" | "plan" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions";
   effort: "auto" | "low" | "medium" | "high" | "xhigh" | "max";
   fallbackModel: string;
   maxBudgetUsd: number | null;
@@ -298,6 +299,9 @@ export interface CoreSettings {
   keepSessionModel: boolean;
   /** A sessão do agente atravessa a troca entre planejamento e build. */
   resumeAcrossModes: boolean;
+  /** O teto total de um pedido, em minutos: passou, o pedido para e os
+   * agentes abertos caem junto. */
+  turnCeilingMinutes: number;
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */
@@ -353,6 +357,8 @@ export interface ModelsRefresh { snapshot: SettingsSnapshot; listed: boolean }
 export interface AgentProbe {
   path: string | null;
   version: string | null;
+  /** Só na conferência pedida, e só no agente que sabe dizer (Claude, Codex). */
+  loggedIn?: boolean;
 }
 
 /** De quem é a conta das estatísticas (ver `src-tauri/crates/jayv-agents/src/usage/store.rs`). */

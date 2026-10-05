@@ -1,6 +1,7 @@
 import type { CoreSnapshot, Expertise } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { saveExpertise, saveLeanCode } from "@/modules/settings";
+import { toggleState, useEntitlements } from "@/modules/plans";
 import { SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -15,6 +16,8 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
   const t = useT();
   const suggestion = snapshot.suggestion;
+  // O código enxuto segue o plano: travado ligado, fora dele desabilitado.
+  const lean = toggleState(useEntitlements(), "leanCode", snapshot.leanCode);
   return (
     <SettingsSection title={t("expertise.title")} description={t("expertise.description")}>
       {suggestion && suggestion.level !== snapshot.expertise && (
@@ -65,10 +68,12 @@ export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
         htmlFor="expertise-lean"
         className="mt-3 grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 rounded-md border border-border px-3.5 py-3 font-normal hover:bg-secondary"
       >
-        <Switch id="expertise-lean" checked={snapshot.leanCode} onCheckedChange={(enabled) => void saveLeanCode(enabled)} className="mt-0.5" />
+        <Switch id="expertise-lean" checked={lean.checked} disabled={lean.disabled} onCheckedChange={(enabled) => void saveLeanCode(enabled)} className="mt-0.5" />
         <span className="grid gap-1">
           <strong className="text-sm">{t("expertise.lean")}</strong>
-          <span className="text-xs text-muted-foreground">{t("expertise.lean.hint")}</span>
+          <span className="text-xs text-muted-foreground">
+            {lean.reason ? `${t(lean.reason === "required" ? "plans.required" : "plans.jevLocked")} · ` : ""}{t("expertise.lean.hint")}
+          </span>
         </span>
       </Label>
     </SettingsSection>

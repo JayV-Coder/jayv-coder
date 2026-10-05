@@ -41,8 +41,12 @@ pub struct JevConfig {
     /// com uma nota dizendo que o modo mudou. Desligado, cada lado da escrita
     /// tem a sua sessão — o comportamento desde a v0.52.4.
     #[serde(default)] pub resume_across_modes: bool,
+    /// O teto total de um pedido, em minutos, do começo ao fim — o plano, o
+    /// agente e a revisão juntos. Passou, o pedido para e os agentes abertos
+    /// caem. O prazo de silêncio do provedor continua valendo por linha.
+    #[serde(default = "default_turn_ceiling")] pub turn_ceiling_minutes: u64,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false, turn_ceiling_minutes:default_turn_ceiling() } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {
@@ -179,6 +183,7 @@ fn default_strategy() -> String { "auto".into() }
 fn default_confidence() -> f64 { 0.7 }
 fn default_fork_limit() -> usize { 8_000 }
 fn default_cache_ttl() -> u64 { 3_600 }
+pub fn default_turn_ceiling() -> u64 { 30 }
 fn default_timeout() -> u64 { 30 }
 fn default_context_window() -> usize { 8_192 }
 fn allow() -> String { "allow".into() }

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { SquareIcon } from "lucide-react";
 import type { Chat } from "@/modules/core";
-import { beatLines, liveOf, pendingWord, useConversation } from "@/modules/conversation";
+import { beatLines, cancelTurn, liveOf, pendingWord, useConversation } from "@/modules/conversation";
 import { openTurns } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { PulseDot } from "@/components/atoms";
+import { Button } from "@/components/ui/button";
 
 /** Quantas etapas já passadas ficam à vista antes de pedir para abrir. */
 const RECENT = 3;
@@ -15,14 +17,19 @@ const RECENT = 3;
  * Só as três etapas mais recentes aparecem; as anteriores ficam atrás de um
  * botão, para a faixa não empurrar a conversa para cima.
  * Quem está na fila não ganha faixa própria: vira a contagem do cabeçalho, para
- * que a caixa não cresça a cada pedido empilhado. */
+ * que a caixa não cresça a cada pedido empilhado.
+ * "Parar" derruba o pedido no ar e o agente que ele abriu; o que o agente já
+ * disse fica no chat. */
 export function PendingBanner({ chat }: { chat: Chat | null }) {
   const t = useT();
   const steps = useRef<HTMLOListElement>(null);
   const [all, setAll] = useState(false);
-  const live = useConversation((state) => state.live);
+  // O pedido que já recebeu o "Parar": o botão não manda de novo enquanto o
+  // agente cai.
+  const [stopping, setStopping] = useState<string | null>(null);
   const open = openTurns(chat);
   const turn = open[0];
+  const live = useConversation((state) => (turn ? state.live[turn.id] : undefined));
   const { text, beats } = turn ? liveOf(turn, live) : { text: "", beats: [] };
   const lines = beatLines(beats);
   // A última etapa é a de agora e vai na linha de baixo; as anteriores ficam
@@ -47,6 +54,20 @@ export function PendingBanner({ chat }: { chat: Chat | null }) {
         <PulseDot />
         <strong className="text-xs font-semibold text-foreground"><span aria-hidden="true" className="me-1.5">🤖</span>JayV</strong>
         <span className="ms-auto text-caption text-muted-foreground">{queued > 0 ? t("pending.queued", { count: queued }) : t("pending.running")}</span>
+        {turn.status === "flying" && chat && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="self-center text-muted-foreground"
+            title={t("pending.stop.title")}
+            disabled={stopping === turn.id}
+            onClick={() => { setStopping(turn.id); void cancelTurn(turn.id, chat.id); }}
+          >
+            <SquareIcon aria-hidden="true" />
+            {stopping === turn.id ? t("pending.stopping") : t("pending.stop")}
+          </Button>
+        )}
       </div>
       {hidden > 0 && (
         <button

@@ -86,8 +86,10 @@ pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:St
 pub(crate) fn set_reply_language(language:Option<crate::i18n::ReplyLanguage>) { crate::i18n::set_reply_language(language); }
 
 #[tauri::command]
-pub(crate) async fn check_agent(command:String)->Result<Probe,Text>{
-    Ok(llm::probe(&command).await)
+/// Com o agente, a conferência pergunta também se ele está logado — e a
+/// resposta passa a valer para o roteamento.
+pub(crate) async fn check_agent(command:String,agent:Option<llm::AgentId>)->Result<Probe,Text>{
+    Ok(match agent { Some(agent)=>llm::probe_agent(agent,&command).await, None=>llm::probe(&command).await })
 }
 
 /// As configurações do Jev e do app como a tela as desenha: o que está
@@ -150,7 +152,7 @@ fn core_snapshot(settings:CoreSettings,defaults:CoreSettings,expertise:crate::ex
 pub(crate) async fn get_core_settings(known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>)->Result<CoreSnapshot,Text>{
     let defaults=defaults(&known);
     let workspace=workspace.lock().await;
-    let settings=workspace.core_settings(&defaults).map_err(failure)?;
+    let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
     let expertise=workspace.expertise().map_err(failure)?;
     Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }
@@ -158,6 +160,12 @@ pub(crate) async fn get_core_settings(known:State<'_,SharedFacts>,workspace:Stat
 fn defaults(known:&SharedFacts)->CoreSettings {
     let path=known.lock().unwrap_or_else(std::sync::PoisonError::into_inner).config_path.clone();
     Orchestrator::core_defaults_at(&path)
+}
+
+/// Os valores de partida com os do plano por cima: quem nunca gravou as
+/// configurações do Jev começa com o que o plano diz.
+fn seeded(workspace:&crate::workspace::WorkspaceStore,defaults:&CoreSettings)->CoreSettings {
+    workspace.entitlements().unwrap_or_default().seed_core(defaults)
 }
 
 /// Grava primeiro e só então troca o orquestrador, como as dos agentes. Com
@@ -168,8 +176,10 @@ pub(crate) async fn save_core_settings(desk:State<'_,SharedDesktopState>,known:S
     let defaults=defaults(&known);
     let mut workspace=workspace.lock().await;
     let saved=workspace.save_core_settings(&settings).map_err(failure)?;
-    let restricted=workspace.entitlements().unwrap_or_default().restrict_core(&saved);
-    when_free(&desk,|orchestrator|orchestrator.use_core(&restricted));
+    // O orquestrador recebe o que vale de fato: sem o que o plano não tem e
+    // com o que ele trava. A tela continua vendo o que quem usa escolheu.
+    let effective=workspace.entitlements().unwrap_or_default().apply_core(&saved);
+    when_free(&desk,|orchestrator|orchestrator.use_core(&effective));
     let expertise=workspace.expertise().map_err(failure)?;
     Ok(core_snapshot(saved,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }
@@ -182,7 +192,7 @@ pub(crate) async fn save_expertise(desk:State<'_,SharedDesktopState>,known:State
     let mut workspace=workspace.lock().await;
     let expertise=workspace.save_expertise(&level).map_err(failure)?;
     when_free(&desk,|orchestrator|orchestrator.expertise=expertise);
-    let settings=workspace.core_settings(&defaults).map_err(failure)?;
+    let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
     Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }
 
@@ -195,6 +205,6 @@ pub(crate) async fn save_lean_code(desk:State<'_,SharedDesktopState>,known:State
     let lean_code=workspace.save_lean_code(enabled).map_err(failure)?;
     when_free(&desk,|orchestrator|orchestrator.lean_code=lean_code);
     let expertise=workspace.expertise().map_err(failure)?;
-    let settings=workspace.core_settings(&defaults).map_err(failure)?;
+    let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
     Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),lean_code))
 }

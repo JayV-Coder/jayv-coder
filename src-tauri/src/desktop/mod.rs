@@ -84,6 +84,22 @@ pub(crate) fn forget_chats(desk:&SharedDesktopState,forget:&SharedForget,chat_id
     }
 }
 
+/// As paradas dos pedidos no ar, por turno. O botão "Parar" dispara a do
+/// turno; o atendente a abre quando chama o pedido e a fecha no fim. O "Parar"
+/// que chega entre a fila chamar o pedido e o atendente abrir a parada fica
+/// guardado aqui e vale do mesmo jeito.
+#[derive(Clone,Default)]
+pub struct Cancels(Arc<std::sync::Mutex<std::collections::HashMap<String,crate::progress::Stop>>>);
+
+impl Cancels {
+    fn entries(&self)->std::sync::MutexGuard<'_,std::collections::HashMap<String,crate::progress::Stop>> { self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
+    /// A parada do pedido que vai ser atendido.
+    pub(crate) fn open(&self,turn_id:&str)->crate::progress::Stop { self.entries().entry(turn_id.to_string()).or_default().clone() }
+    pub(crate) fn close(&self,turn_id:&str) { self.entries().remove(turn_id); }
+    /// Para o pedido no ar (ou o que está para entrar no ar).
+    pub(crate) fn stop(&self,turn_id:&str,reason:crate::progress::StopReason) { self.entries().entry(turn_id.to_string()).or_default().stop(reason); }
+}
+
 /// Toca quando entra pedido novo. O atendente dorme nele em vez de ficar
 /// perguntando ao banco se chegou alguma coisa.
 pub type QueueBell=Arc<Notify>;
@@ -158,6 +174,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         .manage(desk).manage(facts).manage(workspace).manage(bell).manage(sync_bell).manage(connectivity).manage(session)
         .manage(live::SharedLive::default())
         .manage(SharedForget::default())
+        .manage(Cancels::default())
         .manage(tray::TrayReady::default())
         .on_window_event(tray::on_window_event)
         .setup(move |app|{
@@ -185,13 +202,14 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             crate::usage::install(sink);
             tauri::async_runtime::spawn(books::keep_the_books(handle.clone(),workspace.clone(),entries));
             let forget=app.state::<SharedForget>().inner().clone();
-            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity,forget));
+            let cancels=app.state::<Cancels>().inner().clone();
+            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity,forget,cancels));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             session::set_session,session::clear_session,session::connection_status,session::get_locales,session::get_translations,
-            prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,
-            projects::get_workspace,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::set_work_mode,projects::delete_chat,projects::delete_project,
+            prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,prompts::cancel_turn,
+            projects::get_workspace,projects::get_chat,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::set_work_mode,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::refresh_models,settings::check_agent,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,settings::save_expertise,settings::save_lean_code,
             system::system_status,
             gate::gate_feed,gate::scoped_gate_feed,
@@ -261,6 +279,16 @@ mod tests {
         forget_chats(&desk,&forget,vec!["free".into()]);
         assert!(desk.lock().await.orchestrator.memory.conversation("free").is_empty(),"livre: esquece na hora");
         assert!(!forget.lock().unwrap().contains("free"));
+    }
+
+    /// O "Parar" que chega antes de o atendente abrir a parada do turno vale
+    /// do mesmo jeito; fechada, a parada some.
+    #[test] fn a_stop_sent_before_the_turn_opens_still_counts() {
+        let cancels=Cancels::default();
+        cancels.stop("t1",crate::progress::StopReason::Asked);
+        assert_eq!(cancels.open("t1").reason(),Some(crate::progress::StopReason::Asked));
+        cancels.close("t1");
+        assert_eq!(cancels.open("t1").reason(),None,"o mesmo turno reenviado começa sem parada");
     }
 
     /// O ambiente só pode mudar enquanto o processo tem uma thread só. Quem

@@ -14,7 +14,7 @@ export const TALLY: [keyof Tally, Aspect, Key][] = [
  * o ícone. */
 /** Os tipos de saída. `comando` e `arquivo` são a grafia dos checks gravados
  * antes da troca para identificadores em inglês. */
-export const EXIT_KINDS: Record<string, Key> = { command: "exit.kind.command", file: "exit.kind.file", "comando": "exit.kind.command", "arquivo": "exit.kind.file" };
+export const EXIT_KINDS: Record<string, Key> = { command: "exit.kind.command", file: "exit.kind.file", changed: "exit.kind.changed", "comando": "exit.kind.command", "arquivo": "exit.kind.file" };
 
 const VERDICT_TALLY: Record<EntryCheck["verdict"], keyof Tally> = { pass: "passed", ask: "asked", block: "blocked" };
 const EMPTY: GateFeed = { entries: [], exits: [], tally: { passed: 0, asked: 0, blocked: 0, held: 0 } };

@@ -9,6 +9,10 @@ use tauri::State;
 #[tauri::command]
 pub(crate) async fn get_workspace(workspace:State<'_,SharedWorkspace>)->Result<WorkspaceData,Text>{workspace.lock().await.snapshot().map_err(failure)}
 
+/// Um chat só, para a tela reler o que um aviso do núcleo mudou.
+#[tauri::command]
+pub(crate) async fn get_chat(workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<Option<ChatRecord>,Text>{workspace.lock().await.chat_record(&chat_id).map_err(failure)}
+
 #[tauri::command]
 pub(crate) async fn create_project(workspace:State<'_,SharedWorkspace>,name:String,root_path:Option<String>)->Result<ProjectRecord,Text>{crate::desktop::require_session()?;workspace.lock().await.create_project(&name,root_path).map_err(failure)}
 

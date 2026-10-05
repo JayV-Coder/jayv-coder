@@ -5,6 +5,7 @@ pub mod features;
 
 // As camadas de baixo com os nomes de sempre dentro deste crate.
 use jayv_cloud as cloud;
+use jayv_agents::llm;
 use jayv_jev::core_settings;
 #[cfg(test)]
 use jayv_base::config;

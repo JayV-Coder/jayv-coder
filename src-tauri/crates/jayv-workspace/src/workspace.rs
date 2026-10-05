@@ -199,7 +199,7 @@ impl WorkspaceStore {
         crate::usage::store::ensure(&connection)?;
         connection.execute_batch(crate::expertise::SCHEMA)?;
         connection.execute_batch(crate::policy::SCHEMA)?;
-        connection.execute_batch(crate::features::SCHEMA)?;
+        crate::features::ensure(&connection)?;
         connection.execute_batch(crate::project_memory::SCHEMA)?;
         crate::search::ensure(&connection)?;
         connection.execute_batch(AGENT_SESSIONS)?;
@@ -228,6 +228,16 @@ impl WorkspaceStore {
             chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode});
         }
         Ok(WorkspaceData{projects,chats})
+    }
+
+    /// Um chat só, inteiro: o que a tela relê quando um pedido dele entra ou
+    /// fecha, em vez de reler a conversa de todos os chats. Nada quando o chat
+    /// não existe mais.
+    pub fn chat_record(&self, chat_id: &str) -> Result<Option<ChatRecord>> {
+        let row=self.connection.query_row("SELECT id,code,project_id,title,created_at,updated_at,work_mode FROM chats WHERE id=?1",[chat_id],
+            |row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?))).optional()?;
+        let Some((id,code,project_id,title,created_at,updated_at,work_mode))=row else { return Ok(None) };
+        Ok(Some(ChatRecord{messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,id,code,project_id,title,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode}))
     }
 
     pub fn create_project(&mut self, name: &str, root_path: Option<String>) -> Result<ProjectRecord> {
@@ -381,6 +391,9 @@ impl WorkspaceStore {
         }
     }
 
+    /// Se há pedido no ar agora.
+    pub fn turn_in_flight(&self) -> Result<bool> {turns::is_flying(&self.connection)}
+
     /// Quantos pedidos deste chat ainda estão em aberto, contando o que está
     /// sendo atendido agora.
     pub fn queue_depth(&self, chat_id:&str) -> Result<u32> {turns::queue_depth(&self.connection,chat_id)}
@@ -403,6 +416,18 @@ impl WorkspaceStore {
     /// empilhadas sob o mesmo balão.
     pub fn clear_turn_answer(&mut self, turn_id: &str) -> Result<()> {
         self.connection.execute("DELETE FROM messages WHERE turn_id=?1 AND role='assistant'",[turn_id])?;
+        Ok(())
+    }
+
+    /// O que o agente disse antes de o pedido parar ("Parar" ou o teto de
+    /// minutos) entra no chat logo antes do aviso da parada. A tela mostrou
+    /// esse texto crescendo; o fim do pedido não pode apagá-lo.
+    pub fn keep_said_before(&mut self, chat_id: &str, turn_id: &str, said: &str) -> Result<()> {
+        let transaction=self.connection.transaction()?;
+        let first:Option<String>=transaction.query_row("SELECT created_at FROM messages WHERE turn_id=?1 AND role='assistant' ORDER BY created_at,id LIMIT 1",[turn_id],|row|row.get(0)).optional()?;
+        let at=first.as_deref().and_then(|at|turns::parse_time(at).ok()).map_or_else(Utc::now,|at|at-chrono::Duration::milliseconds(1));
+        insert_message(&transaction,chat_id,Some(turn_id),"assistant",said,at)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -893,6 +918,36 @@ mod tests {
         assert_eq!(saved.messages[0].content,"desenha o cabeçalho");
         assert_eq!(saved.messages[0].turn_id.as_deref(),Some(turn.id.as_str()),"o pedido nasce preso ao seu turno");
         assert_eq!(turn.status,TurnStatus::Queued);
+    }
+
+    /// O chat relido sozinho é o mesmo que vem no retrato de todos.
+    #[test]
+    fn one_chat_reads_the_same_as_in_the_snapshot() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        store.enqueue_prompt(&chat.id,"desenha o cabeçalho",None).expect("fila");
+        let alone=store.chat_record(&chat.id).expect("leitura").expect("chat");
+        let all=store.snapshot().expect("snapshot");
+        assert_eq!(serde_json::to_value(&alone).unwrap(),serde_json::to_value(all.chats.iter().find(|item|item.id==chat.id).unwrap()).unwrap());
+        assert!(store.chat_record("sumiu").expect("leitura").is_none());
+    }
+
+    /// O pedido parado guarda o que o agente já tinha dito, antes do aviso
+    /// da parada.
+    #[test]
+    fn what_was_said_before_a_stop_stays_before_the_notice() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"refatora o roteador",None).expect("fila");
+        let notice=crate::i18n::notice(&[Text::new("turn.cancelled")]);
+        store.append_answer(&chat.id,&turn.id,&notice).expect("aviso");
+        store.keep_said_before(&chat.id,&turn.id,"Comecei pelo roteador.").expect("dito");
+        let contents:Vec<String>=store.conversation(&chat.id).expect("conversa").into_iter().map(|message|message.content).collect();
+        assert_eq!(contents,vec!["refatora o roteador".to_string(),"Comecei pelo roteador.".into(),"The developer stopped this request before it finished.".into()]);
     }
 
     #[test]

@@ -22,7 +22,7 @@ pub trait Provider: Send + Sync {
     /// funcionando, e a tela mostra o texto de uma vez em vez de não mostrar
     /// nada. Quem sabe transmitir sobrescreve.
     async fn chat_stream(&self, messages:&[ChatMessage], model:&str, pulse:&Pulse) -> Result<ProviderResponse> {
-        let response=self.chat(messages,model).await?;
+        let response=unless_stopped(pulse,self.chat(messages,model)).await?;
         pulse.beat(Beat::Chunk{text:response.response.clone()});
         Ok(response)
     }
@@ -46,6 +46,25 @@ pub trait Provider: Send + Sync {
     /// Quem não sabe conversa como sempre e ignora a sessão.
     async fn chat_turn(&self, messages:&[ChatMessage], model:&str, effort:Option<&str>, _resume:Option<&str>, pulse:&Pulse) -> Result<ProviderResponse> {
         self.chat_with_effort(messages,model,effort,pulse).await
+    }
+
+    /// Uma chamada de apoio — o plano, a divisão, a revisão, o título —, que
+    /// não vira sessão guardada: ninguém vai retomá-la. Quem não guarda
+    /// sessão conversa como sempre.
+    async fn chat_once(&self, messages:&[ChatMessage], model:&str, effort:Option<&str>, pulse:&Pulse) -> Result<ProviderResponse> {
+        self.chat_turn(messages,model,effort,None,pulse).await
+    }
+}
+
+/// Corre `work` até o fim ou até o pedido ser parado, o que vier primeiro. O
+/// pedido já parado nem começa: a chamada de apoio que vem depois do "Parar"
+/// não gasta nada.
+pub async fn unless_stopped<T>(pulse:&Pulse,work:impl Future<Output=Result<T>>)->Result<T> {
+    if let Some(reason)=pulse.stop().reason() { return Err(reason.text().into()); }
+    tokio::select! {
+        biased;
+        reason=pulse.stop().stopped()=>Err(reason.text().into()),
+        done=work=>done,
     }
 }
 
@@ -380,7 +399,9 @@ impl Provider for HttpProvider {
     async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
         let started=Instant::now();
         let (url,payload)=self.compose(messages,model,true);
-        let harvest=self.flow(&url,&payload,pulse).await?;
+        // Parado no meio, a conexão cai junto com a leitura: o servidor para de
+        // gerar o que ninguém vai ler.
+        let harvest=unless_stopped(pulse,self.flow(&url,&payload,pulse)).await?;
         Ok(self.wrap(harvest,model,started))
     }
 }
@@ -586,11 +607,12 @@ impl CliProvider {
     ///
     /// O esforço que o Jev escolheu entra no lugar de `{effort}`; sem ele, o
     /// argumento sai junto da flag que o anuncia e o agente usa o seu padrão.
-    #[cfg(test)] fn args(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> { self.args_resuming(model,effort,None,prompt,usage_file) }
+    #[cfg(test)] fn args(&self,model:&str,effort:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> { self.args_resuming(model,effort,None,false,prompt,usage_file) }
 
     /// A linha de comando retomando a sessão `resume`. Sem sessão, o lugar
     /// dela sai junto da flag que o anuncia — como o esforço.
-    fn args_resuming(&self,model:&str,effort:Option<&str>,resume:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
+    /// `once` é a chamada de apoio: a flag que não guarda sessão entra.
+    fn args_resuming(&self,model:&str,effort:Option<&str>,resume:Option<&str>,once:bool,prompt:&str,usage_file:&std::path::Path)->Vec<String> {
         let inline=self.inline_for(prompt);
         let mut args=Vec::new();
         let mut given=self.config.args.iter().peekable();
@@ -603,6 +625,10 @@ impl CliProvider {
             }
             if arg==crate::llm::RESUME {
                 match resume { Some(session)=>args.push(session.to_string()), None=>{ if args.last().is_some_and(|flag:&String|flag.starts_with('-')) { args.pop(); } } }
+                continue;
+            }
+            if arg==crate::llm::EPHEMERAL {
+                if let Some(flag)=given.next().filter(|_|once&&resume.is_none()) { args.push(flag.clone()); }
                 continue;
             }
             if arg==crate::llm::RESUME_THREAD {
@@ -620,7 +646,7 @@ impl CliProvider {
 
     /// O agente aberto, com as três pontas na mão. Um só arranque para as duas
     /// conversas: a que espera o fim e a que acompanha.
-    fn open(&self,model:&str,effort:Option<&str>,resume:Option<&str>,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
+    async fn open(&self,model:&str,effort:Option<&str>,resume:Option<&str>,once:bool,prompt:&str,usage_file:&std::path::Path)->Result<tokio::process::Child> {
         let command=self.config.command.as_deref().ok_or_else(||anyhow!("CLI provider has no command"))?;
         // O caminho achado, com extensão: no Windows `claude` sozinho não
         // abre o `claude.cmd` do npm. Sem caminho nenhum, o agente não está
@@ -630,7 +656,12 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
-        process.args(lead).args(self.args_resuming(model,effort,resume,prompt,usage_file)).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        let args=crate::llm::understood(&found,self.args_resuming(model,effort,resume,once,prompt,usage_file)).await;
+        process.args(lead).args(args).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        // Num grupo só dele: o agente abre shells, servidores de MCP e o node do
+        // npm, e parar o pedido tem de derrubar todos (`Tree`), não só o
+        // primeiro processo.
+        #[cfg(unix)] process.process_group(0);
         // A pasta do projeto do chat. Sem ela o agente leria o diretório de
         // onde o aplicativo subiu e responderia sobre o repositório errado.
         if let Some(root)=self.workdir.current().filter(|root|root.is_dir()) { process.current_dir(root); }
@@ -689,20 +720,37 @@ impl Provider for CliProvider {
         self.chat_with_effort(messages,model,None,pulse).await
     }
 
+    /// A conversa solta (o título do chat) é chamada de apoio: não guarda
+    /// sessão.
     async fn chat_with_effort(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
-        self.chat_turn(messages,model,effort,None,pulse).await
+        self.chat_once(messages,model,effort,pulse).await
     }
 
     fn explores(&self)->bool { true }
     fn resumes(&self)->bool { self.config.args.iter().any(|arg|arg==crate::llm::RESUME||arg==crate::llm::RESUME_THREAD) }
 
     async fn chat_turn(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,resume:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
+        self.converse(messages,model,effort,resume,false,pulse).await
+    }
+
+    async fn chat_once(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
+        self.converse(messages,model,effort,None,true,pulse).await
+    }
+}
+
+impl CliProvider {
+    async fn converse(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,resume:Option<&str>,once:bool,pulse:&Pulse)->Result<ProviderResponse> {
         let resume=resume.filter(|_|self.resumes());
         let prompt=Self::prompt(messages);
         let started=Instant::now();
         let usage_file=std::env::temp_dir().join(format!("jayv-usage-{}.json",uuid::Uuid::new_v4()));
         let mut meter=crate::usage::Meter::new(&self.name,model,self.config.command.as_deref().unwrap_or(&self.name));
-        let mut child=self.open(model,effort,resume,&prompt,&usage_file)?;
+        // Parado antes de abrir: nem abre.
+        if let Some(reason)=pulse.stop().reason() { return Err(reason.text().into()); }
+        let mut child=self.open(model,effort,resume,once,&prompt,&usage_file).await?;
+        // Daqui em diante, qualquer saída que não seja o agente terminar por
+        // conta própria derruba a árvore dele — inclusive o pedido largado.
+        let mut tree=Tree::of(&child);
         // O pedido entra pela entrada padrão ao mesmo tempo que a saída é lida.
         // Escrito antes, um agente que enche o cano de saída antes de ler o
         // pedido inteiro travava os dois lados fora do relógio do silêncio.
@@ -726,66 +774,77 @@ impl Provider for CliProvider {
             // As duas leituras podem ser largadas pelo relógio no meio do
             // caminho: `next_segment` guarda a linha pela metade e a devolve
             // inteira na volta, então um sinal de vida nunca se perde aqui.
-            let heard=timeout(silence,async {
-                tokio::select! {
-                    line=talk.next_segment(),if talking=>match line? {
-                        None=>talking=false,
-                        Some(bytes)=>{
-                            let line=text_of(&bytes);
-                            let event=parse(&line);
-                            if let Some(event)=&event {
-                                meter.read_event(event);
-                                if let Some(id)=session_in(event) { session=Some(id); }
-                            }
-                            if let Some(reason)=event.as_ref().and_then(refusal_in) { refused=Some(reason); }
-                            else if let Some(piece)=event.as_ref().and_then(partial_text) { speech.piece(&mut response,piece,pulse); }
-                            else if let Some(beat)=classify_parsed(&line,event.as_ref()) {
-                                match &beat {
-                                    // A mensagem inteira que os pedaços já mostraram fecha
-                                    // o balão deles em vez de entrar de novo.
-                                    Beat::Chunk{text} if speech.open&&event.as_ref().is_some_and(whole_message_in)=>speech.close(&mut response,text,pulse),
-                                    Beat::Chunk{text}=>{
-                                        // Cada mensagem inteira do agente fica no seu balão.
-                                        if event.as_ref().is_some_and(whole_message_in)&&!response.trim().is_empty() {
-                                            let gap=format!("\n{}\n",MESSAGE_BREAK);
-                                            response.push_str(&gap);
-                                            pulse.beat(Beat::Chunk{text:gap});
+            let heard=tokio::select! {
+                biased;
+                reason=pulse.stop().stopped()=>Err(reason),
+                heard=timeout(silence,async {
+                    tokio::select! {
+                        line=talk.next_segment(),if talking=>match line? {
+                            None=>talking=false,
+                            Some(bytes)=>{
+                                let line=text_of(&bytes);
+                                let event=parse(&line);
+                                if let Some(event)=&event {
+                                    meter.read_event(event);
+                                    if let Some(id)=session_in(event) { session=Some(id); }
+                                }
+                                if let Some(reason)=event.as_ref().and_then(refusal_in) { refused=Some(reason); }
+                                else if let Some(piece)=event.as_ref().and_then(partial_text) { speech.piece(&mut response,piece,pulse); }
+                                else if let Some(beat)=classify_parsed(&line,event.as_ref()) {
+                                    match &beat {
+                                        // A mensagem inteira que os pedaços já mostraram fecha
+                                        // o balão deles em vez de entrar de novo.
+                                        Beat::Chunk{text} if speech.open&&event.as_ref().is_some_and(whole_message_in)=>speech.close(&mut response,text,pulse),
+                                        Beat::Chunk{text}=>{
+                                            // Cada mensagem inteira do agente fica no seu balão.
+                                            if event.as_ref().is_some_and(whole_message_in)&&!response.trim().is_empty() {
+                                                let gap=format!("\n{}\n",MESSAGE_BREAK);
+                                                response.push_str(&gap);
+                                                pulse.beat(Beat::Chunk{text:gap});
+                                            }
+                                            response.push_str(text);
+                                            pulse.beat(beat);
                                         }
-                                        response.push_str(text);
-                                        pulse.beat(beat);
+                                        _=>pulse.beat(beat),
                                     }
-                                    _=>pulse.beat(beat),
                                 }
                             }
-                        }
-                    },
-                    line=grumble.next_segment(),if grumbling=>match line? {
-                        None=>grumbling=false,
-                        Some(bytes)=>{
-                            let line=text_of(&bytes);
-                            if !line.trim().is_empty() {
-                                complaint.push_str(&line);
-                                complaint.push('\n');
-                                pulse.beat(Beat::Agent{line});
+                        },
+                        line=grumble.next_segment(),if grumbling=>match line? {
+                            None=>grumbling=false,
+                            Some(bytes)=>{
+                                let line=text_of(&bytes);
+                                if !line.trim().is_empty() {
+                                    complaint.push_str(&line);
+                                    complaint.push('\n');
+                                    pulse.beat(Beat::Agent{line});
+                                }
                             }
-                        }
-                    },
-                }
-                Ok::<(),anyhow::Error>(())
-            }).await;
+                        },
+                    }
+                    Ok::<(),anyhow::Error>(())
+                })=>Ok(heard),
+            };
             match heard {
-                Ok(Ok(()))=>{}
-                Ok(Err(error))=>{ settle_meter(meter,&prompt,&response,false,&usage_file); return Err(error); }
-                Err(_)=>{ let _=child.start_kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(self.muteness()); }
+                Ok(Ok(Ok(())))=>{}
+                Ok(Ok(Err(error)))=>{ tree.kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(error); }
+                Ok(Err(_))=>{ tree.kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(self.muteness()); }
+                Err(reason)=>{ tree.kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(reason.text().into()); }
             }
         }
         // As duas pontas fecharam: o que falta é o agente sair. Sem prazo aqui,
         // um processo que fechou a saída e não morreu seguraria o pedido para
         // sempre — e é por isso que este prazo não é o de trabalhar, é o de sair.
-        let status=match timeout(silence,child.wait()).await {
-            Ok(Ok(status))=>status,
-            Ok(Err(error))=>{ settle_meter(meter,&prompt,&response,false,&usage_file); return Err(error.into()); }
-            Err(_)=>{ settle_meter(meter,&prompt,&response,false,&usage_file); return Err(self.muteness()); }
+        let waited=tokio::select! {
+            biased;
+            reason=pulse.stop().stopped()=>Err(reason),
+            waited=timeout(silence,child.wait())=>Ok(waited),
+        };
+        let status=match waited {
+            Ok(Ok(Ok(status)))=>{ tree.release(); status }
+            Ok(Ok(Err(error)))=>{ tree.kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(error.into()); }
+            Ok(Err(_))=>{ tree.kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(self.muteness()); }
+            Err(reason)=>{ tree.kill(); settle_meter(meter,&prompt,&response,false,&usage_file); return Err(reason.text().into()); }
         };
         // Um `result` com `is_error` é falha mesmo quando o processo sai com
         // zero: a resposta que veio antes dele é o texto do erro, não a do
@@ -819,6 +878,48 @@ fn text_of(bytes:&[u8])->String {
     let bytes=bytes.strip_suffix(b"\r").unwrap_or(bytes);
     String::from_utf8_lossy(bytes).into_owned()
 }
+
+/// A árvore de processos de um agente aberto. O `kill_on_drop` do tokio só
+/// alcança o primeiro processo; o que ele abriu — o shell de uma ferramenta, um
+/// servidor de MCP, o `node` atrás do `.cmd` do npm — ficava rodando depois do
+/// "Parar", do silêncio e do pedido largado. O agente é líder do próprio grupo
+/// (`process_group(0)`), e matar o grupo derruba todos. No Windows, o
+/// `taskkill /T` segue a árvore pelo pai.
+///
+/// Largada sem `release`, a árvore cai: o agente que terminou sozinho é o único
+/// caminho que a deixa em pé.
+struct Tree { pid:Option<u32> }
+
+impl Tree {
+    fn of(child:&tokio::process::Child)->Self { Self{pid:child.id()} }
+    /// O agente saiu por conta própria: não há o que matar, e o número dele
+    /// pode voltar a outro processo.
+    fn release(&mut self) { self.pid=None; }
+    fn kill(&mut self) { if let Some(pid)=self.pid.take() { kill_tree(pid); } }
+}
+
+impl Drop for Tree { fn drop(&mut self) { self.kill(); } }
+
+#[cfg(unix)]
+fn kill_tree(pid:u32) {
+    let Ok(group)=libc::pid_t::try_from(pid) else { return };
+    // SAFETY: `killpg` só lê os dois inteiros; o grupo que já não existe
+    // devolve ESRCH, que não interessa aqui.
+    unsafe { libc::killpg(group,libc::SIGKILL); }
+}
+
+#[cfg(windows)]
+fn kill_tree(pid:u32) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW:u32=0x0800_0000;
+    // Espera o `taskkill`: ele segue a árvore pelo pai, e o pai precisa estar
+    // vivo enquanto ele procura os filhos.
+    let _=std::process::Command::new("taskkill").args(["/T","/F","/PID",&pid.to_string()])
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(CREATE_NO_WINDOW).status();
+}
+
+#[cfg(not(any(unix,windows)))]
+fn kill_tree(_pid:u32) {}
 
 /// A escrita do pedido na entrada padrão, correndo ao lado da leitura. Largada
 /// no meio (o agente calou, o pedido falhou), ela para junto.
@@ -934,6 +1035,62 @@ mod tests {
         let provider=CliProvider{name:"copilot".into(),config:ProviderConfig{command:Some("jayv-agente-que-nao-existe".into()),..config("cli")},workdir:Workdir::default()};
         let error=provider.chat(&ask(),"modelo").await.expect_err("não instalado");
         assert_eq!(crate::i18n::Text::from(error).key,"provider.notInstalled");
+    }
+
+    fn key(error:&anyhow::Error)->Option<&str> { error.downcast_ref::<Text>().map(|text|text.key.as_str()) }
+
+    /// Se o processo ainda roda. O que já morreu e espera o pai recolher
+    /// (zumbi) conta como morto.
+    #[cfg(target_os="linux")]
+    fn alive(pid:i32)->bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat|stat.rsplit_once(") ").is_some_and(|(_,rest)|!rest.starts_with('Z')))
+    }
+
+    /// Parar o pedido derruba o agente e o que ele abriu: o processo que o
+    /// shell deixou em segundo plano não sobrevive ao "Parar".
+    #[cfg(target_os="linux")]
+    #[tokio::test] async fn stopping_a_request_kills_the_whole_agent_tree() {
+        let folder=tempfile::tempdir().expect("pasta");
+        let marker=folder.path().join("filho");
+        let provider=script(&format!("sleep 300 & echo $! > '{}'; echo trabalhando; sleep 300",marker.display()));
+        let (pulse,_beats)=Pulse::channel();
+        let stop=pulse.stop().clone();
+        let running=tokio::spawn(async move { provider.chat_turn(&ask(),"modelo",None,None,&pulse).await });
+        let child=loop {
+            if let Some(pid)=std::fs::read_to_string(&marker).ok().and_then(|text|text.trim().parse::<i32>().ok()) { break pid; }
+            sleep(Duration::from_millis(20)).await;
+        };
+        assert!(alive(child),"o filho subiu");
+        stop.stop(crate::progress::StopReason::Asked);
+        let error=timeout(Duration::from_secs(5),running).await.expect("parou na hora").expect("tarefa").expect_err("parado não é resposta");
+        assert_eq!(key(&error),Some("turn.cancelled"));
+        let mut gone=false;
+        for _ in 0..100 { if !alive(child) { gone=true; break; } sleep(Duration::from_millis(20)).await; }
+        assert!(gone,"o processo em segundo plano morreu junto");
+    }
+
+    /// O pedido já parado não abre agente nenhum.
+    #[tokio::test] async fn a_stopped_request_does_not_start_the_agent() {
+        let folder=tempfile::tempdir().expect("pasta");
+        let marker=folder.path().join("abriu");
+        let provider=script(&format!("touch '{}'",marker.display()));
+        let pulse=Pulse::silent();
+        pulse.stop().stop(crate::progress::StopReason::Ceiling{minutes:30});
+        let error=provider.chat_turn(&ask(),"modelo",None,None,&pulse.quiet()).await.expect_err("parado");
+        assert_eq!(key(&error),Some("turn.ceiling"));
+        assert!(!marker.exists(),"o agente não foi aberto");
+    }
+
+    /// A conversa por HTTP (e a de quem não transmite) larga a espera quando o
+    /// pedido para.
+    #[tokio::test] async fn a_stop_ends_any_pending_call() {
+        let pulse=Pulse::silent();
+        let stop=pulse.stop().clone();
+        let waiting=tokio::spawn(async move { unless_stopped(&pulse,std::future::pending::<Result<()>>()).await });
+        tokio::task::yield_now().await;
+        stop.stop(crate::progress::StopReason::Asked);
+        let error=timeout(Duration::from_secs(1),waiting).await.expect("na hora").expect("tarefa").expect_err("parado");
+        assert_eq!(key(&error),Some("turn.cancelled"));
     }
 
     #[tokio::test] async fn gives_up_after_the_attempt_budget() {
@@ -1243,14 +1400,43 @@ mod tests {
         let provider=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--print".into(),"--resume".into(),crate::llm::RESUME.into(),"--model".into(),"{model}".into()],..config("cli")},workdir:Workdir::default()};
         assert!(provider.resumes());
         assert!(provider.explores());
-        assert_eq!(provider.args_resuming("sonnet",None,Some("abc-123"),"oi",std::path::Path::new("u.json")),["--print","--resume","abc-123","--model","sonnet"]);
-        assert_eq!(provider.args_resuming("sonnet",None,None,"oi",std::path::Path::new("u.json")),["--print","--model","sonnet"]);
+        assert_eq!(provider.args_resuming("sonnet",None,Some("abc-123"),false,"oi",std::path::Path::new("u.json")),["--print","--resume","abc-123","--model","sonnet"]);
+        assert_eq!(provider.args_resuming("sonnet",None,None,false,"oi",std::path::Path::new("u.json")),["--print","--model","sonnet"]);
         let plain=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["exec".into()],..config("cli")},workdir:Workdir::default()};
         assert!(!plain.resumes(),"agente sem o lugar da sessão não retoma");
         let codex=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["exec".into(),"--json".into(),"--sandbox".into(),"read-only".into(),crate::llm::RESUME_THREAD.into(),"-".into()],..config("cli")},workdir:Workdir::default()};
         assert!(codex.resumes(),"o Codex retoma pelo subcomando");
-        assert_eq!(codex.args_resuming("gpt",None,Some("t-9"),"oi",std::path::Path::new("u.json")),["exec","--json","--sandbox","read-only","resume","t-9","-"]);
-        assert_eq!(codex.args_resuming("gpt",None,None,"oi",std::path::Path::new("u.json")),["exec","--json","--sandbox","read-only","-"],"sem sessão, o subcomando some e as opções ficam");
+        assert_eq!(codex.args_resuming("gpt",None,Some("t-9"),false,"oi",std::path::Path::new("u.json")),["exec","--json","--sandbox","read-only","resume","t-9","-"]);
+        assert_eq!(codex.args_resuming("gpt",None,None,false,"oi",std::path::Path::new("u.json")),["exec","--json","--sandbox","read-only","-"],"sem sessão, o subcomando some e as opções ficam");
+    }
+
+    /// A chamada de apoio não guarda sessão; a do chat guarda e retoma.
+    #[test] fn a_support_call_does_not_keep_a_session() {
+        let eph=crate::llm::EPHEMERAL;
+        let claude=CliProvider{name:"claude".into(),config:ProviderConfig{command:Some("claude".into()),args:vec!["--print".into(),"--resume".into(),crate::llm::RESUME.into(),eph.into(),"--no-session-persistence".into()],..config("cli")},workdir:Workdir::default()};
+        let path=std::path::Path::new("u.json");
+        assert_eq!(claude.args_resuming("m",None,None,true,"oi",path),["--print","--no-session-persistence"]);
+        assert_eq!(claude.args_resuming("m",None,None,false,"oi",path),["--print"]);
+        assert_eq!(claude.args_resuming("m",None,Some("s-1"),false,"oi",path),["--print","--resume","s-1"]);
+        let codex=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["exec".into(),eph.into(),"--ephemeral".into(),crate::llm::RESUME_THREAD.into(),"-".into()],..config("cli")},workdir:Workdir::default()};
+        assert_eq!(codex.args_resuming("m",None,None,true,"oi",path),["exec","--ephemeral","-"]);
+        assert_eq!(codex.args_resuming("m",None,Some("t-1"),false,"oi",path),["exec","resume","t-1","-"]);
+    }
+
+    /// A flag nova que a CLI instalada não conhece sai da linha de comando;
+    /// a que ela conhece fica.
+    #[cfg(unix)]
+    #[tokio::test] async fn a_flag_the_installed_cli_does_not_know_is_left_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder=tempfile::tempdir().expect("pasta");
+        let agent=folder.path().join("agente");
+        std::fs::write(&agent,"#!/bin/sh\necho 'Usage: agente [options]'\necho '  --ephemeral   Run without persisting'\n").expect("script");
+        std::fs::set_permissions(&agent,std::fs::Permissions::from_mode(0o755)).expect("permissão");
+        let args=|list:&[&str]|list.iter().map(|arg|arg.to_string()).collect::<Vec<_>>();
+        let given=args(&["--print","--permission-prompts","none","--ephemeral","--model","m"]);
+        assert_eq!(crate::llm::understood(&agent,given).await,args(&["--print","--ephemeral","--model","m"]));
+        let plain=args(&["--print","--model","m"]);
+        assert_eq!(crate::llm::understood(&agent,plain.clone()).await,plain,"sem flag opcional, nem pergunta");
     }
 
     #[test] fn the_session_is_read_from_what_the_agent_announces() {

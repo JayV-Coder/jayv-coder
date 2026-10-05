@@ -51,6 +51,32 @@ export function refreshWorkspace() {
   return loadWorkspace(useWorkspace.getState().activeChatId).catch(reportError);
 }
 
+/** A última leitura pedida de cada chat: a resposta que chega depois de uma
+ * mais nova é descartada. */
+const reads = new Map<string, number>();
+let readSeq = 0;
+
+/** Relê só o chat que um aviso do núcleo mudou — um pedido que entrou, um
+ * turno que fechou —, em vez da conversa de todos os chats. Chat que a tela
+ * ainda não conhece (ou que sumiu) relê tudo. */
+export async function refreshChat(chatId: string) {
+  const seq = ++readSeq;
+  reads.set(chatId, seq);
+  try {
+    const chat = await commands.getChat(chatId);
+    if (reads.get(chatId) !== seq) return;
+    const { data } = useWorkspace.getState();
+    if (!chat || !data.chats.some((item) => item.id === chatId)) return void (await refreshWorkspace());
+    const chats = data.chats.map((item) => (item.id === chatId ? chat : item))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+    useWorkspace.setState({ data: { ...data, chats } });
+    announceScope();
+    bus.emit("workspace:loaded", { chats });
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 export function setLayout(layout: Layout) {
   localStorage.setItem(LAYOUT_KEY, layout);
   useWorkspace.setState({ layout });
@@ -164,8 +190,8 @@ export async function deleteProject(projectId: string) {
  * novo sem reler a conversa. */
 export function connectWorkspace() {
   const offs = [
-    onCore("chat-prompt", () => void refreshWorkspace()),
-    onCore("turn-settled", () => void refreshWorkspace()),
+    onCore("chat-prompt", ({ chatId }) => void refreshChat(chatId)),
+    onCore("turn-settled", ({ chatId }) => void refreshChat(chatId)),
     onCore("chat-renamed", ({ chatId, title }) => {
       const { data } = useWorkspace.getState();
       if (!data.chats.some((chat) => chat.id === chatId)) return;
@@ -173,10 +199,7 @@ export function connectWorkspace() {
       announceScope();
     }),
   ];
-  const offSent = bus.on("prompt:sent", ({ chatId }) => {
-    const { activeChatId } = useWorkspace.getState();
-    void loadWorkspace(activeChatId === chatId ? chatId : undefined).catch(reportError);
-  });
+  const offSent = bus.on("prompt:sent", ({ chatId }) => void refreshChat(chatId));
   return () => {
     offSent();
     offs.forEach((off) => void off.then((unlisten) => unlisten()));

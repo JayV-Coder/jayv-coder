@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.59.1"
+version = "0.60.0"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -35,6 +35,7 @@ dotenvy = "0.15"
 globset = "0.4"
 hex = "0.4"
 ignore = "0.4"
+libc = "0.2"
 jsonwebtoken = "9"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -114,6 +115,7 @@ tauri-plugin-dialog = "2.8.0"
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 # O binário de produção sai sem a tabela de símbolos e otimizado entre crates
 # (LTO "thin"). O LTO completo com uma unidade de código só deixava o binário
