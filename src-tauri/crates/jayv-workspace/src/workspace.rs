@@ -60,6 +60,13 @@ pub struct ChatRecord {
     /// cada pedido), `plan` ou `build`. Fica só nesta máquina.
     #[serde(default="auto_mode")]
     pub work_mode: String,
+    /// O último pedido escrito no chat, para o cartão. Vem também no retrato
+    /// leve (`overview`), em que `messages` chega vazio.
+    #[serde(default)]
+    pub last_prompt: Option<String>,
+    /// Quantas mensagens o chat tem, mesmo quando `messages` vem vazio.
+    #[serde(default)]
+    pub message_count: usize,
 }
 
 pub const MODE_PLAN:&str="plan";
@@ -213,7 +220,15 @@ impl WorkspaceStore {
         Ok(store)
     }
 
-    pub fn snapshot(&self) -> Result<WorkspaceData> {
+    pub fn snapshot(&self) -> Result<WorkspaceData> {self.portrait(true)}
+
+    /// O retrato da lateral e dos cartões: projetos e chats com os turnos,
+    /// sem as mensagens — o último pedido e a contagem ficam no lugar delas.
+    /// A conversa de um chat vem inteira por `chat_record`, quando ele é
+    /// aberto. Reler tudo de todos os chats era a maior chamada da tela.
+    pub fn overview(&self) -> Result<WorkspaceData> {self.portrait(false)}
+
+    fn portrait(&self, full: bool) -> Result<WorkspaceData> {
         let project_rows={
             let mut statement=self.connection.prepare("SELECT id,name,root_path,created_at,repo_keys,org_id FROM projects ORDER BY created_at,id")?;
             statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
@@ -225,7 +240,8 @@ impl WorkspaceStore {
         };
         let mut chats=Vec::with_capacity(chat_rows.len());
         for (id,code,project_id,title,created_at,updated_at,work_mode) in chat_rows {
-            chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode});
+            let (last_prompt,message_count)=self.message_summary(&id)?;
+            chats.push(ChatRecord{id:id.clone(),code,project_id,title,messages:if full {self.messages(&id)?} else {vec![]},turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode,last_prompt,message_count});
         }
         Ok(WorkspaceData{projects,chats})
     }
@@ -237,7 +253,8 @@ impl WorkspaceStore {
         let row=self.connection.query_row("SELECT id,code,project_id,title,created_at,updated_at,work_mode FROM chats WHERE id=?1",[chat_id],
             |row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?))).optional()?;
         let Some((id,code,project_id,title,created_at,updated_at,work_mode))=row else { return Ok(None) };
-        Ok(Some(ChatRecord{messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,id,code,project_id,title,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode}))
+        let (last_prompt,message_count)=self.message_summary(&id)?;
+        Ok(Some(ChatRecord{messages:self.messages(&id)?,turns:turns::views_for_chat(&self.connection,&id)?,question:turns::pending_question(&self.connection,&id)?,id,code,project_id,title,created_at:parse_time(&created_at)?,updated_at:parse_time(&updated_at)?,work_mode,last_prompt,message_count}))
     }
 
     pub fn create_project(&mut self, name: &str, root_path: Option<String>) -> Result<ProjectRecord> {
@@ -316,7 +333,7 @@ impl WorkspaceStore {
         anyhow::ensure!(self.project_exists(project_id)?,Text::new("project.notFound"));
         let now=Utc::now();
         let title=title.unwrap_or_default().trim().to_string();
-        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title,messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now,work_mode:auto_mode()};
+        let chat=ChatRecord{id:Uuid::new_v4().to_string(),code:self.unused_chat_code()?,project_id:project_id.into(),title,messages:vec![],turns:vec![],question:None,created_at:now,updated_at:now,work_mode:auto_mode(),last_prompt:None,message_count:0};
         self.connection.execute("INSERT INTO chats(id,code,project_id,title,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",params![chat.id,chat.code,chat.project_id,chat.title,chat.created_at.to_rfc3339(),chat.updated_at.to_rfc3339()])?;
         Ok(chat)
     }
@@ -371,10 +388,14 @@ impl WorkspaceStore {
     /// desenvolvedor lê são forçosamente a mesma coisa. Enquanto houver um
     /// pedido no ar ninguém é chamado — é isto, e não a ordem das chamadas na
     /// interface, que garante um pedido de cada vez.
-    pub fn claim_next_turn(&mut self) -> Result<Option<(Turn,String)>> {
-        if turns::is_flying(&self.connection)? {return Ok(None);}
+    pub fn claim_next_turn(&mut self) -> Result<Option<(Turn,String)>> {self.claim_next_turn_within(1)}
+
+    /// O mesmo, com até `limit` pedidos no ar ao mesmo tempo — de chats
+    /// diferentes: o chat que já tem pedido no ar espera ele voltar.
+    pub fn claim_next_turn_within(&mut self, limit:usize) -> Result<Option<(Turn,String)>> {
+        if turns::flying_count(&self.connection)?>=limit.max(1) {return Ok(None);}
         loop {
-            let Some(turn)=turns::next_queued(&self.connection)? else {return Ok(None)};
+            let Some(turn)=turns::next_queued_free(&self.connection)? else {return Ok(None)};
             let prompt:Option<String>=self.connection.query_row(
                 "SELECT content FROM messages WHERE turn_id=?1 AND role='user' ORDER BY created_at,id LIMIT 1",[&turn.id],|row|row.get(0),
             ).optional()?;
@@ -741,6 +762,13 @@ impl WorkspaceStore {
         Ok(chats)
     }
 
+    /// O último pedido do chat e quantas mensagens ele tem.
+    fn message_summary(&self,chat_id:&str)->Result<(Option<String>,usize)>{
+        let last=self.connection.query_row("SELECT content FROM messages WHERE chat_id=?1 AND role='user' ORDER BY created_at DESC,id DESC LIMIT 1",[chat_id],|row|row.get::<_,String>(0)).optional()?;
+        let count:i64=self.connection.query_row("SELECT COUNT(*) FROM messages WHERE chat_id=?1",[chat_id],|row|row.get(0))?;
+        Ok((last,count as usize))
+    }
+
     fn messages(&self,chat_id:&str)->Result<Vec<WorkspaceMessage>>{
         let rows={
             let mut statement=self.connection.prepare("SELECT role,content,created_at,turn_id FROM messages WHERE chat_id=?1 ORDER BY created_at,id")?;
@@ -920,6 +948,26 @@ mod tests {
         assert_eq!(turn.status,TurnStatus::Queued);
     }
 
+    /// O retrato leve traz o chat sem as mensagens, com o último pedido e a
+    /// contagem; o resto é igual ao inteiro.
+    #[test]
+    fn the_overview_leaves_the_messages_out() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"primeiro",None).expect("um");
+        store.append_answer(&chat.id,&turn.id,"feito").expect("resposta");
+        store.enqueue_prompt(&chat.id,"segundo",None).expect("dois");
+        let light=store.overview().expect("leve");
+        let full=store.snapshot().expect("inteiro");
+        let (light,full)=(&light.chats[0],&full.chats[0]);
+        assert!(light.messages.is_empty());
+        assert_eq!((light.last_prompt.as_deref(),light.message_count),(Some("segundo"),3));
+        assert_eq!((full.last_prompt.as_deref(),full.message_count,full.messages.len()),(Some("segundo"),3,3));
+        assert_eq!(serde_json::to_value(&light.turns).unwrap(),serde_json::to_value(&full.turns).unwrap());
+    }
+
     /// O chat relido sozinho é o mesmo que vem no retrato de todos.
     #[test]
     fn one_chat_reads_the_same_as_in_the_snapshot() {
@@ -1008,6 +1056,32 @@ mod tests {
         let saved=saved.chats.iter().find(|entry|entry.id==chat.id).expect("chat salvo");
         assert_eq!(saved.messages.len(),1,"o pedido continua único e a resposta que falhou saiu");
         assert_eq!(saved.messages[0].role,"user");
+    }
+
+    /// Com dois pedidos ao mesmo tempo, o de outro projeto sai junto; o
+    /// segundo do mesmo chat, e o de outro chat do mesmo projeto, esperam.
+    #[test]
+    fn projects_run_side_by_side_but_each_project_stays_in_order() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let shop=store.create_project("Loja",None).expect("project");
+        let blog=store.create_project("Blog",None).expect("project");
+        let first=store.create_chat(&shop.id,None).expect("chat");
+        let sibling=store.create_chat(&shop.id,None).expect("chat");
+        let other=store.create_chat(&blog.id,None).expect("chat");
+        store.enqueue_prompt(&first.id,"a1",None).expect("a1");
+        store.enqueue_prompt(&first.id,"a2",None).expect("a2");
+        store.enqueue_prompt(&sibling.id,"s1",None).expect("s1");
+        store.enqueue_prompt(&other.id,"b1",None).expect("b1");
+        let (a1,prompt)=store.claim_next_turn_within(2).expect("consulta").expect("a1");
+        assert_eq!(prompt,"a1");
+        let (_,prompt)=store.claim_next_turn_within(2).expect("consulta").expect("b1");
+        assert_eq!(prompt,"b1","o outro projeto não espera");
+        assert!(store.claim_next_turn_within(4).expect("consulta").is_none(),"o a2 e o s1 esperam o a1, mesmo com vaga");
+        store.set_turn_status(&a1.id,TurnStatus::Answered).expect("respondido");
+        let (_,prompt)=store.claim_next_turn_within(2).expect("consulta").expect("a2");
+        assert_eq!(prompt,"a2","na ordem da fila");
+        assert!(store.claim_next_turn_within(4).expect("consulta").is_none(),"o s1 espera o a2");
     }
 
     #[test]

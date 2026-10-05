@@ -85,6 +85,12 @@ export interface Chat {
   updatedAt: string;
   /** O modo fixado no chat: `auto` deixa o Jev escolher a cada pedido. */
   workMode: WorkMode;
+  /** O último pedido escrito, para o cartão: vem mesmo quando `messages`
+   * chega vazio (o retrato leve de `get_workspace`). */
+  lastPrompt?: string | null;
+  /** Quantas mensagens o chat tem. Maior que `messages.length`: a conversa
+   * ainda não foi lida (`refreshChat`). */
+  messageCount?: number;
 }
 
 /** O modo de trabalho do chat: o Jev escolhe, só planejamento ou desenvolvimento. */

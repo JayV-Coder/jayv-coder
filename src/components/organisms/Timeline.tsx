@@ -115,7 +115,9 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
     if (chat && said) void sendPrompt(said.content, chat.id, turnId);
   };
 
-  const empty = !chat || chat.messages.length === 0;
+  // O chat ainda sem a conversa lida não é um chat vazio: as boas-vindas não
+  // piscam enquanto ela chega.
+  const empty = !chat || Math.max(chat.messages.length, chat.messageCount ?? 0) === 0;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">

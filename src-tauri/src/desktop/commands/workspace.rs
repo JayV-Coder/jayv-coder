@@ -6,8 +6,10 @@ use crate::desktop::{forget_chats, SharedDesktopState, SharedForget, SharedWorks
 use crate::workspace::{ChatRecord, ProjectRecord, WorkspaceData};
 use tauri::State;
 
+/// O retrato leve: a conversa de cada chat vem por `get_chat`, quando a tela
+/// o abre.
 #[tauri::command]
-pub(crate) async fn get_workspace(workspace:State<'_,SharedWorkspace>)->Result<WorkspaceData,Text>{workspace.lock().await.snapshot().map_err(failure)}
+pub(crate) async fn get_workspace(workspace:State<'_,SharedWorkspace>)->Result<WorkspaceData,Text>{workspace.lock().await.overview().map_err(failure)}
 
 /// Um chat só, para a tela reler o que um aviso do núcleo mudou.
 #[tauri::command]

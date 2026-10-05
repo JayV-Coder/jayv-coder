@@ -2,42 +2,99 @@
 //! chama o orquestrador e narra o caminho para a tela e para o disco.
 
 use super::events::*;
-use super::{Cancels, DesktopState, QueueBell, SharedDesktopState, SharedForget, SharedWorkspace};
+use super::{Cancels, DesktopState, Lanes, QueueBell, SharedDesktopState, SharedForget, SharedWorkspace};
 use crate::sync::{Connectivity, Link};
 use crate::gatekeeper::{self, EntryCheck, EntryVerdict, ExitCheck, ExitVerdict};
 use crate::progress::{Beat, Debounce, Frame, Pulse, Stop, StopReason};
 use crate::turns::{Turn, TurnStatus};
 use crate::i18n::{self, Text};
 use crate::{asking, features, jev, model, project_memory, search, usage};
-use std::{path::Path, time::Instant};
+use std::{collections::HashMap, path::Path, time::Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 
-/// O atendente da fila: um pedido de cada vez, na ordem em que chegaram, até
-/// não sobrar nenhum — e então volta a dormir no sino. Ele existe uma vez só no
-/// aplicativo, e é por isso que dois envios seguidos nunca disputam o
+/// O atendente da fila: chama os pedidos na ordem em que chegaram, até não
+/// sobrar nenhum — e então volta a dormir no sino. Ele existe uma vez só no
+/// aplicativo, e é por isso que dois envios seguidos nunca disputam um
 /// orquestrador: o segundo não é uma chamada esperando na porta, é uma linha no
 /// banco esperando a vez.
-pub(crate) async fn serve_the_queue(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity,forget:SharedForget,cancels:Cancels) {
+///
+/// Com o plano permitindo, pedidos de projetos diferentes correm ao mesmo
+/// tempo, cada um no seu atendente (`Lanes`); os de um mesmo projeto, e
+/// portanto os de um mesmo chat, saem um de cada vez.
+pub(crate) async fn serve_the_queue(app:AppHandle,lanes:Lanes,workspace:SharedWorkspace,bell:QueueBell,connectivity:Connectivity,forget:SharedForget,cancels:Cancels) {
+    // Os atendimentos no ar, com o atendente e o turno de cada um.
+    let mut running=tokio::task::JoinSet::new();
+    let mut flying:HashMap<tokio::task::Id,(usize,Turn)>=HashMap::new();
+    let mut busy:Vec<bool>=Vec::new();
+    // O atendente que serviu cada projeto por último: o índice da pasta dele
+    // já está lido ali.
+    let mut served:HashMap<String,usize>=HashMap::new();
     loop {
         // Com a sessão válida a fila anda, com rede ou sem: sem o Supabase a
         // portaria e o roteamento decidem pela heurística, e os agentes falam
         // com os provedores deles. Sem sessão (ou com ela vencida) os pedidos
         // esperam, e o sino da volta os chama em ordem.
-        while serves(connectivity.get()) {
-            let claimed=workspace.lock().await.claim_next_turn();
-            let next=match claimed {
-                Ok(Some(next))=>next,
-                Ok(None)=>break,
-                Err(error)=>{eprintln!("fila: não consegui chamar o próximo pedido ({error})");break;}
-            };
-            let (turn,prompt)=next;
-            let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
-            serve(&app,&desk,&workspace,&forget,&cancels,&turn,&prompt).await;
-            let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+        if serves(connectivity.get()) {
+            // Quantos ao mesmo tempo diz o plano (um, sem plano). Os de um
+            // mesmo projeto saem sempre um de cada vez (`claim_next_turn_within`).
+            let _calling=lanes.calling().await;
+            let limit=workspace.lock().await.entitlements().map(|plan|plan.concurrent_turns()).unwrap_or(1);
+            while running.len()<limit {
+                let claimed=workspace.lock().await.claim_next_turn_within(limit);
+                let (turn,prompt)=match claimed {
+                    Ok(Some(next))=>next,
+                    Ok(None)=>break,
+                    Err(error)=>{eprintln!("fila: não consegui chamar o próximo pedido ({error})");break;}
+                };
+                let project=workspace.lock().await.chat_project(&turn.chat_id).ok().flatten().unwrap_or_else(||turn.chat_id.clone());
+                let index=pick_lane(&busy,served.get(&project).copied());
+                served.insert(project,index);
+                let desk=match lanes.lane(index) {
+                    Ok(desk)=>desk,
+                    Err(error)=>{
+                        eprintln!("fila: não consegui abrir outro atendente ({error:#})");
+                        fail_turn(&workspace,&turn.chat_id,&turn,i18n::notice(&[i18n::failure(error)])).await;
+                        let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+                        continue;
+                    }
+                };
+                if index==busy.len() { busy.push(false); }
+                busy[index]=true;
+                let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+                let (app,workspace,forget,cancels,task)=(app.clone(),workspace.clone(),forget.clone(),cancels.clone(),turn.clone());
+                let handle=running.spawn(async move {
+                    serve(&app,&desk,&workspace,&forget,&cancels,&task,&prompt).await;
+                    let _=app.emit(TURN_EVENT,TurnEvent{chat_id:task.chat_id.clone(),turn_id:task.id.clone()});
+                });
+                flying.insert(handle.id(),(index,turn));
+            }
         }
-        bell.notified().await;
+        tokio::select! {
+            _=bell.notified()=>{}
+            Some(done)=running.join_next_with_id(), if !running.is_empty()=>{
+                let id=match &done { Ok((id,()))=>*id, Err(error)=>error.id() };
+                if let Some((index,turn))=flying.remove(&id) {
+                    busy[index]=false;
+                    // O atendimento que caiu no meio deixaria o turno no ar
+                    // para sempre — e o projeto dele parado atrás.
+                    if let Err(error)=done {
+                        eprintln!("fila: o atendimento de `{}` caiu ({error})",turn.id);
+                        fail_turn(&workspace,&turn.chat_id,&turn,i18n::notice(&[Text::new("turn.noAnswer")])).await;
+                        let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+                    }
+                }
+            }
+        }
     }
+}
+
+/// O atendente livre para o próximo pedido: o que serviu o projeto da última
+/// vez, se estiver livre; senão o primeiro livre; sem nenhum livre, um novo.
+fn pick_lane(busy:&[bool],preferred:Option<usize>)->usize {
+    preferred.filter(|index|busy.get(*index)==Some(&false))
+        .or_else(||busy.iter().position(|taken|!taken))
+        .unwrap_or(busy.len())
 }
 
 /// Se a fila anda com esta conexão.
@@ -348,9 +405,14 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // pedidos na fila vale para eles também.
     state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
     // A sessão do agente sobrevive ao reinício do app: a guardada volta para a
-    // memória antes do pedido, e a de depois dele é guardada de novo.
-    let restored=if state.orchestrator.memory.agent_session(chat_id).is_none() { workspace.lock().await.agent_session(chat_id).ok().flatten() } else { None };
-    if let Some(kept)=restored { state.orchestrator.memory.keep_agent_session(chat_id,kept); }
+    // memória antes do pedido, e a de depois dele é guardada de novo. O banco
+    // é quem manda: com pedidos em paralelo, o chat pode ter sido atendido da
+    // última vez por outro atendente, ou limpo enquanto este atendia outro.
+    match workspace.lock().await.agent_session(chat_id) {
+        Ok(Some(kept))=>state.orchestrator.memory.keep_agent_session(chat_id,kept),
+        Ok(None)=>state.orchestrator.memory.forget_agent_session(chat_id),
+        Err(error)=>eprintln!("sessão do agente: não consegui ler a guardada ({error:#})"),
+    }
     let before=guard.before.await.unwrap_or_default();
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
     let touched={
@@ -567,6 +629,14 @@ fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// O projeto volta ao atendente que já leu a pasta dele, se estiver livre.
+    #[test] fn a_project_goes_back_to_the_lane_that_knows_it() {
+        assert_eq!(pick_lane(&[],None),0,"o primeiro pedido abre o primeiro atendente");
+        assert_eq!(pick_lane(&[true,false,false],Some(2)),2,"o que já conhece o projeto");
+        assert_eq!(pick_lane(&[true,false,false],Some(0)),1,"ocupado: o primeiro livre");
+        assert_eq!(pick_lane(&[true,true],Some(1)),2,"todos ocupados: um novo");
+    }
 
     /// Com sessão, a fila anda com rede ou sem; sem sessão, espera.
     #[test] fn the_queue_runs_with_a_session_even_offline() {

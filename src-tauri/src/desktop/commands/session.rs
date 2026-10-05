@@ -5,7 +5,7 @@
 use crate::i18n::{failure, Text};
 use crate::cloud::{remote::Remote, session::{self, fetch_jwks, validate_offline, Identity, SessionError}};
 use crate::desktop::events::{LinkEvent, LINK_EVENT, MODELS_EVENT, TRANSLATIONS_EVENT};
-use crate::desktop::{both, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
+use crate::desktop::{Lanes, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
 use crate::local::global::{GlobalCache, LocaleRow};
 use crate::memory::MemoryManager;
 use crate::sync::{Connectivity, Link};
@@ -61,10 +61,17 @@ impl From<&Identity> for SessionView {
     fn from(identity:&Identity)->Self { Self{user_id:identity.user_id.clone(),email:identity.email.clone(),expires_at:identity.expires_at} }
 }
 
-/// Troca o banco do orquestrador e da fila. Pega os dois cadeados na ordem
-/// de sempre, então espera o pedido que está no ar terminar.
-async fn adopt(desk:&SharedDesktopState,workspace:&SharedWorkspace,store:WorkspaceStore)->anyhow::Result<()> {
-    let (mut desk,mut workspace)=both(desk,workspace).await;
+/// Troca o banco do orquestrador e da fila. Pega os cadeados na ordem de
+/// sempre — os atendentes, depois o banco —, então espera os pedidos que estão
+/// no ar terminarem. Os atendentes extras vão embora com o usuário antigo.
+async fn adopt(lanes:&Lanes,workspace:&SharedWorkspace,store:WorkspaceStore)->anyhow::Result<()> {
+    // A fila para de chamar antes: o pedido chamado do banco antigo não sai
+    // para um atendente que já vai servir o novo.
+    let _switching=lanes.switching().await;
+    let first=lanes.first();
+    let mut desk=first.lock().await;
+    let extras=lanes.hold_extras().await;
+    let mut workspace=workspace.lock().await;
     desk.orchestrator.use_llm(&store.llm_settings()?);
     let defaults=desk.orchestrator.core_defaults();
     desk.orchestrator.use_core(&store.core_settings(&defaults)?);
@@ -74,6 +81,8 @@ async fn adopt(desk:&SharedDesktopState,workspace:&SharedWorkspace,store:Workspa
         desk.orchestrator.memory.set_conversation(chat.id,conversation);
     }
     *workspace=store;
+    drop(extras);
+    lanes.retire_extras();
     Ok(())
 }
 
@@ -81,7 +90,7 @@ async fn adopt(desk:&SharedDesktopState,workspace:&SharedWorkspace,store:Workspa
 /// volta ao app. Trocar de usuário troca o banco; o mesmo usuário com token
 /// novo só destrava a sincronização.
 #[tauri::command]
-pub(crate) async fn set_session(app:AppHandle,desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,token:String)->Result<SessionView,Text> {
+pub(crate) async fn set_session(app:AppHandle,lanes:State<'_,Lanes>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,token:String)->Result<SessionView,Text> {
     let (identity,changed,dir)={
         let mut state=session.lock().await;
         let identity=state.validate(&token).await?;
@@ -93,8 +102,8 @@ pub(crate) async fn set_session(app:AppHandle,desk:State<'_,SharedDesktopState>,
     session::set_current(Some(token));
     if changed {
         let store=WorkspaceStore::for_user(&dir,&identity.user_id).map_err(failure)?;
-        adopt(&desk,&workspace,store).await.map_err(failure)?;
-        tauri::async_runtime::spawn(refresh_models(app.clone(),desk.inner().clone(),workspace.inner().clone()));
+        adopt(&lanes,&workspace,store).await.map_err(failure)?;
+        tauri::async_runtime::spawn(refresh_models(app.clone(),lanes.first(),workspace.inner().clone()));
     }
     sync.0.notify_one();
     queue.notify_one();
@@ -104,14 +113,14 @@ pub(crate) async fn set_session(app:AppHandle,desk:State<'_,SharedDesktopState>,
 
 /// Logout: o banco do usuário fecha e o app volta ao banco em memória.
 #[tauri::command]
-pub(crate) async fn clear_session(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>)->Result<(),Text> {
+pub(crate) async fn clear_session(lanes:State<'_,Lanes>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>)->Result<(),Text> {
     session::set_current(None);
     {
         let mut state=session.lock().await;
         state.identity=None;
         state.cache.set_last_user(None).map_err(failure)?;
     }
-    adopt(&desk,&workspace,WorkspaceStore::in_memory().map_err(failure)?).await.map_err(failure)?;
+    adopt(&lanes,&workspace,WorkspaceStore::in_memory().map_err(failure)?).await.map_err(failure)?;
     sync.0.notify_one();
     Ok(())
 }

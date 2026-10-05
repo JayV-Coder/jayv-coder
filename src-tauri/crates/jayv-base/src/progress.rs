@@ -89,7 +89,7 @@ impl Beat {
 /// SQLite. Os pedaços são pequenos, a consumidora grava com folga, e um envio
 /// que nunca bloqueia é mais importante aqui do que um teto de memória.
 #[derive(Clone,Default)]
-pub struct Pulse { sender:Option<mpsc::UnboundedSender<Beat>>, stop:Stop }
+pub struct Pulse { sender:Option<mpsc::UnboundedSender<Beat>>, stop:Stop, lines:Option<std::sync::Arc<std::sync::Mutex<String>>> }
 
 impl Pulse {
     pub fn channel()->(Self,mpsc::UnboundedReceiver<Beat>) { Self::channel_with(Stop::default()) }
@@ -97,19 +97,48 @@ impl Pulse {
     /// O canal de um pedido que pode ser parado por `stop`.
     pub fn channel_with(stop:Stop)->(Self,mpsc::UnboundedReceiver<Beat>) {
         let (sender,receiver)=mpsc::unbounded_channel();
-        (Self{sender:Some(sender),stop},receiver)
+        (Self{sender:Some(sender),stop,lines:None},receiver)
     }
 
     pub fn silent()->Self { Self::default() }
 
     /// O mesmo pedido sem narração: as chamadas de apoio (plano, revisão,
     /// divisão) não falam na tela, mas param junto quando ele é parado.
-    pub fn quiet(&self)->Self { Self{sender:None,stop:self.stop.clone()} }
+    pub fn quiet(&self)->Self { Self{sender:None,stop:self.stop.clone(),lines:None} }
+
+    /// O mesmo pedido, com a fala de uma chamada de apoio contada como etapa,
+    /// linha a linha (`Beat::Agent`): o plano do `planFirst` aparece na faixa
+    /// enquanto é escrito, sem entrar na resposta. O resto do que essa chamada
+    /// narra fica de fora. `finish_lines` solta a última linha.
+    pub fn as_lines(&self)->Self { Self{sender:self.sender.clone(),stop:self.stop.clone(),lines:Some(Default::default())} }
 
     /// Engole erro de envio. Um canal fechado — a janela que sumiu, a
     /// consumidora que morreu — não pode derrubar o pedido que está sendo
     /// atendido; o turno vale mais que a narração dele.
-    pub fn beat(&self,beat:Beat) { if let Some(sender)=&self.sender { let _=sender.send(beat); } }
+    pub fn beat(&self,beat:Beat) {
+        let Some(sender)=&self.sender else { return };
+        let Some(lines)=&self.lines else { let _=sender.send(beat); return };
+        let Beat::Chunk{text}=beat else { return };
+        let mut pending=lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.push_str(&text);
+        while let Some(end)=pending.find('\n') {
+            let line:String=pending.drain(..=end).collect();
+            Self::send_line(sender,&line);
+        }
+    }
+
+    /// A última linha da fala contada em linhas, sem quebra no fim.
+    pub fn finish_lines(&self) {
+        let (Some(sender),Some(lines))=(&self.sender,&self.lines) else { return };
+        let line=std::mem::take(&mut *lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        Self::send_line(sender,&line);
+    }
+
+    fn send_line(sender:&mpsc::UnboundedSender<Beat>,line:&str) {
+        let line=line.replace('\u{2063}',"");
+        let line=line.trim();
+        if !line.is_empty() { let _=sender.send(Beat::Agent{line:line.to_string()}); }
+    }
 
     pub fn is_silent(&self)->bool { self.sender.is_none() }
 
@@ -300,6 +329,22 @@ mod tests {
         assert_eq!(waiting.await.expect("acordou"),StopReason::Asked);
         assert_eq!(support.stop().stopped().await,StopReason::Asked,"já parado, volta na hora");
         assert_eq!(StopReason::Ceiling{minutes:30}.text().key,"turn.ceiling");
+    }
+
+    /// A fala contada em linhas vira uma etapa por linha, sem as vazias e sem
+    /// o resto da narração; a última sai no fim.
+    #[tokio::test] async fn speech_told_in_lines_becomes_one_step_per_line() {
+        let (pulse,mut beats)=Pulse::channel();
+        let plan=pulse.as_lines();
+        plan.beat(Beat::Chunk{text:"1. Ler o rote".into()});
+        plan.beat(Beat::Running);
+        plan.beat(Beat::Chunk{text:"ador\n\n2. Mudar".into()});
+        plan.beat(Beat::Chunk{text:" o cache".into()});
+        plan.finish_lines();
+        drop((pulse,plan));
+        let mut lines=Vec::new();
+        while let Some(beat)=beats.recv().await { match beat { Beat::Agent{line}=>lines.push(line), other=>panic!("só linhas: {}",other.kind()) } }
+        assert_eq!(lines,["1. Ler o roteador","2. Mudar o cache"]);
     }
 
     #[test] fn many_small_chunks_make_a_single_write() {

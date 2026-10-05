@@ -30,6 +30,61 @@ pub struct DesktopState {
 
 pub type SharedDesktopState=Arc<Mutex<DesktopState>>;
 
+/// Os atendentes de pedidos: um orquestrador por pedido no ar. O primeiro é o
+/// de sempre (`SharedDesktopState`), que as telas usam; os outros nascem quando
+/// o plano deixa mais de um pedido ao mesmo tempo, cada um com a sua pasta, os
+/// seus agentes e o seu índice, e dividem com o primeiro o que os pedidos
+/// dividem (`Orchestrator::share`).
+///
+/// Quem precisa de mais de um cadeado pega sempre nesta ordem: os
+/// atendentes (o primeiro, depois os extras, em ordem), depois o banco. Cada
+/// atendimento segura só o seu atendente e encosta no banco em trechos curtos;
+/// inverter a ordem em qualquer comando travaria os dois.
+#[derive(Clone)]
+pub struct Lanes { first:SharedDesktopState, extra:Arc<std::sync::Mutex<Vec<SharedDesktopState>>>, config_path:PathBuf, home_root:PathBuf, shared:Arc<crate::orchestrator::Shared>, switching:Arc<tokio::sync::RwLock<()>> }
+
+impl Lanes {
+    pub(crate) fn new(first:SharedDesktopState,orchestrator:&Orchestrator,home_root:PathBuf)->Self {
+        Self{first,extra:Arc::default(),config_path:orchestrator.config_path.clone(),home_root,shared:orchestrator.shared(),switching:Arc::default()}
+    }
+
+    /// A fila chama pedidos com isto na mão; a troca de usuário o pega por
+    /// inteiro (`switching`). Assim nenhum pedido do banco antigo sai para um
+    /// atendente novo enquanto o banco é trocado.
+    pub(crate) async fn calling(&self)->tokio::sync::RwLockReadGuard<'_,()> { self.switching.read().await }
+    pub(crate) async fn switching(&self)->tokio::sync::RwLockWriteGuard<'_,()> { self.switching.write().await }
+
+    /// O primeiro atendente: o que as telas e os comandos usam.
+    pub(crate) fn first(&self)->SharedDesktopState { self.first.clone() }
+
+    fn extras(&self)->std::sync::MutexGuard<'_,Vec<SharedDesktopState>> { self.extra.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
+
+    /// O atendente `index`, criado na primeira vez que ele é preciso.
+    pub(crate) fn lane(&self,index:usize)->anyhow::Result<SharedDesktopState> {
+        if index==0 { return Ok(self.first.clone()); }
+        let mut extra=self.extras();
+        while extra.len()<index {
+            let mut orchestrator=Orchestrator::unindexed(self.config_path.clone(),self.home_root.clone())?;
+            orchestrator.share(self.shared.clone());
+            extra.push(Arc::new(Mutex::new(DesktopState{orchestrator,home_root:self.home_root.clone()})));
+        }
+        Ok(extra[index-1].clone())
+    }
+
+    /// Espera os atendentes extras ficarem livres e os segura. Trocar de
+    /// usuário não pode acontecer com um pedido no ar em nenhum deles.
+    pub(crate) async fn hold_extras(&self)->Vec<tokio::sync::OwnedMutexGuard<DesktopState>> {
+        let lanes:Vec<SharedDesktopState>=self.extras().clone();
+        let mut held=Vec::with_capacity(lanes.len());
+        for lane in lanes { held.push(lane.lock_owned().await); }
+        held
+    }
+
+    /// Os atendentes extras vão embora: os próximos nascem do zero, sem a
+    /// memória de conversa de outro usuário.
+    pub(crate) fn retire_extras(&self) { self.extras().clear(); }
+}
+
 /// O retrato do orquestrador que as telas de leitura mostram, guardado fora do
 /// cadeado dele. O atendente segura o orquestrador do começo ao fim de um
 /// pedido; sem este retrato, Configurações e Sistema ficavam em "Carregando…"
@@ -39,7 +94,7 @@ pub struct OrchestratorFacts { pub config_path:PathBuf, pub providers:usize, pub
 
 impl OrchestratorFacts {
     pub fn of(orchestrator:&Orchestrator)->Self {
-        Self{config_path:orchestrator.config_path.clone(),providers:orchestrator.executable_provider_count(),models:orchestrator.executable_model_count(),indexed_files:orchestrator.rag.len(),cache_entries:orchestrator.cache.len(),session_messages:orchestrator.memory.session_messages(),performance_records:orchestrator.performance.len()}
+        Self{config_path:orchestrator.config_path.clone(),providers:orchestrator.executable_provider_count(),models:orchestrator.executable_model_count(),indexed_files:orchestrator.rag.len(),cache_entries:orchestrator.cache.len(),session_messages:orchestrator.memory.session_messages(),performance_records:orchestrator.performance_len()}
     }
 }
 
@@ -115,16 +170,6 @@ pub(crate) fn require_session()->Result<(),crate::i18n::Text> {
     crate::cloud::session::current().map(drop).ok_or_else(||crate::i18n::Text::new("session.required"))
 }
 
-/// Quem precisa dos dois cadeados pega sempre nesta ordem — orquestrador,
-/// depois banco. O atendente segura o orquestrador do começo ao fim do pedido e
-/// encosta no banco em trechos curtos; inverter a ordem em qualquer comando
-/// travaria os dois.
-pub(crate) async fn both<'a>(desk:&'a SharedDesktopState,workspace:&'a SharedWorkspace)->(tokio::sync::MutexGuard<'a,DesktopState>,tokio::sync::MutexGuard<'a,WorkspaceStore>) {
-    let desk=desk.lock().await;
-    let workspace=workspace.lock().await;
-    (desk,workspace)
-}
-
 /// No Wayland com driver NVIDIA, o renderizador DMA-BUF do WebKitGTK derruba o
 /// processo antes da janela aparecer ("Error 71 (Protocol error) dispatching to
 /// Wayland display"): aberto pelo menu, o app abria e fechava. Quem já escolheu
@@ -153,7 +198,9 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
 
     let http=crate::lockdown::http_client(Duration::from_secs(30)).build()?;
     let facts:SharedFacts=Arc::new(std::sync::Mutex::new(OrchestratorFacts::of(&orchestrator)));
-    let desk:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root}));
+    let first:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:root.clone()}));
+    let lanes=Lanes::new(first.clone(),&first.try_lock().expect("recém-criado").orchestrator,root);
+    let desk=first;
     let workspace:SharedWorkspace=Arc::new(Mutex::new(workspace));
     let bell:QueueBell=Arc::new(Notify::new());
     let sync_bell=SyncBell(Arc::new(Notify::new()));
@@ -175,6 +222,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         .manage(live::SharedLive::default())
         .manage(SharedForget::default())
         .manage(Cancels::default())
+        .manage(lanes)
         .manage(tray::TrayReady::default())
         .on_window_event(tray::on_window_event)
         .setup(move |app|{
@@ -188,7 +236,6 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             let handle=app.handle().clone();
             tray::install(&handle);
             tauri::async_runtime::spawn(tray::watch_updates(handle.clone()));
-            let desk=app.state::<SharedDesktopState>().inner().clone();
             let workspace=app.state::<SharedWorkspace>().inner().clone();
             let bell=app.state::<QueueBell>().inner().clone();
             let sync_bell=app.state::<SyncBell>().0.clone();
@@ -203,7 +250,8 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             tauri::async_runtime::spawn(books::keep_the_books(handle.clone(),workspace.clone(),entries));
             let forget=app.state::<SharedForget>().inner().clone();
             let cancels=app.state::<Cancels>().inner().clone();
-            tauri::async_runtime::spawn(queue::serve_the_queue(handle,desk,workspace,bell,connectivity,forget,cancels));
+            let lanes=app.state::<Lanes>().inner().clone();
+            tauri::async_runtime::spawn(queue::serve_the_queue(handle,lanes,workspace,bell,connectivity,forget,cancels));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -289,6 +337,24 @@ mod tests {
         assert_eq!(cancels.open("t1").reason(),Some(crate::progress::StopReason::Asked));
         cancels.close("t1");
         assert_eq!(cancels.open("t1").reason(),None,"o mesmo turno reenviado começa sem parada");
+    }
+
+    /// O segundo atendente nasce com a sua pasta e os seus agentes, mas
+    /// divide com o primeiro o que os pedidos aprendem; trocar de usuário o
+    /// aposenta.
+    #[tokio::test] async fn a_second_lane_shares_what_turns_learn() {
+        let dir=tempfile::tempdir().expect("pasta");
+        let orchestrator=Orchestrator::unindexed(dir.path().join("missing.yaml"),dir.path().to_path_buf()).expect("orquestrador");
+        let first:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:dir.path().to_path_buf()}));
+        let lanes=Lanes::new(first.clone(),&first.lock().await.orchestrator,dir.path().to_path_buf());
+        assert!(Arc::ptr_eq(&lanes.lane(0).expect("primeiro"),&first));
+        let second=lanes.lane(1).expect("segundo");
+        assert!(!Arc::ptr_eq(&second,&first),"outro orquestrador");
+        assert!(Arc::ptr_eq(&second.lock().await.orchestrator.shared(),&first.lock().await.orchestrator.shared()),"o mesmo aprendizado");
+        assert!(Arc::ptr_eq(&lanes.lane(1).expect("de novo"),&second),"o mesmo atendente volta");
+        assert_eq!(lanes.hold_extras().await.len(),1);
+        lanes.retire_extras();
+        assert!(!Arc::ptr_eq(&lanes.lane(1).expect("novo"),&second),"depois da troca de usuário, nasce outro");
     }
 
     /// O ambiente só pode mudar enquanto o processo tem uma thread só. Quem

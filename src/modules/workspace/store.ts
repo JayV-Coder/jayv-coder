@@ -30,7 +30,11 @@ function announceScope() {
 /** Relê o banco. O chat preferido, quando existe, passa a ser o aberto; senão
  * o aberto só continua se ainda pertencer ao projeto. */
 export async function loadWorkspace(preferredChatId?: string | null) {
-  const data = await commands.getWorkspace();
+  // O retrato vem leve (sem as conversas); a do chat que vai ficar aberto
+  // chega junto, para a tela não piscar vazia.
+  const wanted = preferredChatId ?? useWorkspace.getState().activeChatId;
+  const [light, open] = await Promise.all([commands.getWorkspace(), wanted ? commands.getChat(wanted).catch(() => null) : Promise.resolve(null)]);
+  const data = open ? { ...light, chats: light.chats.map((chat) => (chat.id === open.id ? open : chat)) } : light;
   const state = useWorkspace.getState();
   let activeProjectId = data.projects.some((project) => project.id === state.activeProjectId) ? state.activeProjectId : null;
   let activeChatId = state.activeChatId;
@@ -44,6 +48,15 @@ export async function loadWorkspace(preferredChatId?: string | null) {
   useWorkspace.setState({ data, activeProjectId, activeChatId });
   announceScope();
   bus.emit("workspace:loaded", { chats: data.chats });
+  if (activeChatId && activeChatId !== open?.id) void ensureChat(activeChatId);
+}
+
+/** Lê a conversa do chat se ela ainda não veio (o retrato leve só traz a
+ * contagem). */
+export function ensureChat(chatId: string) {
+  const chat = useWorkspace.getState().data.chats.find((item) => item.id === chatId);
+  if (chat && chat.messages.length < (chat.messageCount ?? 0)) return refreshChat(chatId);
+  return Promise.resolve();
 }
 
 /** Relê o banco mantendo a conversa aberta. */
@@ -111,8 +124,10 @@ export function openProject(projectId: string) {
   const { data, activeChatId } = useWorkspace.getState();
   const chats = chatsOf(data, projectId);
   const keep = chats.some((chat) => chat.id === activeChatId);
-  useWorkspace.setState({ activeProjectId: projectId, activeChatId: keep ? activeChatId : chats[0]?.id ?? null });
+  const next = keep ? activeChatId : chats[0]?.id ?? null;
+  useWorkspace.setState({ activeProjectId: projectId, activeChatId: next });
   announceScope();
+  if (next) void ensureChat(next);
   navigate("chats");
 }
 
@@ -121,6 +136,7 @@ export function openChat(chatId: string) {
   if (!chat) return;
   useWorkspace.setState({ activeProjectId: chat.projectId, activeChatId: chatId });
   announceScope();
+  void ensureChat(chatId);
   navigate("chat");
 }
 

@@ -10,7 +10,7 @@ falhar nos casos medidos e o plano mantém ligado o que protege o usuário.
 ## Global Constraints
 
 - Identificadores em inglês; texto de tela só pelo i18n, com migração nos 10 idiomas.
-- Cada onda sobe a versão nos cinco lugares (onda 1: 0.59.1; onda 2: 0.60.0; onda 3: 0.61.0).
+- Cada onda sobe a versão nos cinco lugares (onda 1: 0.59.1; onda 2: 0.60.0; onda 3: 0.62.0).
 - O que funciona continua funcionando: a resposta gravada do agente não muda de forma.
 - Recurso de núcleo nunca fica desligado — nem offline, nem com servidor antigo.
 
@@ -91,6 +91,15 @@ falhar nos casos medidos e o plano mantém ligado o que protege o usuário.
 - [x] Quadro por `requestAnimationFrame` e seletor por turno.
 - [x] `manual`/`dontAsk`, `--permission-prompts none` (com `llm::understood`), `safeMode` sem símbolos, chamadas de apoio sem sessão, `--silent` e `--skip-git-repo-check` fixos.
 
-## Onda 3 — 0.61.0
+## Onda 3 — 0.62.0
 
-### Task 13: `TurnContext`, `Shared` e o semáforo por plano (L1)
+(A 0.61.0 saiu no meio, com o painel de andamento.)
+
+### Task 13: pedidos em paralelo por plano (L1)
+- [x] `orchestrator::Shared`: desempenho, planos, reclamações e "preso no planejamento" divididos entre orquestradores.
+- [x] `desktop::Lanes` e a fila com até `max_concurrent_turns` pedidos; um projeto de cada vez; afinidade de atendente por projeto.
+- [x] Sessão do agente lida do banco a cada pedido; troca de usuário segura e aposenta os atendentes extras.
+
+### Task 14: o que ficou da onda 2 (L6, L8)
+- [x] `get_workspace` leve e `get_chat`/`ensureChat` ao abrir o chat.
+- [x] Plano do `planFirst` na faixa, linha a linha.
