@@ -294,6 +294,10 @@ export interface CoreSettings {
   planFirst: boolean;
   /** Num pedido complexo do build, partes vão a agentes diferentes ao mesmo tempo. */
   parallelTasks: boolean;
+  /** Num chat com sessão viva, o modelo da sessão fica (padrão ligado). */
+  keepSessionModel: boolean;
+  /** A sessão do agente atravessa a troca entre planejamento e build. */
+  resumeAcrossModes: boolean;
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */

@@ -4,7 +4,7 @@ use crate::{
     firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::{AgentSession, MemoryManager},
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
     progress::{Beat, ModeSwitch, Pulse},
-    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{configuration_selection, rank_models, required_capabilities, PerformanceTracker, Tiebreak},
+    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{configuration_selection, keep_session_model, rank_models, required_capabilities, PerformanceTracker, Tiebreak},
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -245,7 +245,10 @@ impl Orchestrator {
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
         // O agente que o chat já usa desempata: a sessão dele é retomada.
         let sticky=self.memory.agent_session(session_id).map(|kept|(kept.provider.clone(),kept.model.clone()));
-        let ranked=rank_models(&self.config,&intent.intent,&complexity,&context,&self.performance,&Tiebreak{sticky:sticky.as_ref().map(|(provider,model)|(provider.as_str(),model.as_str())),seed:session_id});
+        let sticky=sticky.as_ref().map(|(provider,model)|(provider.as_str(),model.as_str()));
+        let ranked=rank_models(&self.config,&intent.intent,&complexity,&context,&self.performance,&Tiebreak{sticky,seed:session_id});
+        // O modelo da sessão vem antes do porte: trocar abre sessão nova.
+        let ranked=if self.config.jev.keep_session_model { keep_session_model(ranked,&self.config,sticky,&intent.intent,&complexity) } else { ranked };
         let mut selection=ranked.first().cloned().unwrap_or_else(||configuration_selection(&self.config,&complexity,&context));
         selection.mode=mode.into();
         selection.agent=self.agents.for_intent(&intent.intent).map(|agent|agent.name.clone());
@@ -272,7 +275,7 @@ impl Orchestrator {
             self.run_parallel(brief.as_deref().unwrap_or(&normalized),&context,&ranked,session_id,pulse).await
         } else { None };
         let mut execution=match split {
-            Some((response,first))=>{ selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..first}; Ok((response,false)) }
+            Some((response,first))=>{ selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..first}; Ok((response,false,0)) }
             None=>{
                 // Pedido complexo no build: um modelo de raciocínio planeja
                 // antes, em somente leitura, e o plano vai junto ao agente que
@@ -297,7 +300,7 @@ impl Orchestrator {
             pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
             execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
         }
-        if let (Some(watch),Ok((response,_)))=(watch,&mut execution) {
+        if let (Some(watch),Ok((response,_,_)))=(watch,&mut execution) {
             if usable_response(response) {
                 if let Some(review)=self.review(&normalized,&complexity,&context,&selection,session_id,watch,pulse).await {
                     pulse.beat(Beat::Chunk{text:review.clone()});
@@ -310,9 +313,10 @@ impl Orchestrator {
         // entra na busca, no mapa e nos símbolos.
         if mode==MODE_BUILD { self.rag.invalidate(); }
         let decision=Decision { model_provider:selection.provider.clone(), model_name:selection.model_name.clone(), estimated_tokens:selection.estimated_tokens, context_files_count:context.relevant_files.len(), rag_files_count:context.snippets.len() };
-        let resumed=execution.as_ref().is_ok_and(|(_,resumed)|*resumed);
-        let execution=execution.map(|(response,_)|response);
-        self.remember_agent_session(session_id,&selection,execution.as_ref().ok(),resumed);
+        let resumed=execution.as_ref().is_ok_and(|(_,resumed,_)|*resumed);
+        let instructions=execution.as_ref().map_or(0,|(_,_,instructions)|*instructions);
+        let execution=execution.map(|(response,_,_)|response);
+        self.remember_agent_session(session_id,&selection,execution.as_ref().ok(),resumed,instructions);
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
             Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
@@ -457,8 +461,13 @@ impl Orchestrator {
     /// própria, e mandar os dois era pagar a leitura duas vezes. Quando o
     /// agente sabe retomar a sessão do chat, ela é retomada e o histórico não
     /// vai de novo; se a retomada falhar por causa da sessão, o pedido sai do
-    /// zero, com o histórico. Devolve também se a sessão foi retomada.
-    async fn execute(&self,input:&str,extras:&[String],complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool)> {
+    /// zero, com o histórico. Devolve também se a sessão foi retomada e a
+    /// impressão das instruções de sistema com que a sessão está.
+    ///
+    /// Na volta retomada as instruções só vão de novo quando mudaram — outra
+    /// nota de modo, outro agente — ou quando a sessão trocou de modo; senão
+    /// vai só o pedido: a sessão já as tem.
+    async fn execute(&self,input:&str,extras:&[String],complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool,u64)> {
         let pool=self.pool(&selection.mode);
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
@@ -467,11 +476,15 @@ impl Orchestrator {
         let system=format!("{system}\n{}",language_note());
         let user=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
         let effort=Some(effort_for(complexity));
+        let instructions=fingerprint(&system);
         let fresh=match self.resume_check(session_id,provider.as_ref(),selection) {
-            Ok(resume)=>{
-                let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
-                match provider.chat_turn(&messages,&selection.model_name,effort,Some(&resume),pulse).await {
-                    Ok(response)=>return Ok((response,true)),
+            Ok(Resume{id,crossed,instructions:kept})=>{
+                let mut messages=Vec::new();
+                if crossed||kept!=instructions { messages.push(ChatMessage{role:"system".into(),content:system.clone()}); }
+                if crossed { messages.push(ChatMessage{role:"system".into(),content:(if self.writes(&selection.mode) {MODE_TO_BUILD_NOTE} else {MODE_TO_PLAN_NOTE}).into()}); }
+                messages.push(ChatMessage{role:"user".into(),content:user.clone()});
+                match provider.chat_turn(&messages,&selection.model_name,effort,Some(&id),pulse).await {
+                    Ok(response)=>return Ok((response,true,instructions)),
                     Err(error) if !lost_session(&error)=>return Err(error),
                     Err(error)=>{ eprintln!("sessão do agente: não retomou, começando outra ({error:#})"); NewSession::Lost }
                 }
@@ -486,7 +499,7 @@ impl Orchestrator {
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(short_history(self.memory.conversation(session_id)));
         messages.push(ChatMessage{role:"user".into(),content:user});
-        Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false))
+        Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false,instructions))
     }
 
     /// O plano escrito por um modelo de raciocínio, em somente leitura, para
@@ -630,7 +643,7 @@ impl Orchestrator {
         let response=provider.chat_turn(&messages,&selection.model_name,None,resume.as_deref(),&Pulse::silent()).await?;
         self.memory.add_message(session_id,"user",input);
         self.memory.add_message(session_id,"assistant",response.response.clone());
-        self.remember_agent_session(session_id,selection,Some(&response),resume.is_some());
+        self.remember_agent_session(session_id,selection,Some(&response),resume.is_some(),0);
         Ok(response)
     }
 
@@ -640,31 +653,35 @@ impl Orchestrator {
     /// `--permission-mode plan` e a nota de somente leitura; retomada no
     /// build, o agente seguia dizendo que a sessão permanecia somente leitura.
     fn resumable_session(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->Option<String> {
-        self.resume_check(session_id,provider,selection).ok()
+        self.resume_check(session_id,provider,selection).ok().map(|resume|resume.id)
     }
 
     /// A sessão a retomar ou, quando não há, o motivo. O motivo vai para as
     /// marcas do Jev (`session_new:<motivo>`): é com ele que se mede por que
     /// o agente relê o projeto do zero.
-    fn resume_check(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->std::result::Result<String,NewSession> {
+    ///
+    /// Com `resume_across_modes`, a sessão do outro lado da escrita também é
+    /// retomada, e o pedido leva uma nota dizendo que o modo mudou.
+    fn resume_check(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->std::result::Result<Resume,NewSession> {
         if !provider.resumes() { return Err(NewSession::CannotResume); }
         let kept=self.memory.agent_session(session_id).ok_or(NewSession::First)?;
         if kept.provider!=selection.provider { return Err(NewSession::OtherAgent); }
         if kept.model!=selection.model_name { return Err(NewSession::OtherModel); }
         if kept.root!=self.rag.project_info().root { return Err(NewSession::OtherFolder); }
-        if kept.writes!=self.writes(&selection.mode) { return Err(NewSession::OtherMode); }
+        let crossed=kept.writes!=self.writes(&selection.mode);
+        if crossed&&!self.config.jev.resume_across_modes { return Err(NewSession::OtherMode); }
         if kept.turns>=RESUMED_TURNS { return Err(NewSession::TurnCeiling); }
-        Ok(kept.id.clone())
+        Ok(Resume{id:kept.id.clone(),crossed,instructions:kept.instructions})
     }
 
     /// Guarda (ou esquece) a sessão que o agente acabou de usar, para o pedido
     /// seguinte do chat retomá-la.
-    fn remember_agent_session(&mut self,session_id:&str,selection:&ModelSelection,response:Option<&ProviderResponse>,resumed:bool) {
+    fn remember_agent_session(&mut self,session_id:&str,selection:&ModelSelection,response:Option<&ProviderResponse>,resumed:bool,instructions:u64) {
         let resumes=self.providers.get(&selection.provider).is_some_and(|provider|provider.resumes());
         let Some(id)=response.and_then(|response|response.session.clone()).filter(|_|resumes) else { self.memory.forget_agent_session(session_id); return };
         let turns=if resumed { self.memory.agent_session(session_id).map_or(0,|kept|kept.turns)+1 } else { 1 };
         if resumed { crate::usage::mark(crate::usage::JevMark::count("session_resumed",1)); }
-        self.memory.keep_agent_session(session_id,AgentSession{provider:selection.provider.clone(),model:selection.model_name.clone(),root:self.rag.project_info().root,id,turns,writes:self.writes(&selection.mode)});
+        self.memory.keep_agent_session(session_id,AgentSession{provider:selection.provider.clone(),model:selection.model_name.clone(),root:self.rag.project_info().root,id,turns,writes:self.writes(&selection.mode),instructions});
     }
 
     fn without_local_only(&self,context:&Context)->Context {
@@ -708,6 +725,21 @@ impl Orchestrator {
         let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0,session:None}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
         ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into(),..Default::default()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
     }
+}
+
+/// A sessão que o pedido retoma: o id, se ela atravessa a troca de modo e a
+/// impressão das instruções com que ela está.
+struct Resume { id:String, crossed:bool, instructions:u64 }
+
+/// A nota da volta retomada que trocou de lado da escrita. O que ficou na
+/// conversa da sessão dizia o contrário; a nota diz o que vale agora.
+const MODE_TO_BUILD_NOTE:&str="MODE CHANGE: this session continues in BUILD mode. Any earlier instruction in this conversation that the session is read-only, or that you must only plan, no longer applies: make the change within the permissions you have now.";
+const MODE_TO_PLAN_NOTE:&str="MODE CHANGE: this session continues in PLAN mode. Do not change any file from now on; answer with the plan.";
+
+/// FNV-1a das instruções de sistema: estável entre execuções, para a sessão
+/// guardada no disco saber se as instruções mudaram.
+fn fingerprint(text:&str)->u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325,|hash,byte|(hash^u64::from(byte)).wrapping_mul(0x0100_0000_01b3))
 }
 
 /// Por que o pedido abriu uma sessão nova do agente em vez de retomar a do
@@ -1632,6 +1664,41 @@ mod tests {
         let mut kinds=vec![];
         while let Ok(entry)=entries.try_recv() { if let crate::usage::Entry::Jev(_,mark)=entry { if mark.kind.starts_with("session_") { kinds.push(mark.kind); } } }
         assert_eq!(kinds,["session_new:first","session_new:other_mode","session_resumed"]);
+    }
+
+    /// A volta retomada leva só o pedido quando as instruções não mudaram; com
+    /// a retomada entre modos ligada, a sessão do planejamento continua no
+    /// build com a nota da troca e as instruções novas.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_resumed_turn_sends_only_what_changed() {
+        let dir=repository(&[("router.rs",filler("route_request",200))]);
+        let prompts=tempfile::tempdir().expect("prompts");
+        let mut orchestrator=orchestrator(&dir);
+        let script=format!(r#"cat > "{}/stdin-$(ls {} | wc -l)"; echo '{{"type":"system","subtype":"init","session_id":"s-1"}}'; echo resposta"#,prompts.path().display(),prompts.path().display());
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),script.clone(),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],plan_args:vec!["-c".into(),script,"agent".into(),"--resume".into(),crate::llm::RESUME.into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+        let sent=|index:usize|std::fs::read_to_string(prompts.path().join(format!("stdin-{index}"))).unwrap_or_else(|_|panic!("pedido {index}"));
+
+        orchestrator.pending_work_mode=Some(MODE_PLAN.into());
+        orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
+        assert!(sent(0).starts_with("system: "),"a sessão nova leva as instruções");
+        orchestrator.pending_work_mode=Some(MODE_PLAN.into());
+        orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
+        assert!(sent(1).starts_with("user: ")&&!sent(1).contains("system: "),"retomada sem mudança leva só o pedido: {}",sent(1));
+
+        orchestrator.config.jev.resume_across_modes=true;
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("now add a test for route_request",Some("chat"),&Pulse::silent()).await;
+        assert!(sent(2).contains("MODE CHANGE: this session continues in BUILD mode"),"a troca de modo vai dita: {}",sent(2));
+        assert!(sent(2).contains("BUILD mode:"),"e as instruções do modo novo vão junto");
+        assert_eq!(orchestrator.memory.agent_session("chat").map(|kept|(kept.turns,kept.writes)),Some((3,true)),"a mesma sessão, agora do lado que escreve");
     }
 
     #[test]

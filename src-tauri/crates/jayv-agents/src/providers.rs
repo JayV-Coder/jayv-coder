@@ -525,6 +525,10 @@ impl CliProvider {
                 match resume { Some(session)=>args.push(session.to_string()), None=>{ if args.last().is_some_and(|flag:&String|flag.starts_with('-')) { args.pop(); } } }
                 continue;
             }
+            if arg==crate::llm::RESUME_THREAD {
+                if let Some(session)=resume { args.extend(["resume".to_string(),session.to_string()]); }
+                continue;
+            }
             if arg.contains(crate::llm::EFFORT) {
                 match effort { Some(effort)=>args.push(arg.replace(crate::llm::EFFORT,effort)), None=>{ if args.last().is_some_and(|flag:&String|flag.starts_with('-')) { args.pop(); } } }
                 continue;
@@ -606,7 +610,7 @@ impl Provider for CliProvider {
     }
 
     fn explores(&self)->bool { true }
-    fn resumes(&self)->bool { self.config.args.iter().any(|arg|arg==crate::llm::RESUME) }
+    fn resumes(&self)->bool { self.config.args.iter().any(|arg|arg==crate::llm::RESUME||arg==crate::llm::RESUME_THREAD) }
 
     async fn chat_turn(&self,messages:&[ChatMessage],model:&str,effort:Option<&str>,resume:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
         let resume=resume.filter(|_|self.resumes());
@@ -986,6 +990,10 @@ mod tests {
         assert_eq!(provider.args_resuming("sonnet",None,None,"oi",std::path::Path::new("u.json")),["--print","--model","sonnet"]);
         let plain=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["exec".into()],..config("cli")},workdir:Workdir::default()};
         assert!(!plain.resumes(),"agente sem o lugar da sessão não retoma");
+        let codex=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["exec".into(),"--json".into(),"--sandbox".into(),"read-only".into(),crate::llm::RESUME_THREAD.into(),"-".into()],..config("cli")},workdir:Workdir::default()};
+        assert!(codex.resumes(),"o Codex retoma pelo subcomando");
+        assert_eq!(codex.args_resuming("gpt",None,Some("t-9"),"oi",std::path::Path::new("u.json")),["exec","--json","--sandbox","read-only","resume","t-9","-"]);
+        assert_eq!(codex.args_resuming("gpt",None,None,"oi",std::path::Path::new("u.json")),["exec","--json","--sandbox","read-only","-"],"sem sessão, o subcomando some e as opções ficam");
     }
 
     #[test] fn the_session_is_read_from_what_the_agent_announces() {

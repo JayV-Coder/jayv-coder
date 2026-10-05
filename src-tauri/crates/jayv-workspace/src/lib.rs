@@ -8,7 +8,7 @@ use jayv_agents::{llm, usage};
 use jayv_base::{i18n, model};
 use jayv_code::search;
 use jayv_jev::{core_settings, expertise, gatekeeper, policy, turns};
-use jayv_memory::project_memory;
+use jayv_memory::{memory, project_memory};
 use jayv_orgs::repo_keys;
 use jayv_plans::features;
 use jayv_store::local;

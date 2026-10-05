@@ -45,6 +45,8 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
           <ToggleRow id="jev-review" label={t("jev.review")} {...gated("secondOpinion", t("jev.review.hint"))} checked={core.reviewChanges} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
           <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} {...gated("planFirst", t("jev.planFirst.hint"))} checked={core.planFirst} onChange={(planFirst) => updateCore({ planFirst })} />
           <ToggleRow id="jev-parallel" label={t("jev.parallel")} {...gated("parallelTasks", t("jev.parallel.hint"))} checked={core.parallelTasks} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
+          <ToggleRow id="jev-keep-session" label={t("jev.keepSession")} hint={t("jev.keepSession.hint")} checked={core.keepSessionModel} onChange={(keepSessionModel) => updateCore({ keepSessionModel })} />
+          <ToggleRow id="jev-resume-modes" label={t("jev.resumeModes")} hint={t("jev.resumeModes.hint")} checked={core.resumeAcrossModes} onChange={(resumeAcrossModes) => updateCore({ resumeAcrossModes })} />
           <AgentOrderField order={core.agentOrder} />
         </div>
       </SettingsSection>

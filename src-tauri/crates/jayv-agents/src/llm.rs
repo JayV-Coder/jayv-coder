@@ -158,6 +158,10 @@ pub const EFFORT:&str="{effort}";
 /// O lugar da sessão do agente a retomar. Sem sessão, o argumento sai junto
 /// da flag que o anuncia, como o `{effort}`.
 pub const RESUME:&str="{resume}";
+/// O subcomando que retoma uma sessão do Codex (`codex exec … resume <id> -`).
+/// Com sessão, vira `resume` e o id; sem, some. As opções do `exec` vêm antes
+/// dele: o `resume` não aceita `--sandbox`, e o do `exec` vale para a retomada.
+pub const RESUME_THREAD:&str="{resume_thread}";
 const CLAUDE_EFFORTS:[&str;6]=["auto","low","medium","high","xhigh","max"];
 /// A ferramenta do Claude que abre um formulário no terminal interativo.
 const INTERACTIVE_ONLY_TOOL:&str="AskUserQuestion";
@@ -295,6 +299,9 @@ impl CodexOptions {
         // que o Codex usa quando ninguém diz nada.
         let search=if self.mechanisms.iter().any(|mechanism|mechanism==WEB_SEARCH) {"live"} else {"disabled"};
         args.extend(["-c".to_string(),format!("web_search=\"{search}\"")]);
+        // A sessão do chat, quando há uma para retomar: o agente não relê o
+        // projeto do zero.
+        args.push(RESUME_THREAD.into());
         // O pedido chega pela entrada padrão.
         args.push("-".into());
         args
@@ -1169,6 +1176,7 @@ mod tests {
         assert!(!cleaned(json!({"sandbox":"danger-full-access","networkAccess":true})).network_access);
         assert!(!args.iter().any(|arg|arg.contains("network_access")),"lendo, não há rede");
         assert_eq!(args.last().map(String::as_str),Some("-"));
+        assert_eq!(args.iter().rev().nth(1).map(String::as_str),Some(RESUME_THREAD),"a sessão entra logo antes do pedido");
         assert!(args.windows(2).any(|pair|pair==["--sandbox","read-only"]));
         let writing=agent(AgentId::Codex,json!({"sandbox":"workspace-write","networkAccess":true})).args();
         assert!(writing.windows(2).any(|pair|pair==["-c","sandbox_workspace_write.network_access=true"]));
