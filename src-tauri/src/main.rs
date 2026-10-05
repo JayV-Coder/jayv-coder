@@ -26,8 +26,8 @@ enum Commands {
     Run { #[arg(required=true,num_args=1..)] task:Vec<String> },
     Index,
     Version,
-    /// Runs a script of requests (one per line) through JayV and straight to the agent JayV picked, and compares the tokens each side was charged.
-    Bench { script:PathBuf },
+    /// Runs a task file (YAML: a beginner's script and a verify command per task) through JayV and straight to the agent, each side in its own copy, and compares rounds until done and dollars spent.
+    Bench { tasks:PathBuf },
     /// Serves the repository symbol index over MCP (stdio), for coding agents.
     Mcp,
 }
@@ -79,11 +79,10 @@ fn run(cli:Cli)->Result<()> {
         Some(Commands::Index)=>{let orchestrator=Orchestrator::new(config_path,root)?;println!("Indexed {} files",orchestrator.rag.len());Ok(())},
         Some(Commands::Mcp)=>{let orchestrator=Orchestrator::new(config_path,root)?;jayv_lib::mcp::serve(orchestrator.rag,orchestrator.firewall)},
         Some(Commands::Version)=>{println!("JayV v{}",env!("CARGO_PKG_VERSION"));Ok(())},
-        Some(Commands::Bench{script})=>{
-            let prompts=fs::read_to_string(&script).with_context(||format!("cannot read {}",script.display()))?.lines().map(str::trim).filter(|line|!line.is_empty()&&!line.starts_with('#')).map(String::from).collect::<Vec<_>>();
-            anyhow::ensure!(!prompts.is_empty(),"{} has no requests",script.display());
+        Some(Commands::Bench{tasks})=>{
+            let (suite,project)=jayv_lib::bench::load(&tasks,&root)?;
             let runtime=tokio::runtime::Runtime::new()?;
-            runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,root)?;let comparison=jayv_lib::bench::compare(&mut orchestrator,&prompts).await?;println!("{}",jayv_lib::bench::report(&comparison));Ok(())})
+            runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,project.clone())?;let results=jayv_lib::bench::run(&mut orchestrator,&suite,&project).await?;println!("{}",jayv_lib::bench::report(&results));Ok(())})
         },
         Some(Commands::Run{task})=>{let runtime=tokio::runtime::Runtime::new()?;runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,root)?;let result=orchestrator.process(&task.join(" "),Some("cli"),&jayv_lib::progress::Pulse::silent()).await;if let Some(response)=result.result{println!("{}",response.response);Ok(())}else{Err(anyhow::anyhow!(result.error.unwrap_or_else(||"task failed".into())))}})},
     }

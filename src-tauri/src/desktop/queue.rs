@@ -282,9 +282,8 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
     // A sessão do agente sobrevive ao reinício do app: a guardada volta para a
     // memória antes do pedido, e a de depois dele é guardada de novo.
-    if state.orchestrator.memory.agent_session(chat_id).is_none() {
-        if let Ok(Some(kept))=workspace.lock().await.agent_session(chat_id) { state.orchestrator.memory.keep_agent_session(chat_id,kept); }
-    }
+    let restored=if state.orchestrator.memory.agent_session(chat_id).is_none() { workspace.lock().await.agent_session(chat_id).ok().flatten() } else { None };
+    if let Some(kept)=restored { state.orchestrator.memory.keep_agent_session(chat_id,kept); }
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
     {
         let mut workspace=workspace.lock().await;

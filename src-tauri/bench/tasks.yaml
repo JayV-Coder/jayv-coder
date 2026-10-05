@@ -1,0 +1,71 @@
+# Tarefas de exemplo do `jayv bench`. Cada uma traz o roteiro de um iniciante
+# (o pedido vago, a reclamação, o pedido mais preciso) e o comando que diz se
+# ela ficou pronta. Os dois lados — o JayV e o agente sozinho — rodam o
+# roteiro, um pedido por volta, cada um numa cópia própria de `fixture/`.
+#
+#   jayv bench src-tauri/bench/tasks.yaml
+#
+# O projeto é um exemplo neutro, em Python, sem dependências: os testes de
+# `fixture/tests/` falham hoje e passam com a tarefa feita.
+repository: fixture
+tasks:
+  - id: slugify
+    verify: python3 -m unittest -q tests.test_text
+    script:
+      - "cria uma função pra transformar texto em slug"
+      - "não funcionou, o teste ainda falha"
+      - "a função slugify em shop/text.py tem que passar em tests/test_text.py: minúsculas, hífens, sem acento nem pontuação"
+  - id: pagination
+    verify: python3 -m unittest -q tests.test_pagination
+    script:
+      - "a paginação tá pulando itens"
+      - "ainda dá erro"
+      - "em shop/pagination.py a página é contada a partir de 1; corrige paginate até tests/test_pagination.py passar"
+  - id: cart-discount
+    verify: python3 -m unittest -q tests.test_cart
+    script:
+      - "o desconto do carrinho tá errado"
+      - "corrige então"
+      - "em shop/cart.py o desconto é percentual sobre o subtotal (10 = 10%); tests/test_cart.py tem que passar"
+  - id: duration
+    verify: python3 -m unittest -q tests.test_duration
+    script:
+      - "preciso ler durações tipo 1h30m"
+      - "não funcionou"
+      - "crie parse_duration em shop/duration.py que devolve segundos e levanta ValueError com texto inválido, até tests/test_duration.py passar"
+  - id: email-validation
+    verify: python3 -m unittest -q tests.test_signup
+    script:
+      - "valida o email no cadastro"
+      - "ainda aceita email errado"
+      - "em shop/signup.py, validate deve incluir 'email' nos problemas quando o email falta ou não tem formato de email; tests/test_signup.py tem que passar"
+  - id: cli-json
+    verify: python3 -m unittest -q tests.test_cli
+    script:
+      - "add a json option to the cli"
+      - "it still fails"
+      - "in shop/cli.py, main(['--json']) must print the products as JSON and return 0, keeping the table without the flag; make tests/test_cli.py pass"
+  - id: memoize
+    verify: python3 -m unittest -q tests.test_numbers
+    script:
+      - "o fib tá muito lento"
+      - "melhora isso"
+      - "em shop/numbers.py fib(90) tem que voltar em menos de 1 segundo; use cache e rode tests/test_numbers.py"
+  - id: csv-export
+    verify: python3 -m unittest -q tests.test_export
+    script:
+      - "exportar os produtos em csv"
+      - "pode implementar"
+      - "crie to_csv em shop/export.py com cabeçalho name,price e aspas onde precisar, até tests/test_export.py passar"
+  - id: missing-config
+    verify: python3 -m unittest -q tests.test_config
+    script:
+      - "o app quebra quando não tem config"
+      - "não funcionou, dá erro ao abrir"
+      - "em shop/config.py, load_config com arquivo inexistente deve devolver os DEFAULTS; tests/test_config.py tem que passar"
+  - id: rename
+    verify: python3 -m unittest -q tests.test_report
+    script:
+      - "renomeia o calc pra um nome melhor"
+      - "sim"
+      - "em shop/report.py renomeie calc para calculate_total e mantenha calc funcionando como apelido; tests/test_report.py tem que passar"

@@ -682,6 +682,15 @@ impl Orchestrator {
         Ok(response)
     }
 
+    /// O agente e o modelo que um pedido de código médio recebe, em build,
+    /// sem leitura do Jev: é com ele que o `jayv bench` roda o lado direto,
+    /// do primeiro ao último pedido da tarefa.
+    pub fn build_selection(&self)->ModelSelection {
+        let ranked=rank_models(&self.config,"code","medium",&Context::default(),&self.performance,&Tiebreak::default());
+        let selection=ranked.into_iter().next().unwrap_or_else(||configuration_selection(&self.config,"medium",&Context::default()));
+        ModelSelection{mode:MODE_BUILD.into(),..selection}
+    }
+
     /// A sessão do agente que este chat pode retomar: a do mesmo agente, do
     /// mesmo modelo, da mesma pasta e do mesmo lado da escrita, enquanto não
     /// chegou ao teto de pedidos. A sessão aberta no planejamento guarda o
