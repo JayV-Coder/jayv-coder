@@ -45,6 +45,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Toda funcionalidade tem a sua página: sem ela, o release não sai.
+      - name: Conferir a documentação
+        run: node .github/scripts/manual.cjs check
+
       - name: Criar ou reaproveitar o release da versão
         id: release
         uses: actions/github-script@v7
@@ -199,5 +203,15 @@ jobs:
     name: README dos releases
     needs: publish
     uses: ./.github/workflows/releases-readme.yml
+    secrets:
+      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+
+  # A documentação (uma funcionalidade por JSON) e o changelog inteiro, que o
+  # site lê pela função `releases` do Supabase. Depois do README, para os dois
+  # não disputarem o mesmo ramo.
+  docs:
+    name: Documentação dos releases
+    needs: readme
+    uses: ./.github/workflows/releases-docs.yml
     secrets:
       RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}

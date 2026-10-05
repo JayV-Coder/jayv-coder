@@ -1,0 +1,10 @@
+{
+  "id": "exitGate",
+  "category": "gate",
+  "since": null,
+  "plan": "exitGate",
+  "commands": [],
+  "title": "Exit gate",
+  "summary": "Jev checks the commands and files in every answer against the project's rules before you act on it.",
+  "usage": "Always on. An answer that touches a protected file or runs a forbidden command is held, and the gatehouse explains why."
+}

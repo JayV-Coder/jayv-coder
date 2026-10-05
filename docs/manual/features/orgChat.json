@@ -1,0 +1,10 @@
+{
+  "id": "orgChat",
+  "category": "team",
+  "since": "0.32.0",
+  "plan": "orgChat",
+  "commands": [],
+  "title": "Organization chat",
+  "summary": "One chat that works on every repository of an organization at once, with the agent, the index and the gate seeing all of them.",
+  "usage": "On the organization page, click Organization chat. Without an organization folder on this computer, JayV asks for one first."
+}

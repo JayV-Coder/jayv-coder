@@ -1,0 +1,10 @@
+{
+  "id": "agents",
+  "category": "start",
+  "since": null,
+  "plan": null,
+  "commands": [],
+  "title": "Command-line agents",
+  "summary": "JayV does not write code by itself: it orchestrates the coding agents you already use — Codex, Claude Code, GitHub Copilot and Cursor Agent — running each one's own command line on your computer.",
+  "usage": "Open Settings, turn on the agents installed on this computer and list the models each one may use. Each CLI keeps its own login; no key or password passes through JayV. The System page shows whether each agent is installed and answering."
+}

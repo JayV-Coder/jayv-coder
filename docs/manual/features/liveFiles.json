@@ -1,0 +1,10 @@
+{
+  "id": "liveFiles",
+  "category": "project",
+  "since": "0.41.0",
+  "plan": "liveFiles",
+  "commands": [],
+  "title": "Live files",
+  "summary": "A panel beside the conversation shows every file the request changes, newest first, with the diff of each one while the agent writes.",
+  "usage": "Click Live in the chat header; it also opens by itself on the first change. Follow the agent to see each file as soon as it changes."
+}

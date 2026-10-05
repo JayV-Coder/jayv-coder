@@ -1,0 +1,10 @@
+{
+  "id": "parallelTasks",
+  "category": "agents",
+  "since": "0.50.0",
+  "plan": "parallelTasks",
+  "commands": [],
+  "title": "Parallel agents",
+  "summary": "A large build request in a git project is split into up to four parts that touch separate files, each done by a different agent in its own copy of the project.",
+  "usage": "Turn on Split big requests between agents in Settings › Jev › Routing. The parts run at the same time in git worktrees and the changes come back to your folder."
+}

@@ -1,0 +1,10 @@
+{
+  "id": "profilePhoto",
+  "category": "account",
+  "since": "0.63.0",
+  "plan": null,
+  "commands": [],
+  "title": "Profile photo",
+  "summary": "Your own photo, shown in JayV whatever way you sign in — email and password or any linked account.",
+  "usage": "On the JayV site, open Dashboard › Account, click the photo, choose an image and adjust the crop. The app shows it on its next start; removing it brings back the photo of your linked account."
+}

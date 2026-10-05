@@ -1,0 +1,10 @@
+{
+  "id": "progressPanel",
+  "category": "chat",
+  "since": "0.61.0",
+  "plan": null,
+  "commands": [],
+  "title": "Progress panel",
+  "summary": "A panel next to the side menu shows what JayV is doing now, one step per line, so the conversation keeps the full width.",
+  "usage": "The panel opens by itself while a request runs. Collapse it to a thin strip when you do not need it; in an organization chat it also lists the repositories."
+}

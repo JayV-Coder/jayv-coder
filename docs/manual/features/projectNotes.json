@@ -1,0 +1,10 @@
+{
+  "id": "projectNotes",
+  "category": "project",
+  "since": "0.35.0",
+  "plan": "projectNotes",
+  "commands": [],
+  "title": "Project memory",
+  "summary": "Short notes about the project — how to test, where things live, what not to touch — that the agent gets once at the start of each session.",
+  "usage": "On a project's chats screen, click Project memory and write up to 2,200 characters. Secrets are refused, and the notes sync with your account."
+}

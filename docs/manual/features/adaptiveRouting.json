@@ -1,0 +1,10 @@
+{
+  "id": "adaptiveRouting",
+  "category": "agents",
+  "since": "0.35.0",
+  "plan": "adaptiveRouting",
+  "commands": [],
+  "title": "Adaptive routing",
+  "summary": "Jev picks which agent and model answer each request, weighing each model's track record per kind of request.",
+  "usage": "Keep more than one agent enabled in Settings. An answer you report as not working, or that the exit gate holds, costs the model a point. If the chosen agent is missing or not logged in, the request goes to the next one."
+}

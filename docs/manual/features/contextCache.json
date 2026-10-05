@@ -1,0 +1,10 @@
+{
+  "id": "contextCache",
+  "category": "agents",
+  "since": null,
+  "plan": "contextCache",
+  "commands": [],
+  "title": "Context cache",
+  "summary": "The context built for a request is reused for at least five minutes while the files stay the same, so a follow-up request does not search the project again.",
+  "usage": "Always on. Changing a file in the project refreshes only what changed."
+}

@@ -1,0 +1,10 @@
+{
+  "id": "sensitiveFiles",
+  "category": "privacy",
+  "since": "0.60.0",
+  "plan": "sensitiveFiles",
+  "commands": [],
+  "title": "Protected files",
+  "summary": "Files such as .env, private keys and certificates never go into the context, and agents cannot read or edit them.",
+  "usage": "The default list is always applied; add your own patterns under Never read in Settings › App. Claude Code also blocks its own reads and edits of them, and a change any agent makes to a protected file is held at the exit gate."
+}

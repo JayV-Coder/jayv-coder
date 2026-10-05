@@ -1,0 +1,10 @@
+{
+  "id": "secondOpinion",
+  "category": "agents",
+  "since": "0.48.0",
+  "plan": "secondOpinion",
+  "commands": [],
+  "title": "Second opinion",
+  "summary": "After a request changes the project in build mode, an agent from another provider reads the diff without editing anything and lists the problems it finds.",
+  "usage": "Turn on Second opinion from another agent in Settings › Jev › Routing. It needs at least two agents enabled; the answer arrives first and the review follows in its own message."
+}

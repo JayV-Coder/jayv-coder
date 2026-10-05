@@ -1,0 +1,112 @@
+{
+  "commands": [
+    {
+      "id": "modeAuto",
+      "kind": "chat",
+      "usage": "/auto",
+      "detail": "Jev picks planning or development for each request in this chat."
+    },
+    {
+      "id": "modePlan",
+      "kind": "chat",
+      "usage": "/plan",
+      "detail": "Puts the chat in Planning: the agent only reads and answers with a plan. Text after the command is sent as the request."
+    },
+    {
+      "id": "modeBuild",
+      "kind": "chat",
+      "usage": "/build",
+      "detail": "Puts the chat in Development: the agent changes files in the project. Text after the command is sent as the request."
+    },
+    {
+      "id": "palette",
+      "kind": "shortcut",
+      "usage": "Mod+K",
+      "detail": "Opens the command palette."
+    },
+    {
+      "id": "projects",
+      "kind": "shortcut",
+      "usage": "Mod+1",
+      "detail": "Goes to Projects."
+    },
+    {
+      "id": "organizations",
+      "kind": "shortcut",
+      "usage": "Mod+2",
+      "detail": "Goes to Organizations."
+    },
+    {
+      "id": "stats",
+      "kind": "shortcut",
+      "usage": "Mod+3",
+      "detail": "Goes to Statistics."
+    },
+    {
+      "id": "system",
+      "kind": "shortcut",
+      "usage": "Mod+4",
+      "detail": "Goes to System."
+    },
+    {
+      "id": "settings",
+      "kind": "shortcut",
+      "usage": "Mod+,",
+      "detail": "Opens Settings."
+    },
+    {
+      "id": "newChat",
+      "kind": "shortcut",
+      "usage": "Mod+N",
+      "detail": "Starts a new chat in the open project."
+    },
+    {
+      "id": "gate",
+      "kind": "shortcut",
+      "usage": "Mod+G",
+      "detail": "Opens the gatehouse of the open project."
+    },
+    {
+      "id": "workMode",
+      "kind": "shortcut",
+      "usage": "Mod+.",
+      "detail": "Switches the work mode of the open chat."
+    },
+    {
+      "id": "cliStatus",
+      "kind": "cli",
+      "usage": "jayv status",
+      "detail": "Shows the version, the configuration file, how many agents and models can run and how many files are indexed."
+    },
+    {
+      "id": "cliRun",
+      "kind": "cli",
+      "usage": "jayv run <request>",
+      "detail": "Sends one request through the gate and the router and prints the answer."
+    },
+    {
+      "id": "cliIndex",
+      "kind": "cli",
+      "usage": "jayv index",
+      "detail": "Indexes the project folder and prints how many files went in."
+    },
+    {
+      "id": "cliVersion",
+      "kind": "cli",
+      "usage": "jayv version",
+      "detail": "Prints the installed version."
+    },
+    {
+      "id": "cliBench",
+      "kind": "cli",
+      "usage": "jayv bench <tasks.yaml>",
+      "detail": "Runs a task file through JayV and straight to the agent, each in its own copy, and compares rounds and cost."
+    },
+    {
+      "id": "cliMcp",
+      "kind": "cli",
+      "usage": "jayv mcp",
+      "detail": "Serves the project's symbol index over MCP (stdio) for coding agents."
+    }
+  ]
+}
