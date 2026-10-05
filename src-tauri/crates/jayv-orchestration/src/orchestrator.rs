@@ -31,6 +31,8 @@ const MAP_LINKS:usize=4;
 const MAP_NOTE:&str="RELEVANT FILES lists where the task most likely lives, with the definitions found there. Open only the files you need, with your own tools.";
 const TITLE_INSTRUCTIONS:&str="Name this conversation from the developer's first request. Answer with the title alone: at most six words, no quotes, no trailing period, no explanation.";
 const TITLE_PROMPT_CHARS:usize=600;
+/// O agente que cobra por pedido, não por token: não batiza chat.
+const PER_REQUEST_AGENT:&str="copilot";
 const REQUEST_MARGIN:usize=120;
 const SNIPPET_WRAPPER:usize=4;
 const NEUTRAL_SIGNAL:f64=0.5;
@@ -40,6 +42,10 @@ const REQUEST_LANGUAGE_NOTE:&str="Reply to the developer in the language their r
 const NO_REPOSITORY_NOTE:&str="No repository files were supplied: this request does not depend on them. Answer from general knowledge and never guess this codebase's contents.";
 const TOOLS_NOTE:&str="This asks for commands to run or files to change, which this orchestrator cannot execute. Hand back the exact commands or edits for the developer to apply.";
 const DESTRUCTIVE_NOTE:&str="This would overwrite or remove existing work. State the exact effect and how to undo it before giving the change.";
+/// A nota da nova tentativa depois de "não funcionou".
+const RETRY_NOTE:&str="The developer says the previous attempt did not solve this. Before changing anything, check what the previous change actually did and reproduce the failure; then fix the cause instead of repeating the same change, and say how you verified it.";
+/// O cabeçalho do plano que segue inteiro para o build.
+const PLAN_HANDOFF:&str="PLAN TO IMPLEMENT (written earlier in this chat in planning mode, in full; follow it unless the request above says otherwise):";
 const PLAN_NOTE:&str="PLAN mode: the agent runs read-only. Answer with a concrete step-by-step plan (files, changes, how to verify) in the reply, not in a file. Do not claim that any file was changed.";
 const BUILD_NOTE:&str="BUILD mode: make the change directly in the project folder within the permissions you were granted, then summarize what changed and how to verify it. You run without a terminal: nobody can answer a permission prompt, change your permission mode or edit your settings files. If a write or command is denied, say exactly what was denied and that the developer can allow it in JayV under Settings > Agents; never offer to approve prompts, switch permission modes or edit .claude/settings.json, and never work around the denial with shell commands.";
 /// Os agentes saem explorando o repositório e replanejando por conta própria;
@@ -123,6 +129,16 @@ pub struct Orchestrator {
     /// Os chats cujo último pedido pedia para implementar e ficou em
     /// planejamento no automático: o próximo pedido igual sai em build.
     stuck_in_plan: HashSet<String>,
+    /// O último plano que o modo planejamento devolveu em cada chat, inteiro.
+    /// O build seguinte o recebe sem o corte do histórico quando abre sessão
+    /// nova; a sessão retomada já o tem.
+    plans: HashMap<String,String>,
+    /// O pedido em atendimento reclama da resposta anterior ("não
+    /// funcionou"). `process` o consome uma vez.
+    pub pending_retry: bool,
+    /// Quantas reclamações seguidas cada chat fez: da segunda em diante, o
+    /// agente pensa um degrau a mais.
+    complaints: HashMap<String,u32>,
     performance_path: PathBuf,
     providers: HashMap<String, Box<dyn Provider>>,
     /// Os mesmos agentes, presos em somente leitura, para o modo planejamento.
@@ -151,7 +167,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, stuck_in_plan:HashSet::new(), performance_path, last_decision:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), performance:PerformanceTracker::load(&performance_path), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, stuck_in_plan:HashSet::new(), plans:HashMap::new(), pending_retry:false, complaints:HashMap::new(), performance_path, last_decision:None })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -231,6 +247,11 @@ impl Orchestrator {
         let brief=self.pending_brief.take();
         let mut extras=std::mem::take(&mut self.pending_context);
         let gate_passed=self.pending_gate_passed.take().unwrap_or(true);
+        // "Não funcionou": a nova tentativa não sai igual à anterior. O agente
+        // confere o que a mudança anterior fez antes de mudar de novo, e da
+        // segunda reclamação seguida em diante pensa um degrau a mais.
+        let complaints=if std::mem::take(&mut self.pending_retry) { let count=self.complaints.entry(session_id.to_string()).or_insert(0); *count+=1; *count } else { self.complaints.remove(session_id); 0 };
+        if complaints>0 { extras.push(RETRY_NOTE.into()); }
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
         let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
         let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,self.stuck_in_plan.contains(session_id));
@@ -274,6 +295,10 @@ impl Orchestrator {
         let split=if self.config.jev.parallel_tasks&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity)&&self.config.permissions.write!="deny" {
             self.run_parallel(brief.as_deref().unwrap_or(&normalized),&context,&ranked,session_id,pulse).await
         } else { None };
+        let effort=if complaints>=2 { raise_effort(effort_for(&complexity)) } else { effort_for(&complexity) };
+        // O build que segue um plano do mesmo chat recebe o plano inteiro,
+        // fora do corte do histórico, se abrir sessão nova.
+        let handoff:Vec<String>=if mode==MODE_BUILD { self.plans.remove(session_id).map(|plan|format!("{PLAN_HANDOFF}\n{plan}")).into_iter().collect() } else { vec![] };
         let mut execution=match split {
             Some((response,first))=>{ selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..first}; Ok((response,false,0)) }
             None=>{
@@ -283,7 +308,7 @@ impl Orchestrator {
                 if self.config.jev.plan_first&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity) {
                     if let Some(plan)=self.plan_first(brief.as_deref().unwrap_or(&normalized),&context,&selection,session_id,pulse).await { extras.push(plan); }
                 }
-                self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await
+                self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await
             }
         };
         // Plano B: o agente que nem conseguiu começar (não instalado, sem
@@ -298,7 +323,7 @@ impl Orchestrator {
             selection=ModelSelection{mode:selection.mode.clone(),agent:selection.agent.clone(),..next.clone()};
             tried.push(selection.provider.clone());
             pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
-            execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&complexity,&context,&selection,session_id,pulse).await;
+            execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await;
         }
         if let (Some(watch),Ok((response,_,_)))=(watch,&mut execution) {
             if usable_response(response) {
@@ -322,6 +347,9 @@ impl Orchestrator {
             Err(error)=>pulse.beat(Beat::Failed{error:crate::i18n::notice(&[crate::i18n::failure(anyhow::anyhow!("{error:#}"))])}),
         }
         let (result,error,valid)=match execution { Ok(response)=>{let usable=usable_response(&response);if !response.response.trim().is_empty(){self.memory.add_message(session_id,"assistant",response.response.clone());}(Some(response),None,usable)}, Err(error)=>(None,Some(crate::i18n::notice(&[crate::i18n::failure(error)])),false) };
+        // O plano que o planejamento devolveu fica guardado, inteiro, para o
+        // build que vier depois.
+        if mode==MODE_PLAN { match result.as_ref().filter(|_|valid) { Some(response)=>{ self.plans.insert(session_id.to_string(),response.response.clone()); } None=>{ self.plans.remove(session_id); } } }
         self.performance.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now(), chat:Some(session_id.to_string()) });
         let _=self.performance.save(&self.performance_path);
         self.last_decision=Some(decision.clone());
@@ -440,7 +468,9 @@ impl Orchestrator {
     /// do cadeado do orquestrador, e o próximo da fila não espera o batismo.
     pub fn title_request(&self,prompt:&str,intent:&str)->Option<TitleRequest> {
         // O batismo não mexe em nada: vai sempre pelos agentes em somente leitura.
-        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&self.planners.contains_key(&model.provider)).collect();
+        // O Copilot cobra uma premium request por chamada: com só ele, vale o
+        // resumo local que já está no banco.
+        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&model.provider!=PER_REQUEST_AGENT&&self.planners.contains_key(&model.provider)).collect();
         usable.sort_by(|(left_key,left),(right_key,right)|{
             let by_api=|model:&crate::config::ModelConfig|self.planners.get(&model.provider).is_some_and(|provider|provider.explores());
             (by_api(left),cost_rank(&left.cost_class),left_key.as_str()).cmp(&(by_api(right),cost_rank(&right.cost_class),right_key.as_str()))
@@ -467,7 +497,11 @@ impl Orchestrator {
     /// Na volta retomada as instruções só vão de novo quando mudaram — outra
     /// nota de modo, outro agente — ou quando a sessão trocou de modo; senão
     /// vai só o pedido: a sessão já as tem.
-    async fn execute(&self,input:&str,extras:&[String],complexity:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool,u64)> {
+    ///
+    /// `handoff` vai só na sessão nova: é o que a sessão retomada já tem
+    /// (o plano escrito antes, no mesmo chat).
+    #[allow(clippy::too_many_arguments)]
+    async fn execute(&self,input:&str,extras:&[String],handoff:&[String],effort:&str,context:&Context,selection:&ModelSelection,session_id:&str,pulse:&Pulse)->Result<(ProviderResponse,bool,u64)> {
         let pool=self.pool(&selection.mode);
         let provider=pool.get(&selection.provider).ok_or_else(||anyhow!("no executable provider named '{}' is configured",selection.provider))?;
         let safe_context=if provider.is_local(){context.clone()}else{self.without_local_only(context)};
@@ -475,7 +509,7 @@ impl Orchestrator {
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
         let user=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
-        let effort=Some(effort_for(complexity));
+        let effort=Some(effort);
         let instructions=fingerprint(&system);
         let fresh=match self.resume_check(session_id,provider.as_ref(),selection) {
             Ok(Resume{id,crossed,instructions:kept})=>{
@@ -498,6 +532,7 @@ impl Orchestrator {
         let system=match provider.explores().then(||crate::project_map::render(&self.rag)).flatten() { Some(map)=>format!("{system}\n\n{map}"), None=>system };
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(short_history(self.memory.conversation(session_id)));
+        let user=std::iter::once(user).chain(handoff.iter().cloned()).collect::<Vec<_>>().join("\n\n");
         messages.push(ChatMessage{role:"user".into(),content:user});
         Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false,instructions))
     }
@@ -925,6 +960,9 @@ pub fn plan_context(intent:&str,complexity:&str)->Vec<String>{let mut p=match in
 /// agentes pensam o máximo do plano deles quando ninguém diz nada, e é isso
 /// que consumia a sessão até em pedido pequeno.
 pub fn effort_for(complexity:&str)->&'static str { match complexity { "trivial"|"simple"=>"low", "complex"=>"high", _=>"medium" } }
+/// Um degrau de esforço acima: a segunda reclamação seguida pede que o
+/// agente pense mais, não que tente igual.
+pub fn raise_effort(effort:&str)->&'static str { match effort { "low"=>"medium", _=>"high" } }
 pub fn select_strategy(intent:&str,complexity:&str)->String { if complexity=="complex"{"execution_graph"}else if matches!(intent,"code"|"refactor"|"test"|"security"){"rag_first"}else{"single_model"}.into() }
 pub fn local_routing(input:&str,error:Option<String>)->(IntentAnalysis,String,RoutingSignals) {
     let intent=analyze_intent(input); let complexity=analyze_complexity(input,&intent);
@@ -1303,6 +1341,70 @@ mod tests {
         drop(orchestrator);
 
         assert_eq!(request.run().await.as_deref(),Some("Frete do checkout"),"o mais barato batiza, e o título sai limpo");
+    }
+
+    /// Com só o Copilot, que cobra por pedido, o chat fica com o resumo local.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_per_request_agent_does_not_name_the_chat() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),"cat >/dev/null; echo x".into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo '\"Título\"'".into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"copilot".into(),model:"claude-sonnet-4.5".into(),capabilities:vec!["chat".into()],cost_class:"low".into(),speed:"medium".into(),context_window:200_000};
+        let providers=HashMap::from([("copilot".to_string(),agent)]);
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=HashMap::from([("copilot/m".to_string(),model)]);
+        assert!(orchestrator.title_request("corrige o frete","code").is_none(),"uma premium request só para o título não vale");
+    }
+
+    /// O plano do planejamento segue inteiro para o build que abre sessão nova
+    /// (o histórico cortaria em 1.500 caracteres), e "não funcionou" leva a
+    /// nota de conferir antes de mudar, com um degrau de esforço a mais na
+    /// segunda reclamação seguida.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_build_gets_the_whole_plan_and_a_retry_does_not_repeat_itself() {
+        let dir=repository(&[("router.rs",filler("route_request",200))]);
+        let calls=tempfile::tempdir().expect("chamadas");
+        let mut orchestrator=orchestrator(&dir);
+        let plan=format!("1. {}FIM-DO-PLANO",["passo longo do plano"; 200].join(" "));
+        let build=format!(r#"cat > "{dir}/build-$(ls {dir} | wc -l)"; echo "$@" > "{dir}/args-$(ls {dir} | wc -l)"; echo pronto"#,dir=calls.path().display());
+        let planner=format!(r#"cat >/dev/null; echo "{plan}""#);
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build,"agent".into(),"--effort".into(),crate::llm::EFFORT.into()],plan_args:vec!["-c".into(),planner],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        let read=|name:String|std::fs::read_to_string(calls.path().join(&name)).unwrap_or_else(|_|panic!("{name}"));
+
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("analysis",0.93,"simple",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_PLAN.into());
+        orchestrator.process("planeje o cache do roteador",Some("chat"),&Pulse::silent()).await;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("pode implementar",Some("chat"),&Pulse::silent()).await;
+        let built=read("build-0".into());
+        assert!(built.contains(PLAN_HANDOFF)&&built.contains("FIM-DO-PLANO"),"o plano vai inteiro, até o fim");
+        assert!(read("args-1".into()).contains("--effort low"));
+
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.pending_retry=true;
+        orchestrator.process("não funcionou",Some("chat"),&Pulse::silent()).await;
+        assert!(read("build-2".into()).contains(RETRY_NOTE),"a nova tentativa confere antes de mudar");
+        assert!(!read("build-2".into()).contains(PLAN_HANDOFF),"o plano vai uma vez");
+        assert!(read("args-3".into()).contains("--effort low"),"a primeira reclamação ainda pensa igual");
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.pending_retry=true;
+        orchestrator.process("ainda dá erro",Some("chat"),&Pulse::silent()).await;
+        assert!(read("args-5".into()).contains("--effort medium"),"a segunda seguida pensa um degrau a mais: {}",read("args-5".into()));
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("agora adicione um teste",Some("chat"),&Pulse::silent()).await;
+        assert!(!read("build-6".into()).contains(RETRY_NOTE)&&read("args-7".into()).contains("--effort low"),"pedido novo zera a conta");
     }
 
     /// O agente escolhido que não consegue começar passa a vez ao próximo de

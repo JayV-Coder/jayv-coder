@@ -147,9 +147,14 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let project_id=workspace.lock().await.chat_project(chat_id).unwrap_or(None);
     let notes=match &project_id { Some(id)=>workspace.lock().await.project_notes(id).unwrap_or_default(), None=>vec![] };
 
+    // O pedido barrado e reenviado em seguida não poupou nada: o painel
+    // desconta a economia que o bloqueio tinha contado.
+    if let Ok(Some(saved))=workspace.lock().await.blocked_saving_to_revoke(&turn.id) {
+        usage::mark(usage::JevMark{kind:crate::workspace::BLOCKED_SAVING.into(),amount:-saved,precision:usage::Precision::Estimated});
+    }
     // "Não funcionou": o pedido anterior deste chat não resolveu, ainda que
     // a resposta tenha vindo inteira. O roteador aprende com isso.
-    if crate::router::is_complaint(prompt) { state.orchestrator.mark_last_failed(chat_id); }
+    if crate::router::is_complaint(prompt) { state.orchestrator.mark_last_failed(chat_id); state.orchestrator.pending_retry=true; }
 
     // Um turno-resposta é julgado — e enviado — em par com a pergunta que o
     // originou. Um `SIM` sozinho seria barrado por faltas que o pedido de origem

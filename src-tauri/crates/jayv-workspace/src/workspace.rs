@@ -82,6 +82,11 @@ const AGENT_SESSIONS:&str="CREATE TABLE IF NOT EXISTS agent_sessions (
     instructions TEXT NOT NULL DEFAULT '0',
     updated_at TEXT NOT NULL
 );";
+/// Até quantos minutos depois de um bloqueio o pedido seguinte do chat é
+/// tratado como reenvio dele.
+pub const RESEND_MINUTES:i64=15;
+/// A marca da economia de um pedido barrado.
+pub const BLOCKED_SAVING:&str="saved_tokens:blocked";
 /// Por quanto tempo uma sessão guardada ainda é retomada.
 const AGENT_SESSION_HOURS:i64=24;
 
@@ -585,6 +590,26 @@ impl WorkspaceStore {
     pub fn previous_answer(&self, turn_id:&str) -> Result<Option<(crate::gatekeeper::EntryVerdict,chrono::DateTime<Utc>)>> {turns::previous_answer(&self.connection,turn_id)}
 
     pub fn answers_gate(&self, turn_id:&str) -> Result<bool> {turns::answers_gate(&self.connection,turn_id)}
+
+    /// A economia que o bloqueio do pedido anterior do chat registrou, quando
+    /// este pedido chegou em até `RESEND_MINUTES` depois dele: foi reenvio, e
+    /// o bloqueio não poupou o que tinha contado. Nada quando o anterior não
+    /// foi barrado, quando veio mais tarde ou quando a economia já foi desfeita.
+    pub fn blocked_saving_to_revoke(&self, turn_id:&str) -> Result<Option<f64>> {
+        let previous:Option<(String,String,String,String)>=self.connection.query_row(
+            "SELECT previous.id,previous.status,previous.created_at,current.created_at FROM turns current
+               JOIN turns previous ON previous.chat_id=current.chat_id AND previous.ordinal<current.ordinal
+             WHERE current.id=?1 ORDER BY previous.ordinal DESC LIMIT 1",
+            [turn_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+        ).optional()?;
+        let Some((previous,status,blocked_at,now))=previous else { return Ok(None) };
+        if status!=TurnStatus::Blocked.as_str() { return Ok(None); }
+        let gap=turns::parse_time(&now)?-turns::parse_time(&blocked_at)?;
+        if gap>chrono::Duration::minutes(RESEND_MINUTES) { return Ok(None); }
+        let saved:f64=self.connection.query_row("SELECT COALESCE(SUM(amount),0) FROM jev_records WHERE turn_id=?1 AND kind=?2",params![previous,BLOCKED_SAVING],|row|row.get(0))?;
+        let revoked:f64=self.connection.query_row("SELECT COALESCE(SUM(amount),0) FROM jev_records WHERE turn_id=?1 AND kind=?2 AND amount<0",params![turn_id,BLOCKED_SAVING],|row|row.get(0))?;
+        Ok((saved>0.0&&revoked==0.0).then_some(saved))
+    }
 
     /// Os agentes e modelos que a tela Configuração do LLM grava.
     pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
@@ -1224,6 +1249,32 @@ mod tests {
         store.keep_agent_session(&chat_id,&session).expect("guarda de novo");
         store.forget_agent_session(&chat_id).expect("esquece");
         assert_eq!(store.agent_session(&chat_id).expect("leitura"),None);
+    }
+
+    /// O pedido barrado e reenviado logo em seguida não poupou nada: a
+    /// economia que o bloqueio contou é desfeita uma vez.
+    #[test]
+    fn a_quick_resend_takes_back_the_saving_of_the_block() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let blocked=store.enqueue_prompt(&chat.id,"arruma isso",None).expect("barrado");
+        store.set_turn_status(&blocked.id,TurnStatus::Blocked).expect("status");
+        let scope=|turn:&str|crate::usage::Scope{project_id:Some(project.id.clone()),chat_id:Some(chat.id.clone()),turn_id:Some(turn.to_string())};
+        store.record_usage(&crate::usage::Entry::Jev(scope(&blocked.id),crate::usage::JevMark::saved("blocked",300))).expect("economia");
+        let resent=store.enqueue_prompt(&chat.id,"arruma o login em src/login.rs",None).expect("reenvio");
+        assert_eq!(store.blocked_saving_to_revoke(&resent.id).expect("leitura"),Some(300.0));
+        store.record_usage(&crate::usage::Entry::Jev(scope(&resent.id),crate::usage::JevMark{kind:BLOCKED_SAVING.into(),amount:-300.0,precision:crate::usage::Precision::Estimated})).expect("desfaz");
+        assert_eq!(store.blocked_saving_to_revoke(&resent.id).expect("leitura"),None,"desfeita uma vez só");
+        let later=store.enqueue_prompt(&chat.id,"e os testes?",None).expect("depois");
+        assert_eq!(store.blocked_saving_to_revoke(&later.id).expect("leitura"),None,"o anterior não foi barrado");
+        let old=store.enqueue_prompt(&chat.id,"outro",None).expect("barrado");
+        store.set_turn_status(&old.id,TurnStatus::Blocked).expect("status");
+        store.record_usage(&crate::usage::Entry::Jev(scope(&old.id),crate::usage::JevMark::saved("blocked",200))).expect("economia");
+        store.connection.execute("UPDATE turns SET created_at='2000-01-01T00:00:00+00:00' WHERE id=?1",[&old.id]).expect("envelhece");
+        let much_later=store.enqueue_prompt(&chat.id,"outro pedido",None).expect("muito depois");
+        assert_eq!(store.blocked_saving_to_revoke(&much_later.id).expect("leitura"),None,"bem depois não é reenvio");
     }
 
     #[test]
