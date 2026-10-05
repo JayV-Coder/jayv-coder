@@ -4,7 +4,7 @@ import type { Chat, LiveChange, LiveFile } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 import { useT, type Key } from "@/modules/i18n";
 import {
-  diffCounts, hunks, lineDiff, liveFile, loadEditors, openLiveInEditor, selectLiveFile, setLiveEditor, setLiveFollow, setLivePanel, useLive,
+  chooseLiveEditor, diffCounts, editorName, hunks, lineDiff, liveFile, loadEditors, openLiveInEditor, selectLiveFile, setLiveFollow, setLivePanel, useLive,
   type DiffLine,
 } from "@/modules/live";
 import { openTurns } from "@/modules/workspace";
@@ -13,8 +13,6 @@ import { cn } from "@/lib/utils";
 
 const GLYPH: Record<LiveChange["kind"], string> = { created: "+", modified: "~", removed: "−" };
 const KIND: Record<LiveChange["kind"], Key> = { created: "live.kind.created", modified: "live.kind.modified", removed: "live.kind.removed" };
-const EDITOR_NAMES: Record<string, string> = { code: "VS Code", cursor: "Cursor", windsurf: "Windsurf", "code-insiders": "VS Code Insiders", codium: "VSCodium" };
-export const editorName = (editor: string) => EDITOR_NAMES[editor] ?? editor;
 
 /** O que o agente está mexendo, ao lado da conversa: a lista de arquivos que o
  * pedido mudou (o mais recente no topo) e o diff do escolhido, contra como ele
@@ -58,13 +56,16 @@ export function LivePanel({ chat }: { chat: Chat }) {
               key={option ?? "none"}
               type="button"
               aria-pressed={editor === option}
-              onClick={() => setLiveEditor(option)}
+              onClick={() => chooseLiveEditor(chat.id, option)}
               className={cn("rounded-xs border px-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring", editor === option ? "border-primary text-foreground" : "border-border hover:text-foreground")}
             >
               {option ? editorName(option) : t("live.editor.none")}
             </button>
           ))}
         </div>
+      )}
+      {editors && editors.length === 0 && (
+        <p className="flex-none border-b border-border px-3 py-1.5 text-caption text-faint">{t("live.editor.missing")}</p>
       )}
       {files.length === 0 ? (
         <p className="px-3 py-3 text-muted-foreground">{t(running ? "live.waiting" : "live.empty")}</p>

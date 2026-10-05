@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { commands, onCore, type LiveChange, type LiveFile } from "@/modules/core";
-import { reportError } from "@/modules/feedback";
+import { notify, reportError } from "@/modules/feedback";
+import { t } from "@/modules/i18n";
 import { useWorkspace } from "@/modules/workspace";
 import { firstChangedLine, lineDiff } from "./diff";
 import { withChange } from "./changes";
@@ -67,9 +68,21 @@ export function setLiveFollow(follow: boolean) {
   write(FOLLOW_KEY, follow ? "1" : "0");
 }
 
-export function setLiveEditor(editor: string | null) {
+const EDITOR_NAMES: Record<string, string> = { code: "VS Code", cursor: "Cursor", windsurf: "Windsurf", "code-insiders": "VS Code Insiders", codium: "VSCodium" };
+export const editorName = (editor: string) => EDITOR_NAMES[editor] ?? editor;
+
+/** Escolhe o editor que acompanha o agente. A escolha responde na hora: abre
+ * no editor o arquivo que está à vista e, se nenhum arquivo mudou ainda, avisa
+ * que o primeiro a mudar é o que abre. Sem isso, clicar parecia não fazer nada. */
+export function chooseLiveEditor(chatId: string, editor: string | null) {
   useLive.setState({ editor });
   write(EDITOR_KEY, editor);
+  if (!editor) return;
+  const { chats, selected } = useLive.getState();
+  const files = (chats[chatId]?.files ?? []).filter((file) => file.kind !== "removed");
+  const file = files.find((item) => item.path === selected[chatId]) ?? files[0];
+  if (!file) notify(t("live.editor.armed", { editor: editorName(editor) }));
+  else void openLiveInEditor(chatId, file.path, editor).catch(reportError);
 }
 
 export async function loadEditors() {

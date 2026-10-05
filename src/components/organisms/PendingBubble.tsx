@@ -9,7 +9,7 @@ import { MessageBubble } from "./MessageBubble";
  * quando o pedido fecha.
  *
  * O balão só aparece quando há texto. As etapas do Jev e da portaria ficam na
- * faixa colada à caixa de escrita (`PendingBanner`), e não soltas na conversa. */
+ * painel de andamento à esquerda do chat (`ProgressPanel`), e não soltas na conversa. */
 export function PendingBubble({ turn, place }: { turn: TurnView; place: number }) {
   const t = useT();
   // Só o pedido deste balão: o pedaço de outro turno não o redesenha.

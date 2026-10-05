@@ -1,27 +1,27 @@
-import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
-import { ArrowUpIcon } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { WORK_MODES, type Chat, type WorkMode } from "@/modules/core";
-import { answerQuestion, answeringFor, sendPrompt, setDraft, useConversation } from "@/modules/conversation";
+import { answerQuestion, answeringFor, cancelTurn, sendPrompt, setDraft, useConversation } from "@/modules/conversation";
 import { notify } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { MOD, modeCommand, shortcutText } from "@/modules/commands";
-import { setWorkMode } from "@/modules/workspace";
+import { openTurns, setWorkMode } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
 import { SegmentedControl } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AskingPanel } from "./AskingPanel";
-import { PendingBanner } from "./PendingBanner";
 
 /** A caixa de enviar mensagem, como o prompt de um terminal: `❯`, o cursor
  * verde-limão e os atalhos à vista embaixo. É o banco que escolhe o traje dela: sem
  * pergunta em aberto, a caixa de sempre; com pergunta, o painel da pergunta e
  * o texto travado até o desenvolvedor pedir para escrever.
  *
- * O botão só cai quando não há chat. Desligá-lo enquanto um pedido roda era o
- * que empurrava o desenvolvedor a mandar por cima e ver o texto sumir; com
- * fila, mandar em cima da espera é o comportamento normal. Ele só fica
- * apagado enquanto não há o que mandar. */
+ * O botão de enviar cede o lugar ao `Parar` enquanto o JayV de fato trabalha
+ * (o pedido no ar, não o que espera na fila). Mandar por cima continua
+ * valendo com a tecla Enter: o texto entra na fila, e não some. Fora disso o
+ * botão só fica apagado enquanto não há o que mandar.
+ * O andamento do pedido mora no painel da esquerda (`ProgressPanel`). */
 export function Composer({ chat }: { chat: Chat | null }) {
   const t = useT();
   const input = useRef<HTMLTextAreaElement>(null);
@@ -30,6 +30,10 @@ export function Composer({ chat }: { chat: Chat | null }) {
   const question = chat?.question ?? null;
   const writing = question ? answeringFor(question, answering).writing : false;
   const locked = !chat || (question !== null && !writing);
+  // O pedido que já recebeu o "Parar": o botão não manda de novo enquanto o
+  // agente cai.
+  const [stopping, setStopping] = useState<string | null>(null);
+  const flying = openTurns(chat).find((turn) => turn.status === "flying") ?? null;
 
   useEffect(() => {
     const element = input.current;
@@ -79,7 +83,6 @@ export function Composer({ chat }: { chat: Chat | null }) {
 
   return (
     <form onSubmit={submit} className="overflow-hidden rounded-md border border-border bg-card font-mono transition-[border-color,box-shadow] focus-within:border-accent focus-within:ring-3 focus-within:ring-accent/25">
-      <PendingBanner chat={chat} />
       {chat && question && <AskingPanel chat={chat} question={question} />}
       <div className="flex items-start">
       <span aria-hidden="true" className={cn("ps-3.5 pt-3 font-semibold text-go", locked && "text-faint")}>❯</span>
@@ -115,7 +118,19 @@ export function Composer({ chat }: { chat: Chat | null }) {
             className="[&_button]:h-6 [&_button]:px-2"
           />
         )}
-        {(!question || writing) && (
+        {flying && chat ? (
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon-sm"
+            disabled={stopping === flying.id}
+            aria-label={stopping === flying.id ? t("pending.stopping") : t("pending.stop")}
+            title={t("pending.stop.title")}
+            onClick={() => { setStopping(flying.id); void cancelTurn(flying.id, chat.id); }}
+          >
+            <SquareIcon aria-hidden="true" className="fill-current" />
+          </Button>
+        ) : (!question || writing) && (
           <Button type="submit" size="icon-sm" disabled={!chat || !draft.trim()} aria-label={t("composer.send")} title={t("composer.send")}>
             <ArrowUpIcon aria-hidden="true" />
           </Button>
