@@ -21,6 +21,10 @@ interface Answering {
   picked: string[];
   /** No formulário, a resposta de cada pergunta, na ordem delas. */
   form: string[];
+  /** No formulário, a pergunta da vez: uma por etapa. */
+  step: number;
+  /** A pergunta recolhida numa linha, para o chat ter espaço. */
+  folded: boolean;
 }
 
 interface ConversationState {
@@ -30,7 +34,7 @@ interface ConversationState {
   drafts: Record<string, string>;
 }
 
-const IDLE: Answering = { turnId: null, writing: false, picked: [], form: [] };
+const IDLE: Answering = { turnId: null, writing: false, picked: [], form: [], step: 0, folded: false };
 
 export const useConversation = create<ConversationState>(() => ({ live: {}, answering: IDLE, drafts: {} }));
 
@@ -59,6 +63,17 @@ export function setDraft(chatId: string, value: string) {
 
 export function setWriting(question: Question, writing: boolean) {
   useConversation.setState((state) => ({ answering: { ...answeringFor(question, state.answering), writing } }));
+}
+
+/** Vai para outra pergunta do formulário. O que já foi escrito nas outras
+ * fica: só se envia tudo junto, na última etapa. */
+export function setStep(question: Question, step: number) {
+  const last = Math.max(0, formItems(question).length - 1);
+  useConversation.setState((state) => ({ answering: { ...answeringFor(question, state.answering), step: Math.min(Math.max(0, step), last) } }));
+}
+
+export function setFolded(question: Question, folded: boolean) {
+  useConversation.setState((state) => ({ answering: { ...answeringFor(question, state.answering), folded } }));
 }
 
 /** As perguntas do formulário. Uma linha que não se lê fica de fora, e o
