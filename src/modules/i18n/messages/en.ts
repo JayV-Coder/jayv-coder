@@ -1579,4 +1579,6 @@ export const en = {
   "whatsNew.item.codexNetwork.detail": "In Settings › Agents › Codex the Network access switch stayed locked with the default \"Read only\" sandbox, and Development mode dropped it even when it was on. It now works with \"Read only\" and \"Write to the project\" and applies whenever Codex writes; with Full access it shows on, because there is no sandbox.",
   "whatsNew.item.answerNotBlocked.title": "Answering the agent is no longer blocked at the gatehouse",
   "whatsNew.item.answerNotBlocked.detail": "When the agent asked a second question (common in Planning mode), the answer was judged without the request that started the conversation and could be blocked as a new feature. The gatehouse now reads the conversation from the original request, and the answer inherits its pass.",
+  "whatsNew.item.roundMetrics.title": "JayV counts why an agent starts over",
+  "whatsNew.item.roundMetrics.detail": "Every time an agent opens a fresh session instead of resuming the chat's, JayV now records why: first request, another model, another mode, the turn limit, or a session the agent no longer had. Together with the gate verdicts and the cost per chat, this is the baseline for the next releases, which aim at fewer rounds until a request is done.",
 } satisfies Record<string, Message>;

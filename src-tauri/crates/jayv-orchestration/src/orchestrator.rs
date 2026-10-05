@@ -459,14 +459,18 @@ impl Orchestrator {
         let system=format!("{system}\n{}",language_note());
         let user=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
         let effort=Some(effort_for(complexity));
-        if let Some(resume)=self.resumable_session(session_id,provider.as_ref(),selection) {
-            let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
-            match provider.chat_turn(&messages,&selection.model_name,effort,Some(&resume),pulse).await {
-                Ok(response)=>return Ok((response,true)),
-                Err(error) if !lost_session(&error)=>return Err(error),
-                Err(error)=>eprintln!("sessão do agente: não retomou, começando outra ({error:#})"),
+        let fresh=match self.resume_check(session_id,provider.as_ref(),selection) {
+            Ok(resume)=>{
+                let messages=[ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:user.clone()}];
+                match provider.chat_turn(&messages,&selection.model_name,effort,Some(&resume),pulse).await {
+                    Ok(response)=>return Ok((response,true)),
+                    Err(error) if !lost_session(&error)=>return Err(error),
+                    Err(error)=>{ eprintln!("sessão do agente: não retomou, começando outra ({error:#})"); NewSession::Lost }
+                }
             }
-        }
+            Err(reason)=>reason,
+        };
+        crate::usage::mark(crate::usage::JevMark::count(fresh.mark(),1));
         // Sessão nova: as notas do projeto entram uma vez, no começo dela, e o
         // agente que explora recebe também a planta do projeto.
         let system=match &self.project_notes { Some(notes)=>format!("{system}\n{notes}"), None=>system };
@@ -628,9 +632,21 @@ impl Orchestrator {
     /// `--permission-mode plan` e a nota de somente leitura; retomada no
     /// build, o agente seguia dizendo que a sessão permanecia somente leitura.
     fn resumable_session(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->Option<String> {
-        if !provider.resumes() { return None; }
-        let kept=self.memory.agent_session(session_id)?;
-        (kept.provider==selection.provider&&kept.model==selection.model_name&&kept.root==self.rag.project_info().root&&kept.writes==self.writes(&selection.mode)&&kept.turns<RESUMED_TURNS).then(||kept.id.clone())
+        self.resume_check(session_id,provider,selection).ok()
+    }
+
+    /// A sessão a retomar ou, quando não há, o motivo. O motivo vai para as
+    /// marcas do Jev (`session_new:<motivo>`): é com ele que se mede por que
+    /// o agente relê o projeto do zero.
+    fn resume_check(&self,session_id:&str,provider:&dyn Provider,selection:&ModelSelection)->std::result::Result<String,NewSession> {
+        if !provider.resumes() { return Err(NewSession::CannotResume); }
+        let kept=self.memory.agent_session(session_id).ok_or(NewSession::First)?;
+        if kept.provider!=selection.provider { return Err(NewSession::OtherAgent); }
+        if kept.model!=selection.model_name { return Err(NewSession::OtherModel); }
+        if kept.root!=self.rag.project_info().root { return Err(NewSession::OtherFolder); }
+        if kept.writes!=self.writes(&selection.mode) { return Err(NewSession::OtherMode); }
+        if kept.turns>=RESUMED_TURNS { return Err(NewSession::TurnCeiling); }
+        Ok(kept.id.clone())
     }
 
     /// Guarda (ou esquece) a sessão que o agente acabou de usar, para o pedido
@@ -684,6 +700,35 @@ impl Orchestrator {
         let result=ProviderResponse{response,input_tokens:0,output_tokens:0,model:"internal".into(),provider:"jev".into(),latency_ms:0,session:None}; let decision=Decision{model_provider:"jev".into(),model_name:"internal".into(),estimated_tokens:0,context_files_count:0,rag_files_count:0};
         ProcessResult{user_input:user_input.into(),normalized_input:normalized.into(),intent_analysis:analyze_intent(normalized),complexity:"trivial".into(),context_plan:vec![],context:Context::default(),strategy:"explanation".into(),model_selection:ModelSelection{model_name:"internal".into(),provider:"jev".into(),estimated_tokens:0,score:1.0,reason:"local explanation".into(),..Default::default()},result:Some(result),validation:true,decision,routing:RoutingSignals{source:SOURCE_LOCAL.into(),..Default::default()},error:None}
     }
+}
+
+/// Por que o pedido abriu uma sessão nova do agente em vez de retomar a do
+/// chat. Cada sessão nova é um agente relendo o projeto do zero; contar o
+/// motivo diz qual regra está quebrando a retomada.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum NewSession {
+    /// O chat ainda não tinha sessão (ou a anterior não foi guardada).
+    First,
+    /// O agente não sabe retomar (sem o lugar da sessão na linha de comando,
+    /// ou um provedor por API).
+    CannotResume,
+    OtherAgent,
+    OtherModel,
+    OtherFolder,
+    /// A sessão nasceu do outro lado da escrita (planejamento × build).
+    OtherMode,
+    /// A sessão chegou ao teto de pedidos.
+    TurnCeiling,
+    /// A retomada foi tentada e o agente não achou a sessão.
+    Lost,
+}
+
+impl NewSession {
+    pub fn as_str(&self)->&'static str {
+        match self { Self::First=>"first", Self::CannotResume=>"cannot_resume", Self::OtherAgent=>"other_agent", Self::OtherModel=>"other_model", Self::OtherFolder=>"other_folder", Self::OtherMode=>"other_mode", Self::TurnCeiling=>"turn_ceiling", Self::Lost=>"lost" }
+    }
+    /// A marca do Jev que conta esta sessão nova.
+    pub fn mark(&self)->String { format!("session_new:{}",self.as_str()) }
 }
 
 /// O que o firewall fez num contexto recém-lido: arquivos retidos e valores
@@ -1549,6 +1594,43 @@ mod tests {
         orchestrator.pending_work_mode=Some(MODE_BUILD.into());
         orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
         assert!(call("build-2").contains("--resume s-build"),"no mesmo modo, retoma: {}",call("build-2"));
+    }
+
+    /// Cada sessão nova sai com o motivo de não ter retomado a anterior; a
+    /// retomada conta à parte. É isso que a Fase 0 mede.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn every_new_agent_session_is_counted_with_its_reason() {
+        let dir=repository(&[("router.rs",filler("route_request",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let script=r#"cat >/dev/null; echo '{"type":"system","subtype":"init","session_id":"s-1"}'; echo resposta"#.to_string();
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),script.clone(),"agent".into(),"--resume".into(),crate::llm::RESUME.into()],plan_args:vec!["-c".into(),script,"agent".into(),"--resume".into(),crate::llm::RESUME.into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+        let (sink,mut entries)=tokio::sync::mpsc::unbounded_channel();
+        crate::usage::within_sink(crate::usage::Scope::default(),sink,async {
+            orchestrator.pending_work_mode=Some(MODE_PLAN.into());
+            orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
+            orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+            orchestrator.process("explain route_request again",Some("chat"),&Pulse::silent()).await;
+            orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+            orchestrator.process("and where is it called from?",Some("chat"),&Pulse::silent()).await;
+        }).await;
+        let mut kinds=vec![];
+        while let Ok(entry)=entries.try_recv() { if let crate::usage::Entry::Jev(_,mark)=entry { if mark.kind.starts_with("session_") { kinds.push(mark.kind); } } }
+        assert_eq!(kinds,["session_new:first","session_new:other_mode","session_resumed"]);
+    }
+
+    #[test]
+    fn the_session_reasons_are_stable_identifiers() {
+        let all=[NewSession::First,NewSession::CannotResume,NewSession::OtherAgent,NewSession::OtherModel,NewSession::OtherFolder,NewSession::OtherMode,NewSession::TurnCeiling,NewSession::Lost];
+        let names=all.iter().map(NewSession::mark).collect::<Vec<_>>();
+        assert_eq!(names,["session_new:first","session_new:cannot_resume","session_new:other_agent","session_new:other_model","session_new:other_folder","session_new:other_mode","session_new:turn_ceiling","session_new:lost"],"as consultas do Supabase leem estes nomes");
     }
 
     /// A planta do projeto vai no começo da sessão do agente, e a sessão
