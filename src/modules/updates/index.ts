@@ -31,6 +31,16 @@ interface UpdateState {
   dismissed: string | null;
   /** Quando a última consulta voltou com resposta (ISO), com ou sem versão nova. */
   checkedAt: string | null;
+  /** A consulta de quando o app abre está em curso: a tela de abertura espera por ela. */
+  launching: boolean;
+  /** Instalar sozinho a versão nova achada ao abrir o app (ligado por padrão). */
+  installOnLaunch: boolean;
+}
+
+const LAUNCH_KEY = "jayv.updates.launch";
+
+function savedInstallOnLaunch(): boolean {
+  try { return localStorage.getItem(LAUNCH_KEY) !== "off"; } catch { return true; }
 }
 
 /** A consulta ao voltar para a janela não se repete em menos que isto: quem
@@ -40,16 +50,75 @@ export const RECHECK_MS = 15_000;
 
 export const useUpdate = create<UpdateState>(() => ({
   phase: "idle", open: false, current: null, next: null, notes: null, date: null, received: 0, total: null, error: null, failedAt: null, dismissed: null,
-  checkedAt: null,
+  checkedAt: null, launching: false, installOnLaunch: savedInstallOnLaunch(),
 }));
 
-const answered = () => new Date().toISOString();
+/** Quanto a consulta de abertura espera antes de seguir sem ela: sem rede o
+ * app não fica parado numa tela de espera. */
+export const LAUNCH_TIMEOUT_MS = 10_000;
 
-const busy = (phase: UpdatePhase) => phase === "checking" || phase === "downloading" || phase === "installing" || phase === "restarting";
+export function setInstallOnLaunch(on: boolean) {
+  try { localStorage.setItem(LAUNCH_KEY, on ? "on" : "off"); } catch { /* sem armazenamento: vale só nesta sessão */ }
+  useUpdate.setState({ installOnLaunch: on });
+}
+
+let skipLaunch: (() => void) | null = null;
+let launched = false;
+
+/** "Pular" na tela de abertura: o app abre agora; o que a consulta achar
+ * depois vira o aviso do topo, sem instalar. */
+export function skipLaunchUpdate() { skipLaunch?.(); }
+
+/** Ao abrir o app: consulta antes de mostrar a tela e, havendo versão nova,
+ * baixa, instala e reinicia sozinho, com a janela de progresso na frente.
+ * Sem rede, passado o tempo, numa build de desenvolvimento ou com a opção
+ * desligada, o app abre normalmente (a versão achada vira o aviso do topo).
+ * Roda uma vez por abertura. */
+export async function updateAtLaunch() {
+  if (launched) return;
+  launched = true;
+  useUpdate.setState({ launching: true });
+  let skipped = false;
+  const stop = new Promise<null>((resolve) => { skipLaunch = () => { skipped = true; resolve(null); }; });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => { skipped = true; resolve(null); }, LAUNCH_TIMEOUT_MS); });
+  const asking = check().catch((error) => { console.warn("launch update check failed", error); return null; });
+  const update = await Promise.race([asking, stop, timeout]);
+  clearTimeout(timer);
+  skipLaunch = null;
+  useUpdate.setState({ launching: false });
+  if (!update) {
+    // O que a consulta lenta achar depois de pular ainda vira aviso.
+    if (skipped) void asking.then((late) => { if (late) keep(late); });
+    else useUpdate.setState({ checkedAt: answered() });
+    return;
+  }
+  useUpdate.setState({ checkedAt: answered() });
+  if (pending) void pending.close().catch(() => undefined);
+  pending = update;
+  if (useUpdate.getState().installOnLaunch) await install(update);
+  else keep(update);
+}
+
+/** Guarda a versão achada como aviso do topo, sem abrir janela. */
+function keep(update: Update) {
+  if (useUpdate.getState().phase !== "idle" && useUpdate.getState().phase !== "latest") { void update.close().catch(() => undefined); return; }
+  if (pending && pending !== update) void pending.close().catch(() => undefined);
+  pending = update;
+  useUpdate.setState({
+    phase: "available", current: update.currentVersion, next: update.version,
+    notes: update.body?.trim() || null, date: update.date ?? null, error: null, failedAt: null,
+  });
+}
+
+const answered = () => new Date().toISOString();
 
 /** A versão achada pela consulta silenciosa, guardada até a pessoa mandar
  * instalar. */
 let pending: Update | null = null;
+
+const busy = (phase: UpdatePhase) => phase === "checking" || phase === "downloading" || phase === "installing" || phase === "restarting";
+
 
 /** Pergunta ao repositório de releases se há versão nova. Ao abrir o
  * aplicativo, quando o núcleo acha versão nova e ao voltar para a janela
@@ -135,7 +204,7 @@ export function dismissUpdate() {
   useUpdate.setState((state) => ({ dismissed: state.next }));
 }
 
-/** Consulta ao abrir, quando o núcleo avisa que achou versão nova, ao voltar
+/** Ao abrir, `updateAtLaunch`; depois, quando o núcleo avisa que achou versão nova, ao voltar
  * a rede (o computador acordou, o Wi-Fi voltou) e ao voltar para a janela.
  * Quem pergunta de tempos em tempos é o núcleo: os relógios da tela param
  * quando a janela vai para a bandeja. Uma consulta que ainda não voltou não
@@ -150,7 +219,8 @@ export function connectUpdates() {
     void checkForUpdate().finally(() => { asking = false; });
   };
   const back = () => { if (document.visibilityState === "visible" && Date.now() - last >= RECHECK_MS) ask(); };
-  ask();
+  last = Date.now();
+  void updateAtLaunch();
   const off = onCore("update-found", ask);
   window.addEventListener("online", ask);
   window.addEventListener("focus", back);

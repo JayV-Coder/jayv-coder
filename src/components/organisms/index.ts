@@ -30,6 +30,7 @@ export { LivePanel } from "./LivePanel";
 export { ProgressPanel } from "./ProgressPanel";
 export { RepositoryPanel } from "./RepositoryPanel";
 export { UpdateBanner } from "./UpdateBanner";
+export { LaunchUpdate } from "./LaunchUpdate";
 export { WhatsNewDialog } from "./WhatsNewDialog";
 export { ProjectMemoryDialog } from "./ProjectMemoryDialog";
 export { ChatSearch } from "./ChatSearch";

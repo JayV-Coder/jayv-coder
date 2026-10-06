@@ -17,7 +17,7 @@ import { AGENT_LABELS, AGENTS, discardChanges, openSettingsTab, restoreCoreDefau
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
-import { checkForUpdate } from "@/modules/updates";
+import { checkForUpdate, setInstallOnLaunch, useUpdate } from "@/modules/updates";
 import { openStats, setPeriod, type Period } from "@/modules/usage";
 import {
   chatsOf, chatTitle, createChat, findChat, leaveProject, openChat, openProject, openTurns, recentChats, setLayout, setWorkMode, type Layout,
@@ -204,6 +204,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   all.push(
     { id: "whats-new", group: help, label: t("palette.whatsNew"), run: () => void showChanges() },
     { id: "check-update", group: help, label: t("system.update.check"), run: () => void checkForUpdate(true) },
+    { id: "update-on-launch", group: help, label: t("app.updates.launch"), run: () => setInstallOnLaunch(!useUpdate.getState().installOnLaunch) },
     { id: "system-reload", group: help, label: t("system.reload"), run: () => { navigate("status"); featureActions.reloadSystem?.(); } },
     { id: "system-copy", group: help, label: t("system.copy"), run: () => void featureActions.copySystemReport?.().catch(reportError) },
   );
