@@ -3,7 +3,7 @@
 //!
 //!   cargo run --example jev_seed > ../supabase/migrations/20261001120100_seed_jev_en.sql
 
-use jayv_lib::{asking, gatekeeper, jev};
+use jayv_lib::{asking, gatekeeper, jev, skill_choice};
 use serde_json::Value;
 
 fn literal(text:&str)->String { format!("'{}'",text.replace('\'',"''")) }
@@ -20,6 +20,7 @@ fn main() {
         ("entry",gatekeeper::entry_questions()),
         ("routing",jev::routing_questions()),
         ("asking",asking::questions()),
+        ("skills",skill_choice::questions()),
     ];
     println!("-- Gerado por src-tauri/examples/jev_seed.rs. Não edite à mão.\n");
     println!("insert into public.jev_questions (question_set, id, body, position) values");

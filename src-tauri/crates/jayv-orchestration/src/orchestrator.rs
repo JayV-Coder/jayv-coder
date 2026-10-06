@@ -150,6 +150,9 @@ pub struct Orchestrator {
     /// (`ReviewRequest`): quem atende a fila a leva e a roda fora do
     /// cadeado, e o pedido seguinte não espera a segunda opinião.
     pub pending_review: Option<ReviewRequest>,
+    /// As skills que o desenvolvedor instalou e deixou ligadas: o Jev escolhe
+    /// no máximo uma por pedido. Quem atende a fila as renova a cada pedido.
+    skills: Vec<jayv_agents::skills::Skill>,
 }
 
 impl Orchestrator {
@@ -170,7 +173,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -319,7 +322,13 @@ impl Orchestrator {
         // segunda reclamação seguida em diante pensa um degrau a mais.
         let complaints=if std::mem::take(&mut self.pending_retry) { let mut all=held(&self.shared.complaints); let count=all.entry(session_id.to_string()).or_insert(0); *count+=1; *count } else { held(&self.shared.complaints).remove(session_id); 0 };
         if complaints>0 { extras.push(RETRY_NOTE.into()); }
-        let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
+        // A escolha da skill vai ao Jev junto com o roteamento, em paralelo:
+        // o pedido não espera uma ida depois da outra.
+        let candidates:Vec<crate::skill_choice::Candidate>=self.skills.iter().map(|skill|crate::skill_choice::Candidate{name:skill.name.clone(),description:skill.description.clone()}).collect();
+        let skills=self.skills.clone();
+        let with_jev=self.routes_with_jev();
+        let ((intent,complexity,signals),skill_index)=tokio::join!(self.decide_routing(&normalized,session_id),crate::skill_choice::choose(&normalized,&candidates,with_jev));
+        let skill_note=skill_index.and_then(|index|skills.get(index)).and_then(|skill|skill_note(skill).map(|note|(skill.name.clone(),note)));
         let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
         let stuck=held(&self.shared.stuck_in_plan).contains(session_id);
         // Há um plano deste chat esperando: quem o aprova quer o build, mesmo
@@ -329,6 +338,7 @@ impl Orchestrator {
         if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { held(&self.shared.stuck_in_plan).insert(session_id.to_string()); } else { held(&self.shared.stuck_in_plan).remove(session_id); }
         self.mode_switch=switched.clone();
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
+        if let Some((name,note))=skill_note { pulse.beat(Beat::Skill{name}); extras.push(note); }
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
         let notes=format!("{}{}",mode_notes(&signals,mode),self.lean_note(mode).map(|note|format!("\n{note}")).unwrap_or_default());
@@ -491,6 +501,10 @@ impl Orchestrator {
 
     /// A regra de código enxuto deste pedido: só no modo build, só com a
     /// configuração ligada, na força do nível da conta.
+    /// As skills instaladas que valem para os pedidos daqui em diante; as
+    /// desligadas não entram.
+    pub fn use_skills(&mut self,skills:Vec<jayv_agents::skills::Skill>) { self.skills=skills.into_iter().filter(|skill|skill.enabled).collect(); }
+
     fn lean_note(&self,mode:&str)->Option<&'static str> {
         (self.lean_code&&mode==MODE_BUILD).then(||match self.expertise.lean() { crate::expertise::Lean::Lite=>LEAN_LITE_NOTE, crate::expertise::Lean::Full=>LEAN_FULL_NOTE })
     }
@@ -1096,6 +1110,13 @@ pub fn language_reminder()->String {
         Some(language)=>format!("\n\nReminder: write your reply in {} (BCP 47 tag `{}`), whatever language the files, code comments or documentation you read are written in.",language.name,language.tag),
         None=>String::new(),
     }
+}
+
+/// O aviso ao modelo da skill que o Jev escolheu: as instruções dela e onde
+/// estão os outros arquivos. Nada se a pasta da skill não pôde ser lida.
+fn skill_note(skill:&jayv_agents::skills::Skill)->Option<String> {
+    let body=jayv_agents::skills::read_body(skill).map_err(|error|eprintln!("skills: {} ilegível ({error:#})",skill.name)).ok()?;
+    Some(format!("Jev picked the skill `{name}` for this request: {description}\nFollow its instructions below. Any other file it mentions is in `{path}`; read it from there when you need it.\n<skill name=\"{name}\">\n{body}\n</skill>",name=skill.name,description=skill.description,path=skill.path))
 }
 
 /// O que volta do modelo raramente é só o título: vem entre aspas, com marca

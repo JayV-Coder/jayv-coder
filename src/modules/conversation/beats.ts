@@ -17,6 +17,7 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
       return t("beat.gate", { verdict: word ? t(word) : String(d.verdict), score: d.score ?? "", demand: d.demand ?? "" });
     }
     case "read": return t("beat.read", { intent: word(INTENT_WORDS, d.intent), complexity: word(COMPLEXITY_WORDS, d.complexity), source: sourceLabel(String(d.source ?? "")) });
+    case "skill": return t("beat.skill", { name: String(d.name ?? "") });
     case "context": return t("beat.context", { count: d.files ?? 0, tokens: d.tokens ?? 0 });
     case "route": {
       const said = routeLabel({ provider: String(d.provider ?? ""), model: String(d.model ?? ""), mode: (d.mode as RouteMode | undefined) ?? null, agent: (d.agent as string | undefined) ?? null });

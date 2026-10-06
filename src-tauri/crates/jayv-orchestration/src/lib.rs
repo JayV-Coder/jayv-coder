@@ -11,7 +11,7 @@ pub mod split;
 use jayv_agents::{agents, llm, mcp, providers, router, usage};
 use jayv_base::{config, firewall, i18n, model, progress};
 use jayv_code::{context_engine, graph, project_map, rag, symbols};
-use jayv_jev::{core_settings, expertise, jev};
+use jayv_jev::{core_settings, expertise, jev, skill_choice};
 #[cfg(test)] use jayv_jev::policy;
 use jayv_live::live_files;
 use jayv_memory::memory;

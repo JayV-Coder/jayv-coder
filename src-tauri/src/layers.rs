@@ -15,7 +15,7 @@ pub const LAYERS:&[(&str,&[&str])]=&[
     ("store",&["local","cache","checkpoint"]),
     ("cloud",&["cloud"]),
     ("agents",&["llm","providers","agents","router","tools","usage"]),
-    ("jev",&["jev","asking","gatekeeper","expertise","policy","core_settings","turns"]),
+    ("jev",&["jev","asking","gatekeeper","expertise","policy","core_settings","turns","skill_choice"]),
     ("plans",&["features"]),
     ("orgs",&["checkout","repo_keys"]),
     ("code",&["rag","search","symbols","project_map","graph","context_engine"]),

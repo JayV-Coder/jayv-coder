@@ -42,8 +42,8 @@ describe("paletteCommands", () => {
   it("reaches every screen, every settings tab and the project actions", () => {
     const found = ids();
     for (const id of ["projects", "organizations", "stats", "system", "settings", "profile", "plans", "gate", "chats", "new-chat", "new-project"]) expect(found).toContain(id);
-    for (const tab of ["app", "jev", "mcp", "claude", "codex", "copilot", "cursor"]) expect(found).toContain(`settings-${tab}`);
-    for (const id of ["settings-save", "settings-discard", "settings-defaults", "project-notes", "search-chats", "live", "notifications", "sign-out", "check-update", "system-copy", "whats-new"]) expect(found).toContain(id);
+    for (const tab of ["app", "jev", "mcp", "skills", "claude", "codex", "copilot", "cursor"]) expect(found).toContain(`settings-${tab}`);
+    for (const id of ["settings-save", "settings-discard", "settings-defaults", "skills-install", "project-notes", "search-chats", "live", "notifications", "sign-out", "check-update", "system-copy", "whats-new"]) expect(found).toContain(id);
   });
 
   it("lists the tabs of the open organization and one language entry per other language", () => {

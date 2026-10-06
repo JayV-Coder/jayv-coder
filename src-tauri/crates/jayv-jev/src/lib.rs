@@ -7,6 +7,7 @@ pub mod expertise;
 pub mod gatekeeper;
 pub mod jev;
 pub mod policy;
+pub mod skill_choice;
 pub mod turns;
 
 // As camadas de baixo com os nomes de sempre: `crate::config`, `crate::llm`

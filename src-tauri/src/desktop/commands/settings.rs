@@ -240,3 +240,50 @@ pub(crate) async fn draft_mcp(desk:State<'_,SharedDesktopState>,text:String)->Re
     if servers.is_empty() { return Err(Text::new("mcp.draft.unknown")); }
     Ok(McpDraft{servers,from_model:true})
 }
+
+/// Onde as skills instaladas ficam: dentro da pasta de dados do app.
+fn skills_root()->Result<std::path::PathBuf,Text> {
+    crate::workspace::app_data_dir().map(|dir|jayv_agents::skills::root(&dir)).ok_or_else(||Text::new("skills.noFolder"))
+}
+
+/// As skills instaladas neste computador.
+#[tauri::command]
+pub(crate) async fn get_skills(workspace:State<'_,SharedWorkspace>)->Result<Vec<jayv_agents::skills::Skill>,Text>{
+    workspace.lock().await.skills().map_err(failure)
+}
+
+/// Instala a skill de uma pasta com `SKILL.md` (ou as de uma pasta com várias).
+/// Devolve a lista inteira.
+#[tauri::command]
+pub(crate) async fn install_skill_folder(workspace:State<'_,SharedWorkspace>,path:String)->Result<Vec<jayv_agents::skills::Skill>,Text>{crate::desktop::require_session()?;
+    let root=skills_root()?;
+    let mut workspace=workspace.lock().await;
+    workspace.install_skill_folder(&root,std::path::Path::new(path.trim())).map_err(failure)?;
+    workspace.skills().map_err(failure)
+}
+
+/// Instala a skill a partir do texto do `SKILL.md` colado na tela.
+#[tauri::command]
+pub(crate) async fn install_skill_text(workspace:State<'_,SharedWorkspace>,text:String)->Result<Vec<jayv_agents::skills::Skill>,Text>{crate::desktop::require_session()?;
+    let root=skills_root()?;
+    let mut workspace=workspace.lock().await;
+    workspace.install_skill_text(&root,&text).map_err(failure)?;
+    workspace.skills().map_err(failure)
+}
+
+/// Liga ou desliga uma skill: desligada, o Jev nem a considera.
+#[tauri::command]
+pub(crate) async fn set_skill_enabled(workspace:State<'_,SharedWorkspace>,name:String,enabled:bool)->Result<Vec<jayv_agents::skills::Skill>,Text>{crate::desktop::require_session()?;
+    let mut workspace=workspace.lock().await;
+    workspace.set_skill_enabled(&name,enabled).map_err(failure)?;
+    workspace.skills().map_err(failure)
+}
+
+/// Remove a skill e a cópia dela na pasta de dados.
+#[tauri::command]
+pub(crate) async fn remove_skill(workspace:State<'_,SharedWorkspace>,name:String)->Result<Vec<jayv_agents::skills::Skill>,Text>{crate::desktop::require_session()?;
+    let root=skills_root()?;
+    let mut workspace=workspace.lock().await;
+    workspace.remove_skill(&root,&name).map_err(failure)?;
+    workspace.skills().map_err(failure)
+}

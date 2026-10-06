@@ -122,6 +122,9 @@ const APP_IDENTIFIER:&str="ai.jayv.desktop";
 
 /// Onde fica o motivo de o aplicativo não ter aberto. Aberto pelo menu não há
 /// terminal, e sem este arquivo o erro some junto com a janela.
+/// A pasta de dados do app, onde moram o banco e as skills instaladas.
+pub fn app_data_dir()->Option<PathBuf> { dirs::data_dir().map(|data_dir|data_dir.join(APP_IDENTIFIER)) }
+
 pub fn startup_log_location()->Option<PathBuf> { dirs::data_dir().map(|data_dir|data_dir.join(APP_IDENTIFIER).join("startup-error.log")) }
 
 fn database_location_in(config_path:&Path,root:&Path,data_dir:Option<PathBuf>)->PathBuf {
@@ -196,6 +199,7 @@ impl WorkspaceStore {
         connection.execute_batch(turns::SCHEMA)?;
         crate::llm::ensure(&connection)?;
         connection.execute_batch(crate::mcp::SCHEMA)?;
+        connection.execute_batch(jayv_agents::skills::SCHEMA)?;
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
         ensure_chat_work_mode(&connection)?;
@@ -697,6 +701,16 @@ impl WorkspaceStore {
     pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
 
     pub fn save_llm_settings(&mut self, settings:&crate::llm::LlmSettings) -> Result<crate::llm::LlmSettings> {crate::llm::save(&mut self.connection,settings)}
+
+    pub fn skills(&self) -> Result<Vec<jayv_agents::skills::Skill>> {jayv_agents::skills::load(&self.connection)}
+
+    pub fn install_skill_folder(&mut self, root:&Path, source:&Path) -> Result<Vec<jayv_agents::skills::Skill>> {std::fs::create_dir_all(root)?; jayv_agents::skills::install_folder(&self.connection,root,source)}
+
+    pub fn install_skill_text(&mut self, root:&Path, text:&str) -> Result<jayv_agents::skills::Skill> {std::fs::create_dir_all(root)?; jayv_agents::skills::install_text(&self.connection,root,text)}
+
+    pub fn set_skill_enabled(&mut self, name:&str, enabled:bool) -> Result<()> {jayv_agents::skills::set_enabled(&self.connection,name,enabled)}
+
+    pub fn remove_skill(&mut self, root:&Path, name:&str) -> Result<()> {jayv_agents::skills::remove(&self.connection,root,name)}
 
     pub fn mcp_servers(&self) -> Result<Vec<crate::mcp::McpServer>> {crate::mcp::load(&self.connection)}
 
