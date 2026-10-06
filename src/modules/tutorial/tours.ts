@@ -43,6 +43,7 @@ export const TOURS: Tour[] = [
       { feature: "liveFiles", target: "header-live" },
       { feature: "projectNotes" },
       { feature: "orgChat" },
+      { feature: "commandPermissions", target: "composer-grants" },
     ],
   },
   {

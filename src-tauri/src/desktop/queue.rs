@@ -447,6 +447,13 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // Os comandos negados viram a pergunta do box; as linhas que os pediam
     // saem da resposta que fica no chat.
     let permissions=if result.result.is_some() { asking::permission_requests(&assistant) } else { vec![] };
+    // O que a organização bloqueia não se pergunta: o painel não oferece
+    // executar, e o turno registra quem bloqueou.
+    let (permissions,blocked)=split_blocked_permissions(workspace,chat_id,permissions).await;
+    if !blocked.is_empty() {
+        let (commands,orgs):(Vec<String>,Vec<String>)=(blocked.iter().map(|(command,_)|command.clone()).collect(),{ let mut orgs:Vec<String>=Vec::new(); for (_,found) in &blocked { for org in found { if !orgs.contains(org) { orgs.push(org.clone()); } } } orgs });
+        let _=workspace.lock().await.record_beat(&turn.id,"permission_blocked",&serde_json::json!({"commands":commands,"orgs":orgs}));
+    }
     let assistant=asking::without_permission_marks(&assistant);
     if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&assistant));}
     // Só a resposta do modelo passa pelo portão de saída; um aviso de falha
@@ -497,6 +504,20 @@ async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,an
         Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});}
         Err(error)=>eprintln!("pergunta: não consegui habilitar a interação do turno `{}` ({error})",turn.id),
     }
+}
+
+/// Separa os comandos que o agente pediu entre os que a pessoa pode aprovar e
+/// os que a política da organização bloqueia (com quem os bloqueia).
+async fn split_blocked_permissions(workspace:&SharedWorkspace,chat_id:&str,commands:Vec<String>)->(Vec<String>,Vec<(String,Vec<String>)>) {
+    if commands.is_empty() { return (commands,vec![]); }
+    let policy=workspace.lock().await.chat_policy(chat_id).unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});
+    let Some(project)=policy else { return (commands,vec![]) };
+    let mut allowed=Vec::new();
+    let mut blocked=Vec::new();
+    for command in commands {
+        if project.policy.blocks_command(&command) { let orgs=project.policy.blocking_orgs(&command,&project.org_slug); blocked.push((command,orgs)); } else { allowed.push(command); }
+    }
+    (allowed,blocked)
 }
 
 /// O agente esbarrou numa permissão: a pergunta não passa pelo Jev — a linha
@@ -585,7 +606,13 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     let policy=policy.unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});
     // O liberado para o pedido entra antes da política: ela ainda aperta por
     // cima, e o plano por último.
-    let llm=llm.with_grants(grants).with_mcp(&servers);
+    // Os comandos que a organização bloqueia nunca chegam ao agente: saem do
+    // liberado para o pedido e o agente fica sem poder rodá-los.
+    let (grants,blocked)=match &policy {
+        Some(project)=>(project.policy.restrict_grants(grants),project.policy.blocked_commands.clone()),
+        None=>(grants.clone(),vec![]),
+    };
+    let llm=llm.with_grants(&grants).with_mcp(&servers);
     let (llm,core)=match &policy {
         Some(project)=>(project.policy.restrict_llm(&llm),project.policy.restrict_core(&core)),
         None=>(llm,core),
@@ -595,6 +622,7 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     state.orchestrator.use_core(&plan.enforce_core(&core));
     state.orchestrator.use_llm(&plan.apply_llm(&llm));
     state.orchestrator.use_skills(skills);
+    state.orchestrator.blocked_commands=blocked;
     state.orchestrator.policy_scope=policy.map(|project|project.org_slug);
     plan
 }

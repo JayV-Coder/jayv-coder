@@ -16,6 +16,8 @@ export * from "./repositories";
 import type { Role } from "./rules";
 import { connectDashboard } from "./dashboard";
 import { storedPolicy, type StoredPolicy } from "./policy";
+import { blockedCommandsOf, type BlockedCommands } from "./commands";
+export { blockersOf, COMMAND_CATALOG, conflictsWith, type BlockedCommands } from "./commands";
 
 export interface Organization {
   id: string;
@@ -68,6 +70,8 @@ interface OrganizationsState {
   /** Os mecanismos (`agente/mecanismo`) que alguma organização bloqueia nos
    * projetos dela, com as organizações que bloqueiam. */
   blockedMechanisms: Record<string, string[]>;
+  /** Os comandos que as organizações bloqueiam em cada projeto, por id do projeto. */
+  blockedCommands: Record<string, BlockedCommands>;
   loaded: boolean;
   /** A organização aberta na vista `organization`. */
   openId: string | null;
@@ -76,7 +80,7 @@ interface OrganizationsState {
   detail: OrganizationDetail | null;
 }
 
-export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, loaded: false, openId: null, tab: "projects", detail: null }));
+export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, blockedCommands: {}, loaded: false, openId: null, tab: "projects", detail: null }));
 
 /** As RPCs falham com uma chave do i18n (`org.forbidden`); o resto segue como
  * veio. */
@@ -146,6 +150,7 @@ export async function loadOrganizations() {
     projects: Object.fromEntries((projects ?? []).map((row) => [row.project_id as string, { orgId: row.org_id as string, slug: row.org_slug as string, name: row.org_name as string }])),
     policed: Object.fromEntries((policed ?? []).map((row) => [row.project_id as string, true as const])),
     blockedMechanisms: blockedBy(policed ?? []),
+    blockedCommands: Object.fromEntries((policed ?? []).map((row) => [row.project_id as string, blockedCommandsOf(row.policy, String(row.org_slug ?? ""))]).filter(([, rules]) => Object.keys(rules).length > 0)),
   });
 }
 
@@ -267,7 +272,7 @@ export async function declineInvite(invite: string) { await call("decline_invite
 
 export function clearOrganizations() {
   watchOrganization(null);
-  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, loaded: false, openId: null, tab: "projects", detail: null });
+  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, blockedCommands: {}, loaded: false, openId: null, tab: "projects", detail: null });
 }
 
 export function setOrganizationTab(tab: OrganizationTab) {

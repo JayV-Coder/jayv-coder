@@ -12,6 +12,7 @@ use crate::core_settings::CoreSettings;
 use crate::llm::LlmSettings;
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA:&str="
@@ -33,6 +34,13 @@ pub struct LlmPolicy {
     /// `agente/mecanismo` (`claude/webSearch`): o que nenhum projeto da
     /// organização liga, mesmo que quem usa tenha ligado.
     pub blocked_mechanisms:Vec<String>,
+    /// Os comandos que nenhum agente roda nos projetos da organização: o
+    /// programa e até dois subcomandos (`git push`); o programa sozinho vale
+    /// para todos os subcomandos.
+    pub blocked_commands:Vec<String>,
+    /// Quem bloqueia cada regra (`git push` → `["acme"]`), para a tela dizer
+    /// "Bloqueado por acme".
+    pub command_sources:BTreeMap<String,Vec<String>>,
     pub deny:Vec<String>,
     pub local_only:Vec<String>,
     pub safe_agents:bool,
@@ -63,6 +71,23 @@ fn joined(mine:&[String],extra:&[String])->Vec<String> {
 impl LlmPolicy {
     pub fn allows_agent(&self,agent:&str)->bool { self.agents.as_ref().is_none_or(|agents|agents.iter().any(|allowed|allowed==agent)) }
 
+    /// A política bloqueia este comando (começa por uma regra bloqueada).
+    pub fn blocks_command(&self,command:&str)->bool { crate::llm::command_blocked(&self.blocked_commands,command) }
+
+    /// As organizações que bloqueiam o comando, ou, sem a origem da regra, as
+    /// do projeto (`fallback`).
+    pub fn blocking_orgs(&self,command:&str,fallback:&str)->Vec<String> {
+        let mut orgs:Vec<String>=Vec::new();
+        for (rule,sources) in &self.command_sources {
+            if crate::llm::command_blocked(std::slice::from_ref(rule),command) { for org in sources { if !orgs.contains(org) { orgs.push(org.clone()); } } }
+        }
+        if orgs.is_empty() { orgs.push(fallback.to_string()); }
+        orgs
+    }
+
+    /// O que o desenvolvedor liberou, sem os comandos bloqueados.
+    pub fn restrict_grants(&self,grants:&crate::llm::Grants)->crate::llm::Grants { grants.without_blocked(&self.blocked_commands) }
+
     /// Os agentes e modelos de quem usa, com o que a política proíbe desligado.
     pub fn restrict_llm(&self,settings:&LlmSettings)->LlmSettings {
         let agents=settings.agents.iter().map(|agent|{
@@ -76,7 +101,7 @@ impl LlmPolicy {
             model.enabled=model.enabled && self.allows_agent(model.agent.key()) && !self.blocked_models.contains(&crate::llm::model_key(&model));
             model
         }).collect();
-        LlmSettings{agents,models}
+        LlmSettings{agents,models}.without_commands(&self.blocked_commands)
     }
 
     /// As configurações do Jev de quem usa, sem nada mais frouxo que a
@@ -191,6 +216,38 @@ impl LlmPolicy {
         assert_eq!(restricted.agents[0].options["mechanisms"],json!(["webFetch"]));
         assert_eq!(restricted.agents[1].options,mine.agents[1].options,"a busca do Codex não foi bloqueada");
         assert!(!restricted.agents[0].args().iter().any(|arg|arg.contains("WebSearch")),"a linha de comando não libera a busca");
+    }
+
+    #[test] fn blocked_commands_are_denied_by_claude_and_copilot_and_lock_the_agents_without_a_list() {
+        let mut mine=settings();
+        mine.agents[0].options=json!({"mechanisms":["webSearch","shell"]});
+        mine.agents[1].options=json!({"sandbox":"danger-full-access","networkAccess":true});
+        mine.agents[3].options=json!({"force":true,"sandbox":"disabled"});
+        let restricted=policy(json!({"blocked_commands":["git push","npm publish"]})).restrict_llm(&mine);
+        let claude=restricted.agents.iter().find(|agent|agent.id==AgentId::Claude).expect("claude").args();
+        let denied=claude.windows(2).find(|pair|pair[0]=="--disallowed-tools").map(|pair|pair[1].clone()).expect("lista");
+        assert!(denied.contains("Bash(git push:*)")&&denied.contains("Bash(npm publish:*)"),"o Claude nega cada regra: {denied}");
+        assert!(claude.iter().any(|arg|arg.contains("Bash")),"o mecanismo shell continua ligado: a negação vence");
+        let copilot=restricted.agents.iter().find(|agent|agent.id==AgentId::Copilot).expect("copilot").args();
+        assert!(copilot.windows(2).any(|pair|pair==["--deny-tool","shell(git push)"]));
+        let options=|id:AgentId|restricted.agents.iter().find(|agent|agent.id==id).expect("agente").options.clone();
+        assert_eq!((options(AgentId::Codex)["sandbox"].clone(),options(AgentId::Codex)["networkAccess"].clone()),(json!("workspace-write"),json!(false)),"sem lista de comandos, o Codex perde o sandbox aberto e a rede");
+        assert_eq!((options(AgentId::Cursor)["force"].clone(),options(AgentId::Cursor)["sandbox"].clone()),(json!(false),json!("enabled")));
+        assert_eq!(LlmPolicy::default().restrict_llm(&mine).agents[1].options,mine.agents[1].options,"sem regra, nada muda");
+    }
+
+    #[test] fn a_blocked_command_is_never_granted_and_names_who_blocks_it() {
+        let blocked=policy(json!({"blocked_commands":["git push","docker"],"command_sources":{"git push":["acme"],"docker":["acme","outra"]}}));
+        assert!(blocked.blocks_command("git push origin main")&&blocked.blocks_command("docker compose up")&&!blocked.blocks_command("git pull")&&!blocked.blocks_command("dockerize"));
+        assert_eq!(blocked.blocking_orgs("docker run x","fallback"),["acme","outra"]);
+        assert_eq!(blocked.blocking_orgs("git push","fallback"),["acme"]);
+        assert_eq!(policy(json!({"blocked_commands":["make"]})).blocking_orgs("make","padrao"),["padrao"],"sem origem, a organização do projeto");
+        let asked=crate::llm::Grants{shell:true,git:true,network:true,commands:vec!["git push".into(),"git add".into(),"docker run".into()]};
+        let granted=blocked.restrict_grants(&asked);
+        assert_eq!((granted.shell,granted.git,granted.network),(false,false,true),"tudo ou o Git inteiro não vale com comando bloqueado");
+        assert_eq!(granted.commands,["git add"]);
+        assert_eq!(policy(json!({"blocked_commands":["npm publish"]})).restrict_grants(&asked).git,true,"outra ferramenta bloqueada não mexe no Git");
+        assert_eq!(LlmPolicy::default().restrict_grants(&asked),asked);
     }
 
     #[test] fn the_core_settings_only_get_stricter() {
