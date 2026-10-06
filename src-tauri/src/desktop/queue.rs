@@ -566,10 +566,11 @@ async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspac
 /// abaixo dele afrouxa o núcleo. Devolve o plano, que o atendimento consulta.
 async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str,grants:&crate::llm::Grants)->features::Entitlements {
     let defaults=state.orchestrator.core_defaults();
-    let (llm,core,policy,plan)={
+    let (llm,core,policy,plan,servers)={
         let workspace=workspace.lock().await;
         let plan=workspace.entitlements().unwrap_or_default();
-        (workspace.llm_settings(),workspace.core_settings(&plan.seed_core(&defaults)).map(|core|plan.restrict_core(&core)),workspace.chat_policy(chat_id),plan)
+        let servers=workspace.mcp_servers().unwrap_or_else(|error|{eprintln!("mcp: servidores ilegíveis ({error:#})"); vec![]});
+        (workspace.llm_settings(),workspace.core_settings(&plan.seed_core(&defaults)).map(|core|plan.restrict_core(&core)),workspace.chat_policy(chat_id),plan,servers)
     };
     let (Ok(llm),Ok(core))=(llm,core) else { eprintln!("política de LLM: configurações ilegíveis, mantidas as anteriores"); return plan };
     // O login dos agentes, renovado em segundo plano: o pedido não espera, e
@@ -579,7 +580,7 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     let policy=policy.unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});
     // O liberado para o pedido entra antes da política: ela ainda aperta por
     // cima, e o plano por último.
-    let llm=llm.with_grants(grants);
+    let llm=llm.with_grants(grants).with_mcp(&servers);
     let (llm,core)=match &policy {
         Some(project)=>(project.policy.restrict_llm(&llm),project.policy.restrict_core(&core)),
         None=>(llm,core),

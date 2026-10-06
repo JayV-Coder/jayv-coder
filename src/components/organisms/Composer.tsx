@@ -6,6 +6,7 @@ import { notify } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { MOD, modeCommand, shortcutText } from "@/modules/commands";
 import { openTurns, setWorkMode } from "@/modules/workspace";
+import { draftMcp, mcpCommand } from "@/modules/mcp";
 import { Kbd } from "@/components/atoms";
 import { SegmentedControl } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,18 @@ export function Composer({ chat }: { chat: Chat | null }) {
     let value = draft.trim();
     if (!value || !chat) return;
     setDraft(chat.id, "");
+    // `/mcp` seguido da configuração, do comando ou de uma descrição abre o
+    // servidor MCP para conferir; não vira pedido ao agente.
+    const mcp = !question ? mcpCommand(value) : null;
+    if (mcp !== null) {
+      if (!mcp) {
+        notify(t("mcp.chat.empty"), true);
+        setDraft(chat.id, draft);
+        return;
+      }
+      if (!(await draftMcp(mcp))) setDraft(chat.id, draft);
+      return;
+    }
     // `/plan`, `/build` e `/auto` trocam o modo do chat; o que vier depois do
     // comando segue como pedido, já no modo novo.
     const command = !question ? modeCommand(value) : null;

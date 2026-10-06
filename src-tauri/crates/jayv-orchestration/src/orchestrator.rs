@@ -542,6 +542,34 @@ impl Orchestrator {
     ///
     /// Devolve o pedido pronto, com um provedor só dele: a chamada roda fora
     /// do cadeado do orquestrador, e o próximo da fila não espera o batismo.
+    /// O rascunho de um servidor MCP a partir do que o desenvolvedor
+    /// descreveu no chat (`/mcp`), pelo mesmo agente barato e em somente
+    /// leitura do batismo. A resposta é lida por `mcp::from_model`, e nada é
+    /// gravado sem o desenvolvedor conferir.
+    pub fn mcp_draft_request(&self,description:&str)->Option<DraftRequest> {
+        let (provider,model)=self.cheap_planner()?;
+        let request:String=description.trim().chars().take(TITLE_PROMPT_CHARS).collect();
+        let messages=vec![
+            ChatMessage{role:"system".into(),content:crate::mcp::DRAFT_INSTRUCTIONS.into()},
+            ChatMessage{role:"user".into(),content:request},
+        ];
+        Some(DraftRequest{provider,model,messages})
+    }
+
+    /// O agente mais barato que roda em somente leitura, preferindo quem não
+    /// explora o repositório.
+    fn cheap_planner(&self)->Option<(Box<dyn Provider>,String)> {
+        let mut usable:Vec<_>=self.config.models.iter().filter(|(_,model)|model.enabled&&model.provider!=PER_REQUEST_AGENT&&self.planners.contains_key(&model.provider)).collect();
+        usable.sort_by(|(left_key,left),(right_key,right)|{
+            let by_api=|model:&crate::config::ModelConfig|self.planners.get(&model.provider).is_some_and(|provider|provider.explores());
+            (by_api(left),cost_rank(&left.cost_class),left_key.as_str()).cmp(&(by_api(right),cost_rank(&right.cost_class),right_key.as_str()))
+        });
+        let (_,model)=usable.first()?;
+        let config=self.config.providers.get(&model.provider)?;
+        let provider=build_planners(&HashMap::from([(model.provider.clone(),config.clone())]),&self.workdir).into_values().next()?;
+        Some((provider,model.model.clone()))
+    }
+
     pub fn title_request(&self,prompt:&str,intent:&str)->Option<TitleRequest> {
         // O batismo não mexe em nada: vai sempre pelos agentes em somente leitura.
         // O Copilot cobra uma premium request por chamada: com só ele, vale o
@@ -1079,6 +1107,15 @@ fn wants_review(complexity:&str)->bool { matches!(complexity,"medium"|"complex")
 
 /// O batismo pronto para sair, já sem depender do orquestrador.
 pub struct TitleRequest { provider:Box<dyn Provider>, model:String, messages:Vec<ChatMessage> }
+
+/// Um pedido de apoio que devolve o texto do modelo como veio.
+pub struct DraftRequest { provider:Box<dyn Provider>, model:String, messages:Vec<ChatMessage> }
+
+impl DraftRequest {
+    pub async fn run(self)->Option<String> {
+        Some(self.provider.chat_with_effort(&self.messages,&self.model,Some(effort_for("simple")),&Pulse::silent()).await.ok()?.response)
+    }
+}
 
 impl TitleRequest {
     pub async fn run(self)->Option<String> {

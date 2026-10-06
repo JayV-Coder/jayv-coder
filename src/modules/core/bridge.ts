@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, Chat, CoreSettings, Grants, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, Chat, CoreSettings, Grants, McpDraft, McpServer, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
   ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -23,6 +23,9 @@ export const commands = {
     invoke<Turn>("enqueue_prompt", { request: { input, sessionId, turnId, grants } }),
   answerQuestion: (questionTurnId: string, picked: string[], text: string | null) =>
     invoke<Turn | null>("answer_question", { answer: { questionTurnId, picked, text } }),
+  getMcpServers: () => invoke<McpServer[]>("get_mcp_servers"),
+  saveMcpServers: (servers: McpServer[]) => invoke<McpServer[]>("save_mcp_servers", { servers }),
+  draftMcp: (text: string) => invoke<McpDraft>("draft_mcp", { text }),
   allowedCommands: (chatId: string) => invoke<string[]>("allowed_commands", { chatId }),
   forgetAllowedCommand: (chatId: string, command: string) => invoke<string[]>("forget_allowed_command", { chatId, command }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),

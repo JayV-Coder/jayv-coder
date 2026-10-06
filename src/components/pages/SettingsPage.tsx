@@ -1,10 +1,11 @@
 import { useShallow } from "zustand/react/shallow";
+import { PlugIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId } from "@/modules/core";
 import { useT } from "@/modules/i18n";
 import { AGENTS, discardChanges, isDirty, problems, restoreCoreDefaults, saveSettings, useSettings } from "@/modules/settings";
 import { AgentIcon, GridIcon, LoadingNote, LogoIcon } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { AGENT_NAMES, AgentPanel, AppPanel, JevPanel } from "@/components/organisms";
+import { AGENT_NAMES, AgentPanel, AppPanel, JevPanel, McpPanel } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,10 @@ export function SettingsPage() {
             <span>{t("settings.tab.jev")}</span>
             {coreBroken && <span title={t("settings.health.problem")} aria-label={t("settings.health.problem")} className="size-2 rounded-full bg-destructive" />}
           </TabsTrigger>
+          <TabsTrigger value="mcp" className="flex-none gap-2.5 px-4 py-2">
+            <PlugIcon aria-hidden="true" className="size-5" />
+            <span>{t("settings.tab.mcp")}</span>
+          </TabsTrigger>
           <span aria-hidden="true" className="mx-1 h-5 w-px self-center bg-border" />
           {AGENTS.map((id) => {
             const state = health(id);
@@ -79,6 +84,7 @@ export function SettingsPage() {
         </TabsList>
         <TabsContent value="app"><AppPanel core={core} snapshot={coreSnapshot} /></TabsContent>
         <TabsContent value="jev"><JevPanel core={core} snapshot={coreSnapshot} /></TabsContent>
+        <TabsContent value="mcp"><McpPanel /></TabsContent>
         {AGENTS.map((id) => {
           const agent = agents.find((item) => item.id === id);
           return agent && (

@@ -195,6 +195,7 @@ impl WorkspaceStore {
         )?;
         connection.execute_batch(turns::SCHEMA)?;
         crate::llm::ensure(&connection)?;
+        connection.execute_batch(crate::mcp::SCHEMA)?;
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
         ensure_chat_work_mode(&connection)?;
@@ -696,6 +697,10 @@ impl WorkspaceStore {
     pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
 
     pub fn save_llm_settings(&mut self, settings:&crate::llm::LlmSettings) -> Result<crate::llm::LlmSettings> {crate::llm::save(&mut self.connection,settings)}
+
+    pub fn mcp_servers(&self) -> Result<Vec<crate::mcp::McpServer>> {crate::mcp::load(&self.connection)}
+
+    pub fn save_mcp_servers(&mut self, servers:Vec<crate::mcp::McpServer>) -> Result<Vec<crate::mcp::McpServer>> {crate::mcp::save(&mut self.connection,servers)}
 
     pub fn core_settings(&self, defaults:&crate::core_settings::CoreSettings) -> Result<crate::core_settings::CoreSettings> {crate::core_settings::load(&self.connection,defaults)}
 
