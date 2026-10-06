@@ -322,7 +322,10 @@ impl Orchestrator {
         let (intent,complexity,signals)=self.decide_routing(&normalized,session_id).await;
         let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
         let stuck=held(&self.shared.stuck_in_plan).contains(session_id);
-        let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,stuck);
+        // Há um plano deste chat esperando: quem o aprova quer o build, mesmo
+        // que o pedido não pareça código ou passe do teto do nível.
+        let approved=held(&self.shared.plans).contains_key(session_id)&&(wants_build||(gate_passed&&!destructive(&signals)&&approves_plan(&normalized)));
+        let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,stuck,approved);
         if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { held(&self.shared.stuck_in_plan).insert(session_id.to_string()); } else { held(&self.shared.stuck_in_plan).remove(session_id); }
         self.mode_switch=switched.clone();
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
@@ -1178,15 +1181,26 @@ pub fn asks_to_build(intent:&str,signals:&RoutingSignals,gate_passed:bool,level:
 /// automático vale a escolha do Jev, menos quando o desenvolvedor insiste:
 /// o pedido anterior queria implementar e ficou em planejamento, este quer de
 /// novo, e ele sai em build em vez de prender o chat no plano.
-pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_before:bool)->(&'static str,Option<ModeSwitch>) {
+pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_before:bool,plan_approved:bool)->(&'static str,Option<ModeSwitch>) {
     let switch=|from:&str,reason:&str|Some(ModeSwitch{from:from.into(),reason:reason.into()});
     match pinned {
         MODE_BUILD=>(MODE_BUILD,None),
         MODE_PLAN if wants_build=>(MODE_BUILD,switch(MODE_PLAN,SWITCH_ASKED)),
         MODE_PLAN=>(MODE_PLAN,None),
+        MODE_AUTO if chosen==MODE_PLAN&&plan_approved=>(MODE_BUILD,switch(MODE_AUTO,SWITCH_ASKED)),
         _ if chosen==MODE_PLAN&&wants_build&&stuck_before=>(MODE_BUILD,switch(MODE_AUTO,SWITCH_REPEATED)),
         _=>(chosen,None),
     }
+}
+/// Se o pedido aprova o plano que o chat acabou de receber ("aprovado,
+/// implemente", "pode seguir"). Mensagens curtas de sim também valem: só
+/// são lidas quando há um plano esperando.
+pub fn approves_plan(request:&str)->bool {
+    let text=request.to_lowercase();
+    const STRONG:[&str;14]=["aprov","approv","implement","pode seguir","pode fazer","pode executar","siga o plano","segue o plano","execute","go ahead","proceed","do it","vai em frente","manda ver"];
+    if STRONG.iter().any(|cue|text.contains(cue)) { return true; }
+    const YES:[&str;7]=["sim","ok","yes","isso","bora","vamos","faça"];
+    text.split_whitespace().count()<=5&&text.split(|c:char|!c.is_alphanumeric()).any(|word|YES.contains(&word))
 }
 /// As notas do roteamento mais a do modo. Em build o agente executa, então a
 /// nota de "devolva os comandos para o desenvolvedor" não vale.
@@ -1906,14 +1920,18 @@ mod tests {
     #[test]
     fn the_jev_takes_the_chat_out_of_planning_only_when_it_is_stuck() {
         let asked=Some(ModeSwitch{from:MODE_PLAN.into(),reason:SWITCH_ASKED.into()});
+        let asked_from_auto=Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_ASKED.into()});
         let repeated=Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_REPEATED.into()});
-        assert_eq!(resolve_mode(MODE_BUILD,MODE_PLAN,false,false),(MODE_BUILD,None),"build fixo é escolha do desenvolvedor");
-        assert_eq!(resolve_mode(MODE_PLAN,MODE_BUILD,false,false),(MODE_PLAN,None),"planejar não sai do plano");
-        assert_eq!(resolve_mode(MODE_PLAN,MODE_PLAN,true,false),(MODE_BUILD,asked),"pedir para implementar sai, mesmo acima do teto do nível");
-        assert_eq!(resolve_mode(MODE_AUTO,MODE_BUILD,true,false),(MODE_BUILD,None));
-        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,true,false),(MODE_PLAN,None),"a primeira vez fica com o Jev");
-        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,true,true),(MODE_BUILD,repeated),"a segunda vez não prende o chat");
-        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,false,true),(MODE_PLAN,None));
+        assert_eq!(resolve_mode(MODE_BUILD,MODE_PLAN,false,false,false),(MODE_BUILD,None),"build fixo é escolha do desenvolvedor");
+        assert_eq!(resolve_mode(MODE_PLAN,MODE_BUILD,false,false,false),(MODE_PLAN,None),"planejar não sai do plano");
+        assert_eq!(resolve_mode(MODE_PLAN,MODE_PLAN,true,false,false),(MODE_BUILD,asked),"pedir para implementar sai, mesmo acima do teto do nível");
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_BUILD,true,false,false),(MODE_BUILD,None));
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,true,false,false),(MODE_PLAN,None),"a primeira vez fica com o Jev");
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,true,true,false),(MODE_BUILD,repeated),"a segunda vez não prende o chat");
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,false,true,false),(MODE_PLAN,None));
+        assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,false,false,true),(MODE_BUILD,asked_from_auto),"plano aprovado no automático vai ao build");
+        assert_eq!(resolve_mode(MODE_PLAN,MODE_PLAN,false,false,true),(MODE_PLAN,None),"planejamento fixo só sai com pedido de implementar");
+        assert!(approves_plan("Aprovado, pode implementar")&&approves_plan("sim")&&!approves_plan("e se usarmos outro banco de dados para isso?"));
         assert_eq!((work_mode("plan"),work_mode("build"),work_mode("auto"),work_mode("x")),(Some(MODE_PLAN),Some(MODE_BUILD),Some(MODE_AUTO),None));
     }
 
@@ -1938,7 +1956,7 @@ mod tests {
         assert_eq!(orchestrator.mode_switch,None,"a insistência é por chat");
         let second=orchestrator.process("pode implementar",Some("chat"),&Pulse::silent()).await;
         assert_eq!(second.result.as_ref().map(|answer|answer.response.trim()),Some("ran-build"));
-        assert_eq!(orchestrator.mode_switch,Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_REPEATED.into()}));
+        assert_eq!(orchestrator.mode_switch,Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_ASKED.into()}),"o plano do chat estava esperando: o pedido o aprova");
     }
 
     /// O agente explora o repositório sozinho: recebe o mapa, não os arquivos,
