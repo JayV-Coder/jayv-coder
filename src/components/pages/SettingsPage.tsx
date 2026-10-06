@@ -52,49 +52,51 @@ export function SettingsPage() {
         </p>
       )}
 
-      <Tabs value={tab} onValueChange={(value) => setSettingsTab(value as SettingsTab)} className="gap-5">
-        <TabsList className="h-auto w-full justify-start gap-1 p-1">
-          <TabsTrigger value="app" className="flex-none gap-2.5 px-4 py-2">
+      <Tabs orientation="vertical" value={tab} onValueChange={(value) => setSettingsTab(value as SettingsTab)} className="gap-6">
+        {/* As abas ficam numa coluna à esquerda, ao lado do conteúdo; a coluna
+            acompanha a rolagem da página. */}
+        <TabsList className="sticky top-0 h-auto w-52 shrink-0 gap-0.5 py-1 pr-1">
+          <TabsTrigger value="app" className="flex-none gap-2.5 px-3 py-2">
             <GridIcon className="size-5" />
             <span>{t("settings.tab.app")}</span>
           </TabsTrigger>
-          <TabsTrigger value="jev" className="flex-none gap-2.5 px-4 py-2">
+          <TabsTrigger value="jev" className="flex-none gap-2.5 px-3 py-2">
             <LogoIcon className="size-5" />
             <span>{t("settings.tab.jev")}</span>
-            {coreBroken && <span title={t("settings.health.problem")} aria-label={t("settings.health.problem")} className="size-2 rounded-full bg-destructive" />}
+            {coreBroken && <span title={t("settings.health.problem")} aria-label={t("settings.health.problem")} className="ml-auto size-2 rounded-full bg-destructive" />}
           </TabsTrigger>
-          <TabsTrigger value="mcp" className="flex-none gap-2.5 px-4 py-2">
+          <TabsTrigger value="mcp" className="flex-none gap-2.5 px-3 py-2">
             <PlugIcon aria-hidden="true" className="size-5" />
             <span>{t("settings.tab.mcp")}</span>
           </TabsTrigger>
-          <TabsTrigger value="skills" className="flex-none gap-2.5 px-4 py-2">
+          <TabsTrigger value="skills" className="flex-none gap-2.5 px-3 py-2">
             <SparklesIcon aria-hidden="true" className="size-5" />
             <span>{t("settings.tab.skills")}</span>
           </TabsTrigger>
-          <span aria-hidden="true" className="mx-1 h-5 w-px self-center bg-border" />
+          <span aria-hidden="true" className="my-1.5 h-px w-full self-center bg-border" />
           {AGENTS.map((id) => {
             const state = health(id);
             return (
-              <TabsTrigger key={id} value={id} className="flex-none gap-2.5 px-4 py-2">
+              <TabsTrigger key={id} value={id} className="flex-none gap-2.5 px-3 py-2">
                 <AgentIcon agent={id} className="size-5" />
                 <span>{AGENT_NAMES[id]}</span>
                 <span
                   title={t(`settings.health.${state}`)}
                   aria-label={t(`settings.health.${state}`)}
-                  className={cn("size-2 rounded-full", state === "ok" ? "bg-success" : state === "problem" ? "bg-destructive" : "bg-muted-foreground/40")}
+                  className={cn("ml-auto size-2 rounded-full", state === "ok" ? "bg-success" : state === "problem" ? "bg-destructive" : "bg-muted-foreground/40")}
                 />
               </TabsTrigger>
             );
           })}
         </TabsList>
-        <TabsContent value="app"><AppPanel core={core} snapshot={coreSnapshot} /></TabsContent>
-        <TabsContent value="jev"><JevPanel core={core} snapshot={coreSnapshot} /></TabsContent>
-        <TabsContent value="mcp"><McpPanel /></TabsContent>
-        <TabsContent value="skills"><SkillsPanel /></TabsContent>
+        <TabsContent value="app" className="min-w-0"><AppPanel core={core} snapshot={coreSnapshot} /></TabsContent>
+        <TabsContent value="jev" className="min-w-0"><JevPanel core={core} snapshot={coreSnapshot} /></TabsContent>
+        <TabsContent value="mcp" className="min-w-0"><McpPanel /></TabsContent>
+        <TabsContent value="skills" className="min-w-0"><SkillsPanel /></TabsContent>
         {AGENTS.map((id) => {
           const agent = agents.find((item) => item.id === id);
           return agent && (
-            <TabsContent key={id} value={id}>
+            <TabsContent key={id} value={id} className="min-w-0">
               <AgentPanel agent={agent} models={models.filter((model) => model.agent === id)} problems={found[id]} />
             </TabsContent>
           );
