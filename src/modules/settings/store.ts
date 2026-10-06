@@ -1,13 +1,18 @@
 import { create } from "zustand";
 import {
-  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type KnownModel,
+  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type GatewayCheck, type KnownModel, isGateway,
   type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { t, type Key } from "@/modules/i18n";
 
-export const AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor"];
-export const AGENT_LABELS: Record<AgentId, string> = { claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot", cursor: "Cursor" };
+export const AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"];
+export const AGENT_LABELS: Record<AgentId, string> = {
+  claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot", cursor: "Cursor", kilo: "Kilo Code", openrouter: "OpenRouter", litellm: "LiteLLM",
+};
+/** Os agentes que são um programa na máquina: só neles há o que conferir
+ * (instalado, versão, login). Os gateways de API têm endereço e chave. */
+export const CLI_AGENTS: AgentId[] = AGENTS.filter((id) => !isGateway(id));
 
 /** O modelo como está na aba: `uid` segura a linha enquanto o identificador
  * muda. */
@@ -24,6 +29,8 @@ interface SettingsState {
   timeoutRange: [number, number];
   contextRange: [number, number];
   probes: Record<AgentId, ProbeState>;
+  /** A conferência de cada gateway de API (endereço e chave gravados). */
+  gateways: Partial<Record<AgentId, GatewayCheck | "checking">>;
   /** O que foi gravado por último, para saber se há alteração pendente. */
   saved: string;
   saving: boolean;
@@ -38,11 +45,11 @@ interface SettingsState {
 
 let next = 0;
 const uid = () => `model-${++next}`;
-const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null, copilot: null, cursor: null });
+const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null, copilot: null, cursor: null, kilo: null, openrouter: null, litellm: null });
 
 export const useSettings = create<SettingsState>(() => ({
-  loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [], cursor: [] }, timeoutRange: [30, 3600],
-  contextRange: [8000, 2000000], probes: noProbes(), saved: "", saving: false, refreshing: null,
+  loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [], cursor: [], kilo: [], openrouter: [], litellm: [] }, timeoutRange: [30, 3600],
+  contextRange: [8000, 2000000], probes: noProbes(), gateways: {}, saved: "", saving: false, refreshing: null,
   core: null, coreSnapshot: null, savedCore: "",
 }));
 
@@ -138,7 +145,7 @@ export function addModel(agent: AgentId) {
   const taken = new Set(models.filter((model) => model.agent === agent).map((model) => model.model));
   const known = catalog[agent].find((model) => !taken.has(model.id));
   const model: ModelDraft = {
-    uid: uid(), agent, enabled: true, capabilities: known?.capabilities ?? ["chat", "code", "reasoning", "tools"],
+    uid: uid(), agent, enabled: true, capabilities: known?.capabilities ?? (isGateway(agent) ? ["chat", "reasoning"] : ["chat", "code", "reasoning", "tools"]),
     model: known?.id ?? "", contextWindow: known?.contextWindow ?? 128000, costClass: known?.costClass ?? "medium", speed: known?.speed ?? "medium",
   };
   useSettings.setState({ models: [...models, model] });
@@ -167,6 +174,17 @@ export async function checkAgent(id: AgentId, quiet = false) {
   setProbe(probe);
 }
 
+/** Pergunta ao gateway, com o que está gravado, a lista de modelos dele. */
+export async function checkGateway(id: AgentId) {
+  const set = (value: GatewayCheck | "checking") => useSettings.setState((state) => ({ gateways: { ...state.gateways, [id]: value } }));
+  set("checking");
+  try {
+    set(await commands.checkGateway(id));
+  } catch (error) {
+    set({ models: 0, error: String(error) });
+  }
+}
+
 function sameProbe(a: ProbeState, b: ProbeState) {
   if (a === null || b === null || a === "checking" || b === "checking") return a === b;
   return a.path === b.path && a.version === b.version && a.loggedIn === b.loggedIn;
@@ -174,7 +192,7 @@ function sameProbe(a: ProbeState, b: ProbeState) {
 
 /** Confere todos os agentes agora (o botão da página Sistema). */
 export function checkAllAgents() {
-  for (const agent of AGENTS) void checkAgent(agent);
+  for (const agent of CLI_AGENTS) void checkAgent(agent);
 }
 
 /** De quanto em quanto tempo a tela de configurações confere os agentes
@@ -184,7 +202,7 @@ export const PROBE_EVERY_MS = 10_000;
 /** Confere os três agentes agora e depois a cada `PROBE_EVERY_MS`, e também ao
  * voltar para a janela. Devolve quem para tudo. */
 export function watchAgents() {
-  const all = () => { for (const agent of AGENTS) void checkAgent(agent, true); };
+  const all = () => { for (const agent of CLI_AGENTS) void checkAgent(agent, true); };
   const timer = window.setInterval(() => { if (document.visibilityState === "visible") all(); }, PROBE_EVERY_MS);
   window.addEventListener("focus", all);
   return () => {
@@ -203,7 +221,13 @@ export function problems(state: Pick<SettingsState, "agents" | "models">, id: Ag
   const agent = state.agents.find((item) => item.id === id);
   if (!agent) return found;
   const command = agent.command.trim();
-  if (!command) found.command = "agent.command.empty";
+  if (isGateway(id)) {
+    const options = (agent as AgentSettings<"openrouter">).options;
+    const url = options.baseUrl.trim();
+    if (url && !/^https?:\/\/[^\s/@]+/i.test(url)) found.baseUrl = "gateway.baseUrl.invalid";
+    if (id === "openrouter" && agent.enabled && !options.hasKey && !options.apiKey?.trim()) found.apiKey = "gateway.apiKey.required";
+    if (options.apiKey && /\s/.test(options.apiKey)) found.apiKey = "gateway.apiKey.invalid";
+  } else if (!command) found.command = "agent.command.empty";
   else if (/\s/.test(command)) found.command = "agent.command.hint";
   const own = state.models.filter((model) => model.agent === id);
   if (agent.enabled && !own.some((model) => model.enabled)) found.models = "agent.noActiveModel";

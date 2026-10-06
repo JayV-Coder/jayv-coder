@@ -94,7 +94,15 @@ pub fn build_providers(configs: &HashMap<String, ProviderConfig>, workdir: &Work
     }).collect()
 }
 
+/// Um modelo da lista do provedor: o id e, quando ele diz, a janela de contexto.
+#[derive(Debug,Clone,PartialEq)]
+pub struct ListedModel { pub id:String, pub context:Option<usize> }
+
 pub async fn discover_models(name: &str, config: &ProviderConfig) -> Result<Vec<String>> {
+    Ok(discover_listing(name,config).await?.into_iter().map(|model|model.id).collect())
+}
+
+pub async fn discover_listing(name: &str, config: &ProviderConfig) -> Result<Vec<ListedModel>> {
     if config.kind=="cli" { return Err(anyhow!("CLI providers do not offer model discovery")); }
     let default_base=match config.kind.as_str() {
         "openai"=>"https://api.openai.com/v1",
@@ -117,10 +125,10 @@ pub async fn discover_models(name: &str, config: &ProviderConfig) -> Result<Vec<
     let body:Value=response.json().await.context("invalid response while loading models")?;
     if !status.is_success(){return Err(anyhow!("the provider returned {status}: {}",provider_error(&body)));}
     let mut models=body.get("data").and_then(Value::as_array).into_iter().flatten()
-        .filter_map(|item|item.get("id").and_then(Value::as_str))
-        .map(str::to_string).collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
+        .filter_map(|item|Some(ListedModel{id:item.get("id").and_then(Value::as_str)?.to_string(),context:item.get("context_length").or_else(||item.get("context_window")).and_then(Value::as_u64).map(|window|window as usize)}))
+        .collect::<Vec<_>>();
+    models.sort_by(|a,b|a.id.cmp(&b.id));
+    models.dedup_by(|a,b|a.id==b.id);
     if models.is_empty(){return Err(anyhow!("the provider returned no available models"));}
     Ok(models)
 }

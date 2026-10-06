@@ -13,10 +13,11 @@ import {
   acceptInvite, declineInvite, openOrganization, organizationChatsOf, type IncomingInvite, type Organization, type OrganizationTab,
 } from "@/modules/organizations";
 import { allows } from "@/modules/plans";
-import { AGENT_LABELS, AGENTS, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
+import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
+import { resetTours, setAutoTours, startTour, startTourHere, tourForView, TOURS, useTutorial } from "@/modules/tutorial";
 import { checkForUpdate, setInstallOnLaunch, useUpdate } from "@/modules/updates";
 import { openStats, setPeriod, type Period } from "@/modules/usage";
 import {
@@ -142,6 +143,10 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       { id: "settings-discard", group: settings, label: t("settings.discard"), run: discardChanges },
     );
   }
+  // Conferir o endereço e a chave dos gateways de API (o botão da aba deles).
+  for (const id of ["openrouter", "litellm"] as const) {
+    all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: AGENT_LABELS[id] }), run: () => { openSettingsTab(id); void checkGateway(id); } });
+  }
   all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
   all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });
 
@@ -205,6 +210,10 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     { id: "whats-new", group: help, label: t("palette.whatsNew"), run: () => void showChanges() },
     { id: "check-update", group: help, label: t("system.update.check"), run: () => void checkForUpdate(true) },
     { id: "update-on-launch", group: help, label: t("app.updates.launch"), run: () => setInstallOnLaunch(!useUpdate.getState().installOnLaunch) },
+    ...(tourForView(ctx.view) ? [{ id: "tutorial-here", group: help, label: t("tutorial.here"), run: () => startTourHere(ctx.view) }] : []),
+    ...TOURS.map((tour) => ({ id: `tutorial-${tour.id}`, group: help, label: t("tutorial.palette", { name: t(`tutorial.tour.${tour.id}` as never) }), run: () => startTour(tour.id) })),
+    { id: "tutorial-auto", group: help, label: t("tutorial.auto"), run: () => setAutoTours(!useTutorial.getState().auto) },
+    { id: "tutorial-reset", group: help, label: t("tutorial.reset"), run: () => resetTours() },
     { id: "system-reload", group: help, label: t("system.reload"), run: () => { navigate("status"); featureActions.reloadSystem?.(); } },
     { id: "system-copy", group: help, label: t("system.copy"), run: () => void featureActions.copySystemReport?.().catch(reportError) },
   );

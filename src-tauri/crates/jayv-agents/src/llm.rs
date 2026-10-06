@@ -2,8 +2,10 @@
 //! um. Moram no banco, não no `config.yaml`: a tela Configuração do LLM é a
 //! única porta de entrada, e o que ela grava é o que o orquestrador usa.
 //!
-//! São quatro agentes, e só quatro: Claude Code, Codex, Copilot e Cursor. Nenhum
-//! deles recebe argumentos crus. Cada opção da tela tem um conjunto fechado de
+//! São sete agentes: quatro de linha de comando que editam o projeto (Claude
+//! Code, Codex, Copilot e Cursor), o Kilo Code (também de linha de comando) e
+//! dois gateways de API (OpenRouter e LiteLLM), que só respondem por texto: não
+//! editam arquivos. Nenhum deles recebe argumentos crus. Cada opção da tela tem um conjunto fechado de
 //! valores, e é daqui que sai a linha de comando — um argumento digitado errado
 //! era o jeito mais fácil de quebrar o agente sem saber por quê.
 
@@ -34,6 +36,12 @@ CREATE TABLE IF NOT EXISTS llm_models (
   context_window INTEGER NOT NULL,
   position INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (agent, model)
+);
+-- A chave de API dos gateways. Só local: não está na lista de tabelas
+-- sincronizadas (`TABLES` do `jayv-store`), então nunca sobe para a nuvem.
+CREATE TABLE IF NOT EXISTS llm_secrets (
+  agent TEXT PRIMARY KEY,
+  secret TEXT NOT NULL
 );";
 
 /// O prazo de silêncio aceito, em segundos. Menos que meio minuto derruba um
@@ -46,14 +54,17 @@ pub const SPEEDS:[&str;3]=["fast","medium","slow"];
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Hash,Serialize,Deserialize)]
 #[serde(rename_all="lowercase")]
-pub enum AgentId { Claude, Codex, Copilot, Cursor }
+pub enum AgentId { Claude, Codex, Copilot, Cursor, Kilo, Openrouter, Litellm }
 
 impl AgentId {
-    pub const ALL:[AgentId;4]=[AgentId::Claude,AgentId::Codex,AgentId::Copilot,AgentId::Cursor];
-    pub fn key(self)->&'static str { match self { Self::Claude=>"claude", Self::Codex=>"codex", Self::Copilot=>"copilot", Self::Cursor=>"cursor" } }
+    pub const ALL:[AgentId;7]=[AgentId::Claude,AgentId::Codex,AgentId::Copilot,AgentId::Cursor,AgentId::Kilo,AgentId::Openrouter,AgentId::Litellm];
+    pub fn key(self)->&'static str { match self { Self::Claude=>"claude", Self::Codex=>"codex", Self::Copilot=>"copilot", Self::Cursor=>"cursor", Self::Kilo=>"kilo", Self::Openrouter=>"openrouter", Self::Litellm=>"litellm" } }
+    /// Os gateways de API (OpenRouter e LiteLLM): falam por HTTP com endereço
+    /// e chave, em vez de abrir um programa, e só respondem por texto.
+    pub fn is_gateway(self)->bool { matches!(self,Self::Openrouter|Self::Litellm) }
     /// O nome do executável. O instalador do Cursor cria `agent` e
     /// `cursor-agent`; `agent` sozinho é genérico demais para achar no PATH.
-    pub fn binary(self)->&'static str { match self { Self::Cursor=>"cursor-agent", other=>other.key() } }
+    pub fn binary(self)->&'static str { match self { Self::Cursor=>"cursor-agent", Self::Openrouter|Self::Litellm=>"", other=>other.key() } }
     fn parse(key:&str)->Result<Self> { Self::ALL.into_iter().find(|agent|agent.key()==key).ok_or_else(||anyhow!("agente desconhecido: `{key}`")) }
     fn default_timeout(self)->u64 { 300 }
 }
@@ -181,6 +192,47 @@ pub struct CursorOptions {
 }
 impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false} } }
 
+#[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Default)]
+#[serde(rename_all="camelCase",default)]
+pub struct KiloOptions {
+    /// Aprova sozinho o que o agente pedir (`kilo run --auto`). Sem isto, o que
+    /// pediria aprovação é recusado, já que ninguém responde no terminal.
+    /// O modo desenvolvimento liga; o planejamento desliga.
+    pub auto:bool,
+}
+
+/// Os dois gateways de API. A chave nunca volta para a tela nem para o banco
+/// de opções (que sobe para a nuvem): ela mora na tabela local `llm_secrets`.
+/// `api_key` só viaja da tela para o salvar; `has_key` é o que a tela lê.
+#[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Default)]
+#[serde(rename_all="camelCase",default)]
+pub struct GatewayOptions {
+    /// O endereço base compatível com a API da OpenAI (`…/v1`).
+    pub base_url:String,
+    #[serde(skip_serializing)]
+    pub api_key:Option<String>,
+    /// Apaga a chave guardada.
+    #[serde(skip_serializing)]
+    pub clear_key:bool,
+    pub has_key:bool,
+}
+
+const OPENROUTER_URL:&str="https://openrouter.ai/api/v1";
+/// O LiteLLM é o servidor do próprio usuário: o endereço padrão é o do proxy
+/// local, na porta que a documentação dele usa.
+const LITELLM_URL:&str="http://localhost:4000";
+
+impl GatewayOptions {
+    fn fresh(id:AgentId)->Self { Self{base_url:(if id==AgentId::Openrouter {OPENROUTER_URL} else {LITELLM_URL}).into(),..Self::default()} }
+    fn checked(mut self,id:AgentId)->Result<Self> {
+        self.base_url=self.base_url.trim().trim_end_matches('/').to_string();
+        if self.base_url.is_empty() { self.base_url=Self::fresh(id).base_url; }
+        let valid=reqwest::Url::parse(&self.base_url).is_ok_and(|url|matches!(url.scheme(),"http"|"https")&&url.host_str().is_some()&&url.username().is_empty()&&url.password().is_none());
+        if !valid { bail!(Text::new("settings.baseUrlInvalid").with("agent",label(id))); }
+        Ok(self)
+    }
+}
+
 const CLAUDE_PERMISSIONS:[&str;6]=[MANUAL,"plan","acceptEdits","auto","dontAsk","bypassPermissions"];
 /// O modo que pergunta antes de cada ferramenta. Sem terminal, ninguém
 /// responde, e o que pediria aprovação é negado. O Claude chamava de `default`
@@ -247,7 +299,7 @@ pub const COPILOT_MECHANISMS:[&str;3]=[WEB_FETCH,SHELL,GITHUB_TOOLS];
 /// Os mecanismos que a CLI do agente sabe ligar. O Cursor não tem flag para
 /// nenhum: a busca na web dele é sempre dele, e os comandos só pelo `--force`.
 pub fn mechanisms_of(agent:AgentId)->&'static [&'static str] {
-    match agent { AgentId::Claude=>&CLAUDE_MECHANISMS, AgentId::Codex=>&CODEX_MECHANISMS, AgentId::Copilot=>&COPILOT_MECHANISMS, AgentId::Cursor=>&[] }
+    match agent { AgentId::Claude=>&CLAUDE_MECHANISMS, AgentId::Codex=>&CODEX_MECHANISMS, AgentId::Copilot=>&COPILOT_MECHANISMS, AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>&[] }
 }
 
 /// A ferramenta do Claude atrás de cada mecanismo.
@@ -438,6 +490,16 @@ impl CursorOptions {
     }
 }
 
+impl KiloOptions {
+    fn args(&self)->Vec<String> {
+        // `kilo run` recebe o pedido como argumento e responde em texto.
+        let mut args=strings(&["run","--model","{model}"]);
+        if self.auto { args.push("--auto".into()); }
+        args.push("{prompt}".into());
+        args
+    }
+}
+
 fn strings(items:&[&str])->Vec<String> { items.iter().map(|item|item.to_string()).collect() }
 
 fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
@@ -447,8 +509,8 @@ fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
 
 impl AgentSettings {
     fn fresh(id:AgentId)->Self {
-        let options=match id { AgentId::Claude=>serde_json::to_value(ClaudeOptions::default()), AgentId::Codex=>serde_json::to_value(CodexOptions::default()), AgentId::Copilot=>serde_json::to_value(CopilotOptions::default()), AgentId::Cursor=>serde_json::to_value(CursorOptions::default()) }.unwrap_or_default();
-        Self{id,enabled:locate(id.binary()).is_some(),command:id.binary().into(),timeout:id.default_timeout(),options}
+        let options=match id { AgentId::Claude=>serde_json::to_value(ClaudeOptions::default()), AgentId::Codex=>serde_json::to_value(CodexOptions::default()), AgentId::Copilot=>serde_json::to_value(CopilotOptions::default()), AgentId::Kilo=>serde_json::to_value(KiloOptions::default()), AgentId::Openrouter|AgentId::Litellm=>serde_json::to_value(GatewayOptions::fresh(id)), AgentId::Cursor=>serde_json::to_value(CursorOptions::default()) }.unwrap_or_default();
+        Self{id,enabled:!id.is_gateway()&&locate(id.binary()).is_some(),command:id.binary().into(),timeout:id.default_timeout(),options}
     }
 
     /// As opções limpas e tipadas, com o que faltava preenchido pelo padrão.
@@ -458,6 +520,8 @@ impl AgentSettings {
             AgentId::Codex=>serde_json::to_value(parse::<CodexOptions>(&self.options)?.checked()?)?,
             AgentId::Copilot=>serde_json::to_value(parse::<CopilotOptions>(&self.options)?.checked()?)?,
             AgentId::Cursor=>serde_json::to_value(parse::<CursorOptions>(&self.options)?.checked()?)?,
+            AgentId::Kilo=>serde_json::to_value(parse::<KiloOptions>(&self.options)?)?,
+            AgentId::Openrouter|AgentId::Litellm=>serde_json::to_value(parse::<GatewayOptions>(&self.options)?.checked(self.id)?)?,
         })
     }
 
@@ -467,6 +531,8 @@ impl AgentSettings {
             AgentId::Codex=>parse::<CodexOptions>(&self.options).unwrap_or_default().args(),
             AgentId::Copilot=>parse::<CopilotOptions>(&self.options).unwrap_or_default().args(),
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().args(),
+            AgentId::Kilo=>parse::<KiloOptions>(&self.options).unwrap_or_default().args(),
+            AgentId::Openrouter|AgentId::Litellm=>vec![],
         }
     }
 
@@ -498,6 +564,8 @@ impl AgentSettings {
                 options.args()
             }
             AgentId::Cursor=>self.args(),
+            AgentId::Kilo=>KiloOptions{auto:true}.args(),
+            AgentId::Openrouter|AgentId::Litellm=>vec![],
         }
     }
 
@@ -518,6 +586,8 @@ impl AgentSettings {
                 CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],mcp:vec![],..options}.args()
             }
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
+            AgentId::Kilo=>KiloOptions{auto:false}.args(),
+            AgentId::Openrouter|AgentId::Litellm=>vec![],
         }
     }
 
@@ -558,6 +628,8 @@ impl AgentSettings {
                 if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
                 serde_json::to_value(options)
             }
+            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false}),
+            AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
@@ -572,7 +644,7 @@ impl AgentSettings {
             AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
             AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
             AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
-            AgentId::Cursor=>return self.clone(),
+            AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
@@ -624,6 +696,8 @@ impl AgentSettings {
                 if grants.shell||grants.git||!grants.commands.is_empty() { options.force=true; }
                 serde_json::to_value(options)
             }
+            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:true}),
+            AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
@@ -641,7 +715,7 @@ impl AgentSettings {
             AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } serde_json::to_value(options) }
             AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
             AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } serde_json::to_value(options) }
-            AgentId::Cursor=>return self.clone(),
+            AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
@@ -723,11 +797,15 @@ impl KnownModel {
             else if has(&["fable"]) {("high","medium")}
             else {("medium","medium")};
         if lower.ends_with("-fast") { speed="fast"; }
-        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000, AgentId::Cursor=>200_000 }});
-        let capabilities=if cost_class=="low" {strings(&["chat","code","tools"])} else {strings(&CAPABILITIES)};
+        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000, AgentId::Cursor|AgentId::Kilo=>200_000, AgentId::Openrouter|AgentId::Litellm=>128_000 }});
+        let capabilities=if agent.is_gateway() { gateway_capabilities(cost_class) } else if cost_class=="low" {strings(&["chat","code","tools"])} else {strings(&CAPABILITIES)};
         Self{id:id.into(),label:label.unwrap_or_else(||id.into()),context_window:context.clamp(CONTEXT_RANGE.0,CONTEXT_RANGE.1),cost_class:cost_class.into(),speed:speed.into(),capabilities}
     }
 }
+
+/// O que um modelo de gateway faz: responder e, nos maiores, raciocinar. Sem
+/// `code` e `tools`: o gateway devolve texto, não edita o projeto.
+fn gateway_capabilities(cost_class:&str)->Vec<String> { if cost_class=="low" { strings(&["chat"]) } else { strings(&["chat","reasoning"]) } }
 
 /// `o1`, `o3`, `o4`… sozinhos ou com sufixo (`o3-2025`), mas não `gpt-4o`.
 fn reasoning_series(lower:&str)->bool {
@@ -744,6 +822,9 @@ fn starter_ids(agent:AgentId)->&'static [&'static str] {
         AgentId::Codex=>&["gpt-5.5"],
         AgentId::Copilot=>&["claude-sonnet-4.5"],
         AgentId::Cursor=>&["auto"],
+        AgentId::Kilo=>&["anthropic/claude-sonnet-4"],
+        AgentId::Openrouter=>&["anthropic/claude-sonnet-4"],
+        AgentId::Litellm=>&["gpt-4o-mini"],
     }
 }
 
@@ -753,6 +834,51 @@ fn starter_models(agent:AgentId)->Vec<AgentModel> {
 
 fn fresh_model(agent:AgentId,known:&KnownModel)->AgentModel {
     AgentModel{agent,model:known.id.clone(),enabled:true,capabilities:known.capabilities.clone(),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
+}
+
+/// A chave de API de cada gateway, em memória: lida do banco local ao carregar
+/// e ao salvar. Fica fora do `AgentSettings`, que vai para a tela e para a nuvem.
+static SECRETS:std::sync::LazyLock<std::sync::RwLock<HashMap<AgentId,String>>>=std::sync::LazyLock::new(Default::default);
+
+/// A chave guardada do gateway, se houver.
+pub fn secret(agent:AgentId)->Option<String> { SECRETS.read().ok()?.get(&agent).cloned().filter(|key|!key.trim().is_empty()) }
+
+fn remember_secrets(connection:&Connection)->Result<()> {
+    let mut statement=connection.prepare("SELECT agent,secret FROM llm_secrets")?;
+    let rows=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let found:HashMap<AgentId,String>=rows.into_iter().filter_map(|(agent,secret)|Some((AgentId::parse(&agent).ok()?,secret))).collect();
+    if let Ok(mut cache)=SECRETS.write() { *cache=found; }
+    Ok(())
+}
+
+/// O gateway como o provedor HTTP o entende: endereço e chave.
+fn gateway_config(agent:&AgentSettings)->ProviderConfig {
+    let options=parse::<GatewayOptions>(&agent.options).unwrap_or_default();
+    let key=secret(agent.id);
+    ProviderConfig{
+        // O LiteLLM pode rodar sem chave (um proxy local); o OpenRouter, não.
+        enabled:agent.enabled&&(agent.id==AgentId::Litellm||key.is_some()),
+        kind:"openai-compatible".into(),base_url:Some(if options.base_url.trim().is_empty() { GatewayOptions::fresh(agent.id).base_url } else { options.base_url }),api_key:key,timeout:agent.timeout,..ProviderConfig::default()
+    }
+}
+
+/// Os modelos do gateway, pelo `/models` dele. Os gateways só respondem por
+/// texto: nunca levam as capacidades `code` e `tools`.
+pub async fn discover_gateway(agent:&AgentSettings)->Result<Vec<KnownModel>> {
+    let config=gateway_config(agent);
+    let listed=crate::providers::discover_listing(agent.id.key(),&config).await?;
+    let found:Vec<KnownModel>=unique(listed.into_iter().filter(|model|valid_id(&model.id)).map(|model|KnownModel::named(agent.id,&model.id,None,model.context)));
+    if let Ok(mut cache)=DISCOVERED.lock() { cache.insert(agent.id,found.clone()); }
+    Ok(found)
+}
+
+/// A descoberta de um agente, de qualquer tipo: o CLI pelo comando, o gateway
+/// pelo endereço. `None` quando não respondeu.
+pub async fn discover_agent(agent:&AgentSettings)->Option<Vec<KnownModel>> {
+    if agent.id.is_gateway() {
+        return match discover_gateway(agent).await { Ok(found) if !found.is_empty()=>Some(found), Ok(_)=>None, Err(error)=>{ eprintln!("[llm] {} listed no models: {error}",agent.id.key()); None } };
+    }
+    discover(agent.id,&agent.command).await
 }
 
 /// O que o último `/model` de cada agente devolveu nesta execução do app.
@@ -778,6 +904,8 @@ fn listing_args(agent:AgentId)->&'static [&'static str] {
         AgentId::Codex=>&["debug","models"],
         AgentId::Copilot=>&["help","config"],
         AgentId::Cursor=>&["models"],
+        AgentId::Kilo=>&["models"],
+        AgentId::Openrouter|AgentId::Litellm=>&[],
     }
 }
 
@@ -796,6 +924,8 @@ pub async fn discover(agent:AgentId,command:&str)->Option<Vec<KnownModel>> {
         AgentId::Codex=>parse_codex_listing(&text),
         AgentId::Copilot=>parse_copilot_listing(&text),
         AgentId::Cursor=>parse_cursor_listing(&text),
+        AgentId::Kilo=>parse_kilo_listing(&text),
+        AgentId::Openrouter|AgentId::Litellm=>vec![],
     };
     if found.is_empty() { eprintln!("[llm] {} listed no models",agent.key()); return None; }
     if let Ok(mut cache)=DISCOVERED.lock() { cache.insert(agent,found.clone()); }
@@ -840,6 +970,13 @@ fn parse_cursor_listing(text:&str)->Vec<KnownModel> {
         KnownModel::named(AgentId::Cursor,id,Some(name.to_string()).filter(|name|!name.is_empty()),None)
     });
     unique(found)
+}
+
+/// Uma linha `provedor/modelo` por modelo; o resto (cabeçalho, aviso) não passa
+/// pelo `valid_id` ou não tem a barra.
+fn parse_kilo_listing(text:&str)->Vec<KnownModel> {
+    let ids=text.lines().map(str::trim).filter(|line|line.contains('/')&&valid_id(line));
+    unique(ids.map(|id|KnownModel::named(AgentId::Kilo,id,None,None)))
 }
 
 fn unique(models:impl Iterator<Item=KnownModel>)->Vec<KnownModel> {
@@ -911,6 +1048,8 @@ fn filled(id:AgentId,options:Value)->Value {
         AgentId::Codex=>parse::<CodexOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
         AgentId::Copilot=>parse::<CopilotOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
         AgentId::Cursor=>parse::<CursorOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
+        AgentId::Kilo=>parse::<KiloOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
+        AgentId::Openrouter|AgentId::Litellm=>parse::<GatewayOptions>(&options).and_then(|mut options|{ if options.base_url.trim().is_empty() { options.base_url=GatewayOptions::fresh(id).base_url; } Ok(serde_json::to_value(options)?) }),
     };
     typed.unwrap_or(options)
 }
@@ -926,6 +1065,10 @@ pub fn load(connection:&Connection)->Result<LlmSettings> {
             agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:filled(id,legacy_effort(serde_json::from_str(&options).unwrap_or(Value::Null)))});
         }
     }
+    remember_secrets(connection)?;
+    for agent in agents.iter_mut().filter(|agent|agent.id.is_gateway()) {
+        if let Some(options)=agent.options.as_object_mut() { options.insert("hasKey".into(),Value::Bool(secret(agent.id).is_some())); }
+    }
     // Um agente que falte no banco volta com o padrão: a tela sempre tem uma
     // aba por agente.
     for id in AgentId::ALL { if !agents.iter().any(|agent|agent.id==id) { agents.push(AgentSettings::fresh(id)); } }
@@ -938,6 +1081,8 @@ pub fn load(connection:&Connection)->Result<LlmSettings> {
         let Ok(agent)=AgentId::parse(&agent) else { continue };
         models.push(AgentModel{agent,model,enabled,capabilities:serde_json::from_str(&capabilities).unwrap_or_default(),cost_class,speed,context_window:context_window.max(0) as usize});
     }
+    // Na ordem dos agentes do app, não na do nome: o banco ordena o texto.
+    models.sort_by_key(|model|AgentId::ALL.iter().position(|id|*id==model.agent));
     Ok(LlmSettings{agents,models})
 }
 
@@ -947,8 +1092,9 @@ pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
     let mut agents=Vec::new();
     for id in AgentId::ALL {
         let agent=settings.agents.iter().find(|agent|agent.id==id).cloned().unwrap_or_else(||AgentSettings::fresh(id));
-        let command=agent.command.trim().to_string();
-        if command.is_empty() { bail!(Text::new("settings.commandRequired").with("agent",label(id))); }
+        // O gateway não abre programa: o endereço dele mora nas opções.
+        let command=if id.is_gateway() { String::new() } else { agent.command.trim().to_string() };
+        if command.is_empty()&&!id.is_gateway() { bail!(Text::new("settings.commandRequired").with("agent",label(id))); }
         if command.chars().any(char::is_whitespace) { bail!(Text::new("settings.commandArgs").with("agent",label(id))); }
         if !(TIMEOUT_RANGE.0..=TIMEOUT_RANGE.1).contains(&agent.timeout) { bail!(Text::new("settings.timeout").with("agent",label(id)).with("min",TIMEOUT_RANGE.0).with("max",TIMEOUT_RANGE.1)); }
         let own:HashSet<&str>=settings.models.iter().filter(|model|model.agent==id).map(|model|model.model.trim()).collect();
@@ -965,6 +1111,8 @@ pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
         if !seen.insert((model.agent,name.clone())) { bail!(Text::new("settings.modelDuplicate").with("name",&name).with("agent",label(model.agent))); }
         let mut capabilities=Vec::new();
         for capability in &model.capabilities { one_of("model.capability",capability,&CAPABILITIES)?; if !capabilities.contains(capability) { capabilities.push(capability.clone()); } }
+        // O gateway só responde por texto: sem escrever no projeto nem usar ferramentas.
+        if model.agent.is_gateway() { capabilities.retain(|capability|capability!="code"&&capability!="tools"); if capabilities.is_empty() { capabilities.push("chat".into()); } }
         if capabilities.is_empty() { bail!(Text::new("settings.modelNoCapability").with("name",&name)); }
         one_of("model.cost",&model.cost_class,&COSTS)?;
         one_of("model.speed",&model.speed,&SPEEDS)?;
@@ -976,10 +1124,29 @@ pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
 }
 
 pub fn save(connection:&mut Connection,settings:&LlmSettings)->Result<LlmSettings> {
-    let settings=validate(settings)?;
+    let incoming=settings;
+    let mut settings=validate(settings)?;
     let transaction=connection.transaction()?;
+    // A chave do gateway: a que veio nas opções entra na tabela local e some
+    // do que se grava (o `validate` já a tirou); `clearKey` apaga.
+    for agent in incoming.agents.iter().filter(|agent|agent.id.is_gateway()) {
+        let options=parse::<GatewayOptions>(&agent.options)?;
+        if options.clear_key { transaction.execute("DELETE FROM llm_secrets WHERE agent=?1",[agent.id.key()])?; }
+        if let Some(key)=options.api_key.as_deref().map(str::trim).filter(|key|!key.is_empty()) {
+            if key.chars().any(char::is_whitespace) { bail!(Text::new("settings.keyInvalid").with("agent",label(agent.id))); }
+            transaction.execute("INSERT INTO llm_secrets(agent,secret) VALUES(?1,?2) ON CONFLICT(agent) DO UPDATE SET secret=excluded.secret",params![agent.id.key(),key])?;
+        }
+    }
+    for agent in settings.agents.iter().filter(|agent|agent.id==AgentId::Openrouter&&agent.enabled) {
+        let stored:i64=transaction.query_row("SELECT COUNT(*) FROM llm_secrets WHERE agent=?1",[agent.id.key()],|row|row.get(0))?;
+        if stored==0 { bail!(Text::new("settings.keyRequired").with("agent",label(agent.id))); }
+    }
     write(&transaction,&settings)?;
     transaction.commit()?;
+    remember_secrets(connection)?;
+    for agent in settings.agents.iter_mut().filter(|agent|agent.id.is_gateway()) {
+        if let Some(options)=agent.options.as_object_mut() { options.insert("hasKey".into(),Value::Bool(secret(agent.id).is_some())); }
+    }
     Ok(settings)
 }
 
@@ -1028,9 +1195,9 @@ pub fn guarding(args:&[String],deny:&[String])->Vec<String> {
 
 /// Os provedores e modelos no formato que o orquestrador já entende.
 pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap<String,ModelConfig>) {
-    let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),ProviderConfig{
+    let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),if agent.id.is_gateway() { gateway_config(agent) } else { ProviderConfig{
         enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.build_args(),plan_args:agent.plan_args(),..ProviderConfig::default()
-    })).collect();
+    } })).collect();
     let models=settings.models.iter().map(|model|(model_key(model),ModelConfig{
         enabled:model.enabled,provider:model.agent.key().into(),model:model.model.clone(),capabilities:model.capabilities.clone(),
         cost_class:model.cost_class.clone(),speed:model.speed.clone(),context_window:model.context_window,
@@ -1038,7 +1205,7 @@ pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap
     (providers,models)
 }
 
-fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude Code", AgentId::Codex=>"Codex", AgentId::Copilot=>"Copilot", AgentId::Cursor=>"Cursor" } }
+fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude Code", AgentId::Codex=>"Codex", AgentId::Copilot=>"Copilot", AgentId::Cursor=>"Cursor", AgentId::Kilo=>"Kilo Code", AgentId::Openrouter=>"OpenRouter", AgentId::Litellm=>"LiteLLM" } }
 
 /// Onde o executável está, procurando como o shell faria: no PATH e, depois,
 /// nas pastas onde os instaladores dos agentes os põem — o app aberto pelo menu
@@ -1752,5 +1919,49 @@ mod tests {
         assert_eq!(command_prefix("make lint"),"make lint");
         assert_eq!(command_prefix("pytest tests/unit"),"pytest");
         assert_eq!(command_prefix("ls -la"),"ls");
+    }
+
+    #[test] fn kilo_lists_provider_slash_model_lines_only() {
+        let found=parse_kilo_listing("Available models:\nanthropic/claude-sonnet-4\n  openai/gpt-4o  \nnot a model\nanthropic/claude-sonnet-4\n");
+        assert_eq!(found.iter().map(|model|model.id.as_str()).collect::<Vec<_>>(),["anthropic/claude-sonnet-4","openai/gpt-4o"]);
+    }
+
+    /// O gateway só responde por texto: o modelo dele nunca leva `code` nem `tools`.
+    #[test] fn gateway_models_never_get_code_or_tools() {
+        for id in [AgentId::Openrouter,AgentId::Litellm] {
+            let known=KnownModel::named(id,"anthropic/claude-sonnet-4",None,None);
+            assert!(known.capabilities.iter().all(|capability|capability!="code"&&capability!="tools"),"{id:?}");
+        }
+        let mut loaded=settings(vec![agent(AgentId::Litellm,json!({}))]);
+        for model in loaded.models.iter_mut().filter(|model|model.agent==AgentId::Litellm) { model.capabilities=strings(&["code","tools"]); }
+        let checked=validate(&loaded).expect("validação");
+        assert!(checked.models.iter().filter(|model|model.agent==AgentId::Litellm).all(|model|model.capabilities==["chat"]));
+    }
+
+    /// A chave do gateway vai para a tabela local e nunca para as opções
+    /// gravadas, nem para o que volta à tela.
+    #[test] fn the_gateway_key_stays_out_of_the_saved_options() {
+        let mut connection=memory();
+        let loaded=settings(vec![agent(AgentId::Litellm,json!({"baseUrl":"http://localhost:4000","apiKey":"sk-segredo"}))]);
+        let saved=save(&mut connection,&loaded).expect("gravação");
+        let options=saved.agents.iter().find(|entry|entry.id==AgentId::Litellm).expect("litellm").options.to_string();
+        assert!(!options.contains("sk-segredo")&&!options.contains("apiKey"),"{options}");
+        assert!(options.contains("\"hasKey\":true"),"{options}");
+        let stored:String=connection.query_row("SELECT options FROM llm_agents WHERE id='litellm'",[],|row|row.get(0)).expect("linha");
+        assert!(!stored.contains("sk-segredo"));
+        assert_eq!(secret(AgentId::Litellm).as_deref(),Some("sk-segredo"));
+        let cleared=settings(vec![agent(AgentId::Litellm,json!({"baseUrl":"http://localhost:4000","clearKey":true}))]);
+        save(&mut connection,&cleared).expect("gravação");
+        assert_eq!(secret(AgentId::Litellm),None);
+    }
+
+    #[test] fn openrouter_needs_a_key_to_be_turned_on() {
+        let mut connection=memory();
+        let _=connection.execute("DELETE FROM llm_secrets WHERE agent='openrouter'",[]);
+        let mut loaded=settings(vec![agent(AgentId::Claude,Value::Null),agent(AgentId::Openrouter,json!({}))]);
+        let error=save(&mut connection,&loaded).expect_err("sem chave");
+        assert!(format!("{error:?}").contains("settings.keyRequired"),"{error:?}");
+        loaded.agents.iter_mut().find(|entry|entry.id==AgentId::Openrouter).expect("openrouter").enabled=false;
+        save(&mut connection,&loaded).expect("desligado não pede chave");
     }
 }

@@ -20,7 +20,7 @@ export interface LlmPolicy {
  * repositório dela. */
 export interface StoredPolicy extends LlmPolicy { repositoryId: string | null; updatedAt: string }
 
-export const POLICY_AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor"];
+export const POLICY_AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"];
 export const POLICY_RULES = ["read", "write", "shell"] as const;
 export const PATTERNS_MAX = 50;
 export const PATTERN_LENGTH_MAX = 200;
@@ -32,7 +32,7 @@ export const emptyPolicy = (): LlmPolicy => ({
 });
 
 /** O mesmo `check` de `policy_models_ok`. */
-const MODEL = /^(claude|codex|copilot|cursor)\/[A-Za-z0-9._:/@[\]-]{1,120}$/;
+const MODEL = /^(claude|codex|copilot|cursor|kilo|openrouter|litellm)\/[A-Za-z0-9._:/@[\]-]{1,120}$/;
 
 /** As linhas de um campo de texto, aparadas, sem vazias e sem repetição —
  * como o banco as grava. */

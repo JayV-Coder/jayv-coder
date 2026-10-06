@@ -1,7 +1,8 @@
-import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, CircleHelpIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
+import { startTourHere, tourForView, TOURS, startTour } from "@/modules/tutorial";
 import { BrandMark, LogoIcon, UserAvatar } from "@/components/atoms";
 import { ChatRow, NavItem, ProjectPlate } from "@/components/molecules";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -48,13 +49,13 @@ export function Sidebar() {
       {!project ? (
         <nav className="grid gap-0.5">
           <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
-          {can.organizations && <NavItem active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>
+          {can.organizations && <NavItem data-tour="nav-organizations" active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>
             <span className="flex-1">{t("nav.organizations")}</span>
             {invites > 0 && (
               <span title={t("org.invites.count", { count: invites })} className="rounded-md bg-accent px-1.5 font-mono text-caption font-semibold text-accent-foreground tabular-nums">{invites}</span>
             )}
           </NavItem>}
-          {can.stats && <NavItem active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>}
+          {can.stats && <NavItem data-tour="nav-stats" active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>}
           <NavItem active={view === "status"} mark={<ActivityIcon />} shortcut="system" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
           <NavItem active={view === "plans"} mark={<CreditCardIcon />} onClick={() => navigate("plans")}>{t("nav.plans")}</NavItem>
         </nav>
@@ -71,6 +72,7 @@ export function Sidebar() {
           <ProjectPlate project={project} />
           <NavItem active={view === "chats"} mark={<MessagesSquareIcon />} onClick={() => navigate("chats")}>{t("nav.chats")}</NavItem>
           {can.gate && <NavItem
+            data-tour="nav-gate"
             active={view === "gate"}
             className="mb-1"
             shortcut="gate"
@@ -115,6 +117,20 @@ export function Sidebar() {
             </span>
           </button>
           <NotificationBell />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t("tutorial.help")}
+                data-tour="help-tutorial"
+                onClick={() => (tourForView(view) ? startTourHere(view) : startTour(TOURS[0].id))}
+                className="grid size-9 shrink-0 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <CircleHelpIcon aria-hidden="true" className="size-[18px]" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t("tutorial.help")}</TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <button

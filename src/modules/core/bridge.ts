@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
   ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -58,6 +58,7 @@ export const commands = {
   saveLeanCode: (enabled: boolean) => invoke<CoreSnapshot>("save_lean_code", { enabled }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
   checkAgent: (command: string, agent: AgentId | null = null) => invoke<AgentProbe>("check_agent", { command, agent }),
+  checkGateway: (agent: AgentId) => invoke<GatewayCheck>("check_gateway", { agent }),
   refreshModels: (agent: AgentId) => invoke<ModelsRefresh>("refresh_models", { agent }),
   setSession: (token: string) => invoke<SessionView>("set_session", { token }),
   clearSession: () => invoke<void>("clear_session"),

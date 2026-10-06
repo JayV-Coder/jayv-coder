@@ -52,7 +52,7 @@ impl Default for McpServer {
 
 /// O Cursor não recebe MCP pela linha de comando: ele lê o `.cursor/mcp.json`
 /// do projeto ou da pasta do usuário.
-pub fn receives(agent:AgentId)->bool { !matches!(agent,AgentId::Cursor) }
+pub fn receives(agent:AgentId)->bool { !matches!(agent,AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm) }
 
 impl McpServer {
     /// O servidor limpo, ou o motivo de não ser aceito. O nome vira chave de
@@ -127,7 +127,7 @@ pub fn args_for(servers:&[McpServer],agent:AgentId)->Vec<String> {
     match agent {
         AgentId::Codex=>servers.iter().filter(|server|server.serves(agent)).flat_map(|server|server.codex_overrides()).flat_map(|value|["-c".to_string(),value]).collect(),
         AgentId::Copilot=>config_json(servers,agent,Map::new()).map(|config|vec!["--additional-mcp-config".to_string(),config]).unwrap_or_default(),
-        AgentId::Claude|AgentId::Cursor=>vec![],
+        AgentId::Claude|AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>vec![],
     }
 }
 

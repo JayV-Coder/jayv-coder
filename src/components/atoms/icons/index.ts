@@ -19,3 +19,6 @@ export { CursorIcon } from "./CursorIcon";
 export { GithubIcon } from "./GithubIcon";
 export { GitlabIcon } from "./GitlabIcon";
 export { BitbucketIcon } from "./BitbucketIcon";
+export { KiloIcon } from "./KiloIcon";
+export { OpenRouterIcon } from "./OpenRouterIcon";
+export { LiteLLMIcon } from "./LiteLLMIcon";

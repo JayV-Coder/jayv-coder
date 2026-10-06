@@ -12,6 +12,8 @@
   ],
   "features": [
     "agents",
+    "kiloCode",
+    "gatewayProviders",
     "workModes",
     "stopRequest",
     "progressPanel",
@@ -45,6 +47,7 @@
     "twoFactor",
     "commandPalette",
     "updates",
+    "tutorials",
     "cli"
   ]
 }

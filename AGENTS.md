@@ -128,6 +128,19 @@ tem botão — e (2) na documentação (`docs/manual/`), as duas com i18n nos de
 idiomas, na migração do `JayV-Coder/supabase`. Funcionalidade que ganha botão
 sem entrada na paleta, ou sem página no manual, não está pronta.
 
+## Toda funcionalidade nova ganha o seu tutorial
+
+Regra fixa do dono do projeto, junto das duas acima: toda funcionalidade nova
+precisa de um passo no tutorial (`src/modules/tutorial/tours.ts`). O texto do
+passo é o da documentação da própria funcionalidade (`docs/manual/features/<id>.json`,
+traduzido pelas chaves `docs.<id>.*`), então a página do manual já escreve o
+tutorial; o passo só diz em qual tutorial (tela) entra e, se houver, qual
+elemento destacar (`data-tour="<alvo>"` no componente). Um teste
+(`tutorial.test.ts`) falha quando um recurso do manual não aparece em nenhum
+tutorial ou quando um alvo não existe. O tutorial abre sozinho na primeira
+visita a cada tela e pode ser aberto de novo pelo botão de ajuda (?) da lateral,
+pela paleta (Ctrl+K) ou em Configurações › App › Tutoriais.
+
 ## Mensagem de commit: detalha cada alteração
 
 A mensagem de todo commit no `main` começa por `vX.Y.Z: resumo` (a versão

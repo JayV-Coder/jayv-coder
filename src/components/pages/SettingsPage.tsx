@@ -55,7 +55,7 @@ export function SettingsPage() {
       <Tabs orientation="vertical" value={tab} onValueChange={(value) => setSettingsTab(value as SettingsTab)} className="gap-6">
         {/* As abas ficam numa coluna à esquerda, ao lado do conteúdo; a coluna
             acompanha a rolagem da página. */}
-        <TabsList className="sticky top-0 h-auto w-52 shrink-0 gap-0.5 py-1 pr-1">
+        <TabsList data-tour="settings-tabs" className="sticky top-0 h-auto w-52 shrink-0 gap-0.5 py-1 pr-1">
           <TabsTrigger value="app" className="flex-none gap-2.5 px-3 py-2">
             <GridIcon className="size-5" />
             <span>{t("settings.tab.app")}</span>
