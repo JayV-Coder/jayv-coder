@@ -1720,6 +1720,8 @@ export const en = {
   "settings.baseUrlInvalid": "{agent}: the base URL must start with http:// or https://.",
   "settings.keyRequired": "{agent} needs an API key before it can be turned on.",
   "settings.keyInvalid": "{agent}: the API key can't contain spaces.",
+  "whatsNew.item.envTemplates.title": "Example env files stay readable to agents",
+  "whatsNew.item.envTemplates.detail": "Protecting .env.* no longer blocks .env.example, .env.sample and similar templates: agents can read and edit them, and the \"directory denied\" loop is gone. .env, .env.local, .env.production and other real files stay protected.",
   "whatsNew.item.progressAutoScroll.title": "The progress panel follows the latest step",
   "whatsNew.item.progressAutoScroll.detail": "The steps list beside the chat now scrolls to the end by itself whenever a new step arrives. If you scroll up to read an earlier step, it stays where you left it and shows a button to jump back to the latest step.",
   "whatsNew.item.providerIcons.title": "Official icons and checked integrations",

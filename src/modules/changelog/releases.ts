@@ -32,6 +32,12 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    version: "0.76.2", date: "2026-10-06",
+    items: [
+      { kind: "fix", id: "envTemplates" },
+    ],
+  },
+  {
     version: "0.76.1", date: "2026-10-06",
     items: [
       { kind: "fix", id: "progressAutoScroll" },

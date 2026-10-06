@@ -1271,7 +1271,8 @@ pub fn model_key(model:&AgentModel)->String { format!("{}/{}",model.agent.key(),
 /// isto: neles a proteção é o firewall, que tira os arquivos do contexto, e a
 /// portaria de saída, que segura o que o agente mexeu.
 pub fn guarding(args:&[String],deny:&[String])->Vec<String> {
-    let rules:Vec<String>=deny.iter().map(|pattern|pattern.trim()).filter(|pattern|!pattern.is_empty()&&!pattern.starts_with('!')&&!pattern.contains([',','(',')',' ','\t']))
+    let expanded:Vec<String>=deny.iter().flat_map(|pattern|if pattern.trim()==jayv_base::firewall::ENV_ANY { jayv_base::firewall::ENV_REAL.iter().map(|real|real.to_string()).collect() } else { vec![pattern.clone()] }).collect();
+    let rules:Vec<String>=expanded.iter().map(|pattern|pattern.trim()).filter(|pattern|!pattern.is_empty()&&!pattern.starts_with('!')&&!pattern.contains([',','(',')',' ','\t']))
         .map(|pattern|match pattern.strip_prefix('/') { Some(rest)=>format!("./{rest}"), None=>pattern.to_string() })
         .flat_map(|pattern|[format!("Read({pattern})"),format!("Edit({pattern})")]).collect();
     if rules.is_empty() { return args.to_vec(); }
@@ -1816,6 +1817,9 @@ mod tests {
         for rule in ["AskUserQuestion","Read(.env)","Edit(.env)","Read(secrets/**)","Edit(secrets/**)","Read(./config/prod.yml)"] { assert!(rules.contains(&rule),"falta {rule}: {denied}"); }
         assert!(!denied.contains("bad")&&!denied.contains("keep"),"o que não cabe na lista fica com o firewall: {denied}");
         assert_eq!(guarding(&args,&[]),args);
+        let env=guarding(&args,&[".env.*".into()]);
+        let denied=env.windows(2).find(|pair|pair[0]=="--disallowed-tools").map(|pair|pair[1].clone()).expect("lista");
+        assert!(denied.contains("Read(.env.local)")&&denied.contains("Read(.env.production)")&&!denied.contains(".env.example")&&!denied.contains("Read(.env.*)"),"{denied}");
     }
 
     /// O login lido da resposta de cada agente.
