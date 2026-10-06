@@ -1,27 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { showChanges } from "@/modules/changelog";
-import { reportError } from "@/modules/feedback";
 import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
-import { useT, type Key } from "@/modules/i18n";
-import { navigate } from "@/modules/navigation";
-import { openOrganization, organizationChatsOf, useOrganizations } from "@/modules/organizations";
-import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
+import { useLocale, useLocales, useT } from "@/modules/i18n";
+import { navigate, useNavigation } from "@/modules/navigation";
+import { useOrganizations } from "@/modules/organizations";
+import { isDirty, useSettings } from "@/modules/settings";
+import { useEntitlements } from "@/modules/plans";
 import { openStats } from "@/modules/usage";
-import { WORK_MODES } from "@/modules/core";
-import { chatTitle, chatsOf, createChat, findChat, findProject, leaveProject, nextWorkMode, openChat, openProject, recentChats, setWorkMode, useWorkspace } from "@/modules/workspace";
+import { createChat, findChat, findProject, leaveProject, nextWorkMode, setWorkMode, useWorkspace } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
 import { cn } from "@/lib/utils";
-
-interface Command {
-  id: string;
-  group: Key;
-  label: string;
-  /** Texto apagado ao lado do nome: o caminho do projeto, por exemplo. */
-  hint?: string;
-  shortcut?: Shortcut;
-  run: () => void;
-}
+import { paletteCommands, type Command } from "./paletteCommands";
 
 /** Grifa as letras que a busca casou. */
 function Marked({ text, positions }: { text: string; positions: number[] }) {
@@ -89,53 +78,18 @@ export function CommandPalette() {
     if (open) { setQuery(""); setSelected(0); }
   }, [open]);
 
-  const commands = useMemo<Command[]>(() => {
-    const all: Command[] = [];
-    if (project) {
-      all.push(
-        { id: "new-chat", group: "palette.group.project", label: t("common.newChat"), hint: project.name, shortcut: "newChat", run: () => void createChat(project.id) },
-        { id: "chats", group: "palette.group.project", label: t("nav.chats"), hint: project.name, run: () => navigate("chats") },
-        { id: "gate", group: "palette.group.project", label: t("nav.gate"), hint: project.name, shortcut: "gate", run: () => navigate("gate") },
-        { id: "project-stats", group: "palette.group.project", label: t("nav.stats"), hint: project.name, run: () => openStats({ kind: "project", id: project.id }) },
-      );
-      const chat = findChat(data, activeChatId);
-      if (chat) {
-        for (const mode of WORK_MODES) {
-          if (mode === (chat.workMode ?? "auto")) continue;
-          all.push({ id: `mode-${mode}`, group: "palette.group.project", label: t("palette.mode", { name: t(`mode.${mode}`) }), hint: t(`mode.${mode}.hint`), run: () => void setWorkMode(chat.id, mode) });
-        }
-      }
-      for (const chat of recentChats(chatsOf(data, project.id), activeChatId)) {
-        all.push({ id: `chat-${chat.id}`, group: "palette.group.chats", label: chatTitle(chat), run: () => openChat(chat.id) });
-      }
-    }
-    all.push(
-      { id: "projects", group: "palette.group.navigate", label: t("nav.projects"), shortcut: "projects", run: leaveProject },
-      { id: "organizations", group: "palette.group.navigate", label: t("nav.organizations"), shortcut: "organizations", run: () => navigate("organizations") },
-      { id: "stats", group: "palette.group.navigate", label: t("nav.stats"), shortcut: "stats", run: () => openStats({ kind: "global" }) },
-      { id: "system", group: "palette.group.navigate", label: t("nav.system"), shortcut: "system", run: () => navigate("status") },
-      { id: "settings", group: "palette.group.navigate", label: t("nav.settings"), shortcut: "settings", run: () => navigate("settings") },
-      { id: "profile", group: "palette.group.navigate", label: t("nav.profile"), run: () => navigate("profile") },
-      { id: "plans", group: "palette.group.navigate", label: t("nav.plans"), run: () => navigate("plans") },
-    );
-    for (const item of data.projects) {
-      if (item.id === project?.id) continue;
-      all.push({ id: `project-${item.id}`, group: "palette.group.projects", label: item.name, hint: item.rootPath ?? undefined, run: () => openProject(item.id) });
-    }
-    for (const organization of organizations) {
-      all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id).catch(reportError) });
-      const general = organizationChatsOf(data, organization.id);
-      for (const chat of general.slice(0, 5)) {
-        all.push({ id: `general-${chat.id}`, group: "palette.group.general", label: chatTitle(chat), hint: organization.name, run: () => openChat(chat.id) });
-      }
-      if (general[0]) all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), run: () => void createChat(general[0].projectId) });
-    }
-    for (const preference of THEME_PREFERENCES) {
-      all.push({ id: `theme-${preference}`, group: "palette.group.appearance", label: t("palette.theme", { name: t(`theme.${preference}`) }), run: () => setThemePreference(preference) });
-    }
-    all.push({ id: "whats-new", group: "palette.group.help", label: t("palette.whatsNew"), run: () => void showChanges() });
-    return all;
-  }, [t, project, data, activeChatId, organizations]);
+  const view = useNavigation((state) => state.view);
+  const layout = useWorkspace((state) => state.layout);
+  const locale = useLocale();
+  const locales = useLocales();
+  const invites = useOrganizations((state) => state.incoming);
+  const openOrganizationId = useOrganizations((state) => state.openId);
+  const settingsDirty = useSettings(isDirty);
+  const rights = useEntitlements();
+
+  const commands = useMemo<Command[]>(() => paletteCommands({
+    t, data, project, activeChatId, view, layout, locale, locales, organizations, invites, openOrganizationId, settingsDirty, rights,
+  }), [t, project, data, activeChatId, view, layout, locale, locales, organizations, invites, openOrganizationId, settingsDirty, rights]);
 
   const shown = useMemo(() => {
     const matched = commands

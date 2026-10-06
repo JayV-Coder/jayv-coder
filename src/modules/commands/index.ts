@@ -109,3 +109,4 @@ export function fuzzyMatch(query: string, text: string): { score: number; positi
   }
   return { score, positions };
 }
+export * from "./intents";

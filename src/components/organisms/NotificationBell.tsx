@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { BellIcon } from "lucide-react";
+import { useIntentHandler } from "@/modules/commands";
 import { useT } from "@/modules/i18n";
 import { reportError } from "@/modules/feedback";
 import { acceptInvite, declineInvite, useOrganizations } from "@/modules/organizations";
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 export function NotificationBell() {
   const t = useT();
   const [open, setOpen] = useState(false);
+  useIntentHandler("notifications", () => setOpen(true));
   const [busy, setBusy] = useState<string | null>(null);
   const account = useNotifications((state) => state.account);
   const device = useNotifications((state) => state.device);

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { PencilIcon, RepeatIcon, Trash2Icon } from "lucide-react";
 import type { NoteDraft, NoteKind, ProjectMemory, ProjectNote } from "@/modules/core";
+import { useIntentHandler } from "@/modules/commands";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { deleteNote, loadMemory, notesUsed, saveNote } from "@/modules/memory";
@@ -94,6 +95,7 @@ function NoteItem({ note, onSave, onDelete }: { note: ProjectNote; onSave: (draf
 export function ProjectMemoryDialog({ projectId, children }: { projectId: string; children: ReactNode }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  useIntentHandler("projectNotes", () => setOpen(true));
   const [memory, setMemory] = useState<ProjectMemory | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<NoteDraft>(blank(projectId, "recipe"));
 

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SearchIcon } from "lucide-react";
 import type { SearchHit } from "@/modules/core";
+import { useIntentHandler } from "@/modules/commands";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { SEARCH_MIN_CHARS, searchChats, snippetParts } from "@/modules/memory";
@@ -14,6 +15,8 @@ export function ChatSearch({ projectId }: { projectId: string }) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const field = useRef<HTMLInputElement>(null);
+  useIntentHandler("searchChats", () => field.current?.focus());
 
   useEffect(() => {
     const text = query.trim();
@@ -30,7 +33,7 @@ export function ChatSearch({ projectId }: { projectId: string }) {
       <label className="relative block">
         <span className="sr-only">{t("search.label")}</span>
         <SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input type="search" value={query} placeholder={t("search.placeholder")} className="pl-9" onChange={(event) => setQuery(event.target.value)} />
+        <Input ref={field} type="search" value={query} placeholder={t("search.placeholder")} className="pl-9" onChange={(event) => setQuery(event.target.value)} />
       </label>
       {hits && (hits.length === 0
         ? <p className="text-sm text-muted-foreground">{t("search.empty")}</p>
