@@ -1,0 +1,10 @@
+{
+  "id": "consumptionGuard",
+  "category": "agents",
+  "since": "0.80.0",
+  "plan": null,
+  "commands": [],
+  "title": "Quota guard",
+  "summary": "JayV stops a run before it burns the quota of your plan: it does not open an agent whose plan limit is almost used, caps what one request can open and stops a run that takes too many steps or tokens.",
+  "usage": "It is always on and covers Claude Code, Codex, Copilot, Cursor, Kilo Code, OpenRouter and LiteLLM. An agent whose plan window (session, week or month) reads 95% or more is not opened, and another agent takes over when one is on. A request opens at most 12 agent calls (plan, split, review, retries), a run stops after 400 tool steps or about 1.5 million tokens' worth of quota, and planning does not pick the large model by itself. When it stops something, the chat says what and why, and what the agent already did stays. Plan limits are in Statistics."
+}

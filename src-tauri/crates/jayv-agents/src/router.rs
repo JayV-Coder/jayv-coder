@@ -139,6 +139,20 @@ pub fn keep_session_model(mut ranked:Vec<ModelSelection>,config:&Config,sticky:O
     ranked
 }
 
+/// O planejamento não abre sozinho o porte grande: um plano de pedido
+/// complexo no modelo maior leu o projeto por minutos, com dezenas de
+/// subagentes, e custou a cota de várias execuções de desenvolvimento. O
+/// primeiro modelo de porte até médio da lista passa à frente; quem só tem o
+/// grande continua com ele, e quem fixa o modelo na mão não passa por aqui.
+pub fn cap_plan_tier(mut ranked:Vec<ModelSelection>,config:&Config)->Vec<ModelSelection> {
+    let tier=|selection:&ModelSelection|selection_tier(config,selection).unwrap_or(1);
+    if ranked.first().is_none_or(|first|tier(first)<=PLAN_TIER_CAP) { return ranked; }
+    if let Some(index)=ranked.iter().position(|candidate|tier(candidate)<=PLAN_TIER_CAP) { let kept=ranked.remove(index); ranked.insert(0,kept); }
+    ranked
+}
+/// O maior porte que o planejamento escolhe sozinho: o médio.
+pub const PLAN_TIER_CAP:usize=2;
+
 /// O que nenhum modelo configurado atende: o Jev explica como configurar.
 pub fn configuration_selection(config:&Config,complexity:&str,context:&Context)->ModelSelection {
     let budget=*config.budgets.get(complexity).unwrap_or(&12_000);
@@ -235,6 +249,25 @@ fn score_model(name:&str,model:&ModelConfig,intent:&str,complexity:&str,config:&
         assert_eq!(keep_session_model(ranked.clone(),&config,Some(("claude","opus")),"refactor","complex")[0].model_name,"opus");
         assert_eq!(keep_session_model(ranked.clone(),&config,Some(("other","x")),"refactor","complex")[0].model_name,"opus","sessão de modelo fora da lista não muda nada");
         assert_eq!(selection_tier(&config,&ranked[0]),Some(3));
+    }
+
+    /// O plano de pedido complexo não abre o modelo grande sozinho; quem só
+    /// tem o grande fica com ele.
+    #[test]
+    fn planning_does_not_open_the_large_tier_by_itself() {
+        let mut config=bare();
+        config.providers.insert("claude".into(),crate::config::ProviderConfig { enabled:true, kind:"openai".into(), api_key:Some("configured".into()), ..Default::default() });
+        let all=vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()];
+        for (id,cost) in [("sonnet","medium"),("opus","high")] {
+            config.models.insert(format!("claude:{id}"),ModelConfig{enabled:true,provider:"claude".into(),model:id.into(),capabilities:all.clone(),cost_class:cost.into(),speed:"medium".into(),context_window:200_000});
+        }
+        let ranked=rank_models(&config,"refactor","complex",&Context::default(),&PerformanceTracker::default(),&Tiebreak::default());
+        assert_eq!(ranked[0].model_name,"opus");
+        assert_eq!(cap_plan_tier(ranked.clone(),&config)[0].model_name,"sonnet");
+        assert_eq!(cap_plan_tier(ranked,&config).len(),2,"o grande continua como plano B");
+        config.models.get_mut("claude:sonnet").expect("sonnet").enabled=false;
+        let only=rank_models(&config,"refactor","complex",&Context::default(),&PerformanceTracker::default(),&Tiebreak::default());
+        assert_eq!(cap_plan_tier(only,&config)[0].model_name,"opus","sem outro modelo, o grande planeja");
     }
 
     #[test]

@@ -3,7 +3,7 @@ import type { WorkMode } from "@/modules/core";
 
 /** O que um atalho de teclado global faz. A tela decide como cumprir; aqui só
  * se reconhece a tecla. */
-export type Shortcut = "palette" | "projects" | "organizations" | "stats" | "system" | "settings" | "newChat" | "gate" | "workMode";
+export type Shortcut = "palette" | "projects" | "organizations" | "stats" | "system" | "settings" | "newChat" | "gate" | "workMode" | "find";
 
 interface KeyLike {
   key: string;
@@ -32,6 +32,7 @@ const BY_KEY: Record<string, Shortcut> = {
   n: "newChat",
   g: "gate",
   ".": "workMode",
+  f: "find",
 };
 
 /** Os comandos de modo que a caixa de mensagem entende, com os apelidos em

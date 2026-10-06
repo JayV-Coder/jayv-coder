@@ -156,6 +156,11 @@ pub enum StopReason {
     Asked,
     /// O pedido passou do teto total de minutos.
     Ceiling{minutes:u64},
+    /// A execução deu passos de ferramenta demais (trava de consumo).
+    Steps{max:u32},
+    /// A execução gastou mais que o teto de tokens ponderados, em décimos de
+    /// milhão (trava de consumo).
+    Tokens{millions:u32,tenths:u32},
 }
 
 impl StopReason {
@@ -164,6 +169,8 @@ impl StopReason {
         match self {
             Self::Asked=>crate::i18n::Text::new("turn.cancelled"),
             Self::Ceiling{minutes}=>crate::i18n::Text::new("turn.ceiling").with("minutes",*minutes),
+            Self::Steps{max}=>crate::i18n::Text::new("guard.steps").with("max",*max),
+            Self::Tokens{millions,tenths}=>crate::i18n::Text::new("guard.tokens").with("amount",if *tenths==0 {millions.to_string()} else {format!("{millions}.{tenths}")}),
         }
     }
 }

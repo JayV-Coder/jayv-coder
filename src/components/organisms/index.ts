@@ -36,6 +36,7 @@ export { LaunchUpdate } from "./LaunchUpdate";
 export { TutorialOverlay } from "./TutorialOverlay";
 export { WhatsNewDialog } from "./WhatsNewDialog";
 export { ProjectMemoryDialog } from "./ProjectMemoryDialog";
+export { ChatFind } from "./ChatFind";
 export { ChatSearch } from "./ChatSearch";
 export { UsageTable } from "./UsageTable";
 export { ChatUsageBar } from "./ChatUsageBar";

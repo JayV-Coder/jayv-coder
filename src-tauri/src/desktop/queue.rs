@@ -116,7 +116,7 @@ async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspac
     // turno, deste chat e deste projeto.
     let project_id=workspace.lock().await.chat_project(&turn.chat_id).unwrap_or(None);
     let scope=usage::Scope{project_id,chat_id:Some(turn.chat_id.clone()),turn_id:Some(turn.id.clone())};
-    usage::within(scope,attend(app,desk,workspace,forget,turn,prompt,&pulse)).await;
+    usage::within(scope,crate::guard::within(attend(app,desk,workspace,forget,turn,prompt,&pulse))).await;
     drop(pulse);
     let said=narrator.await.unwrap_or_default();
     cancels.close(&turn.id);
@@ -343,6 +343,17 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
             usage::mark(usage::JevMark::count(format!("entry_followed:{}",entry.verdict.as_str()),1));
             entry=entry.inherit(verdict);
         }
+    }
+    // Com um plano esperando no chat, a mensagem que manda executá-lo ("siga
+    // com o desenvolvimento", "chega de plano") não é um pedido novo e vago:
+    // a portaria não a barra, e o orquestrador a leva ao desenvolvimento com o
+    // plano inteiro, mesmo que o app tenha sido reaberto depois do plano.
+    let waiting_plan=workspace.lock().await.pending_plan(&turn.id).ok().flatten();
+    state.orchestrator.pending_plan=None;
+    if let Some(plan_text)=waiting_plan.filter(|_|choice.is_none()&&paired.is_none()&&crate::orchestrator::goes_ahead(prompt)) {
+        if entry.verdict!=EntryVerdict::Pass { usage::mark(usage::JevMark::count(format!("entry_plan_followed:{}",entry.verdict.as_str()),1)); }
+        entry=entry.inherit(EntryVerdict::Pass);
+        state.orchestrator.pending_plan=Some(plan_text);
     }
     {
         let mut workspace=workspace.lock().await;

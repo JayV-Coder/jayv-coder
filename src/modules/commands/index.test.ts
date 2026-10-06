@@ -12,6 +12,12 @@ describe("shortcutFor", () => {
     expect(shortcutFor(key("k", { metaKey: true }), false)).toBeNull();
   });
 
+  it("Ctrl+F e ⌘F buscam na conversa", () => {
+    expect(shortcutFor(key("f", { ctrlKey: true }), false)).toBe("find");
+    expect(shortcutFor(key("F", { metaKey: true }), true)).toBe("find");
+    expect(shortcutFor(key("f", { ctrlKey: true, shiftKey: true }), false)).toBeNull();
+  });
+
   it("leva os números às telas principais", () => {
     expect(shortcutFor(key("1", { ctrlKey: true }), false)).toBe("projects");
     expect(shortcutFor(key("4", { ctrlKey: true }), false)).toBe("system");

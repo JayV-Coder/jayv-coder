@@ -7,6 +7,7 @@ import { formatCost, formatDuration, formatTokens, useUsage } from "@/modules/us
 import { openFile, openTurns, setWorkMode } from "@/modules/workspace";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ChatFind } from "./ChatFind";
 import { MessageBubble } from "./MessageBubble";
 import { PendingBubble } from "./PendingBubble";
 import { Welcome } from "./Welcome";
@@ -120,6 +121,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
   const empty = !chat || Math.max(chat.messages.length, chat.messageCount ?? 0) === 0;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <ChatFind root={scroller} version={chat} />
       <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         <div className={cn("mx-auto min-h-full w-full max-w-4xl px-5 pt-2 pb-4", empty && "flex flex-col pt-6")}>
           {empty ? <Welcome project={project} chat={chat} /> : (

@@ -3,7 +3,7 @@ import { WORK_MODES } from "@/modules/core";
 import { signOut } from "@/modules/auth";
 import { showChanges } from "@/modules/changelog";
 import { featureActions, requestIntent, type Shortcut } from "@/modules/commands";
-import { cancelTurn } from "@/modules/conversation";
+import { cancelTurn, openChatFind } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { setLocale, type Key, type LocaleOption } from "@/modules/i18n";
 import { setLivePanel, useLive } from "@/modules/live";
@@ -103,6 +103,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
           run: () => { openChat(chat.id); setLivePanel(chat.id, useLive.getState().panel[chat.id] !== true); },
         });
       }
+      all.push({ id: "find-in-chat", group, label: t("find.label"), shortcut: "find", run: () => { openChat(chat.id); openChatFind(); } });
       all.push({ id: "grants", group, label: t("palette.commandPermissions"), run: () => { openChat(chat.id); requestIntent("commandPermissions"); } });
       const flying = openTurns(chat).find((turn) => turn.status === "flying");
       if (flying) all.push({ id: "stop", group, label: t("palette.stop"), run: () => void cancelTurn(flying.id, chat.id) });

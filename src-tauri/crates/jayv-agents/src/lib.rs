@@ -2,6 +2,7 @@
 //! mesmos nomes (`crate::llm`, `crate::providers`, `crate::usage`...).
 
 pub mod agents;
+pub mod guard;
 pub mod llm;
 pub mod mcp;
 pub mod org_extensions;
