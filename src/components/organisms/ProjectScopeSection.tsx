@@ -1,9 +1,9 @@
 import { Building2Icon, FolderDownIcon, UserIcon } from "lucide-react";
 import type { Project } from "@/modules/core";
-import { useT, type Key } from "@/modules/i18n";
-import { openOrganization, type ScopeGroup } from "@/modules/organizations";
+import { formatSince, useT, type Key } from "@/modules/i18n";
+import { openOrganization, organizationChatsOf, splitGeneral, type ScopeGroup } from "@/modules/organizations";
 import { reportError } from "@/modules/feedback";
-import { chatsOf, createChat, deleteProject, openProject, useWorkspace, type Layout } from "@/modules/workspace";
+import { chatTitle, chatsOf, createChat, deleteProject, openChat, openProject, useWorkspace, type Layout } from "@/modules/workspace";
 import { EmptyText } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,11 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
   const data = useWorkspace((state) => state.data);
   const personal = group.scope.kind === "personal";
   const Icon = personal ? UserIcon : Building2Icon;
-  const count = group.projects.length;
+  // Os chats gerais (todos os repositórios juntos) ficam num bloco à parte dos
+  // projetos de cada repositório.
+  const { repositories } = splitGeneral(group.projects);
+  const generalChats = personal ? [] : organizationChatsOf(data, group.key);
+  const count = repositories.length;
   return (
     <section aria-labelledby={`scope-${group.key}`} className="grid gap-3">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
@@ -42,6 +46,27 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
           </>
         )}
       </header>
+      {generalChats.length > 0 && (
+        <div className="grid gap-2">
+          <h4 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("projects.org.general")}</h4>
+          <p className="text-xs text-muted-foreground">{t("projects.org.generalHint")}</p>
+          <ul className="grid gap-1.5">
+            {generalChats.slice(0, 5).map((chat) => (
+              <li key={chat.id}>
+                <button
+                  type="button"
+                  onClick={() => openChat(chat.id)}
+                  className="flex w-full min-w-0 items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-start hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <span className="truncate text-sm">{chatTitle(chat)}</span>
+                  <span className="shrink-0 text-caption text-muted-foreground">{formatSince(chat.updatedAt)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {generalChats.length > 0 && count > 0 && <h4 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("projects.org.repositories")}</h4>}
       {count === 0
         ? (
           <div className="flex flex-wrap items-center gap-3">
@@ -55,7 +80,7 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
         )
         : (
           <div className={cn("grid gap-4", layout === "grid" ? "grid-cols-[repeat(auto-fill,minmax(280px,1fr))]" : "grid-cols-1")}>
-            {group.projects.map((project) => (
+            {repositories.map((project) => (
               <ProjectCard
                 key={project.id}
                 project={project}

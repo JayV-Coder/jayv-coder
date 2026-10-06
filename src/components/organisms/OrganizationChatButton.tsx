@@ -2,20 +2,22 @@ import { useState, type ComponentProps } from "react";
 import { FolderTreeIcon } from "lucide-react";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
+import { formatSince } from "@/modules/i18n";
 import {
-  chatReach, openOrganizationChat, organizationFolder, organizationRepositories, pickFolder, rememberOrganizationFolder, resumeOrganizationChat,
+  chatReach, openOrganizationChat, organizationChatsOf, organizationFolder, organizationRepositories, pickFolder, rememberOrganizationFolder,
   type Repository,
 } from "@/modules/organizations";
 import { useFeature } from "@/modules/plans";
-import { useWorkspace } from "@/modules/workspace";
+import { chatTitle, createChat, openChat, useWorkspace } from "@/modules/workspace";
 import { Eyebrow, PathText } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-/** O chat em todos os repositórios da organização: um chat com a pasta da
- * organização como raiz, que enxerga todos os clones dela de uma vez. Quando
- * esse chat já existe neste computador, o botão leva direto a ele; senão,
- * antes de abrir, mostra o que entra e o que fica de fora. Na página da
+/** Os chats gerais da organização: chats com a pasta da organização como
+ * raiz, que enxergam todos os clones dela de uma vez. Quando já existe algum
+ * neste computador, o botão abre uma janela para escolher qual continuar (ou
+ * começar um novo); senão, antes de abrir o primeiro, mostra o que entra e o
+ * que fica de fora. Na página da
  * organização os repositórios já vêm carregados; na lista de projetos, são
  * buscados no clique. */
 export function OrganizationChatButton({ organization, repositories, size, variant }: {
@@ -29,12 +31,15 @@ export function OrganizationChatButton({ organization, repositories, size, varia
   const [folder, setFolder] = useState<string | null>(null);
   const [fetched, setFetched] = useState<Repository[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const projects = useWorkspace((state) => state.data.projects);
+  const [picking, setPicking] = useState(false);
+  const data = useWorkspace((state) => state.data);
+  const projects = data.projects;
+  const generalChats = organizationChatsOf(data, organization.id);
   const loaded = repositories ?? fetched;
   const reach = folder && loaded ? chatReach(loaded, projects, folder) : null;
 
   const open = async () => {
-    if (resumeOrganizationChat(organization.id)) return;
+    if (generalChats.length > 0) { setPicking(true); return; }
     if (!repositories) setFetched(await organizationRepositories(organization.id));
     await choose(false);
   };
@@ -46,6 +51,17 @@ export function OrganizationChatButton({ organization, repositories, size, varia
     if (!chosen) return;
     rememberOrganizationFolder(organization.id, chosen);
     setFolder(chosen);
+  };
+
+  const pick = (chatId: string) => {
+    setPicking(false);
+    openChat(chatId);
+  };
+
+  const another = async () => {
+    const projectId = generalChats[0]?.projectId;
+    setPicking(false);
+    if (projectId) await createChat(projectId);
   };
 
   const start = async () => {
@@ -83,6 +99,33 @@ export function OrganizationChatButton({ organization, repositories, size, varia
         <FolderTreeIcon className="size-4" />
         {t("orgChat.open")}
       </Button>
+      <Dialog open={picking} onOpenChange={setPicking}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <Eyebrow>{organization.name}</Eyebrow>
+            <DialogTitle className="text-xl">{t("orgChat.pick.title")}</DialogTitle>
+            <DialogDescription>{t("orgChat.pick.description", { org: organization.name })}</DialogDescription>
+          </DialogHeader>
+          <ul className="grid max-h-[50vh] gap-1.5 overflow-y-auto">
+            {generalChats.map((chat) => (
+              <li key={chat.id}>
+                <button
+                  type="button"
+                  onClick={() => pick(chat.id)}
+                  className="flex w-full min-w-0 items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-start hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <span className="truncate text-sm">{chatTitle(chat)}</span>
+                  <span className="shrink-0 text-caption text-muted-foreground">{formatSince(chat.updatedAt)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPicking(false)}>{t("common.cancel")}</Button>
+            <Button type="button" onClick={() => void another()}>{t("orgChat.pick.new")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={folder !== null} onOpenChange={(open) => { if (!open) setFolder(null); }}>
         <DialogContent className="sm:max-w-[560px]">
           <DialogHeader>
