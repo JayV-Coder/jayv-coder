@@ -13,7 +13,7 @@ import {
   acceptInvite, declineInvite, openOrganization, organizationChatsOf, type IncomingInvite, type Organization, type OrganizationTab,
 } from "@/modules/organizations";
 import { allows } from "@/modules/plans";
-import { AGENT_LABELS, AGENTS, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
+import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -142,6 +142,10 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       { id: "settings-save", group: settings, label: t("settings.save"), run: () => void saveSettings() },
       { id: "settings-discard", group: settings, label: t("settings.discard"), run: discardChanges },
     );
+  }
+  // Conferir o endereço e a chave dos gateways de API (o botão da aba deles).
+  for (const id of ["openrouter", "litellm"] as const) {
+    all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: AGENT_LABELS[id] }), run: () => { openSettingsTab(id); void checkGateway(id); } });
   }
   all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
   all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });

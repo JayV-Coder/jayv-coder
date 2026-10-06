@@ -1051,7 +1051,7 @@ const LLM_REFRESH:std::time::Duration=std::time::Duration::from_secs(60);
 /// recusou de cara por login, chave ou cota.
 /// O nome do agente como a pessoa o conhece, para o prompt da revisão.
 fn agent_name(provider:&str)->String {
-    match provider { "claude"=>"Claude Code", "codex"=>"Codex", "copilot"=>"GitHub Copilot", "cursor"=>"Cursor", other=>other }.to_string()
+    match provider { "claude"=>"Claude Code", "codex"=>"Codex", "copilot"=>"GitHub Copilot", "cursor"=>"Cursor", "kilo"=>"Kilo Code", "openrouter"=>"OpenRouter", "litellm"=>"LiteLLM", other=>other }.to_string()
 }
 
 pub fn could_not_start(error:&anyhow::Error)->bool {

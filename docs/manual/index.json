@@ -12,6 +12,8 @@
   ],
   "features": [
     "agents",
+    "kiloCode",
+    "gatewayProviders",
     "workModes",
     "stopRequest",
     "progressPanel",

@@ -4,7 +4,7 @@ import { useConnection } from "@/modules/connection";
 import { reportError } from "@/modules/feedback";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
-import { AGENT_LABELS, AGENTS, useSettings, type ProbeState } from "@/modules/settings";
+import { AGENT_LABELS, CLI_AGENTS, useSettings, type ProbeState } from "@/modules/settings";
 import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { Eyebrow, LoadingNote } from "@/components/atoms";
 import { Metric, PageHeading, PathLine } from "@/components/molecules";
@@ -41,7 +41,7 @@ export function StatusPage() {
   const server = connectionHealth(link, pending, refused);
   const probeOf = (probe: ProbeState) => (probe === "checking" ? null : probe);
 
-  const agentLine = (id: (typeof AGENTS)[number]) => {
+  const agentLine = (id: (typeof CLI_AGENTS)[number]) => {
     const probe = probes[id];
     const health: Health = probe === "checking" ? "off" : configured[id] === false ? "off" : agentHealth(probeOf(probe));
     const detail = probe === "checking"
@@ -86,7 +86,7 @@ export function StatusPage() {
             <ul className="grid">
               <HealthLine health={server} label={t("system.server")}
                 detail={[t(LINK[link] ?? "system.link.signedOut"), pending > 0 && t("connection.pending", { count: pending }), refused > 0 && t("connection.failed", { count: refused })].filter(Boolean).join(" · ")} />
-              {AGENTS.map(agentLine)}
+              {CLI_AGENTS.map(agentLine)}
             </ul>
           </Card>
           <Card className="gap-3 px-5 py-5">

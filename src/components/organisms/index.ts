@@ -30,6 +30,8 @@ export { LivePanel } from "./LivePanel";
 export { ProgressPanel } from "./ProgressPanel";
 export { RepositoryPanel } from "./RepositoryPanel";
 export { UpdateBanner } from "./UpdateBanner";
+export { GatewayConnection } from "./GatewayConnection";
+export { KiloOptionsForm } from "./KiloOptionsForm";
 export { LaunchUpdate } from "./LaunchUpdate";
 export { TutorialOverlay } from "./TutorialOverlay";
 export { WhatsNewDialog } from "./WhatsNewDialog";

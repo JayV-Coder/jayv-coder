@@ -58,6 +58,8 @@ export const TOURS: Tour[] = [
     id: "settings", view: "settings",
     steps: [
       { feature: "agents", target: "settings-tabs" },
+      { feature: "kiloCode" },
+      { feature: "gatewayProviders" },
       { feature: "adaptiveRouting" },
       { feature: "agentSessions" },
       { feature: "secondOpinion" },

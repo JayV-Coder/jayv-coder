@@ -239,7 +239,12 @@ export interface SystemStatus {
   performance_records: number;
 }
 
-export type AgentId = "claude" | "codex" | "copilot" | "cursor";
+export type AgentId = "claude" | "codex" | "copilot" | "cursor" | "kilo" | "openrouter" | "litellm";
+
+/** Os gateways de API: falam por HTTP (endereço e chave) e só respondem por
+ * texto, sem editar o projeto. Os outros são programas de linha de comando. */
+export const GATEWAY_AGENTS: AgentId[] = ["openrouter", "litellm"];
+export const isGateway = (id: AgentId) => GATEWAY_AGENTS.includes(id);
 export type CostClass = "free" | "low" | "medium" | "high";
 export type Speed = "fast" | "medium" | "slow";
 export type Capability = "chat" | "code" | "reasoning" | "tools";
@@ -284,6 +289,20 @@ export interface CursorOptions {
   approveMcps: boolean;
 }
 
+export interface KiloOptions {
+  /** Aprova sozinho o que o agente pedir (`kilo run --auto`). */
+  auto: boolean;
+}
+
+/** As opções dos gateways. A chave nunca volta do núcleo: `hasKey` diz se há
+ * uma guardada; `apiKey` e `clearKey` só vão da tela ao salvar. */
+export interface GatewayOptions {
+  baseUrl: string;
+  hasKey: boolean;
+  apiKey?: string;
+  clearKey?: boolean;
+}
+
 /** O que o agente pode fazer além de ler e editar o projeto: buscar na web,
  * abrir páginas, rodar comandos, usar as ferramentas do GitHub. */
 export type Mechanism = "webSearch" | "webFetch" | "shell" | "githubTools";
@@ -295,6 +314,9 @@ export const AGENT_MECHANISMS: Record<AgentId, Mechanism[]> = {
   codex: ["webSearch"],
   copilot: ["webFetch", "shell", "githubTools"],
   cursor: [],
+  kilo: [],
+  openrouter: [],
+  litellm: [],
 };
 
 export interface AgentOptions {
@@ -302,6 +324,9 @@ export interface AgentOptions {
   codex: CodexOptions;
   copilot: CopilotOptions;
   cursor: CursorOptions;
+  kilo: KiloOptions;
+  openrouter: GatewayOptions;
+  litellm: GatewayOptions;
 }
 
 export interface AgentSettings<A extends AgentId = AgentId> {
@@ -416,6 +441,9 @@ export interface SettingsSnapshot {
 /** A lista de um agente lida de novo do `/model` do CLI. `listed` é falso
  * quando o CLI não respondeu e nada mudou. */
 export interface ModelsRefresh { snapshot: SettingsSnapshot; listed: boolean }
+
+/** A conferência de um gateway: quantos modelos ele lista, ou o motivo de não ter listado. */
+export interface GatewayCheck { models: number; error: string | null }
 
 export interface AgentProbe {
   path: string | null;

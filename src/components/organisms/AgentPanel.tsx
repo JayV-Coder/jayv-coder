@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AgentId, AgentSettings } from "@/modules/core";
+import { isGateway, type AgentId, type AgentSettings } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { AGENT_LABELS, addModel, checkAgent, isAgentsDirty, refreshModels, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
 import { AgentIcon, EmptyText } from "@/components/atoms";
@@ -11,6 +11,8 @@ import { ClaudeOptionsForm } from "./ClaudeOptionsForm";
 import { CodexOptionsForm } from "./CodexOptionsForm";
 import { CopilotOptionsForm } from "./CopilotOptionsForm";
 import { CursorOptionsForm } from "./CursorOptionsForm";
+import { GatewayConnection } from "./GatewayConnection";
+import { KiloOptionsForm } from "./KiloOptionsForm";
 import { ModelRow } from "./ModelRow";
 
 export const AGENT_NAMES: Record<AgentId, string> = AGENT_LABELS;
@@ -20,6 +22,7 @@ const TIMEOUTS = [60, 120, 300, 600, 900, 1800, 3600];
  * fazer e com quais modelos. */
 export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; models: ModelDraft[]; problems: Record<string, Key> }) {
   const t = useT();
+  const gateway = isGateway(agent.id);
   const probe = useSettings((state) => state.probes[agent.id]);
   const [min, max] = useSettings((state) => state.timeoutRange);
   const refreshing = useSettings((state) => state.refreshing);
@@ -52,9 +55,9 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         </label>
       </div>
 
-      <SettingsSection title={t("agent.section.connection")} description={t("agent.section.connection.description")}>
+      <SettingsSection title={t("agent.section.connection")} description={t(gateway ? "gateway.section.description" : "agent.section.connection.description")}>
         <div className="grid gap-5 sm:grid-cols-[1fr_220px]">
-          <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t("agent.command.locked")} error={problems.command && t(problems.command)}>
+          {gateway ? <div className="sm:col-span-2"><GatewayConnection agent={agent as AgentSettings<"openrouter">} problems={problems} /></div> : <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t("agent.command.locked")} error={problems.command && t(problems.command)}>
             <div className="flex gap-2">
               <Input
                 id={`${agent.id}-command`}
@@ -67,7 +70,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
               <Button variant="outline" disabled={probe === "checking" || !!problems.command} onClick={() => void checkAgent(agent.id)}>{t("agent.check")}</Button>
             </div>
             <AgentProbeLine probe={probe} />
-          </FormField>
+          </FormField>}
           <FormField label={t("agent.timeout")} htmlFor={`${agent.id}-timeout`} hint={t("agent.timeout.hint")}>
             <OptionSelect id={`${agent.id}-timeout`} value={String(agent.timeout)} onChange={(value) => updateAgent(agent.id, { timeout: Number(value) })}
               options={timeouts.map((value) => ({ value: String(value), label: duration(value) }))} />
@@ -80,6 +83,8 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         {agent.id === "codex" && <CodexOptionsForm agent={agent as AgentSettings<"codex">} />}
         {agent.id === "copilot" && <CopilotOptionsForm agent={agent as AgentSettings<"copilot">} />}
         {agent.id === "cursor" && <CursorOptionsForm agent={agent as AgentSettings<"cursor">} />}
+        {agent.id === "kilo" && <KiloOptionsForm agent={agent as AgentSettings<"kilo">} />}
+        {gateway && <p className="text-sm leading-snug text-muted-foreground">{t("gateway.textOnly")}</p>}
       </SettingsSection>
 
       <SettingsSection

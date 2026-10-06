@@ -1,0 +1,10 @@
+{
+  "id": "kiloCode",
+  "category": "agents",
+  "since": "0.75.0",
+  "plan": null,
+  "commands": [],
+  "title": "Kilo Code",
+  "summary": "Kilo Code is a command-line coding agent that Jev can pick like Claude Code, Codex, Copilot and Cursor. It edits the project in Development mode and only reads in Planning mode.",
+  "usage": "Install the kilo command (npm install -g @kilocode/cli) and sign in with kilo auth; then turn it on in Settings › Kilo Code and refresh its models. Auto-approve is always on in Development and off in Planning."
+}
