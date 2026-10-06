@@ -215,6 +215,53 @@ fn enable(kind:Shape,candidate:&Candidate,source:&str)->Pending {
     Pending{kind,prompt:candidate.prompt.clone(),options:if kind.wants_options(){candidate.options.clone()}else{vec![]},source:source.into()}
 }
 
+/// O agente que esbarrou numa permissão não relata e para: ele fecha a
+/// resposta com uma linha `JAYV-PERMISSION: <comando>` por comando negado
+/// (`BUILD_NOTE`), e o JayV pergunta no box se executa, nega ou sempre
+/// permite. A linha sai da resposta que fica no chat.
+pub const PERMISSION_MARK:&str="JAYV-PERMISSION:";
+pub const PERMISSION_SOURCE:&str="permission";
+pub const PERMISSION_RUN:&str="run";
+pub const PERMISSION_DENY:&str="deny";
+pub const PERMISSION_ALWAYS:&str="always";
+/// Mais que isso numa resposta é o agente listando tudo o que ia fazer.
+const MAX_PERMISSIONS:usize=5;
+
+/// A linha de permissão, se for uma: o comando, sem crase nem enfeite.
+fn permission_line(line:&str)->Option<String> {
+    let line=line.trim().trim_start_matches(['-','*','>',' ']).trim_matches('`').trim();
+    let rest=line.strip_prefix(PERMISSION_MARK)?;
+    let command=rest.trim().trim_matches('`').trim();
+    (!command.is_empty()).then(||command.to_string())
+}
+
+/// Os comandos que o agente pediu para rodar, na ordem, sem repetição.
+pub fn permission_requests(answer:&str)->Vec<String> {
+    let mut found:Vec<String>=Vec::new();
+    for command in last_message(answer).lines().filter_map(permission_line) {
+        if !found.contains(&command) { found.push(command); }
+    }
+    found.truncate(MAX_PERMISSIONS);
+    found
+}
+
+/// A resposta sem as linhas de permissão: elas viram a pergunta, não texto.
+pub fn without_permission_marks(answer:&str)->String {
+    if !answer.contains(PERMISSION_MARK) { return answer.to_string(); }
+    answer.lines().filter(|line|permission_line(line).is_none()).collect::<Vec<_>>().join("\n").trim_end().to_string()
+}
+
+/// A pergunta do box: os comandos no enunciado, um por linha, e as três saídas.
+pub fn permission_question(commands:&[String])->Pending {
+    Pending{kind:Shape::Single,prompt:commands.join("\n"),options:[PERMISSION_RUN,PERMISSION_DENY,PERMISSION_ALWAYS].map(String::from).to_vec(),source:PERMISSION_SOURCE.into()}
+}
+
+/// A linha que fica no chat e chega ao modelo quando o desenvolvedor aprova.
+pub fn permission_answer(commands:&[String],always:bool)->String {
+    let list=commands.iter().map(|command|format!("`{command}`")).collect::<Vec<_>>().join(", ");
+    i18n::notice(&[Text::new(if always {"grant.always"} else {"grant.once"}).with("commands",list)])
+}
+
 pub const YES:&str="yes";
 pub const NO:&str="no";
 
@@ -302,6 +349,16 @@ mod tests {
     #[test] fn bold_and_headings_are_stripped_from_the_prompt() {
         assert_eq!(extract("**Devo aplicar a migração agora?**").expect("pergunta").prompt,"Devo aplicar a migração agora?");
         assert_eq!(extract("## E o teste, escrevo antes?").expect("pergunta").prompt,"E o teste, escrevo antes?");
+    }
+
+    #[test] fn the_permission_lines_become_the_question_and_leave_the_answer() {
+        let answer="Rodei o lint.\n\nO `git add` foi negado: o `.git` é somente leitura.\n\nJAYV-PERMISSION: `git add -A`\n- JAYV-PERMISSION: git commit -m \"fix\"\nJAYV-PERMISSION: git add -A";
+        assert_eq!(permission_requests(answer),vec!["git add -A".to_string(),"git commit -m \"fix\"".to_string()]);
+        assert_eq!(without_permission_marks(answer),"Rodei o lint.\n\nO `git add` foi negado: o `.git` é somente leitura.");
+        let question=permission_question(&permission_requests(answer));
+        assert_eq!((question.kind,question.source.as_str(),question.options.len()),(Shape::Single,PERMISSION_SOURCE,3));
+        assert!(permission_requests("Pronto, nada foi negado.").is_empty());
+        assert_eq!(without_permission_marks("sem marca\n"),"sem marca\n");
     }
 
     /// Uma lista sem pergunta acima dela é um relatório, não uma escolha.

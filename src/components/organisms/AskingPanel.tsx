@@ -35,6 +35,10 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
   // o lê no seu idioma) e as saídas são enviar como está, enviar reescrito ou
   // completar o pedido.
   const gate = question.source === "gate";
+  // O agente esbarrou numa permissão: o enunciado são os comandos negados, um
+  // por linha, e as saídas são executar, negar ou sempre permitir.
+  const permission = question.source === "permission";
+  const blocked = permission ? question.prompt.split("\n").map((line) => line.trim()).filter(Boolean) : [];
   const prompt = gate ? shownText(question.prompt) : question.prompt;
   const items = form ? formItems(question) : [];
   const step = Math.min(answering.step, Math.max(0, items.length - 1));
@@ -59,7 +63,7 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
           className="-ms-1 flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-0.5 text-start text-caption text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <ChevronIcon className={cn("w-[15px] flex-none transition-transform duration-200 motion-reduce:transition-none", folded && "-rotate-90")} />
-          <span className="flex-none font-semibold tracking-wider text-ask uppercase">{t("ask.title")}</span>
+          <span className="flex-none font-semibold tracking-wider text-ask uppercase">{t(permission ? "ask.permission.title" : "ask.title")}</span>
           {form && items.length > 1 && <span className="flex-none font-mono tabular-nums">{t("ask.form.step", { current: step + 1, total: items.length })}</span>}
           {folded && <span className="min-w-0 truncate text-foreground">{headline}</span>}
         </button>
@@ -123,11 +127,21 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
             );
           })}
         </div>
+      ) : permission ? (
+        <div className="mb-2 grid gap-1.5">
+          <p className="leading-relaxed text-foreground">{t("ask.permission.prompt", { count: blocked.length })}</p>
+          <ul className="grid gap-1">
+            {blocked.map((command) => (
+              <li key={command}><code className="block overflow-x-auto rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-xs whitespace-pre">{command}</code></li>
+            ))}
+          </ul>
+          <small className="text-caption text-muted-foreground">{t("ask.permission.hint")}</small>
+        </div>
       ) : (
         <p className="mb-2 leading-relaxed whitespace-pre-wrap text-foreground">{prompt}</p>
       )}
       {gate && answering.writing && <small className="mb-2 block text-caption text-muted-foreground">{t("gate.confirm.completeHint")}</small>}
-      {!form && !gate && question.kind !== "noul" && (
+      {!form && !gate && !permission && question.kind !== "noul" && (
         <div className="mb-2 grid gap-1.5">
           {multiple ? question.options.map((option, index) => (
             <Label key={option} htmlFor={`pick-${index}`} className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border px-3 py-2 text-sm font-normal hover:bg-secondary">
@@ -151,6 +165,12 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
       <div className="mt-3 flex flex-wrap gap-2">
         {answering.writing ? (
           <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}>{t("ask.back")}</Button>
+        ) : permission ? (
+          <>
+            <Button type="button" disabled={busy} className={act} onClick={() => run(() => answerQuestion(question, chat.id, ["run"]))}>{t("ask.permission.run")}</Button>
+            <Button type="button" disabled={busy} variant="outline" className={act} onClick={() => run(() => answerQuestion(question, chat.id, ["always"]))}>{t("ask.permission.always")}</Button>
+            <Button type="button" disabled={busy} variant="outline" className={act} onClick={() => run(() => answerQuestion(question, chat.id, ["deny"]))}>{t("ask.permission.deny")}</Button>
+          </>
         ) : gate ? (
           <>
             {question.options.map((option, index) => (
@@ -180,7 +200,7 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
             <Button type="button" variant="outline" className={act} onClick={() => setWriting(question, true)}>{t("ask.reply")}</Button>
           </>
         )}
-        <Button type="button" disabled={busy} variant="ghost" className={`${act} ms-auto text-muted-foreground`} onClick={() => run(() => dismissQuestion(question, chat.id))}>{t("ask.ignore")}</Button>
+        {!permission && <Button type="button" disabled={busy} variant="ghost" className={`${act} ms-auto text-muted-foreground`} onClick={() => run(() => dismissQuestion(question, chat.id))}>{t("ask.ignore")}</Button>}
       </div>
       </>)}
     </div>

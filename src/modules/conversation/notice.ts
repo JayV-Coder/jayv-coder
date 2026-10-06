@@ -39,6 +39,7 @@ const SOURCES: Record<string, Key> = {
   heuristic: "source.local",
   heuristic_after_jev_error: "source.fallback",
   gate: "source.gate",
+  permission: "source.permission",
   // A grafia dos registros gravados antes da troca para identificadores.
   "heurística local": "source.local",
 };

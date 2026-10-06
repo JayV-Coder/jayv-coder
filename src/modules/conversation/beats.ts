@@ -48,6 +48,7 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     case "done": return t("beat.done", { latency: d.latencyMs ?? 0, input: d.inputTokens ?? 0, output: d.outputTokens ?? 0 });
     case "failed": return t("beat.failed", { error: shownText(String(d.error ?? "")) });
     case "dismissed": return t("beat.dismissed", { prompt: d.prompt ?? "" });
+    case "permission_denied": return t("beat.permissionDenied", { commands: Array.isArray(d.commands) ? d.commands.join(", ") : "" });
     default: return null;
   }
 }

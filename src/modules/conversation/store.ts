@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { bus, commands, onCore, type Activity, type FormItem, type Question, type TurnView } from "@/modules/core";
+import { bus, commands, onCore, NO_GRANTS, type Activity, type FormItem, type Grants, type Question, type TurnView } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 
 /** O que está acontecendo agora, por pedido em aberto: o texto que vai
@@ -32,11 +32,26 @@ interface ConversationState {
   answering: Answering;
   /** O texto ainda não enviado, por chat. */
   drafts: Record<string, string>;
+  /** As permissões escolhidas para o próximo pedido, por chat. Valem para um
+   * envio só e somem com ele. */
+  grants: Record<string, Grants>;
 }
 
 const IDLE: Answering = { turnId: null, writing: false, picked: [], form: [], step: 0, folded: false };
 
-export const useConversation = create<ConversationState>(() => ({ live: {}, answering: IDLE, drafts: {} }));
+export const useConversation = create<ConversationState>(() => ({ live: {}, answering: IDLE, drafts: {}, grants: {} }));
+
+export function grantsOf(chatId: string | null | undefined, grants: Record<string, Grants>): Grants {
+  return (chatId && grants[chatId]) || NO_GRANTS;
+}
+
+export function hasGrants(grants: Grants): boolean {
+  return grants.shell || grants.git || grants.network || grants.commands.length > 0;
+}
+
+export function setGrants(chatId: string, grants: Grants) {
+  useConversation.setState((state) => ({ grants: { ...state.grants, [chatId]: grants } }));
+}
 
 /** O que se sabe deste pedido, juntando o que o banco gravou com o que chegou
  * pelo barramento. O banco escreve o rascunho com folga, então o que está na
@@ -115,12 +130,18 @@ export function pick(question: Question, option: string, checked: boolean) {
  * Se a gravação falhar, o texto volta para a caixa: perder o que foi digitado é
  * pior do que qualquer erro na tela. */
 export async function sendPrompt(value: string, chatId: string, turnId: string | null = null) {
+  // As permissões do seletor vão com este pedido e saem da caixa; o reenvio
+  // de um turno mantém as que ele já tinha.
+  const grants = turnId ? NO_GRANTS : grantsOf(chatId, useConversation.getState().grants);
+  const chosen = hasGrants(grants);
+  if (chosen) setGrants(chatId, NO_GRANTS);
   try {
-    await commands.enqueuePrompt(value, chatId, turnId);
+    await commands.enqueuePrompt(value, chatId, turnId, chosen ? grants : null);
     bus.emit("prompt:sent", { chatId });
   } catch (error) {
     reportError(error);
     if (!turnId && !useConversation.getState().drafts[chatId]?.trim()) setDraft(chatId, value);
+    if (chosen) setGrants(chatId, grants);
   }
 }
 

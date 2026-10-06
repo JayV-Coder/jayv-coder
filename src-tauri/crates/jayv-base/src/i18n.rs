@@ -97,6 +97,8 @@ fn english(text:&Text)->String {
         "ask.answer"=>format!("Answer to the question «{}»: {}",param("question"),param("answer")),
         "ask.yes"=>"YES".into(),
         "ask.no"=>"NO".into(),
+        "grant.once"=>format!("The developer approved, for this request only: {}. Run it now and carry on with the task.",param("commands")),
+        "grant.always"=>format!("The developer approved, for this request and from now on in this project: {}. Run it now and carry on with the task.",param("commands")),
         "gate.blocked"=>format!("The JayV entry gate blocked this request with {} out of 100 (the minimum for a {} is {}).",param("score"),param("scope"),param("demand")),
         "gate.missing"=>"What is missing:".into(),
         "gate.confirm"=>format!("The JayV entry gate held this request before calling any agent: {} out of 100 (a {} asks for {}).",param("score"),param("scope"),param("demand")),

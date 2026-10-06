@@ -227,7 +227,16 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
     // A política de LLM do projeto e o plano vêm antes da pasta: eles podem
     // mudar a privacidade, e o índice da pasta é lido com o firewall já certo.
-    let plan=apply_project_policy(&mut state,workspace,chat_id).await;
+    // O que o desenvolvedor liberou para este pedido (no seletor, ou ao
+    // aprovar o comando que o agente pediu) e os comandos sempre permitidos no
+    // projeto. Valem só para este pedido: o próximo lê de novo.
+    let (grants,granted_here)={
+        let workspace=workspace.lock().await;
+        let mine=workspace.turn_grants(&turn.id).unwrap_or_default();
+        let always=crate::llm::Grants{commands:workspace.allowed_commands(chat_id).unwrap_or_default(),..Default::default()};
+        (mine.merged(&always),!mine.is_empty())
+    };
+    let plan=apply_project_policy(&mut state,workspace,chat_id,&grants).await;
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
     // computador pela sincronização, vale já para o próximo.
     state.orchestrator.expertise=workspace.lock().await.expertise().unwrap_or_default();
@@ -404,6 +413,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // O modo do chat é lido agora, na vez do pedido: trocar de modo com
     // pedidos na fila vale para eles também.
     state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
+    // Permissão liberada para este pedido é pedido de executar: no
+    // automático ele vai ao desenvolvimento. O planejamento fixado continua.
+    if granted_here&&state.orchestrator.pending_work_mode.as_deref().is_none_or(|mode|mode==crate::orchestrator::MODE_AUTO) {
+        state.orchestrator.pending_work_mode=Some(crate::orchestrator::MODE_BUILD.into());
+    }
     // A sessão do agente sobrevive ao reinício do app: a guardada volta para a
     // memória antes do pedido, e a de depois dele é guardada de novo. O banco
     // é quem manda: com pedidos em paralelo, o chat pode ter sido atendido da
@@ -430,6 +444,10 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         if let Err(error)=workspace.lock().await.set_work_mode(chat_id,crate::orchestrator::MODE_BUILD) {eprintln!("modo: não consegui gravar a troca do Jev ({error:#})");}
     }
     let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||i18n::notice(&[Text::new("turn.noAnswer")]));
+    // Os comandos negados viram a pergunta do box; as linhas que os pediam
+    // saem da resposta que fica no chat.
+    let permissions=if result.result.is_some() { asking::permission_requests(&assistant) } else { vec![] };
+    let assistant=asking::without_permission_marks(&assistant);
     if result.result.is_none(){state.orchestrator.memory.add_message(chat_id,"assistant",i18n::for_model(&assistant));}
     // Só a resposta do modelo passa pelo portão de saída; um aviso de falha
     // não pede para rodar nem mexer em nada.
@@ -455,7 +473,9 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // A ida ao Jev para achar a pergunta não segura o próximo da fila.
     if result.result.is_some() {
         let (app,workspace,turn)=(app.clone(),workspace.clone(),turn.clone());
-        tauri::async_runtime::spawn(async move {enable_question(&app,&workspace,&turn,&assistant).await;});
+        tauri::async_runtime::spawn(async move {
+            if permissions.is_empty() { enable_question(&app,&workspace,&turn,&assistant).await; } else { ask_permission(&app,&workspace,&turn,&permissions).await; }
+        });
     }
     if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
 }
@@ -476,6 +496,18 @@ async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,an
     match recorded {
         Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});}
         Err(error)=>eprintln!("pergunta: não consegui habilitar a interação do turno `{}` ({error})",turn.id),
+    }
+}
+
+/// O agente esbarrou numa permissão: a pergunta não passa pelo Jev — a linha
+/// de permissão já diz o que é —, e o box oferece executar, negar ou sempre
+/// permitir o que foi negado.
+async fn ask_permission(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,commands:&[String]) {
+    let question=asking::permission_question(commands);
+    let recorded=workspace.lock().await.ask_question(&turn.id,question.kind.as_str(),&question.prompt,&question.options,&question.source);
+    match recorded {
+        Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});}
+        Err(error)=>eprintln!("permissão: não consegui perguntar no turno `{}` ({error})",turn.id),
     }
 }
 
@@ -532,7 +564,7 @@ async fn focus_on_chat_project(state:&mut DesktopState,workspace:&SharedWorkspac
 /// já para este. A ordem é a que só aperta: o plano tira o que não tem, a
 /// política aperta por cima, e o que o plano trava liga por último — nada
 /// abaixo dele afrouxa o núcleo. Devolve o plano, que o atendimento consulta.
-async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str)->features::Entitlements {
+async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace,chat_id:&str,grants:&crate::llm::Grants)->features::Entitlements {
     let defaults=state.orchestrator.core_defaults();
     let (llm,core,policy,plan)={
         let workspace=workspace.lock().await;
@@ -545,6 +577,9 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     crate::llm::refresh_logins(&llm);
     crate::llm::warm_up(&llm);
     let policy=policy.unwrap_or_else(|error|{eprintln!("política de LLM: {error:#}"); None});
+    // O liberado para o pedido entra antes da política: ela ainda aperta por
+    // cima, e o plano por último.
+    let llm=llm.with_grants(grants);
     let (llm,core)=match &policy {
         Some(project)=>(project.policy.restrict_llm(&llm),project.policy.restrict_core(&core)),
         None=>(llm,core),
