@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import type { Chat } from "@/modules/core";
 import { beatLines, liveOf, pendingWord, useConversation } from "@/modules/conversation";
@@ -22,6 +22,28 @@ function remembered(): boolean {
   }
 }
 
+const WIDTH_KEY = "jayv.progress.width";
+const MIN_WIDTH = 220;
+const MAX_WIDTH = 640;
+const KEY_STEP = 16;
+
+/** Mantém a largura entre o mínimo do painel e o que ainda deixa lugar para a conversa. */
+function clampWidth(width: number): number {
+  const room = typeof window === "undefined" ? MAX_WIDTH : Math.max(MIN_WIDTH, window.innerWidth - 480);
+  return Math.round(Math.min(Math.max(width, MIN_WIDTH), Math.min(MAX_WIDTH, room)));
+}
+
+/** A largura que a pessoa deixou, ou a de antes do ajuste (18 rem; 20 rem em janela larga). */
+function rememberedWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(WIDTH_KEY));
+    if (saved > 0) return clampWidth(saved);
+    return clampWidth(window.matchMedia("(min-width: 1280px)").matches ? 320 : 288);
+  } catch {
+    return 288;
+  }
+}
+
 /** O painel à esquerda do chat, junto ao menu lateral: o andamento do JayV,
  * com cada etapa do Jev e da portaria numa linha só dela, e, embaixo, o que
  * mais acompanha o chat (os repositórios da organização, em `children`).
@@ -31,6 +53,8 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
   const t = useT();
   const steps = useRef<HTMLOListElement>(null);
   const [open, setOpen] = useState(remembered);
+  const [width, setWidth] = useState(rememberedWidth);
+  const dragging = useRef<{ x: number; width: number } | null>(null);
   const turn = openTurns(chat)[0];
   const queued = openTurns(chat).length - 1;
   const live = useConversation((state) => (turn ? state.live[turn.id] : undefined));
@@ -52,6 +76,39 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
     });
   };
 
+  // A janela encolhendo não deixa o painel comer a conversa.
+  useEffect(() => {
+    const fit = () => setWidth((value) => clampWidth(value));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
+
+  const save = (value: number) => {
+    try { localStorage.setItem(WIDTH_KEY, String(value)); } catch { /* fica só nesta sessão */ }
+  };
+  const direction = () => (document.documentElement.dir === "rtl" ? -1 : 1);
+  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
+    dragging.current = { x: event.clientX, width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const drag = (event: PointerEvent<HTMLDivElement>) => {
+    const start = dragging.current;
+    if (start) setWidth(clampWidth(start.width + (event.clientX - start.x) * direction()));
+  };
+  const endDrag = () => {
+    if (!dragging.current) return;
+    dragging.current = null;
+    setWidth((value) => { save(value); return value; });
+  };
+  const nudge = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === "ArrowRight" ? KEY_STEP * direction() : event.key === "ArrowLeft" ? -KEY_STEP * direction() : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = clampWidth(width + step);
+    setWidth(next);
+    save(next);
+  };
+
   if (!open) {
     return (
       <aside aria-label={t("progress.title")} className="flex min-h-0 w-10 flex-none flex-col items-center gap-3 border-e border-border bg-card py-2 font-mono">
@@ -64,7 +121,7 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
   }
 
   return (
-    <aside aria-label={t("progress.title")} className="flex min-h-0 w-72 flex-none flex-col border-e border-border bg-card font-mono text-small xl:w-80">
+    <aside aria-label={t("progress.title")} style={{ width }} className="relative flex min-h-0 flex-none flex-col border-e border-border bg-card font-mono text-small">
       <header className="flex flex-none items-center gap-2 border-b border-border px-3 py-1.5">
         <span aria-hidden="true" className="text-primary">❯</span>
         <span className="text-foreground">{t("progress.title")}</span>
@@ -103,6 +160,23 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
         )}
       </div>
       {children}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("progress.resize")}
+        aria-valuemin={MIN_WIDTH}
+        aria-valuemax={MAX_WIDTH}
+        aria-valuenow={width}
+        tabIndex={0}
+        title={t("progress.resize")}
+        onPointerDown={startDrag}
+        onPointerMove={drag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onKeyDown={nudge}
+        onDoubleClick={() => { const initial = clampWidth(320); setWidth(initial); try { localStorage.removeItem(WIDTH_KEY); } catch { /* ignora */ } }}
+        className="absolute inset-y-0 -end-1 z-10 w-2 cursor-col-resize touch-none select-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none active:bg-primary/50"
+      />
     </aside>
   );
 }

@@ -120,6 +120,7 @@ export const en = {
   "pending.stopping": "Stopping…",
   "progress.title": "Progress",
   "progress.idle": "Nothing running. The steps of the next request appear here, one per line.",
+  "progress.resize": "Drag to resize the progress panel (arrow keys too, double-click to reset)",
   "progress.collapse": "Hide the progress panel",
   "progress.expand": "Show the progress panel",
 
@@ -1432,6 +1433,10 @@ export const en = {
   "whatsNew.item.accountOnSite.detail": "Personal data, password, authenticator app and linked accounts moved to the dashboard on the JayV site, for every account. The Profile page keeps your level, activity and agent quotas.",
   "whatsNew.item.orgAdminOnSite.title": "Organizations managed on the site",
   "whatsNew.item.orgAdminOnSite.detail": "Creating organizations, inviting members and the LLM policy moved to the dashboard on the JayV site. The app keeps members, repositories, projects and the policy in force.",
+  "whatsNew.item.progressResize.title": "Resize the progress panel",
+  "whatsNew.item.progressResize.detail": "Drag the right edge of the progress panel beside the chat to make it wider or narrower. The arrow keys work on the edge too, and a double-click brings back the original width. JayV remembers the width you chose.",
+  "whatsNew.item.planApprovedAuto.title": "Approving a plan in Auto mode now starts the change",
+  "whatsNew.item.planApprovedAuto.detail": "In Auto mode, when you approved a plan JayV had just written (\"approved, go ahead\", \"pode implementar\"), the request could still run in planning mode and the agent answered that it was only using the read-only plan context. Now an approval of a plan from the same chat runs in Development, as long as the request passes the gate and is not destructive.",
   "whatsNew.item.planSessionInBuild.title": "The agent no longer stays read-only after planning",
   "whatsNew.item.planSessionInBuild.detail": "When a chat went from Planning to Development, the agent picked up the session it had opened in Planning, kept its read-only permission and answered that the session was still read-only. A request in Development now opens its own agent session, and the next requests in the same mode pick it up as before.",
   "whatsNew.item.featureStatsPlans.title": "Statistics and Plans in their own folders",
