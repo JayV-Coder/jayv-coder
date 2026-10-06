@@ -39,6 +39,8 @@ export const TOURS: Tour[] = [
       { feature: "progressPanel" },
       { feature: "parallelRequests" },
       { feature: "chatSearch" },
+      { feature: "conversationFind" },
+      { feature: "consumptionGuard" },
       { feature: "answerRecall" },
       { feature: "liveFiles", target: "header-live" },
       { feature: "projectNotes" },

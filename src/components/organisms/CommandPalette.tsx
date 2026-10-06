@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { openChatFind } from "@/modules/conversation";
 import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
 import { useLocale, useLocales, useT } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
@@ -38,6 +39,7 @@ function runShortcut(shortcut: Shortcut, projectId: string | null, chatId: strin
     case "settings": navigate("settings"); break;
     case "newChat": if (projectId) void createChat(projectId); break;
     case "gate": if (projectId) navigate("gate"); break;
+    case "find": if (chatId && useNavigation.getState().view === "chat") openChatFind(); break;
     case "workMode": {
       const chat = findChat(useWorkspace.getState().data, chatId);
       if (chat) void setWorkMode(chat.id, nextWorkMode(chat.workMode ?? "auto"));

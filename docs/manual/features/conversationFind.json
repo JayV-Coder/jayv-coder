@@ -1,0 +1,12 @@
+{
+  "id": "conversationFind",
+  "category": "chat",
+  "since": "0.80.0",
+  "plan": null,
+  "commands": [
+    "find"
+  ],
+  "title": "Find in the conversation",
+  "summary": "Search the words of the open conversation, with every match highlighted and a jump to the next and the previous one.",
+  "usage": "Press Ctrl+F (⌘F on Mac) in a chat, type, and use Enter and Shift+Enter (or the arrows) to move between matches; Esc closes. The same entry is in the command palette. Case and accents do not matter. In the installed app the other shortcuts of the web engine (reload, zoom, print, save page, native find, back and forward, view source, inspector) are turned off, and so is the native right-click menu outside text fields; copy, cut, paste, select all and undo keep working."
+}

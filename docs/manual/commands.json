@@ -73,6 +73,12 @@
       "detail": "Switches the work mode of the open chat."
     },
     {
+      "id": "find",
+      "kind": "shortcut",
+      "usage": "Mod+F",
+      "detail": "Searches the words of the open conversation."
+    },
+    {
       "id": "cliStatus",
       "kind": "cli",
       "usage": "jayv status",

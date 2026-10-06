@@ -283,6 +283,9 @@
   h4 { @apply text-h4 font-semibold; }
   code, kbd, samp, pre { @apply font-mono; }
   ::selection { @apply bg-accent text-accent-foreground; }
+  /* A busca na conversa (Ctrl+F): as ocorrências e a atual, sem mexer no DOM. */
+  ::highlight(chat-find) { background-color: color-mix(in srgb, var(--warning) 35%, transparent); color: inherit; }
+  ::highlight(chat-find-current) { background-color: var(--warning); color: var(--background); }
   button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
   /* Ícone Lucide sem tamanho próprio segue o traço do design system. */
   .lucide { stroke-width: 1.75; }

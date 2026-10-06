@@ -122,7 +122,7 @@ fn send(entry:Entry) {
 
 pub fn spend(spend:Spend) { send(Entry::Spend(current_scope(),spend)); }
 pub fn mark(mark:JevMark) { send(Entry::Jev(current_scope(),mark)); }
-pub fn quota(quota:Quota) { send(Entry::Quota(quota)); }
+pub fn quota(quota:Quota) { crate::guard::note_quota(&quota); send(Entry::Quota(quota)); }
 
 /// Se o aplicativo instalou a pia. Sem ela ninguém grava, e não vale abrir
 /// processo nenhum para ler limite.
@@ -162,7 +162,17 @@ impl Meter {
         let elapsed=self.elapsed();
         match self.agent.as_str() {
             "claude"=>{
-                if let Some(found)=claude::spends(event,&self.model,elapsed) { self.spends.extend(found); }
+                if let Some(found)=claude::spends(event,&self.model,elapsed) {
+                    // Um `result` repetido (o agente acorda de novo quando um
+                    // subagente termina) traz o gasto da execução inteira outra
+                    // vez: vale o último de cada modelo, não a soma.
+                    for spend in found {
+                        match self.spends.iter_mut().find(|kept|kept.model==spend.model) {
+                            Some(kept)=>{ let duration=kept.duration_ms.max(spend.duration_ms); *kept=Spend{duration_ms:duration,..spend}; }
+                            None=>self.spends.push(spend),
+                        }
+                    }
+                }
                 if claude::is_rate_limit(event) { self.rate_limited=true; }
             }
             "codex"=>{
@@ -201,7 +211,7 @@ impl Meter {
         for found in self.quotas.drain(..) { self::quota(found); }
         // O Claude avisou que o limite andou; o Codex acabou de gravar o dele
         // na sessão. Os dois valem uma releitura.
-        if self.rate_limited||self.agent=="codex" { quota::refresh(&self.agent,&self.command); }
+        if self.rate_limited||matches!(self.agent.as_str(),"codex"|"claude") { quota::refresh(&self.agent,&self.command); }
         totals
     }
 
@@ -270,6 +280,19 @@ mod tests {
         }).await;
         let [Entry::Spend(_,spend)]=entries.as_slice() else { panic!("{entries:?}") };
         assert_eq!(spend.precision,Precision::Reported);
+    }
+
+    /// O `result` que o Claude repete (o agente acorda de novo quando um
+    /// subagente termina) traz o gasto da execução inteira: contar de novo
+    /// quadruplicava a conta.
+    #[tokio::test] async fn a_repeated_claude_result_does_not_multiply_the_spend() {
+        let entries=collect(async {
+            let mut meter=Meter::new("claude","alias","claude");
+            let result=r#"{"type":"result","is_error":false,"duration_ms":10,"modelUsage":{"model-big":{"inputTokens":1,"outputTokens":70,"cacheReadInputTokens":3000,"cacheCreationInputTokens":300,"costUSD":5.7}}}"#;
+            for _ in 0..4 { meter.read(result); }
+            assert_eq!(meter.settle("p","r",true,None),(3301,70));
+        }).await;
+        assert_eq!(entries.iter().filter(|entry|matches!(entry,Entry::Spend(..))).count(),1);
     }
 
     #[tokio::test] async fn a_failed_run_still_counts() {

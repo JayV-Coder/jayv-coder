@@ -615,6 +615,28 @@ pub fn previous_answer(connection:&Connection,turn_id:&str)->Result<Option<(Entr
     Ok(Some((EntryVerdict::parse(&verdict)?,parse_time(&at)?)))
 }
 
+/// O plano que este chat espera para ser executado: a resposta do turno
+/// anterior que chegou a um agente, se ele rodou em planejamento e fechou
+/// respondido. Turnos que a portaria barrou ou confirmou não chegam a agente
+/// nenhum e não contam; um turno que construiu depois do plano o encerra. É o
+/// que faz "pode seguir" valer depois de reiniciar o app, quando o plano que
+/// o orquestrador guardava em memória já se perdeu.
+pub fn pending_plan(connection:&Connection,turn_id:&str)->Result<Option<String>> {
+    let found:Option<(String,String,Option<String>)>=connection.query_row(
+        "SELECT previous.id,previous.status,(SELECT v.detail FROM turn_events v WHERE v.turn_id=previous.id AND v.kind='route' ORDER BY v.seq DESC LIMIT 1)
+         FROM turns current JOIN turns previous ON previous.chat_id=current.chat_id AND previous.ordinal<current.ordinal
+         WHERE current.id=?1 AND EXISTS(SELECT 1 FROM turn_events r WHERE r.turn_id=previous.id AND r.kind='route')
+         ORDER BY previous.ordinal DESC LIMIT 1",
+        [turn_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+    ).optional()?;
+    let Some((previous,status,Some(route)))=found else { return Ok(None) };
+    let mode=serde_json::from_str::<serde_json::Value>(&route).ok().and_then(|detail|detail.get("mode").and_then(serde_json::Value::as_str).map(str::to_string));
+    if status!=TurnStatus::Answered.as_str()||mode.as_deref()!=Some("plan") { return Ok(None); }
+    let mut statement=connection.prepare("SELECT content FROM messages WHERE turn_id=?1 AND role='assistant' ORDER BY created_at,id")?;
+    let said=statement.query_map([&previous],|row|row.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join("\n");
+    Ok(Some(said).filter(|text|!text.trim().is_empty()))
+}
+
 /// Se `turn_id` responde à confirmação que a portaria fez no lugar do agente.
 pub fn answers_gate(connection:&Connection,turn_id:&str)->Result<bool> {
     Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM questions WHERE answered_by=?1 AND source=?2)",params![turn_id,crate::gatekeeper::GATE_SOURCE],|row|row.get(0))?)

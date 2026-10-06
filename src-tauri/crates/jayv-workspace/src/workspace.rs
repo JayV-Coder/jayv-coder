@@ -691,6 +691,8 @@ impl WorkspaceStore {
 
     pub fn question_verdict(&self, turn_id:&str) -> Result<Option<crate::gatekeeper::EntryVerdict>> {turns::question_verdict(&self.connection,turn_id)}
 
+    /// O plano à espera de execução neste chat (`turns::pending_plan`).
+    pub fn pending_plan(&self, turn_id:&str) -> Result<Option<String>> {turns::pending_plan(&self.connection,turn_id)}
     pub fn previous_answer(&self, turn_id:&str) -> Result<Option<(crate::gatekeeper::EntryVerdict,chrono::DateTime<Utc>)>> {turns::previous_answer(&self.connection,turn_id)}
 
     pub fn answers_gate(&self, turn_id:&str) -> Result<bool> {turns::answers_gate(&self.connection,turn_id)}
@@ -1426,6 +1428,33 @@ mod tests {
         assert_eq!(store.question_verdict(&first.id).expect("veredito"),Some(crate::gatekeeper::EntryVerdict::Pass));
         assert_eq!(store.question_verdict(&second.id).expect("veredito"),None,"a primeira resposta ainda não tem leitura gravada");
         assert_eq!(store.question_verdict(&request.id).expect("veredito"),None,"o pedido de origem não responde a nada");
+    }
+
+    /// O plano que o chat espera sai do banco: a resposta do último turno que
+    /// chegou a um agente em planejamento. Barrado ou confirmado não conta, e
+    /// um turno que construiu depois do plano o encerra.
+    #[test]
+    fn the_plan_waiting_in_the_chat_is_read_from_the_database() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let planned=store.open_turn(&chat.id).expect("turno do plano");
+        store.record_beat(&planned.id,"route",&serde_json::json!({"kind":"route","provider":"claude","model":"sonnet","reason":"x","mode":"plan","agent":null})).expect("route");
+        store.append_exchange(&chat.id,&planned.id,"faça X","1. criar\n2. testar").expect("exchange");
+        store.set_turn_status(&planned.id,TurnStatus::Answered).expect("respondido");
+        let blocked=store.open_turn(&chat.id).expect("turno barrado");
+        store.append_answer(&chat.id,&blocked.id,"barrado").expect("resposta");
+        store.set_turn_status(&blocked.id,TurnStatus::Blocked).expect("barrado");
+        let follow=store.open_turn(&chat.id).expect("continuação");
+        assert!(store.pending_plan(&follow.id).expect("leitura").is_some_and(|plan|plan.contains("2. testar")),"o turno barrado não esconde o plano");
+        assert!(store.pending_plan(&planned.id).expect("leitura").is_none(),"o primeiro turno não tem plano antes dele");
+
+        store.record_beat(&follow.id,"route",&serde_json::json!({"kind":"route","provider":"claude","model":"sonnet","reason":"x","mode":"build","agent":null})).expect("route");
+        store.append_exchange(&chat.id,&follow.id,"siga","feito").expect("exchange");
+        store.set_turn_status(&follow.id,TurnStatus::Answered).expect("respondido");
+        let after=store.open_turn(&chat.id).expect("depois");
+        assert!(store.pending_plan(&after.id).expect("leitura").is_none(),"o build encerrou o plano");
     }
 
     /// "Pode implementar" logo depois de uma resposta é continuação: o pedido

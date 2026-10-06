@@ -398,6 +398,7 @@ impl Provider for HttpProvider {
     fn name(&self)->&str { &self.name }
     fn is_local(&self)->bool { self.config.local.unwrap_or_else(||self.config.base_url.as_deref().is_some_and(is_loopback_url)) }
     async fn chat(&self,messages:&[ChatMessage],model:&str)->Result<ProviderResponse> {
+        crate::guard::enter()?;
         let started=Instant::now();
         let (url,payload)=self.compose(messages,model,false);
         let harvest=self.reap(&self.send(&url,&payload).await?);
@@ -405,6 +406,7 @@ impl Provider for HttpProvider {
     }
 
     async fn chat_stream(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        crate::guard::enter()?;
         let started=Instant::now();
         let (url,payload)=self.compose(messages,model,true);
         // Parado no meio, a conexão cai junto com a leitura: o servidor para de
@@ -755,6 +757,11 @@ impl CliProvider {
         let mut meter=crate::usage::Meter::new(&self.name,model,self.config.command.as_deref().unwrap_or(&self.name));
         // Parado antes de abrir: nem abre.
         if let Some(reason)=pulse.stop().reason() { return Err(reason.text().into()); }
+        // A trava de consumo: aberturas demais no pedido ou o plano do agente
+        // no limite, e o agente nem abre.
+        crate::guard::enter()?;
+        crate::guard::check_quota(&self.name,self.config.command.as_deref().unwrap_or(&self.name)).await?;
+        let mut watch=crate::guard::Watch::default();
         let mut child=self.open(model,effort,resume,once,&prompt,&usage_file).await?;
         // Daqui em diante, qualquer saída que não seja o agente terminar por
         // conta própria derruba a árvore dele — inclusive o pedido largado.
@@ -794,6 +801,7 @@ impl CliProvider {
                                 let event=parse(&line);
                                 if let Some(event)=&event {
                                     meter.read_event(event);
+                                    if let Some(reason)=watch.read(event) { pulse.stop().stop(reason); }
                                     if let Some(id)=session_in(event) { session=Some(id); }
                                 }
                                 if let Some(reason)=event.as_ref().and_then(refusal_in) { refused=Some(reason); }
@@ -813,6 +821,7 @@ impl CliProvider {
                                             response.push_str(text);
                                             pulse.beat(beat);
                                         }
+                                        Beat::Agent{..}=>{ if let Some(reason)=watch.step() { pulse.stop().stop(reason); } pulse.beat(beat) }
                                         _=>pulse.beat(beat),
                                     }
                                 }

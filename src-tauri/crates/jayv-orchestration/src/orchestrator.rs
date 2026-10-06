@@ -4,7 +4,7 @@ use crate::{
     firewall::ContextFirewall, graph::ExecutionGraph, i18n::{self, Text}, jev, memory::{AgentSession, MemoryManager},
     model::{ChatMessage, Context, ContextSnippet, Decision, IntentAnalysis, ModelSelection, PerformanceRecord, ProcessResult, ProviderResponse, RoutingSignals},
     progress::{Beat, ModeSwitch, Pulse},
-    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{configuration_selection, keep_session_model, rank_models, required_capabilities, PerformanceTracker, Tiebreak},
+    providers::{build_providers, Provider, Workdir}, rag::RepositoryRag, router::{cap_plan_tier, configuration_selection, keep_session_model, rank_models, required_capabilities, PerformanceTracker, Tiebreak},
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -106,6 +106,9 @@ pub struct Orchestrator {
     /// Só o liberado de vez pode ir em modo build. Sem portaria — a linha de
     /// comando, os testes — vale como liberado. `process` o consome uma vez.
     pub pending_gate_passed: Option<bool>,
+    /// O plano que o chat espera, lido do banco quando a memória do app não o
+    /// tem (o app foi reaberto) — o pedido seguinte o executa.
+    pub pending_plan: Option<String>,
     /// O nível da conta: quanto o Jev confia no pedido e até onde ele constrói.
     pub expertise: crate::expertise::Expertise,
     /// A organização cuja política de LLM vale para o pedido em atendimento
@@ -176,7 +179,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -336,7 +339,8 @@ impl Orchestrator {
         let stuck=held(&self.shared.stuck_in_plan).contains(session_id);
         // Há um plano deste chat esperando: quem o aprova quer o build, mesmo
         // que o pedido não pareça código ou passe do teto do nível.
-        let approved=held(&self.shared.plans).contains_key(session_id)&&(wants_build||(gate_passed&&!destructive(&signals)&&approves_plan(&normalized)));
+        if let Some(plan)=self.pending_plan.take() { held(&self.shared.plans).entry(session_id.to_string()).or_insert(plan); }
+        let approved=held(&self.shared.plans).contains_key(session_id)&&(wants_build||(gate_passed&&!destructive(&signals)&&goes_ahead(&normalized)));
         let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,stuck,approved);
         if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { held(&self.shared.stuck_in_plan).insert(session_id.to_string()); } else { held(&self.shared.stuck_in_plan).remove(session_id); }
         self.mode_switch=switched.clone();
@@ -353,6 +357,8 @@ impl Orchestrator {
         let sticky=sticky.as_ref().map(|(provider,model)|(provider.as_str(),model.as_str()));
         let ranked=rank_models(&self.config,&intent.intent,&complexity,&context,&held(&self.shared.performance),&Tiebreak{sticky,seed:session_id});
         // O modelo da sessão vem antes do porte: trocar abre sessão nova.
+        // O planejamento não abre o porte grande sozinho (trava de consumo).
+        let ranked=if mode==MODE_PLAN { cap_plan_tier(ranked,&self.config) } else { ranked };
         let ranked=if self.config.jev.keep_session_model { keep_session_model(ranked,&self.config,sticky,&intent.intent,&complexity) } else { ranked };
         let mut selection=ranked.first().cloned().unwrap_or_else(||configuration_selection(&self.config,&complexity,&context));
         selection.mode=mode.into();
@@ -1076,7 +1082,7 @@ pub fn could_not_start(error:&anyhow::Error)->bool {
     // próximo agente encontraria o projeto pela metade.
     let from_output=|text:&Text|matches!(text.params.get("origin"),Some(crate::i18n::Param::Plain(origin)) if origin==crate::providers::FAILURE_OUTPUT);
     error.chain().filter_map(|cause|cause.downcast_ref::<Text>()).any(|text|match text.key.as_str() {
-        "provider.notInstalled"|"provider.start"=>true,
+        "provider.notInstalled"|"provider.start"|"guard.quota"=>true,
         "provider.failed"=>!from_output(text)&&matches!(text.params.get("reason"),Some(crate::i18n::Param::Plain(reason)) if refusal.is_match(reason)),
         _=>false,
     })
@@ -1280,14 +1286,39 @@ pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_befor
     }
 }
 /// Se o pedido aprova o plano que o chat acabou de receber ("aprovado,
-/// implemente", "pode seguir"). Mensagens curtas de sim também valem: só
-/// são lidas quando há um plano esperando.
+/// implemente", "pode seguir", "siga com o desenvolvimento"). Mensagens curtas
+/// de sim também valem: só são lidas quando há um plano esperando. As pistas
+/// cobrem os idiomas do app; as curtas só valem como palavra inteira.
 pub fn approves_plan(request:&str)->bool {
     let text=request.to_lowercase();
-    const STRONG:[&str;14]=["aprov","approv","implement","pode seguir","pode fazer","pode executar","siga o plano","segue o plano","execute","go ahead","proceed","do it","vai em frente","manda ver"];
-    if STRONG.iter().any(|cue|text.contains(cue)) { return true; }
-    const YES:[&str;7]=["sim","ok","yes","isso","bora","vamos","faça"];
-    text.split_whitespace().count()<=5&&text.split(|c:char|!c.is_alphanumeric()).any(|word|YES.contains(&word))
+    const PHRASES:[&str;14]=["pode seguir","pode fazer","pode executar","seguir com","segue o","go ahead","go on","do it","vai em frente","manda ver","carry out","start building","mach weiter","fang an"];
+    if PHRASES.iter().any(|cue|text.contains(cue)) { return true; }
+    // Raízes de palavra: valem no começo de uma palavra ("implemente",
+    // "desenvolva"), não no meio ("consiga").
+    const STEMS:[&str;32]=["aprov","approv","implement","siga","execut","execute","desenvolv","prossig","continu","comece","começ","inicie","iniciar","proceed","adelante","procede","empieza","hazlo","vas-y","commence","fais-le","lance","продолж","приступ","начина","реализ","делай","進め","続け","実装","実行","始め"];
+    const SCRIPTS:[&str;11]=["继续","开始","实现","执行","好的","जारी","शुरू","लागू","تابع","ابدأ","نفذ"];
+    let words:Vec<&str>=text.split(|c:char|!c.is_alphanumeric()&&c!='-').filter(|word|!word.is_empty()).collect();
+    if words.iter().any(|word|STEMS.iter().any(|stem|word.starts_with(stem))) { return true; }
+    if SCRIPTS.iter().any(|cue|text.contains(cue)) { return true; }
+    const YES:[&str;15]=["sim","ok","yes","isso","bora","vamos","faça","faz","si","oui","ja","go","build","dale","vai"];
+    words.len()<=5&&words.iter().any(|word|YES.contains(word))
+}
+/// Quantas palavras no máximo tem a mensagem que segue um plano pendente e
+/// ainda é lida como "execute-o".
+const PLAN_FOLLOWUP_WORDS:usize=40;
+/// A mensagem que, com um plano esperando no chat, manda executá-lo. Além das
+/// pistas de `approves_plan`, vale a mensagem curta, sem pergunta, que fala do
+/// plano ("use o plano que fizemos", "chega de plano"): quem escreve assim não
+/// quer outro plano. Pergunta continua sendo pergunta.
+pub fn goes_ahead(request:&str)->bool {
+    if approves_plan(request) { return true; }
+    let text=request.trim().to_lowercase();
+    let words=text.split_whitespace().count();
+    if words==0||words>PLAN_FOLLOWUP_WORDS||text.contains(['?','？','؟']) { return false; }
+    // "o plano", "that plan": o plano que já existe, não "faça um plano".
+    const THE_PLAN:[&str;22]=["o plano","do plano","pelo plano","no plano","esse plano","este plano","plano que","plano acima","plano anterior","planejado","planeado","chega de plano","the plan","that plan","this plan","your plan","el plan","ese plan","le plan","ce plan","der plan","den plan"];
+    const ANY_PLAN:[&str;8]=["план","計画","プラン","计划","方案","योजना","خطة","plan que"];
+    THE_PLAN.iter().chain(ANY_PLAN.iter()).any(|word|text.contains(word))
 }
 /// As notas do roteamento mais a do modo. Em build o agente executa, então a
 /// nota de "devolva os comandos para o desenvolvedor" não vale.
@@ -2035,6 +2066,13 @@ mod tests {
         assert_eq!(resolve_mode(MODE_AUTO,MODE_PLAN,false,false,true),(MODE_BUILD,asked_from_auto),"plano aprovado no automático vai ao build");
         assert_eq!(resolve_mode(MODE_PLAN,MODE_PLAN,false,false,true),(MODE_PLAN,None),"planejamento fixo só sai com pedido de implementar");
         assert!(approves_plan("Aprovado, pode implementar")&&approves_plan("sim")&&!approves_plan("e se usarmos outro banco de dados para isso?"));
+        // As mensagens reais que ficaram presas no planejamento (e as de outros idiomas).
+        for said in ["vamos desenvolver chega de plano!","siga para desenvolvimento planejado nessa conversa anteriormente","tu é bugada mesmo, estou pedindo para utilizar o plano que fizemos agora pouco","siga com o desenvolvimento do plano","Please continue with the plan","adelante con el plan","继续执行计划","продолжай по плану"] {
+            assert!(goes_ahead(said),"{said}");
+        }
+        for said in ["e se usarmos outro banco de dados para isso?","crie um plano para migrar o banco","explique o plano?","consiga os dados do usuário"] {
+            assert!(!goes_ahead(said),"{said}");
+        }
         assert_eq!((work_mode("plan"),work_mode("build"),work_mode("auto"),work_mode("x")),(Some(MODE_PLAN),Some(MODE_BUILD),Some(MODE_AUTO),None));
     }
 
