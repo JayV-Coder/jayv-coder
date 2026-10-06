@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
+import { ArrowDownIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import type { Chat } from "@/modules/core";
 import { beatLines, liveOf, pendingWord, useConversation } from "@/modules/conversation";
 import { openTurns } from "@/modules/workspace";
@@ -26,6 +26,8 @@ const WIDTH_KEY = "jayv.progress.width";
 const MIN_WIDTH = 220;
 const MAX_WIDTH = 640;
 const KEY_STEP = 16;
+/** Até quantos pixels do fim ainda conta como "no fim da lista". */
+const END_SLACK = 24;
 
 /** Mantém a largura entre o mínimo do painel e o que ainda deixa lugar para a conversa. */
 function clampWidth(width: number): number {
@@ -51,7 +53,9 @@ function rememberedWidth(): number {
  * fina que ainda mostra se há pedido em andamento. */
 export function ProgressPanel({ chat, children }: { chat: Chat | null; children?: ReactNode }) {
   const t = useT();
-  const steps = useRef<HTMLOListElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  // Acompanha o fim da lista enquanto a pessoa não rolar para cima.
+  const [following, setFollowing] = useState(true);
   const [open, setOpen] = useState(remembered);
   const [width, setWidth] = useState(rememberedWidth);
   const dragging = useRef<{ x: number; width: number } | null>(null);
@@ -64,10 +68,23 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
   // fecha todas as etapas.
   const done = text ? lines : lines.slice(0, -1);
 
+  const current = pendingWord(text, beats);
+
+  // Evento novo (etapa, texto da etapa de agora ou resposta) leva ao fim da
+  // lista, a menos que a pessoa tenha rolado para cima.
   useEffect(() => {
-    const element = steps.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [done.length, turn?.id, open]);
+    const element = scroller.current;
+    if (element && following) element.scrollTop = element.scrollHeight;
+  }, [done.length, current, text, turn?.id, open, following]);
+
+  // Pedido novo volta a acompanhar.
+  useEffect(() => { setFollowing(true); }, [turn?.id]);
+
+  const watchScroll = () => {
+    const element = scroller.current;
+    if (!element) return;
+    setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight <= END_SLACK);
+  };
 
   const toggle = () => {
     setOpen((value) => {
@@ -130,7 +147,8 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
           <PanelLeftCloseIcon aria-hidden="true" />
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto" role="status" aria-live="polite">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={scroller} onScroll={watchScroll} className="min-h-0 flex-1 overflow-y-auto" role="status" aria-live="polite">
         {!turn ? (
           <p className="px-3 py-3 text-muted-foreground">{t("progress.idle")}</p>
         ) : (
@@ -140,7 +158,7 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
               <strong className="text-xs font-semibold text-foreground"><span aria-hidden="true" className="me-1.5">🤖</span>JayV</strong>
               <span className="ms-auto text-caption text-muted-foreground">{queued > 0 ? t("pending.queued", { count: queued }) : t("pending.running")}</span>
             </div>
-            <ol ref={steps} className="mt-2.5 grid gap-1.5">
+            <ol className="mt-2.5 grid gap-1.5">
               {done.map((line) => (
                 <li
                   key={line.seq}
@@ -153,11 +171,24 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
               ))}
               <li className="flex gap-2 rounded-xs border border-primary/50 bg-background px-2 py-1.5 text-xs leading-[1.45]">
                 <span aria-hidden="true" className="flex-none text-primary">❯</span>
-                <span className="shimmer-text min-w-0 break-words">{pendingWord(text, beats)}</span>
+                <span className="shimmer-text min-w-0 break-words">{current}</span>
               </li>
             </ol>
           </div>
         )}
+      </div>
+      {turn && !following && (
+        <Button
+          size="icon-xs"
+          variant="secondary"
+          aria-label={t("progress.scrollDown")}
+          title={t("progress.scrollDown")}
+          onClick={() => setFollowing(true)}
+          className="absolute bottom-2 end-3 rounded-full shadow-none"
+        >
+          <ArrowDownIcon aria-hidden="true" />
+        </Button>
+      )}
       </div>
       {children}
       <div
