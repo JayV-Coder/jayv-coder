@@ -50,9 +50,12 @@ impl Default for McpServer {
     fn default()->Self { Self{name:String::new(),transport:STDIO.into(),command:String::new(),args:vec![],env:BTreeMap::new(),url:String::new(),headers:BTreeMap::new(),enabled:true,agents:vec![]} }
 }
 
-/// O Cursor não recebe MCP pela linha de comando: ele lê o `.cursor/mcp.json`
-/// do projeto ou da pasta do usuário.
-pub fn receives(agent:AgentId)->bool { !matches!(agent,AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm) }
+/// Todo agente recebe os servidores, cada um do jeito que sabe: Claude, Codex
+/// e Copilot pela linha de comando, o Kilo Code pela configuração em linha
+/// (`KILO_CONFIG_CONTENT`), o Cursor por um bloco gerido do `~/.cursor/mcp.json`
+/// e os gateways de API pelo próprio JayV (`mcp_client`). Só com o "Aprovar
+/// servidores MCP" do agente ligado (`AgentSettings::with_mcp`).
+pub fn receives(_agent:AgentId)->bool { true }
 
 impl McpServer {
     /// O servidor limpo, ou o motivo de não ser aceito. O nome vira chave de
@@ -129,6 +132,75 @@ pub fn args_for(servers:&[McpServer],agent:AgentId)->Vec<String> {
         AgentId::Copilot=>config_json(servers,agent,Map::new()).map(|config|vec!["--additional-mcp-config".to_string(),config]).unwrap_or_default(),
         AgentId::Claude|AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>vec![],
     }
+}
+
+/// A configuração em linha do Kilo Code (`KILO_CONFIG_CONTENT`, que ele soma à
+/// dele): os servidores e a permissão das ferramentas deles, que rodam sem
+/// pergunta. As ferramentas chegam ao modelo como `<servidor>_<ferramenta>`.
+pub fn kilo_config(servers:&[McpServer])->Option<String> {
+    let mut mcp=Map::new();
+    let mut permission=Map::new();
+    for server in servers.iter().filter(|server|server.serves(AgentId::Kilo)) {
+        let entry=match server.transport.as_str() {
+            HTTP=>json!({"type":"remote","url":server.url,"headers":server.headers,"enabled":true}),
+            _=>{ let mut command=vec![server.command.clone()]; command.extend(server.args.clone()); json!({"type":"local","command":command,"environment":server.env,"enabled":true}) }
+        };
+        mcp.insert(server.name.clone(),entry);
+        permission.insert(format!("{}_*",server.name.replace('-',"_")),json!("allow"));
+    }
+    (!mcp.is_empty()).then(||json!({"mcp":mcp,"permission":permission}).to_string())
+}
+
+/// O arquivo do Cursor com os servidores do JayV, e o outro, ao lado, com os
+/// nomes que o JayV pôs nele — só esses saem na volta seguinte.
+const CURSOR_FILE:&str="mcp.json";
+const CURSOR_MANAGED:&str="jayv-mcp.json";
+
+/// Põe os servidores no `~/.cursor/mcp.json`, único caminho do Cursor: ele
+/// não recebe MCP pela linha de comando. O que o JayV pôs numa vez e saiu da
+/// lista sai do arquivo; o que a pessoa escreveu lá (outro nome, ou o mesmo)
+/// nunca é tocado. Sem servidores e sem nada posto antes, não escreve.
+pub fn sync_cursor(servers:&[McpServer])->Result<()> {
+    let Some(home)=dirs::home_dir() else { return Ok(()) };
+    sync_cursor_in(&home.join(".cursor"),servers)
+}
+
+fn sync_cursor_in(dir:&std::path::Path,servers:&[McpServer])->Result<()> {
+    let file=dir.join(CURSOR_FILE);
+    let managed_file=dir.join(CURSOR_MANAGED);
+    let before:Vec<String>=std::fs::read_to_string(&managed_file).ok().and_then(|text|serde_json::from_str(&text).ok()).unwrap_or_default();
+    let mine:Vec<&McpServer>=servers.iter().filter(|server|server.serves(AgentId::Cursor)).collect();
+    if mine.is_empty()&&before.is_empty() { return Ok(()); }
+    let mut config=match std::fs::read_to_string(&file) {
+        Ok(text) if text.trim().is_empty()=>json!({}),
+        Ok(text)=>serde_json::from_str::<Value>(&text).ok().filter(Value::is_object).ok_or_else(||anyhow::Error::new(Text::new("mcp.cursorFile").with("path",file.display().to_string())))?,
+        Err(_)=>json!({}),
+    };
+    let object=config.as_object_mut().expect("objeto");
+    let map=object.entry("mcpServers").or_insert_with(||json!({}));
+    let Some(map)=map.as_object_mut() else { bail!(Text::new("mcp.cursorFile").with("path",file.display().to_string())) };
+    for name in &before { map.remove(name); }
+    let mut placed=Vec::new();
+    for server in mine {
+        if map.contains_key(&server.name) { continue; }
+        map.insert(server.name.clone(),if server.transport==HTTP { json!({"url":server.url,"headers":server.headers}) } else { json!({"command":server.command,"args":server.args,"env":server.env}) });
+        placed.push(server.name.clone());
+    }
+    if map.is_empty()&&placed.is_empty()&&!file.exists() { return Ok(()); }
+    std::fs::create_dir_all(dir)?;
+    write_private(&file,&serde_json::to_string_pretty(&config)?)?;
+    if placed!=before { write_private(&managed_file,&serde_json::to_string(&placed)?)?; }
+    Ok(())
+}
+
+/// Grava por um arquivo ao lado e renomeia: dois pedidos em paralelo nunca
+/// deixam o arquivo pela metade. Só o dono lê (pode levar segredos).
+fn write_private(path:&std::path::Path,text:&str)->Result<()> {
+    let temporary=path.with_extension(format!("tmp{}",std::process::id()));
+    std::fs::write(&temporary,text)?;
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&temporary,std::fs::Permissions::from_mode(0o600))?; }
+    std::fs::rename(&temporary,path)?;
+    Ok(())
 }
 
 pub fn claude_tools(servers:&[McpServer])->Vec<String> {
@@ -339,5 +411,54 @@ mod tests {
         let drafted=from_model("Aqui está:\n```json\n{\"mcpServers\":{\"github\":{\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-github\"]}}}\n```");
         assert_eq!(drafted[0].name,"github");
         assert!(from_model("{}").is_empty());
+    }
+
+    #[test] fn every_agent_is_served_unless_the_server_names_others() {
+        let servers=parse(r#"{"mcpServers":{"github":{"command":"npx","args":["pkg"]}}}"#);
+        assert!(AgentId::ALL.into_iter().all(|agent|servers[0].serves(agent)));
+        let only=McpServer{agents:vec!["litellm".into()],..servers[0].clone()};
+        assert!(only.serves(AgentId::Litellm)&&!only.serves(AgentId::Kilo));
+        assert_eq!(only.clone().checked().expect("válido").agents,vec!["litellm".to_string()]);
+    }
+
+    #[test] fn kilo_gets_inline_config_with_the_tool_permission() {
+        let servers=parse(r#"{"mcpServers":{"my-git":{"command":"npx","args":["-y","pkg"],"env":{"T":"x"}},"docs":{"url":"https://mcp.example.com/mcp","headers":{"A":"b"}}}}"#);
+        let config:Value=serde_json::from_str(&kilo_config(&servers).expect("configuração")).expect("json");
+        assert_eq!(config["mcp"]["my-git"],json!({"type":"local","command":["npx","-y","pkg"],"environment":{"T":"x"},"enabled":true}));
+        assert_eq!(config["mcp"]["docs"]["type"],"remote");
+        assert_eq!(config["permission"]["my_git_*"],"allow");
+        assert!(kilo_config(&[]).is_none());
+    }
+
+    #[test] fn the_cursor_file_keeps_what_the_person_wrote_and_removes_only_what_jayv_placed() {
+        let dir=tempfile::tempdir().expect("pasta");
+        let file=dir.path().join(CURSOR_FILE);
+        std::fs::write(&file,r#"{"mcpServers":{"mine":{"command":"x"},"github":{"command":"own"}},"other":1}"#).expect("escrita");
+        let servers=parse(r#"{"mcpServers":{"github":{"command":"npx","args":["pkg"]},"docs":{"url":"https://mcp.example.com/mcp"}}}"#);
+        sync_cursor_in(dir.path(),&servers).expect("sincroniza");
+        let read=||serde_json::from_str::<Value>(&std::fs::read_to_string(&file).expect("leitura")).expect("json");
+        let config=read();
+        assert_eq!(config["mcpServers"]["github"]["command"],"own","o nome da pessoa vence");
+        assert_eq!(config["mcpServers"]["docs"]["url"],"https://mcp.example.com/mcp");
+        assert_eq!(config["mcpServers"]["mine"]["command"],"x");
+        assert_eq!(config["other"],1);
+        sync_cursor_in(dir.path(),&[]).expect("limpa");
+        let config=read();
+        assert!(config["mcpServers"].get("docs").is_none(),"o que o JayV pôs sai");
+        assert_eq!(config["mcpServers"]["github"]["command"],"own");
+        assert!(config["mcpServers"].get("mine").is_some());
+    }
+
+    #[test] fn without_servers_and_without_a_file_nothing_is_written() {
+        let dir=tempfile::tempdir().expect("pasta");
+        sync_cursor_in(&dir.path().join(".cursor"),&[]).expect("nada");
+        assert!(!dir.path().join(".cursor").exists());
+    }
+
+    #[test] fn a_cursor_file_that_is_not_json_is_left_alone() {
+        let dir=tempfile::tempdir().expect("pasta");
+        std::fs::write(dir.path().join(CURSOR_FILE),"{ não é json").expect("escrita");
+        assert!(sync_cursor_in(dir.path(),&parse(r#"{"mcpServers":{"docs":{"url":"https://m.example.com/mcp"}}}"#)).is_err());
+        assert_eq!(std::fs::read_to_string(dir.path().join(CURSOR_FILE)).expect("leitura"),"{ não é json");
     }
 }

@@ -43,6 +43,7 @@ describe("paletteCommands", () => {
     const found = ids();
     for (const id of ["projects", "organizations", "stats", "system", "settings", "profile", "plans", "gate", "chats", "new-chat", "new-project"]) expect(found).toContain(id);
     for (const tab of ["app", "jev", "mcp", "skills", "claude", "codex", "copilot", "cursor"]) expect(found).toContain(`settings-${tab}`);
+    for (const id of ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"]) expect(found).toContain(`mcp-approve-${id}`);
     for (const id of ["settings-save", "settings-discard", "settings-defaults", "skills-install", "project-notes", "search-chats", "live", "notifications", "sign-out", "check-update", "system-copy", "whats-new"]) expect(found).toContain(id);
   });
 

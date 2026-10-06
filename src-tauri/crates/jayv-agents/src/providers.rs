@@ -379,6 +379,57 @@ impl HttpProvider {
         }).await
     }
 
+    /// Os servidores MCP que o pedido leva (`ProviderConfig::mcp`).
+    fn mcp_servers(&self)->Vec<crate::mcp::McpServer> {
+        self.config.mcp.iter().filter_map(|value|serde_json::from_value(value.clone()).ok()).collect()
+    }
+
+    /// O pedido com as ferramentas dos servidores MCP: o app é o cliente.
+    /// Lista as ferramentas, manda as definições ao modelo e, enquanto ele
+    /// pedir ferramentas, roda cada uma e devolve o resultado, até a resposta
+    /// final. Sem ferramenta alguma (nenhum servidor subiu), conversa como
+    /// sempre. Parar o pedido derruba os servidores junto (`Toolbox`).
+    async fn chat_tools(&self,messages:&[ChatMessage],model:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        let servers=self.mcp_servers();
+        if servers.is_empty()||!matches!(self.kind,HttpKind::OpenAi) { return self.chat_stream(messages,model,pulse).await; }
+        let mut toolbox=unless_stopped(pulse,async { Ok(crate::mcp_client::Toolbox::open(&servers).await) }).await?;
+        if toolbox.is_empty() { return self.chat_stream(messages,model,pulse).await; }
+        let started=Instant::now();
+        unless_stopped(pulse,self.tool_rounds(messages,model,&mut toolbox,pulse,started)).await
+    }
+
+    async fn tool_rounds(&self,messages:&[ChatMessage],model:&str,toolbox:&mut crate::mcp_client::Toolbox,pulse:&Pulse,started:Instant)->Result<ProviderResponse> {
+        let (url,mut payload)=self.compose(messages,model,false);
+        let mut history=payload.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+        payload["tools"]=json!(toolbox.definitions());
+        let mut total=Harvest::default();
+        for round in 0..=MAX_TOOL_ROUNDS {
+            crate::guard::enter()?;
+            // A última volta não leva ferramentas: o modelo que ainda quer
+            // ferramentas tem de responder com o que já tem.
+            if round==MAX_TOOL_ROUNDS { if let Some(object)=payload.as_object_mut() { object.remove("tools"); } }
+            payload["messages"]=json!(history);
+            let body=self.send(&url,&payload).await?;
+            let harvest=self.reap(&body);
+            total.input_tokens+=harvest.input_tokens;
+            total.output_tokens+=harvest.output_tokens;
+            total.cache_read_tokens+=harvest.cache_read_tokens;
+            let message=body.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
+            let calls=message.get("tool_calls").and_then(Value::as_array).cloned().unwrap_or_default();
+            if calls.is_empty()||round==MAX_TOOL_ROUNDS { total.text=harvest.text; break; }
+            history.push(message);
+            for call in calls {
+                let name=call.pointer("/function/name").and_then(Value::as_str).unwrap_or_default().to_string();
+                let arguments=call.pointer("/function/arguments").and_then(Value::as_str).and_then(|text|serde_json::from_str::<Value>(text).ok()).filter(Value::is_object).unwrap_or_else(||json!({}));
+                pulse.beat(Beat::Agent{line:format!("tool_use: {}",toolbox.label(&name))});
+                let output=toolbox.run(&name,arguments).await;
+                history.push(json!({"role":"tool","tool_call_id":call.get("id").cloned().unwrap_or(Value::Null),"content":output}));
+            }
+        }
+        if !total.text.is_empty() { pulse.beat(Beat::Chunk{text:total.text.clone()}); }
+        Ok(self.wrap(total,model,started))
+    }
+
     async fn send(&self,url:&str,payload:&Value)->Result<Value> {
         with_retry(RetryPolicy::default(),move |_attempt| async move {
             let response=self.ask(url,payload).send().await.map_err(|error|RetryError::from_transport(&self.name,error))?;
@@ -414,7 +465,20 @@ impl Provider for HttpProvider {
         let harvest=unless_stopped(pulse,self.flow(&url,&payload,pulse)).await?;
         Ok(self.wrap(harvest,model,started))
     }
+
+    /// O pedido do chat leva as ferramentas dos servidores MCP; as chamadas de
+    /// apoio (`chat_once`: título, plano, revisão) não.
+    async fn chat_turn(&self,messages:&[ChatMessage],model:&str,_effort:Option<&str>,_resume:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
+        self.chat_tools(messages,model,pulse).await
+    }
+
+    async fn chat_once(&self,messages:&[ChatMessage],model:&str,_effort:Option<&str>,pulse:&Pulse)->Result<ProviderResponse> {
+        self.chat_stream(messages,model,pulse).await
+    }
 }
+
+/// Quantas voltas de ferramenta o gateway aceita num pedido.
+const MAX_TOOL_ROUNDS:usize=8;
 
 struct CliProvider { name:String, config:ProviderConfig, workdir:Workdir }
 
@@ -666,6 +730,11 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
+        // O Kilo Code recebe os servidores MCP na configuração em linha.
+        if self.name==crate::llm::AgentId::Kilo.key() {
+            let servers:Vec<crate::mcp::McpServer>=self.config.mcp.iter().filter_map(|value|serde_json::from_value(value.clone()).ok()).collect();
+            if let Some(config)=crate::mcp::kilo_config(&servers) { process.env("KILO_CONFIG_CONTENT",config); }
+        }
         let args=crate::llm::understood(&found,self.args_resuming(model,effort,resume,once,prompt,usage_file)).await;
         process.args(lead).args(args).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // Num grupo só dele: o agente abre shells, servidores de MCP e o node do
@@ -1502,5 +1571,98 @@ mod tests {
         let provider=CliProvider{name:"codex".into(),config:ProviderConfig{command:Some("codex".into()),args:vec!["--model".into(),"{model}".into(),"-c".into(),"model_reasoning_effort=\"{effort}\"".into(),"-".into()],..config("cli")},workdir:Workdir::default()};
         assert_eq!(provider.args("gpt-5",Some("low"),"",std::path::Path::new("u.json")),["--model","gpt-5","-c","model_reasoning_effort=\"low\"","-"]);
         assert_eq!(provider.args("gpt-5",None,"",std::path::Path::new("u.json")),["--model","gpt-5","-"]);
+    }
+
+    /// Um servidor HTTP que serve ao mesmo tempo um servidor MCP (`/mcp`) e uma
+    /// API de chat (`/v1/chat/completions`): o modelo pede a ferramenta na
+    /// primeira volta e responde na segunda. Guarda o que o chat recebeu.
+    async fn gateway_with_a_tool()->(String,std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+        use tokio::io::{AsyncReadExt,AsyncWriteExt};
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("porta");
+        let address=format!("http://{}",listener.local_addr().expect("endereço"));
+        let chats=std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let kept=chats.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket,_))=listener.accept().await else { return };
+                let kept=kept.clone();
+                tokio::spawn(async move {
+                    let mut data=Vec::new();
+                    let mut buffer=vec![0u8;16*1024];
+                    let (head,body)=loop {
+                        let read=socket.read(&mut buffer).await.unwrap_or(0);
+                        if read==0 { return; }
+                        data.extend_from_slice(&buffer[..read]);
+                        let text=String::from_utf8_lossy(&data).to_string();
+                        if let Some(end)=text.find("\r\n\r\n") {
+                            let head=text[..end].to_string();
+                            let length=head.to_lowercase().lines().find_map(|line|line.strip_prefix("content-length: ").and_then(|value|value.trim().parse::<usize>().ok())).unwrap_or(0);
+                            if data.len()>=end+4+length { break (head,String::from_utf8_lossy(&data[end+4..end+4+length]).to_string()); }
+                        }
+                    };
+                    let request:Value=serde_json::from_str(&body).unwrap_or(Value::Null);
+                    let path=head.split_whitespace().nth(1).unwrap_or_default().to_string();
+                    let answer=if path=="/mcp" {
+                        match request["method"].as_str().unwrap_or_default() {
+                            "initialize"=>Some(json!({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}})),
+                            "tools/list"=>Some(json!({"jsonrpc":"2.0","id":request["id"],"result":{"tools":[{"name":"lookup","description":"Looks a word up","inputSchema":{"type":"object","properties":{"word":{"type":"string"}}}}]}})),
+                            "tools/call"=>Some(json!({"jsonrpc":"2.0","id":request["id"],"result":{"content":[{"type":"text","text":format!("definition of {}",request["params"]["arguments"]["word"].as_str().unwrap_or_default())}]}})),
+                            _=>None,
+                        }
+                    } else {
+                        let mut chats=kept.lock().unwrap();
+                        chats.push(request.clone());
+                        let tool_turn=chats.len()==1;
+                        Some(if tool_turn { json!({"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"docs__lookup","arguments":"{\"word\":\"mcp\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":2}}) }
+                        else { json!({"choices":[{"message":{"role":"assistant","content":"the tool said it"}}],"usage":{"prompt_tokens":20,"completion_tokens":5}}) })
+                    };
+                    let (status,payload)=match answer { Some(value)=>("200 OK",value.to_string()), None=>("202 Accepted",String::new()) };
+                    let reply=format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",payload.len());
+                    let _=socket.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        (address,chats)
+    }
+
+    fn gateway(address:&str,mcp:Vec<Value>)->HttpProvider {
+        HttpProvider::compatible("litellm".into(),ProviderConfig{base_url:Some(format!("{address}/v1")),mcp,..config("openai-compatible")})
+    }
+
+    fn docs_server(address:&str)->Value { serde_json::to_value(crate::mcp::McpServer{name:"docs".into(),transport:crate::mcp::HTTP.into(),url:format!("{address}/mcp"),..Default::default()}).expect("json") }
+
+    #[tokio::test] async fn a_gateway_request_runs_the_mcp_tools_the_model_asks_for() {
+        let (address,chats)=gateway_with_a_tool().await;
+        let provider=gateway(&address,vec![docs_server(&address)]);
+        let (pulse,mut beats)=Pulse::channel();
+        let response=provider.chat_turn(&ask(),"model",None,None,&pulse).await.expect("resposta");
+        assert_eq!(response.response,"the tool said it");
+        assert_eq!((response.input_tokens,response.output_tokens),(30,7),"a conta soma as voltas");
+        let chats=chats.lock().unwrap();
+        assert_eq!(chats.len(),2);
+        assert_eq!(chats[0]["tools"][0]["function"]["name"],"docs__lookup","o modelo recebe a ferramenta com o nome do servidor");
+        let last=chats[1]["messages"].as_array().expect("mensagens").last().expect("última");
+        assert_eq!((last["role"].as_str(),last["tool_call_id"].as_str(),last["content"].as_str()),(Some("tool"),Some("call_1"),Some("definition of mcp")));
+        drop(pulse);
+        let mut steps=Vec::new();
+        while let Some(beat)=beats.recv().await { if let Beat::Agent{line}=beat { steps.push(line); } }
+        assert_eq!(steps,vec!["tool_use: docs/lookup".to_string()]);
+    }
+
+    #[tokio::test] async fn without_servers_or_for_a_support_call_the_gateway_sends_no_tools() {
+        let (address,chats)=gateway_with_a_tool().await;
+        let none=gateway(&address,vec![]);
+        let _=none.chat_turn(&ask(),"model",None,None,&Pulse::silent()).await;
+        let support=gateway(&address,vec![docs_server(&address)]);
+        let _=support.chat_once(&ask(),"model",None,&Pulse::silent()).await;
+        assert!(chats.lock().unwrap().iter().all(|chat|chat.get("tools").is_none()));
+    }
+
+    #[tokio::test] async fn a_server_that_does_not_come_up_does_not_stop_the_request() {
+        let (address,chats)=gateway_with_a_tool().await;
+        let broken=serde_json::to_value(crate::mcp::McpServer{name:"gone".into(),transport:crate::mcp::HTTP.into(),url:"http://127.0.0.1:1/mcp".into(),..Default::default()}).expect("json");
+        let provider=gateway(&address,vec![broken]);
+        let _=provider.chat_turn(&ask(),"model",None,None,&Pulse::silent()).await.expect("responde mesmo assim");
+        assert!(chats.lock().unwrap()[0].get("tools").is_none());
     }
 }

@@ -2,19 +2,16 @@ import { useState } from "react";
 import type { McpServer } from "@/modules/core";
 import { useT } from "@/modules/i18n";
 import { lines, pairs, pairText } from "@/modules/mcp";
+import { AGENT_LABELS, AGENTS } from "@/modules/settings";
 import { FormField, SegmentedControl, ToggleRow } from "@/components/molecules";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-/** Os agentes que recebem MCP pela linha de comando. O Cursor lê o
- * `.cursor/mcp.json` dele e fica de fora. */
-export const MCP_AGENTS = [
-  { id: "claude", name: "Claude Code" },
-  { id: "codex", name: "Codex" },
-  { id: "copilot", name: "Copilot" },
-] as const;
+/** Todos os agentes recebem os servidores, cada um do jeito que sabe (e só
+ * com o "Aprovar servidores MCP" dele ligado). */
+export const MCP_AGENTS = AGENTS.map((id) => ({ id: id as string, name: AGENT_LABELS[id] }));
 
 /** Os campos de um servidor MCP. Argumentos, variáveis e cabeçalhos vão um
  * por linha, como num arquivo: é o jeito mais curto de colar o que a
@@ -28,7 +25,7 @@ export function McpServerForm({ server, onChange, idPrefix }: { server: McpServe
   const id = (field: string) => `${idPrefix}-${field}`;
   const stdio = server.transport === "stdio";
   const toggleAgent = (agent: string, on: boolean) => {
-    const all = server.agents.length === 0 ? MCP_AGENTS.map((item) => item.id as string) : server.agents;
+    const all = server.agents.length === 0 ? MCP_AGENTS.map((item) => item.id) : server.agents;
     const next = on ? [...new Set([...all, agent])] : all.filter((item) => item !== agent);
     // Todos marcados é o mesmo que nenhum escolhido: vale para os novos agentes.
     onChange({ ...server, agents: next.length === MCP_AGENTS.length ? [] : next });

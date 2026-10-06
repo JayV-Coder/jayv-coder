@@ -13,7 +13,7 @@ import {
   acceptInvite, declineInvite, openOrganization, organizationChatsOf, type IncomingInvite, type Organization, type OrganizationTab,
 } from "@/modules/organizations";
 import { allows } from "@/modules/plans";
-import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
+import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -144,6 +144,16 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       { id: "settings-save", group: settings, label: t("settings.save"), run: () => void saveSettings() },
       { id: "settings-discard", group: settings, label: t("settings.discard"), run: discardChanges },
     );
+  }
+  // O "Aprovar servidores MCP" de cada agente: abre a aba dele e vira a chave,
+  // e o Salvar da página (ou o comando dele) grava.
+  for (const id of AGENTS) {
+    const on = useSettings.getState().agents.find((agent) => agent.id === id)?.options as { approveMcps?: boolean } | undefined;
+    all.push({
+      id: `mcp-approve-${id}`, group: settings,
+      label: t(on?.approveMcps ? "palette.mcpRevoke" : "palette.mcpApprove", { name: AGENT_LABELS[id] }),
+      run: () => { openSettingsTab(id); updateOptions(id, { approveMcps: !on?.approveMcps } as never); },
+    });
   }
   // Conferir o endereço e a chave dos gateways de API (o botão da aba deles).
   for (const id of ["openrouter", "litellm"] as const) {

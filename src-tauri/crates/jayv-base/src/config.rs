@@ -84,11 +84,18 @@ pub struct ProviderConfig {
     /// somente leitura. Vazia, o agente roda igual nos dois modos.
     #[serde(default, skip_serializing_if = "Vec::is_empty")] pub plan_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")] pub local: Option<bool>,
+    /// Os servidores MCP que este agente recebe neste pedido, como JSON de
+    /// `jayv_agents::mcp::McpServer`. Postos na hora do pedido, nunca gravados
+    /// nem sincronizados: levam segredos. Só os agentes que não os recebem pela
+    /// linha de comando leem isto (Cursor, Kilo Code e os gateways de API).
+    #[serde(skip)] pub mcp: Vec<serde_json::Value>,
 }
-impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None } } }
+impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None, mcp:vec![] } } }
 impl ProviderConfig {
     /// O mesmo agente, no modo planejamento.
-    pub fn for_planning(&self)->Self { if self.plan_args.is_empty() { self.clone() } else { Self{args:self.plan_args.clone(),..self.clone()} } }
+    /// Sem servidores MCP: o planejamento só lê, e as ferramentas deles rodam
+    /// sem pergunta.
+    pub fn for_planning(&self)->Self { Self{args:if self.plan_args.is_empty() { self.args.clone() } else { self.plan_args.clone() },mcp:vec![],..self.clone()} }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

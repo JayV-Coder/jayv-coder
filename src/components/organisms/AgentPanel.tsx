@@ -13,6 +13,7 @@ import { CopilotOptionsForm } from "./CopilotOptionsForm";
 import { CursorOptionsForm } from "./CursorOptionsForm";
 import { GatewayConnection } from "./GatewayConnection";
 import { KiloOptionsForm } from "./KiloOptionsForm";
+import { McpApproveField } from "./McpApproveField";
 import { ModelRow } from "./ModelRow";
 
 export const AGENT_NAMES: Record<AgentId, string> = AGENT_LABELS;
@@ -84,6 +85,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         {agent.id === "copilot" && <CopilotOptionsForm agent={agent as AgentSettings<"copilot">} />}
         {agent.id === "cursor" && <CursorOptionsForm agent={agent as AgentSettings<"cursor">} />}
         {agent.id === "kilo" && <KiloOptionsForm agent={agent as AgentSettings<"kilo">} />}
+        <McpApproveField agent={agent} />
         {gateway && <p className="text-sm leading-snug text-muted-foreground">{t("gateway.textOnly")}</p>}
       </SettingsSection>
 
