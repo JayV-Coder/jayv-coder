@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShieldCheckIcon, XIcon } from "lucide-react";
 import { commands, type Chat, type Grants } from "@/modules/core";
 import { useIntentHandler } from "@/modules/commands";
-import { grantsOf, hasGrants, setGrants, useConversation } from "@/modules/conversation";
+import { grantsOf, hasGrants, loadGrants, setGrants, useConversation } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { blockersOf, COMMAND_CATALOG, conflictsWith, useOrganizations } from "@/modules/organizations";
@@ -15,8 +15,8 @@ import { cn } from "@/lib/utils";
 const KINDS = ["shell", "git", "network"] as const;
 const NONE: Record<string, string[]> = {};
 
-/** As permissões do próximo pedido, ao lado do modo: rodar comandos, mexer no
- * Git e usar a rede, só para a mensagem que sair em seguida. Sem nada ligado,
+/** As permissões do chat, ao lado do modo: rodar comandos, mexer no Git e
+ * usar a rede, ligadas para todas as mensagens do chat até serem desligadas. Sem nada ligado,
  * o agente que esbarrar numa permissão pergunta no painel de cima se executa,
  * nega ou sempre permite. Embaixo, os comandos sempre permitidos no projeto,
  * para tirar o que não deve mais passar sem pergunta.
@@ -36,6 +36,7 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
   const allBlockers = orgsOf(Object.keys(blocked));
   const locked = (kind: (typeof KINDS)[number]) => (kind === "shell" ? allBlockers : kind === "git" ? gitBlockers : []);
   const active = KINDS.filter((kind) => grants[kind]).length + grants.commands.length;
+  useEffect(() => { void loadGrants(chat.id); }, [chat.id]);
   useIntentHandler("commandPermissions", () => { setOpen(true); load(true); });
 
   const load = (opening: boolean) => {

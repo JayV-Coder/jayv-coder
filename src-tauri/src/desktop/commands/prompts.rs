@@ -126,6 +126,17 @@ async fn answer_permission(app:&AppHandle,workspace:&SharedWorkspace,bell:&Queue
     }
 }
 
+/// As permissões ligadas no seletor do chat, que valem para todo pedido dele.
+#[tauri::command]
+pub(crate) async fn chat_grants(workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<crate::llm::Grants,Text>{crate::desktop::require_session()?;
+    workspace.lock().await.chat_grants(&chat_id).map_err(failure)
+}
+
+#[tauri::command]
+pub(crate) async fn set_chat_grants(workspace:State<'_,SharedWorkspace>,chat_id:String,grants:crate::llm::Grants)->Result<(),Text>{crate::desktop::require_session()?;
+    workspace.lock().await.set_chat_grants(&chat_id,&grants).map_err(failure)
+}
+
 /// Os comandos sempre permitidos no projeto do chat.
 #[tauri::command]
 pub(crate) async fn allowed_commands(workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<Vec<String>,Text>{crate::desktop::require_session()?;

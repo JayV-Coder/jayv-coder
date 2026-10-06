@@ -40,9 +40,27 @@ export function Sidebar() {
     <aside className="flex h-full flex-col overflow-hidden border-e border-sidebar-border bg-sidebar px-3 pt-4 pb-3 text-sidebar-foreground">
       <div className="flex items-center gap-2.5 px-1.5 pb-5">
         <BrandMark />
-        <div className="flex flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           <strong className="text-sm font-semibold">JayV</strong>
-          <small className="text-caption text-sidebar-muted">{t("brand.tagline")}</small>
+          <small className="truncate text-caption text-sidebar-muted">{t("brand.tagline")}</small>
+        </div>
+        {/* O sino e a ajuda ficam no alto, à direita do logotipo. */}
+        <div className="flex shrink-0 items-center self-start">
+          <NotificationBell />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={t("tutorial.help")}
+            data-tour="help-tutorial"
+            onClick={() => (tourForView(view) ? startTourHere(view) : startTour(TOURS[0].id))}
+            className="grid size-9 shrink-0 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <CircleHelpIcon aria-hidden="true" className="size-[18px]" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t("tutorial.help")}</TooltipContent>
+      </Tooltip>
         </div>
       </div>
 
@@ -96,8 +114,8 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* A conta abre o perfil; o sino, as notificações; a engrenagem, as
-          configurações — o idioma mora lá dentro. */}
+      {/* A conta abre o perfil e a engrenagem, as
+          configurações (o sino e a ajuda ficam no alto) — o idioma mora lá dentro. */}
       <div className="mt-auto grid gap-2 border-t border-sidebar-border pt-3">
         <div className="flex items-center gap-1.5">
           <button
@@ -116,21 +134,6 @@ export function Sidebar() {
               {email && name !== email && <span className="truncate text-caption text-sidebar-muted">{email}</span>}
             </span>
           </button>
-          <NotificationBell />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t("tutorial.help")}
-                data-tour="help-tutorial"
-                onClick={() => (tourForView(view) ? startTourHere(view) : startTour(TOURS[0].id))}
-                className="grid size-9 shrink-0 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <CircleHelpIcon aria-hidden="true" className="size-[18px]" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">{t("tutorial.help")}</TooltipContent>
-          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <button

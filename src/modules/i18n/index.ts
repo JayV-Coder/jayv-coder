@@ -31,7 +31,16 @@ function apply(locale: Locale, locales: LocaleOption[]) {
   document.documentElement.lang = locale;
   document.documentElement.dir = locales.find((known) => known.id === locale)?.rtl ? "rtl" : "ltr";
   // O modelo responde no idioma da tela, não no do pedido.
-  void commands.setReplyLanguage({ tag: locale, name: replyName(locale, locales) }).catch(() => {});
+  tellCore(locale, locales, 3);
+}
+
+/** O núcleo só responde no idioma da tela se souber qual é: um aviso perdido
+ * deixava o modelo na língua do pedido (inglês, nas respostas que o próprio app
+ * escreve), então tenta de novo antes de desistir. */
+function tellCore(locale: Locale, locales: LocaleOption[], attempts: number) {
+  commands.setReplyLanguage({ tag: locale, name: replyName(locale, locales) }).catch(() => {
+    if (attempts > 1) setTimeout(() => tellCore(locale, locales, attempts - 1), 2000);
+  });
 }
 
 /** Antes da lista chegar, vale o idioma salvo: sem isso a tela piscaria em

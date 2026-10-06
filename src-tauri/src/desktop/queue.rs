@@ -227,14 +227,15 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
     // A política de LLM do projeto e o plano vêm antes da pasta: eles podem
     // mudar a privacidade, e o índice da pasta é lido com o firewall já certo.
-    // O que o desenvolvedor liberou para este pedido (no seletor, ou ao
-    // aprovar o comando que o agente pediu) e os comandos sempre permitidos no
-    // projeto. Valem só para este pedido: o próximo lê de novo.
+    // O que o desenvolvedor liberou para este pedido (ao aprovar o comando que
+    // o agente pediu), o que ele deixou ligado no seletor do chat inteiro e os
+    // comandos sempre permitidos no projeto. O próximo pedido lê de novo.
     let (grants,granted_here)={
         let workspace=workspace.lock().await;
         let mine=workspace.turn_grants(&turn.id).unwrap_or_default();
         let always=crate::llm::Grants{commands:workspace.allowed_commands(chat_id).unwrap_or_default(),..Default::default()};
-        (mine.merged(&always),!mine.is_empty())
+        let chat=workspace.chat_grants(chat_id).unwrap_or_default();
+        (mine.merged(&chat).merged(&always),!mine.is_empty())
     };
     let plan=apply_project_policy(&mut state,workspace,chat_id,&grants).await;
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
