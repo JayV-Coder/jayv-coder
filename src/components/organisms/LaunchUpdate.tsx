@@ -1,10 +1,9 @@
 import { LoaderCircleIcon } from "lucide-react";
 import { useT } from "@/modules/i18n";
-import { skipLaunchUpdate, useUpdate } from "@/modules/updates";
-import { Button } from "@/components/ui/button";
+import { useUpdate } from "@/modules/updates";
 
-/** A tela de abertura enquanto o app confere se há versão nova: sem rede ou
- * com pressa, "Pular" abre o app na hora. Com versão nova, a janela de
+/** A tela de abertura enquanto o app confere se há versão nova: sem rede
+ * (ou se a consulta falhar) o app abre sozinho depois do limite, sem botão. Com versão nova, a janela de
  * progresso da atualização assume. */
 export function LaunchUpdate() {
   const t = useT();
@@ -16,7 +15,6 @@ export function LaunchUpdate() {
         <LoaderCircleIcon aria-hidden="true" className="size-6 animate-spin text-muted-foreground motion-reduce:animate-none" />
         <p className="text-sm font-medium">{t("update.launch.checking")}</p>
         <p className="max-w-xs text-xs text-muted-foreground">{t("update.launch.note")}</p>
-        <Button size="sm" variant="ghost" onClick={skipLaunchUpdate}>{t("update.launch.skip")}</Button>
       </div>
     </div>
   );

@@ -62,12 +62,7 @@ export function setInstallOnLaunch(on: boolean) {
   useUpdate.setState({ installOnLaunch: on });
 }
 
-let skipLaunch: (() => void) | null = null;
 let launched = false;
-
-/** "Pular" na tela de abertura: o app abre agora; o que a consulta achar
- * depois vira o aviso do topo, sem instalar. */
-export function skipLaunchUpdate() { skipLaunch?.(); }
 
 /** Ao abrir o app: consulta antes de mostrar a tela e, havendo versão nova,
  * baixa, instala e reinicia sozinho, com a janela de progresso na frente.
@@ -79,16 +74,14 @@ export async function updateAtLaunch() {
   launched = true;
   useUpdate.setState({ launching: true });
   let skipped = false;
-  const stop = new Promise<null>((resolve) => { skipLaunch = () => { skipped = true; resolve(null); }; });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => { skipped = true; resolve(null); }, LAUNCH_TIMEOUT_MS); });
   const asking = check().catch((error) => { console.warn("launch update check failed", error); return null; });
-  const update = await Promise.race([asking, stop, timeout]);
+  const update = await Promise.race([asking, timeout]);
   clearTimeout(timer);
-  skipLaunch = null;
   useUpdate.setState({ launching: false });
   if (!update) {
-    // O que a consulta lenta achar depois de pular ainda vira aviso.
+    // O que a consulta lenta achar depois do limite ainda vira aviso.
     if (skipped) void asking.then((late) => { if (late) keep(late); });
     else useUpdate.setState({ checkedAt: answered() });
     return;

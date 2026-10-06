@@ -3,6 +3,7 @@ import type { TurnEvidence } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 import { evidenceGroups, loadEvidence } from "@/modules/gate";
 import { useT, type Key } from "@/modules/i18n";
+import { LoadingNote } from "@/components/atoms";
 
 /** O que foi conferido numa resposta, aberto pelo botão do balão. Os três
  * grupos ficam separados de propósito: o que o JayV observou, o que um modelo
@@ -18,7 +19,7 @@ export function EvidencePanel({ turnId }: { turnId: string }) {
     return () => { live = false; };
   }, [turnId]);
 
-  if (!evidence) return <p className="text-caption text-muted-foreground">{t("evidence.loading")}</p>;
+  if (!evidence) return <LoadingNote fill={false}>{t("evidence.loading")}</LoadingNote>;
   const groups = evidenceGroups(evidence, t);
   const sections: [Key, string[]][] = [
     ["evidence.observed", groups.observed],

@@ -7,6 +7,7 @@ import {
 } from "@/modules/organizations";
 import { openTurns } from "@/modules/workspace";
 import { Button } from "@/components/ui/button";
+import { LoadingNote } from "@/components/atoms";
 import { cn } from "@/lib/utils";
 
 const POLICY: Record<PolicySource, Key> = {
@@ -103,7 +104,7 @@ export function RepositoryPanel({ project, chat }: { project: Project; chat: Cha
       {open && (
         <div className="min-h-0 overflow-y-auto border-t border-border px-3 py-2">
           {failed && <p className="text-muted-foreground">{t("chatRepos.failed")}</p>}
-          {!failed && items === null && <p className="text-muted-foreground">{t("chatRepos.loading")}</p>}
+          {!failed && items === null && <LoadingNote fill={false}>{t("chatRepos.loading")}</LoadingNote>}
           {!failed && items?.length === 0 && <p className="text-muted-foreground">{t("chatRepos.empty")}</p>}
           {!failed && items && items.length > 0 && (
             <ul className="grid gap-2.5">

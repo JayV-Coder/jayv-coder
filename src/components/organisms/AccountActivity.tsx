@@ -1,7 +1,7 @@
 import type { UsageReport } from "@/modules/core";
 import { useLocale, useT } from "@/modules/i18n";
 import { formatPercent, formatTokens, openStats } from "@/modules/usage";
-import { EmptyText } from "@/components/atoms";
+import { LoadingNote } from "@/components/atoms";
 import { SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 
@@ -26,7 +26,7 @@ export function AccountActivity({ report, projects, chats }: { report: UsageRepo
       description={t("profile.activity.description")}
       action={<Button variant="outline" size="sm" onClick={() => openStats({ kind: "global" })}>{t("profile.activity.open")}</Button>}
     >
-      {!totals ? <EmptyText role="status">{t("usage.loading")}</EmptyText> : (
+      {!totals ? <LoadingNote fill={false}>{t("usage.loading")}</LoadingNote> : (
         <dl className="grid grid-cols-2 gap-3">
           {numbers.map(([label, value]) => (
             <div key={label} className="rounded-lg border border-border/60 px-3.5 py-3 last:col-span-2">

@@ -897,6 +897,8 @@ impl Orchestrator {
             Text::new("guidance.nothingConfigured")
         } else if self.config.models.is_empty() {
             Text::new("guidance.noModels")
+        } else if !self.config.models.values().any(|model|model.enabled) {
+            Text::new("guidance.noActiveModel")
         } else if self.providers.is_empty() {
             Text::new("guidance.noAgent")
         } else if selection.provider=="jev" {

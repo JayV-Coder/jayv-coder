@@ -22,6 +22,7 @@ import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
 import { FeatureLocked, LaunchUpdate, McpDraftDialog, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
+import { LoadingNote } from "@/components/atoms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -91,7 +92,7 @@ export function App() {
   // com o caminho para os planos, por qualquer atalho que se chegue a ela.
   const locked = VIEW_FEATURE[view];
   const blocked = useEntitlements((state) => (locked ? !allows(state, locked) : false));
-  const loading = <p className="grid min-h-full place-items-center text-sm text-muted-foreground">{t("auth.loading")}</p>;
+  const loading = <LoadingNote>{t("auth.loading")}</LoadingNote>;
   // Sem perfil (a leitura falhou ou a linha não existe), o app abre mesmo
   // assim: o passo de perfil é convite, não porta.
   const signedIn = recovering
