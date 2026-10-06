@@ -10,13 +10,15 @@ function Tabs({
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
-      className={cn("flex flex-col gap-4", className)}
+      className={cn("flex flex-col gap-4 data-[orientation=vertical]:flex-row data-[orientation=vertical]:items-start", className)}
       {...props}
     />
   )
 }
 
-/** Abas em linha sobre um divisor; a ativa ganha o traço de 2px embaixo. */
+/** Abas em linha sobre um divisor; a ativa ganha o traço de 2px embaixo. Na
+ * vertical (`orientation="vertical"` no `Tabs`) ficam em coluna, com o divisor
+ * à direita e o traço da ativa também à direita. */
 function TabsList({
   className,
   ...props
@@ -25,7 +27,7 @@ function TabsList({
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        "inline-flex w-fit items-stretch gap-1 border-b border-border text-muted-foreground",
+        "inline-flex w-fit items-stretch gap-1 border-b border-border text-muted-foreground data-[orientation=vertical]:flex-col data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:border-r",
         className
       )}
       {...props}
@@ -41,7 +43,7 @@ function TabsTrigger({
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
       className={cn(
-        "-mb-px inline-flex items-center justify-center gap-1.5 rounded-t-md border-b-2 border-transparent px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-[color,border-color,background-color] outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50 data-[state=active]:border-foreground data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "-mb-px inline-flex items-center justify-center gap-1.5 rounded-t-md border-b-2 border-transparent px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-[color,border-color,background-color] outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50 data-[orientation=vertical]:mr-[-1px] data-[orientation=vertical]:mb-0 data-[orientation=vertical]:justify-start data-[orientation=vertical]:rounded-t-none data-[orientation=vertical]:rounded-l-md data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:border-r-2 data-[state=active]:border-foreground data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}

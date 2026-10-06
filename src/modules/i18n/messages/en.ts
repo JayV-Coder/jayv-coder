@@ -1631,6 +1631,8 @@ export const en = {
   "whatsNew.item.orgGeneralChats.detail": "In the project list, the chats that work on all repositories of an organization now have their own General chats block, separate from the projects of each repository. The Open chat button asks which general chat to continue, or starts a new one, and the command palette (Ctrl+K) lists them too.",
   "whatsNew.item.paletteEverything.title": "Every screen is reachable from Ctrl+K",
   "whatsNew.item.paletteEverything.detail": "The command palette now lists what each screen does: new project and layout, project notes and chat search, the live files panel, stopping a request, every Settings tab and its save, discard and defaults buttons, the organization tabs, accepting invites, language, theme, notifications, sign out, checking for updates, the system diagnostics and the documentation on the site.",
+  "whatsNew.item.settingsSideTabs.title": "Settings tabs on the left",
+  "whatsNew.item.settingsSideTabs.detail": "The tabs of the Settings page (App, Jev, MCP, Skills and each agent) now sit in a column on the left, next to the content of the page, instead of in a row on top. The column follows you as the page scrolls.",
   "whatsNew.item.skills.title": "Skills that Jev chooses for you",
   "whatsNew.item.skills.detail": "Install skills (folders with a SKILL.md) in Settings › Skills, from a folder or by pasting the file. After reading each request, Jev picks the one skill that fits, or none, and tells the model to follow it; the chat shows a Skill step when one was used. Also reachable from the command palette (Ctrl+K).",
   "whatsNew.item.replyLanguage.title": "JayV always replies in the language of the app",
