@@ -39,7 +39,7 @@ impl ContextFirewall {
     pub fn check_file(&self, path: impl AsRef<Path>) -> FilePrivacyInfo {
         let normalized = path.as_ref().to_string_lossy().replace('\\', "/");
         let file_name = path.as_ref().file_name().map(|x| x.to_string_lossy()).unwrap_or_default();
-        let denied = first_match(&self.deny, &self.deny_patterns, &normalized, file_name.as_ref());
+        let denied = first_match(&self.deny, &self.deny_patterns, &normalized, file_name.as_ref()).filter(|pattern| !(*pattern == ENV_ANY && is_env_template(file_name.as_ref())));
         let confined = first_match(&self.local, &self.local_patterns, &normalized, file_name.as_ref());
         let matched_rule = denied.map(|pattern| format!("privacy.deny · {pattern}")).or_else(|| confined.map(|pattern| format!("privacy.local_only · {pattern}")));
         FilePrivacyInfo { path: normalized, is_sensitive: denied.is_some(), local_only: confined.is_some(), matched_rule }
@@ -62,6 +62,21 @@ impl ContextFirewall {
         filtered
     }
 }
+
+/// A regra que protege todo `.env.<algo>`.
+pub const ENV_ANY: &str = ".env.*";
+
+/// `.env.example` e afins: o molde das variáveis, sem valor de verdade. Fica
+/// legível mesmo com `.env.*` protegido; o `.env` e os `.env.local`,
+/// `.env.production` etc. continuam fechados.
+pub fn is_env_template(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    name.starts_with(".env.") && [".example", ".sample", ".template", ".dist", ".defaults"].iter().any(|suffix| name.ends_with(suffix))
+}
+
+/// Os `.env` de verdade que `.env.*` cobre — o Claude não tem negação nas
+/// regras, então a lista vai por extenso e deixa de fora os moldes.
+pub const ENV_REAL: [&str; 9] = [".env.local", ".env.*.local", ".env.development", ".env.production", ".env.staging", ".env.test", ".env.dev", ".env.prod", ".env.secrets"];
 
 fn build_globs(patterns: &[String]) -> GlobSet {
     let mut builder = GlobSetBuilder::new();
@@ -95,6 +110,12 @@ fn is_card_number(raw: &str) -> bool { let digits: String = raw.chars().filter(c
 mod tests {
     use super::*;
     fn firewall() -> ContextFirewall { ContextFirewall::new(PrivacyConfig::default()) }
+    #[test] fn env_templates_stay_readable() {
+        let f = ContextFirewall::new(PrivacyConfig { deny: vec![".env".into(), ENV_ANY.into()], local_only: vec![], redact_secrets: true });
+        assert!(f.check_file("jobs/job-browser/.env.example").matched_rule.is_none());
+        assert!(f.check_file(".env.sample").matched_rule.is_none());
+        assert!(f.check_file(".env.production").is_sensitive && f.check_file("a/.env.local").is_sensitive && f.check_file(".env").is_sensitive);
+    }
     #[test] fn protects_sensitive_files_and_values() { let f = firewall(); assert!(f.check_file(".env").is_sensitive); assert!(f.redact_secrets("Email: test@example.com").contains("[EMAIL_REDACTED]")); }
     #[test] fn names_the_rule_a_path_matched() {
         let f = firewall();
