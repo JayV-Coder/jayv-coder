@@ -200,6 +200,7 @@ impl WorkspaceStore {
         ensure_chat_work_mode(&connection)?;
         ensure_turn_partial(&connection)?;
         ensure_turn_local(&connection)?;
+        ensure_turn_grants(&connection)?;
         ensure_message_uid(&connection)?;
         ensure_project_repo_keys(&connection)?;
         ensure_project_org(&connection)?;
@@ -474,6 +475,38 @@ impl WorkspaceStore {
     }
 
     /// O modo fixado no chat; chat sem modo gravado fica no automático.
+    /// O que foi liberado para o pedido deste turno, além das configurações.
+    pub fn turn_grants(&self, turn_id: &str) -> Result<crate::llm::Grants> {
+        let stored:Option<Option<String>>=self.connection.query_row("SELECT grants FROM turns WHERE id=?1",[turn_id],|row|row.get(0)).optional()?;
+        Ok(stored.flatten().and_then(|json|serde_json::from_str(&json).ok()).unwrap_or_default())
+    }
+
+    pub fn set_turn_grants(&mut self, turn_id: &str, grants: &crate::llm::Grants) -> Result<()> {
+        let json=(!grants.is_empty()).then(||serde_json::to_string(grants)).transpose()?;
+        self.connection.execute("UPDATE turns SET grants=?1 WHERE id=?2",params![json,turn_id])?;
+        Ok(())
+    }
+
+    /// Os comandos sempre permitidos no projeto do chat, na ordem em que
+    /// foram permitidos.
+    pub fn allowed_commands(&self, chat_id: &str) -> Result<Vec<String>> {
+        let mut statement=self.connection.prepare("SELECT a.command FROM allowed_commands a JOIN chats c ON c.project_id=a.project_id WHERE c.id=?1 ORDER BY a.created_at,a.command")?;
+        let commands=statement.query_map([chat_id],|row|row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(commands)
+    }
+
+    pub fn allow_command(&mut self, chat_id: &str, command: &str) -> Result<()> {
+        let command=command.trim();
+        anyhow::ensure!(!command.is_empty(),"empty command");
+        self.connection.execute("INSERT OR IGNORE INTO allowed_commands(project_id,command,created_at) SELECT project_id,?2,?3 FROM chats WHERE id=?1",params![chat_id,command,Utc::now().to_rfc3339()])?;
+        Ok(())
+    }
+
+    pub fn forget_allowed_command(&mut self, chat_id: &str, command: &str) -> Result<()> {
+        self.connection.execute("DELETE FROM allowed_commands WHERE command=?2 AND project_id=(SELECT project_id FROM chats WHERE id=?1)",params![chat_id,command])?;
+        Ok(())
+    }
+
     pub fn work_mode(&self, chat_id: &str) -> Result<String> {
         Ok(self.connection.query_row("SELECT work_mode FROM chats WHERE id=?1",[chat_id],|row|row.get(0)).optional()?.unwrap_or_else(auto_mode))
     }
@@ -806,6 +839,24 @@ fn ensure_turn_local(connection:&Connection)->Result<()> {
     if !connection.prepare("SELECT 1 FROM pragma_table_info('turns') WHERE name='local'")?.exists([])? {
         connection.execute_batch("ALTER TABLE turns ADD COLUMN local INTEGER NOT NULL DEFAULT 1")?;
     }
+    Ok(())
+}
+
+/// As permissões liberadas para um pedido só (`llm::Grants`, em JSON) e os
+/// comandos que o desenvolvedor mandou sempre permitir num projeto. Ficam
+/// neste computador: são permissões dele, para os agentes daqui.
+fn ensure_turn_grants(connection:&Connection)->Result<()> {
+    if !connection.prepare("SELECT 1 FROM pragma_table_info('turns') WHERE name='grants'")?.exists([])? {
+        connection.execute_batch("ALTER TABLE turns ADD COLUMN grants TEXT")?;
+    }
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS allowed_commands (
+           project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+           command TEXT NOT NULL,
+           created_at TEXT NOT NULL,
+           PRIMARY KEY(project_id,command)
+         );",
+    )?;
     Ok(())
 }
 
@@ -1775,4 +1826,21 @@ mod tests {
         assert_eq!(store.work_mode(&chat.id).expect("modo"),"plan");
     }
 
+
+    #[test] fn grants_stay_with_the_turn_and_always_allowed_commands_with_the_project() {
+        let root=tempfile::tempdir().expect("tempdir");
+        let mut store=store(&root);
+        let project=store.create_project("p",None).expect("projeto");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"rode os testes",None).expect("turno");
+        assert!(store.turn_grants(&turn.id).expect("lê").is_empty());
+        let grants=crate::llm::Grants{git:true,commands:vec!["git add -A".into()],..Default::default()};
+        store.set_turn_grants(&turn.id,&grants).expect("grava");
+        assert_eq!(store.turn_grants(&turn.id).expect("lê"),grants);
+        store.allow_command(&chat.id,"git add").expect("sempre");
+        store.allow_command(&chat.id,"git add").expect("de novo, sem duplicar");
+        assert_eq!(store.allowed_commands(&chat.id).expect("lista"),vec!["git add".to_string()]);
+        store.forget_allowed_command(&chat.id,"git add").expect("tira");
+        assert!(store.allowed_commands(&chat.id).expect("lista").is_empty());
+    }
 }

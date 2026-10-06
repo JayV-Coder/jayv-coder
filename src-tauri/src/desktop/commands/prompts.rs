@@ -18,6 +18,9 @@ pub struct ProcessRequest {
     /// Preenchido só no reenvio: é o turno que falhou voltando ao ar com o
     /// mesmo código, em vez de um pedido novo com um código novo.
     pub turn_id:Option<String>,
+    /// O que o desenvolvedor liberou só para este pedido, no seletor de
+    /// permissões da caixa de mensagem.
+    #[serde(default)] pub grants:Option<crate::llm::Grants>,
 }
 
 /// Aceita o pedido e devolve o turno. Só isso — e é de propósito: esta chamada
@@ -35,7 +38,10 @@ pub(crate) async fn enqueue_prompt(app:AppHandle,workspace:State<'_,SharedWorksp
     let turn={
         let mut workspace=workspace.lock().await;
         if !workspace.contains_chat(chat_id).map_err(failure)?{return Err(Text::new("chat.notFound"));}
-        workspace.enqueue_prompt(chat_id,input,request.turn_id.as_deref()).map_err(failure)?
+        let turn=workspace.enqueue_prompt(chat_id,input,request.turn_id.as_deref()).map_err(failure)?;
+        // O reenvio sem seletor mantém o que o pedido já tinha liberado.
+        if let Some(grants)=&request.grants { workspace.set_turn_grants(&turn.id,grants).map_err(failure)?; }
+        turn
     };
     let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:chat_id.to_string()});
     bell.notify_one();
@@ -60,10 +66,11 @@ pub struct AnswerInput {
 ///
 /// O pedido entra na fila como qualquer outro. Nenhum caminho dispensa o portão.
 #[tauri::command]
-pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Turn,Text>{crate::desktop::require_session()?;
+pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorkspace>,bell:State<'_,QueueBell>,answer:AnswerInput)->Result<Option<Turn>,Text>{crate::desktop::require_session()?;
     let mut store=workspace.lock().await;
     let question=store.question_of(&answer.question_turn_id).map_err(failure)?.ok_or_else(||Text::new("question.gone"))?;
     if question.status!=turns::QUESTION_PENDING {return Err(Text::new("question.closed"));}
+    if question.source==asking::PERMISSION_SOURCE { drop(store); return answer_permission(&app,workspace.inner(),bell.inner(),&question,&answer).await; }
     // A confirmação da portaria grava a escolha (ou o pedido completado), não
     // "Resposta à pergunta…": a fila a lê para mandar o pedido de origem.
     let composed=if question.source==crate::gatekeeper::GATE_SOURCE {
@@ -81,7 +88,56 @@ pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorks
     drop(store);
     let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id});
     bell.notify_one();
-    Ok(turn)
+    Ok(Some(turn))
+}
+
+/// A resposta ao comando que o agente pediu. Executar e sempre permitir
+/// repetem o pedido de origem com a permissão liberada só para ele (a pergunta
+/// e a resposta vão em par, como em qualquer pergunta); sempre permitir grava
+/// o começo do comando no projeto. Negar fecha a pergunta e não chama agente
+/// nenhum: o agente já disse o que fez sem o comando.
+async fn answer_permission(app:&AppHandle,workspace:&SharedWorkspace,bell:&QueueBell,question:&turns::QuestionView,answer:&AnswerInput)->Result<Option<Turn>,Text> {
+    let mut store=workspace.lock().await;
+    let commands=question.prompt.lines().map(str::trim).filter(|line|!line.is_empty()).map(String::from).collect::<Vec<_>>();
+    let chat_id=store.chat_of_turn(&question.turn_id).map_err(failure)?.ok_or_else(||Text::new("question.originGone"))?;
+    let choice=answer.picked.first().map(String::as_str).unwrap_or_default();
+    match choice {
+        asking::PERMISSION_DENY=>{
+            if !store.settle_question(&question.turn_id,turns::QUESTION_DISMISSED,None).map_err(failure)? { return Err(Text::new("question.closed")); }
+            let _=store.record_beat(&question.turn_id,"permission_denied",&serde_json::json!({"commands":commands}));
+            drop(store);
+            let _=app.emit(TURN_EVENT,TurnEvent{chat_id,turn_id:question.turn_id.clone()});
+            Ok(None)
+        }
+        asking::PERMISSION_RUN|asking::PERMISSION_ALWAYS=>{
+            let always=choice==asking::PERMISSION_ALWAYS;
+            if always { for command in &commands { store.allow_command(&chat_id,&crate::llm::command_prefix(command)).map_err(failure)?; } }
+            let turn=store.enqueue_prompt(&chat_id,&asking::permission_answer(&commands,always),None).map_err(failure)?;
+            store.set_turn_grants(&turn.id,&crate::llm::Grants{commands:commands.clone(),..Default::default()}).map_err(failure)?;
+            if !store.settle_question(&question.turn_id,turns::QUESTION_ANSWERED,Some(&turn.id)).map_err(failure)? {
+                eprintln!("permissão: `{}` foi encerrada por outro caminho enquanto era respondida",question.turn_id);
+            }
+            drop(store);
+            let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id});
+            bell.notify_one();
+            Ok(Some(turn))
+        }
+        other=>Err(Text::new("answer.unknown").with("option",other)),
+    }
+}
+
+/// Os comandos sempre permitidos no projeto do chat.
+#[tauri::command]
+pub(crate) async fn allowed_commands(workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<Vec<String>,Text>{crate::desktop::require_session()?;
+    workspace.lock().await.allowed_commands(&chat_id).map_err(failure)
+}
+
+/// Tira um comando dos sempre permitidos: volta a ser perguntado.
+#[tauri::command]
+pub(crate) async fn forget_allowed_command(workspace:State<'_,SharedWorkspace>,chat_id:String,command:String)->Result<Vec<String>,Text>{crate::desktop::require_session()?;
+    let mut store=workspace.lock().await;
+    store.forget_allowed_command(&chat_id,&command).map_err(failure)?;
+    store.allowed_commands(&chat_id).map_err(failure)
 }
 
 /// Descarta a pergunta e devolve o box ao desenvolvedor. A decisão fica

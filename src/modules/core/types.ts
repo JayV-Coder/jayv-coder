@@ -72,6 +72,17 @@ export interface TurnRoute {
   switched?: ModeSwitch | null;
 }
 
+/** O que o desenvolvedor libera só para o próximo pedido, por cima das
+ * configurações dos agentes. `commands` são comandos aprovados no chat. */
+export interface Grants {
+  shell: boolean;
+  git: boolean;
+  network: boolean;
+  commands: string[];
+}
+
+export const NO_GRANTS: Grants = { shell: false, git: false, network: false, commands: [] };
+
 export interface Question {
   turnId: string;
   code: string;

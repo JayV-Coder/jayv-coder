@@ -11,6 +11,7 @@ import { SegmentedControl } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AskingPanel } from "./AskingPanel";
+import { GrantsPicker } from "./GrantsPicker";
 
 /** A caixa de enviar mensagem, como o prompt de um terminal: `❯`, o cursor
  * verde-limão e os atalhos à vista embaixo. É o banco que escolhe o traje dela: sem
@@ -106,9 +107,9 @@ export function Composer({ chat }: { chat: Chat | null }) {
               <span className="inline-flex items-center gap-1.5"><Kbd>↵</Kbd>{t(writing ? "composer.key.answer" : "composer.key.send")}</span>
               <span className="inline-flex items-center gap-1.5"><Kbd>⇧</Kbd><Kbd>↵</Kbd>{t("composer.key.newline")}</span>
               <span className="inline-flex items-center gap-1.5"><Kbd>{MOD}</Kbd><Kbd>K</Kbd>{t("palette.title")}</span>
-              {!question && <span className="inline-flex items-center gap-1.5"><Kbd>/plan</Kbd><Kbd>/build</Kbd><Kbd>/auto</Kbd>{t("composer.key.mode")}</span>}
             </small>
           )}
+        {chat && !question && <GrantsPicker chat={chat} />}
         {chat && (
           <SegmentedControl<WorkMode>
             label={`${t("mode.label")} (${shortcutText("workMode")})`}

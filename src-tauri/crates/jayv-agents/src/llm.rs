@@ -86,6 +86,14 @@ pub struct AgentModel {
 #[serde(rename_all="camelCase")]
 pub struct LlmSettings { pub agents:Vec<AgentSettings>, pub models:Vec<AgentModel> }
 
+impl LlmSettings {
+    /// Todos os agentes com o que foi liberado para o pedido.
+    pub fn with_grants(&self,grants:&Grants)->Self {
+        if grants.is_empty() { return self.clone(); }
+        Self{agents:self.agents.iter().map(|agent|agent.with_grants(grants)).collect(),models:self.models.clone()}
+    }
+}
+
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
 pub struct ClaudeOptions {
@@ -106,8 +114,12 @@ pub struct ClaudeOptions {
     pub symbol_tools:bool,
     /// Os mecanismos liberados sem pergunta (`CLAUDE_MECHANISMS`).
     pub mechanisms:Vec<String>,
+    /// As regras do `--allowedTools` que o desenvolvedor liberou para um
+    /// pedido só (`Grants`): `Bash(git add:*)`. Nunca gravadas.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub granted:Vec<String>,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH])} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -136,8 +148,12 @@ pub struct CopilotOptions {
     pub silent:bool,
     /// Os mecanismos liberados sem pergunta (`COPILOT_MECHANISMS`).
     pub mechanisms:Vec<String>,
+    /// As ferramentas do `--allow-tool` liberadas para um pedido só
+    /// (`Grants`): `shell(git add)`. Nunca gravadas.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub granted:Vec<String>,
 }
-impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![]} } }
+impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -276,6 +292,9 @@ impl ClaudeOptions {
         let mut allowed=self.mechanisms.iter().filter_map(|mechanism|claude_tool(mechanism))
             .filter(|tool|!self.blocked_tools.iter().any(|item|item==tool)).map(str::to_string).collect::<Vec<_>>();
         let symbols=if self.symbol_tools&&!self.safe_mode { symbol_server_config() } else { None };
+        // O que o desenvolvedor liberou para este pedido; o `Bash` bloqueado
+        // continua bloqueado.
+        if !self.blocked_tools.iter().any(|item|item=="Bash") { allowed.extend(self.granted.iter().cloned()); }
         if symbols.is_some() { allowed.push(SYMBOL_SERVER_TOOLS.to_string()); }
         if !allowed.is_empty() { args.extend(["--allowedTools".to_string(),allowed.join(",")]); }
         if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
@@ -361,6 +380,7 @@ impl CopilotOptions {
                 _=>{}
             }
         }
+        for tool in &self.granted { args.extend(["--allow-tool".to_string(),tool.clone()]); }
         // A negação vence a liberação no Copilot, então o bloqueio continua
         // valendo mesmo com o mecanismo ligado.
         for tool in &self.blocked_tools { args.extend(["--deny-tool".to_string(),tool.clone()]); }
@@ -468,12 +488,12 @@ impl AgentSettings {
         match self.id {
             AgentId::Claude=>{
                 let options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                ClaudeOptions{permission_mode:"plan".into(),mechanisms:without_shell(&options.mechanisms),..options}.args()
+                ClaudeOptions{permission_mode:"plan".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],..options}.args()
             }
             AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
             AgentId::Copilot=>{
                 let options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),..options}.args()
+                CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],..options}.args()
             }
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
         }
@@ -491,6 +511,7 @@ impl AgentSettings {
                 let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
                 if options.permission_mode=="bypassPermissions" { options.permission_mode=MANUAL.into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
+                options.granted.clear();
                 serde_json::to_value(options)
             }
             AgentId::Codex=>{
@@ -502,6 +523,7 @@ impl AgentSettings {
                 let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
                 if options.tool_access=="all" { options.tool_access="edits".into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
+                options.granted.clear();
                 serde_json::to_value(options)
             }
             AgentId::Cursor=>{
@@ -515,6 +537,57 @@ impl AgentSettings {
         Self{options,..self.clone()}
     }
 
+    /// O mesmo agente com o que o desenvolvedor liberou para um pedido só
+    /// (`Grants`). Só soma: o que a configuração já liberava continua, e a
+    /// política da organização, aplicada depois, ainda tira o que não deixa.
+    ///
+    /// Cada CLI libera do jeito que sabe. O Claude e o Copilot liberam
+    /// comando por comando (`Bash(git add:*)`, `shell(git add)`). O Codex não
+    /// tem lista de comandos: ele já roda comandos no sandbox, e o que o
+    /// sandbox nega é a rede (`network_access`) e o `.git`, que só o
+    /// `danger-full-access` abre. O Cursor só tem o `--force`.
+    pub fn with_grants(&self,grants:&Grants)->Self {
+        if grants.is_empty() { return self.clone(); }
+        let with=|mechanisms:&[String],mechanism:&str|{ let mut all=mechanisms.to_vec(); if !all.iter().any(|known|known==mechanism) { all.push(mechanism.into()); } all };
+        let options=match self.id {
+            AgentId::Claude=>{
+                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
+                if grants.shell { options.mechanisms=with(&options.mechanisms,SHELL); }
+                if grants.network { options.mechanisms=with(&options.mechanisms,WEB_FETCH); }
+                let mut rules=grants.commands.iter().filter_map(|command|claude_rule(command)).collect::<Vec<_>>();
+                if grants.git { rules.push("Bash(git:*)".into()); }
+                // O comando que não cabe numa regra (vírgula, parêntese) libera
+                // o `Bash` inteiro: foi o que o desenvolvedor aprovou.
+                if grants.commands.iter().any(|command|claude_rule(command).is_none()) { options.mechanisms=with(&options.mechanisms,SHELL); }
+                for rule in rules { if !options.granted.contains(&rule) { options.granted.push(rule); } }
+                serde_json::to_value(options)
+            }
+            AgentId::Codex=>{
+                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
+                if grants.needs_git() { options.sandbox="danger-full-access".into(); }
+                if grants.needs_network()&&options.sandbox!="danger-full-access" { options.network_access=true; }
+                serde_json::to_value(options)
+            }
+            AgentId::Copilot=>{
+                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
+                if grants.shell { options.mechanisms=with(&options.mechanisms,SHELL); }
+                if grants.network { options.mechanisms=with(&options.mechanisms,WEB_FETCH); }
+                if options.tool_access=="read" { options.tool_access="edits".into(); }
+                let mut tools=grants.commands.iter().filter_map(|command|copilot_rule(command)).collect::<Vec<_>>();
+                if grants.git { tools.push("shell(git)".into()); }
+                if grants.commands.iter().any(|command|copilot_rule(command).is_none()) { options.mechanisms=with(&options.mechanisms,SHELL); }
+                for tool in tools { if !options.granted.contains(&tool) { options.granted.push(tool); } }
+                serde_json::to_value(options)
+            }
+            AgentId::Cursor=>{
+                let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
+                if grants.shell||grants.git||!grants.commands.is_empty() { options.force=true; }
+                serde_json::to_value(options)
+            }
+        }.unwrap_or_default();
+        Self{options,..self.clone()}
+    }
+
     /// O mesmo agente sem os mecanismos que a política bloqueia, escritos
     /// `agente/mecanismo`. A política só tira: nunca liga o que quem usa
     /// deixou desligado.
@@ -522,14 +595,71 @@ impl AgentSettings {
         let prefix=format!("{}/",self.id.key());
         if !blocked.iter().any(|key|key.starts_with(&prefix)) { return self.clone(); }
         let gone=|mechanisms:&[String]|mechanisms.iter().filter(|mechanism|!blocked.contains(&format!("{}/{mechanism}",self.id.key()))).cloned().collect::<Vec<_>>();
+        // Os comandos liberados para um pedido também são o mecanismo `shell`.
+        let shell_blocked=blocked.contains(&format!("{}/{SHELL}",self.id.key()));
         let options=match self.id {
-            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
+            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } serde_json::to_value(options) }
             AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
-            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
+            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } serde_json::to_value(options) }
             AgentId::Cursor=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
+}
+
+/// O que o desenvolvedor libera para um pedido só, por cima das
+/// configurações do agente: no seletor de permissões da caixa de mensagem, ou
+/// ao responder "Executar" ou "Sempre permitir" ao comando que o agente pediu.
+/// `commands` são os comandos aprovados, como o agente os citou (ou o começo
+/// deles, para os sempre permitidos no projeto).
+#[derive(Debug,Clone,Default,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",default)]
+pub struct Grants { pub shell:bool, pub git:bool, pub network:bool, pub commands:Vec<String> }
+
+impl Grants {
+    pub fn is_empty(&self)->bool { !self.shell&&!self.git&&!self.network&&self.commands.is_empty() }
+
+    /// Os dois juntos: o pedido do seletor e as regras do projeto.
+    pub fn merged(&self,other:&Grants)->Self {
+        let mut commands=self.commands.clone();
+        for command in &other.commands { if !commands.contains(command) { commands.push(command.clone()); } }
+        Self{shell:self.shell||other.shell,git:self.git||other.git,network:self.network||other.network,commands}
+    }
+
+    /// Algum comando aprovado mexe no git. No Codex é o `.git` aberto.
+    pub fn needs_git(&self)->bool { self.git||self.commands.iter().any(|command|program(command)=="git") }
+
+    /// Algum comando aprovado busca coisa na rede: instalar pacote, baixar,
+    /// falar com o remoto do git.
+    pub fn needs_network(&self)->bool { self.network||self.commands.iter().any(|command|fetches(command)) }
+}
+
+/// O começo de um comando que vale para "sempre permitir": o programa e o
+/// subcomando (`git add`, `npm run`), sem os argumentos que mudam a cada vez.
+pub fn command_prefix(command:&str)->String {
+    let words=command.split_whitespace().collect::<Vec<_>>();
+    let take=match words.get(1) { Some(word) if !word.starts_with('-')&&!word.contains(['/','\\','.','=']) =>2, _=>1 };
+    words.iter().take(take).copied().collect::<Vec<_>>().join(" ")
+}
+
+fn program(command:&str)->&str { command.split_whitespace().next().unwrap_or_default() }
+
+fn fetches(command:&str)->bool {
+    let words=command.split_whitespace().collect::<Vec<_>>();
+    matches!(words.first().copied(),Some("curl"|"wget"|"gh"))
+        ||words.iter().skip(1).take(2).any(|word|matches!(*word,"install"|"i"|"add"|"ci"|"fetch"|"pull"|"push"|"clone"|"update"|"upgrade"|"download"|"sync"))
+}
+
+/// A regra do Claude para o comando: ele e o que vier depois.
+fn claude_rule(command:&str)->Option<String> {
+    let command=command.trim();
+    (!command.is_empty()&&!command.contains([',','(',')'])).then(||format!("Bash({command}:*)"))
+}
+
+/// A ferramenta do Copilot para o comando: o programa e o subcomando.
+fn copilot_rule(command:&str)->Option<String> {
+    let prefix=command_prefix(command);
+    (!prefix.is_empty()&&!prefix.contains([',','(',')'])).then(||format!("shell({prefix})"))
 }
 
 fn without_shell(mechanisms:&[String])->Vec<String> { mechanisms.iter().filter(|mechanism|*mechanism!=SHELL).cloned().collect() }
@@ -1549,5 +1679,38 @@ mod tests {
     #[test] fn the_agent_path_starts_with_its_own_folder() {
         let path=agent_path(Path::new("/opt/tools/bin/copilot")).expect("path");
         assert_eq!(env::split_paths(&path).next(),Some(PathBuf::from("/opt/tools/bin")));
+    }
+
+    /// O liberado para um pedido chega à linha de comando de cada agente do
+    /// jeito que a CLI dele sabe, e a política com `safe_agents` ainda tira.
+    #[test] fn grants_reach_each_agent_and_safe_agents_still_removes_them() {
+        let grants=Grants{commands:vec!["git add -A".into()],..Default::default()};
+        let claude=agent(AgentId::Claude,Value::Null).with_grants(&grants);
+        let args=claude.build_args();
+        let allowed=args.iter().position(|arg|arg=="--allowedTools").map(|at|args[at+1].clone()).expect("allowedTools");
+        assert!(allowed.contains("Bash(git add -A:*)"),"{allowed}");
+        assert!(!claude.without_unsafe_modes().build_args().join(" ").contains("Bash("),"safe_agents tira o liberado");
+        assert!(!claude.plan_args().join(" ").contains("Bash("),"o planejamento não roda comando");
+        let codex=agent(AgentId::Codex,Value::Null).with_grants(&grants).build_args();
+        assert!(codex.windows(2).any(|pair|pair[0]=="--sandbox"&&pair[1]=="danger-full-access"),"git abre o .git no Codex");
+        let network=agent(AgentId::Codex,Value::Null).with_grants(&Grants{commands:vec!["npm install".into()],..Default::default()}).build_args();
+        assert!(network.iter().any(|arg|arg=="sandbox_workspace_write.network_access=true"));
+        let copilot=agent(AgentId::Copilot,Value::Null).with_grants(&grants).build_args();
+        assert!(copilot.windows(2).any(|pair|pair[0]=="--allow-tool"&&pair[1]=="shell(git add)"));
+        let cursor=agent(AgentId::Cursor,Value::Null).with_grants(&Grants{shell:true,..Default::default()}).build_args();
+        assert!(cursor.iter().any(|arg|arg=="--force"));
+        // Sem nada liberado, nada muda.
+        assert_eq!(agent(AgentId::Codex,Value::Null).with_grants(&Grants::default()).build_args(),agent(AgentId::Codex,Value::Null).build_args());
+        assert!(!agent(AgentId::Claude,Value::Null).build_args().join(" ").contains("Bash("));
+        // A política que bloqueia o shell do Claude também tira o liberado.
+        assert!(!claude.without_mechanisms(&["claude/shell".into()]).build_args().join(" ").contains("Bash("));
+    }
+
+    #[test] fn the_always_prefix_keeps_the_program_and_subcommand() {
+        assert_eq!(command_prefix("git add -A"),"git add");
+        assert_eq!(command_prefix("npm run build"),"npm run");
+        assert_eq!(command_prefix("make lint"),"make lint");
+        assert_eq!(command_prefix("pytest tests/unit"),"pytest");
+        assert_eq!(command_prefix("ls -la"),"ls");
     }
 }

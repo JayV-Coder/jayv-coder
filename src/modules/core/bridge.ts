@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, Chat, CoreSettings, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, Chat, CoreSettings, Grants, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
   ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -19,10 +19,12 @@ export const commands = {
   setWorkMode: (chatId: string, mode: WorkMode) => invoke<void>("set_work_mode", { chatId, mode }),
   deleteChat: (chatId: string) => invoke<void>("delete_chat", { chatId }),
   deleteProject: (projectId: string) => invoke<void>("delete_project", { projectId }),
-  enqueuePrompt: (input: string, sessionId: string, turnId: string | null = null) =>
-    invoke<Turn>("enqueue_prompt", { request: { input, sessionId, turnId } }),
+  enqueuePrompt: (input: string, sessionId: string, turnId: string | null = null, grants: Grants | null = null) =>
+    invoke<Turn>("enqueue_prompt", { request: { input, sessionId, turnId, grants } }),
   answerQuestion: (questionTurnId: string, picked: string[], text: string | null) =>
-    invoke<Turn>("answer_question", { answer: { questionTurnId, picked, text } }),
+    invoke<Turn | null>("answer_question", { answer: { questionTurnId, picked, text } }),
+  allowedCommands: (chatId: string) => invoke<string[]>("allowed_commands", { chatId }),
+  forgetAllowedCommand: (chatId: string, command: string) => invoke<string[]>("forget_allowed_command", { chatId, command }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
   cancelTurn: (turnId: string) => invoke<void>("cancel_turn", { turnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
