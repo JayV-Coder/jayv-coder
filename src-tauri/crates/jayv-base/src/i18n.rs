@@ -115,6 +115,7 @@ fn english(text:&Text)->String {
         "guidance.fix"=>"Open Settings, turn an agent on and keep at least one of its models active.".into(),
         "guidance.nothingConfigured"=>"no LLM provider or model is configured".into(),
         "guidance.noModels"=>"providers are declared but no model is configured".into(),
+        "guidance.noActiveModel"=>"no model is turned on — they all start off".into(),
         "guidance.noAgent"=>"no agent is on".into(),
         "guidance.noFittingModel"=>"no configured model fits this request".into(),
         "guidance.policyBlocked"=>format!("the LLM policy of @{} leaves no allowed agent or model for it",param("org")),

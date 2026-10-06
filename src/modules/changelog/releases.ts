@@ -26,6 +26,14 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.78.0", date: "2026-10-06",
+    items: [
+      { kind: "feature", id: "modelsOffByDefault" },
+      { kind: "feature", id: "loadingSpinner" },
+      { kind: "feature", id: "launchWithoutSkip" },
+    ],
+  },
+  {
     version: "0.77.0", date: "2026-10-06",
     items: [
       { kind: "feature", id: "commandPermissions" },

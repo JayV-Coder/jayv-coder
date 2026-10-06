@@ -121,21 +121,26 @@ describe("updateAtLaunch", () => {
     expect(state.getState()).toMatchObject({ launching: false, phase: "idle", error: null });
   });
 
-  it("skip opens the app at once and a late answer becomes the notice", async () => {
-    const update = release("1.1.0");
-    let answer: (value: unknown) => void = () => undefined;
-    check.mockReset();
-    check.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
-    const { updateAtLaunch, skipLaunchUpdate, useUpdate: state } = await fresh();
-    state.setState({ installOnLaunch: true });
-    const running = updateAtLaunch();
-    expect(state.getState().launching).toBe(true);
-    skipLaunchUpdate();
-    await running;
-    expect(state.getState().launching).toBe(false);
-    answer(update);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(update.download).not.toHaveBeenCalled();
-    expect(state.getState()).toMatchObject({ phase: "available", next: "1.1.0" });
+  it("a slow check opens the app after the limit and a late answer becomes the notice", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = release("1.1.0");
+      let answer: (value: unknown) => void = () => undefined;
+      check.mockReset();
+      check.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+      const { updateAtLaunch, LAUNCH_TIMEOUT_MS, useUpdate: state } = await fresh();
+      state.setState({ installOnLaunch: true });
+      const running = updateAtLaunch();
+      expect(state.getState().launching).toBe(true);
+      await vi.advanceTimersByTimeAsync(LAUNCH_TIMEOUT_MS);
+      await running;
+      expect(state.getState().launching).toBe(false);
+      answer(update);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(update.download).not.toHaveBeenCalled();
+      expect(state.getState()).toMatchObject({ phase: "available", next: "1.1.0" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

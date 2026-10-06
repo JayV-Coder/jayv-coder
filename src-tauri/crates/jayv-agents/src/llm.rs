@@ -923,7 +923,7 @@ fn starter_models(agent:AgentId)->Vec<AgentModel> {
 }
 
 fn fresh_model(agent:AgentId,known:&KnownModel)->AgentModel {
-    AgentModel{agent,model:known.id.clone(),enabled:true,capabilities:known.capabilities.clone(),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
+    AgentModel{agent,model:known.id.clone(),enabled:false,capabilities:known.capabilities.clone(),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
 }
 
 /// A chave de API de cada gateway, em memória: lida do banco local ao carregar
@@ -1189,7 +1189,6 @@ pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
         if !(TIMEOUT_RANGE.0..=TIMEOUT_RANGE.1).contains(&agent.timeout) { bail!(Text::new("settings.timeout").with("agent",label(id)).with("min",TIMEOUT_RANGE.0).with("max",TIMEOUT_RANGE.1)); }
         let own:HashSet<&str>=settings.models.iter().filter(|model|model.agent==id).map(|model|model.model.trim()).collect();
         let options=agent.checked(&own)?;
-        if agent.enabled && !settings.models.iter().any(|model|model.agent==id&&model.enabled) { bail!(Text::new("settings.noActiveModel").with("agent",label(id))); }
         agents.push(AgentSettings{id,enabled:agent.enabled,command,timeout:agent.timeout,options});
     }
     let mut seen=HashSet::new();
@@ -1594,7 +1593,7 @@ mod tests {
     fn settings(agents:Vec<AgentSettings>)->LlmSettings { LlmSettings{agents,models:AgentId::ALL.into_iter().flat_map(starter_models).collect()} }
 
     /// Antes de o CLI responder, cada agente tem os modelos de fábrica, todos
-    /// ligados — os apelidos do Claude seguem a versão nova sozinhos.
+    /// desligados — os apelidos do Claude seguem a versão nova sozinhos.
     #[test] fn the_database_starts_with_the_starter_models() {
         let loaded=load(&memory()).expect("leitura");
         assert_eq!(loaded.agents.iter().map(|agent|agent.id).collect::<Vec<_>>(),AgentId::ALL);
@@ -1603,7 +1602,7 @@ mod tests {
         assert_eq!(of(AgentId::Codex).len(),1);
         assert_eq!(of(AgentId::Copilot).len(),1);
         assert_eq!(of(AgentId::Cursor),["auto"]);
-        assert!(loaded.models.iter().all(|model|model.enabled));
+        assert!(loaded.models.iter().all(|model|!model.enabled),"modelos nascem desligados");
     }
 
     #[test] fn claude_lists_its_models_through_the_model_command() {
@@ -1686,17 +1685,19 @@ mod tests {
         assert_eq!(loaded.agents.iter().find(|agent|agent.id==AgentId::Codex).map(|agent|agent.timeout),Some(900));
     }
 
-    /// A lista do CLI manda: o novo nasce ligado, o gravado guarda o que o
+    /// A lista do CLI manda: o novo nasce desligado, o gravado guarda o que o
     /// usuário mudou, e o que sumiu sai — inclusive do modelo reserva.
     #[test] fn the_cli_listing_replaces_the_agent_models() {
         let mut current=settings(vec![agent(AgentId::Claude,json!({"fallbackModel":"haiku"})),agent(AgentId::Codex,Value::Null),agent(AgentId::Copilot,Value::Null)]);
-        current.models.iter_mut().filter(|model|model.model=="opus").for_each(|model|model.enabled=false);
+        current.models.iter_mut().filter(|model|model.model=="sonnet").for_each(|model|model.enabled=true);
         let listing=[KnownModel::named(AgentId::Claude,"opus",None,None),KnownModel::named(AgentId::Claude,"sonnet[1m]",None,None)];
         let adopted=adopt_listing(&current,AgentId::Claude,&listing);
         let claude:Vec<&AgentModel>=adopted.models.iter().filter(|model|model.agent==AgentId::Claude).collect();
         assert_eq!(claude.iter().map(|model|model.model.as_str()).collect::<Vec<_>>(),["opus","sonnet[1m]"]);
-        assert!(!claude[0].enabled,"a escolha do usuário fica");
-        assert!(claude[1].enabled,"o modelo novo nasce ligado");
+        assert!(!claude[0].enabled,"o que estava desligado segue desligado");
+        assert!(!claude[1].enabled,"o modelo novo nasce desligado");
+        let kept=adopt_listing(&current,AgentId::Claude,&[KnownModel::named(AgentId::Claude,"sonnet",None,None)]);
+        assert!(kept.models.iter().find(|model|model.agent==AgentId::Claude&&model.model=="sonnet").is_some_and(|model|model.enabled),"a escolha do usuário fica");
         assert_eq!(adopted.models.iter().filter(|model|model.agent!=AgentId::Claude).count(),current.models.iter().filter(|model|model.agent!=AgentId::Claude).count());
         let options:ClaudeOptions=serde_json::from_value(adopted.agents[0].options.clone()).expect("opções");
         assert_eq!(options.fallback_model,"");
@@ -1752,10 +1753,12 @@ mod tests {
         assert!(validate(&spaced).is_err());
     }
 
-    #[test] fn an_enabled_agent_without_an_active_model_is_refused() {
-        let mut lonely=settings(vec![agent(AgentId::Claude,Value::Null)]);
-        lonely.models.retain(|model|model.agent!=AgentId::Claude);
-        assert!(validate(&lonely).unwrap_err().to_string().contains("Claude Code"));
+    /// Os modelos nascem desligados: um agente ligado sem modelo ativo salva;
+    /// é o pedido que avisa para ligar um modelo em Configurações.
+    #[test] fn an_enabled_agent_may_have_every_model_off() {
+        let mut quiet=settings(vec![agent(AgentId::Claude,Value::Null)]);
+        quiet.models.iter_mut().for_each(|model|model.enabled=false);
+        assert!(validate(&quiet).is_ok());
     }
 
     #[test] fn the_fallback_model_must_belong_to_the_same_agent() {

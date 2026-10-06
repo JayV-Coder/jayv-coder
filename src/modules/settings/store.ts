@@ -230,7 +230,6 @@ export function problems(state: Pick<SettingsState, "agents" | "models">, id: Ag
   } else if (!command) found.command = "agent.command.empty";
   else if (/\s/.test(command)) found.command = "agent.command.hint";
   const own = state.models.filter((model) => model.agent === id);
-  if (agent.enabled && !own.some((model) => model.enabled)) found.models = "agent.noActiveModel";
   const seen = new Set<string>();
   for (const model of own) {
     const name = model.model.trim();
