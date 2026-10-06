@@ -32,8 +32,8 @@ interface ConversationState {
   answering: Answering;
   /** O texto ainda não enviado, por chat. */
   drafts: Record<string, string>;
-  /** As permissões escolhidas para o próximo pedido, por chat. Valem para um
-   * envio só e somem com ele. */
+  /** As permissões ligadas no seletor, por chat. Valem para todo pedido do
+   * chat até serem desligadas, e ficam gravadas neste computador. */
   grants: Record<string, Grants>;
 }
 
@@ -51,6 +51,17 @@ export function hasGrants(grants: Grants): boolean {
 
 export function setGrants(chatId: string, grants: Grants) {
   useConversation.setState((state) => ({ grants: { ...state.grants, [chatId]: grants } }));
+  commands.setChatGrants(chatId, grants).catch(reportError);
+}
+
+/** Lê do banco o que ficou ligado neste chat (ao abri-lo). */
+export async function loadGrants(chatId: string) {
+  try {
+    const grants = await commands.chatGrants(chatId);
+    useConversation.setState((state) => ({ grants: { ...state.grants, [chatId]: grants } }));
+  } catch (error) {
+    reportError(error);
+  }
 }
 
 /** O que se sabe deste pedido, juntando o que o banco gravou com o que chegou
@@ -130,18 +141,14 @@ export function pick(question: Question, option: string, checked: boolean) {
  * Se a gravação falhar, o texto volta para a caixa: perder o que foi digitado é
  * pior do que qualquer erro na tela. */
 export async function sendPrompt(value: string, chatId: string, turnId: string | null = null) {
-  // As permissões do seletor vão com este pedido e saem da caixa; o reenvio
-  // de um turno mantém as que ele já tinha.
-  const grants = turnId ? NO_GRANTS : grantsOf(chatId, useConversation.getState().grants);
-  const chosen = hasGrants(grants);
-  if (chosen) setGrants(chatId, NO_GRANTS);
+  // As permissões do seletor valem para o chat inteiro: o núcleo as lê do
+  // banco a cada pedido, então nada vai junto com o envio.
   try {
-    await commands.enqueuePrompt(value, chatId, turnId, chosen ? grants : null);
+    await commands.enqueuePrompt(value, chatId, turnId);
     bus.emit("prompt:sent", { chatId });
   } catch (error) {
     reportError(error);
     if (!turnId && !useConversation.getState().drafts[chatId]?.trim()) setDraft(chatId, value);
-    if (chosen) setGrants(chatId, grants);
   }
 }
 

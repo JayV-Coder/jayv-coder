@@ -8,9 +8,9 @@ type OpenFile = (path: string) => void;
 
 /** O caminho em três partes: a pasta, o nome e o `:linha` do fim. */
 function pathParts(text: string) {
-  const line = text.match(/(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$/)?.[0] ?? "";
+  const line = text.match(/(?::\d+(?:-\d+)?){1,2}$|#L\d+(?:-L?\d+)?$/)?.[0] ?? "";
   const path = line ? text.slice(0, -line.length) : text;
-  const slash = path.lastIndexOf("/");
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return { dir: path.slice(0, slash + 1), name: path.slice(slash + 1), line };
 }
 
@@ -39,6 +39,7 @@ function Inlines({ items, onOpenFile }: { items: Inline[]; onOpenFile?: OpenFile
   return items.map((item, index) => {
     switch (item.type) {
       case "strong": return <strong key={index}>{item.text}</strong>;
+      case "em": return <em key={index}>{item.text}</em>;
       case "code": return <code key={index}>{item.text}</code>;
       case "file": return <FileRef key={index} text={item.text} path={item.path} onOpenFile={onOpenFile} />;
       case "link": return <a key={index} href={item.href} target="_blank" rel="noreferrer">{item.text}</a>;

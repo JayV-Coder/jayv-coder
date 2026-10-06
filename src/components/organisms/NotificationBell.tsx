@@ -64,7 +64,7 @@ export function NotificationBell() {
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent side="right" align="end" sideOffset={10} className="flex max-h-[min(560px,calc(100vh-32px))] w-[380px] flex-col p-0">
+      <PopoverContent side="right" align="start" sideOffset={10} className="flex max-h-[min(560px,calc(100vh-32px))] w-[380px] flex-col p-0">
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="grid">
             <h2 className="text-sm font-semibold">{t("notifications.title")}</h2>

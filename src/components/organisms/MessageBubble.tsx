@@ -212,10 +212,9 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
                     // de uma ferramenta.
                     !last && "flex gap-2 text-small text-muted-foreground before:shrink-0 before:text-faint before:content-['↳']",
                     last && tinted && "text-[var(--aspect)]",
-                    pending && "whitespace-pre-wrap",
                   )}
                 >
-                  {pending ? part : <Markdown content={part} onOpenFile={onOpenFile} />}
+                  <Markdown content={part} onOpenFile={onOpenFile} />
                 </div>
               );
             })}

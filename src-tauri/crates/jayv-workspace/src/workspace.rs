@@ -501,6 +501,23 @@ impl WorkspaceStore {
         Ok(commands)
     }
 
+    /// O que o desenvolvedor deixou ligado no seletor de permissões deste chat:
+    /// vale para todo pedido dele, até desligar.
+    pub fn chat_grants(&self, chat_id: &str) -> Result<crate::llm::Grants> {
+        let stored:Option<String>=self.connection.query_row("SELECT grants FROM chat_grants WHERE chat_id=?1",[chat_id],|row|row.get(0)).optional()?;
+        Ok(stored.and_then(|json|serde_json::from_str(&json).ok()).unwrap_or_default())
+    }
+
+    pub fn set_chat_grants(&mut self, chat_id: &str, grants: &crate::llm::Grants) -> Result<()> {
+        anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
+        if grants.is_empty() {
+            self.connection.execute("DELETE FROM chat_grants WHERE chat_id=?1",[chat_id])?;
+        } else {
+            self.connection.execute("INSERT INTO chat_grants(chat_id,grants) VALUES(?1,?2) ON CONFLICT(chat_id) DO UPDATE SET grants=excluded.grants",params![chat_id,serde_json::to_string(grants)?])?;
+        }
+        Ok(())
+    }
+
     pub fn allow_command(&mut self, chat_id: &str, command: &str) -> Result<()> {
         let command=command.trim();
         anyhow::ensure!(!command.is_empty(),"empty command");
@@ -870,7 +887,8 @@ fn ensure_turn_local(connection:&Connection)->Result<()> {
     Ok(())
 }
 
-/// As permissões liberadas para um pedido só (`llm::Grants`, em JSON) e os
+/// As permissões liberadas para um pedido só e as do chat inteiro
+/// (`llm::Grants`, em JSON) e os
 /// comandos que o desenvolvedor mandou sempre permitir num projeto. Ficam
 /// neste computador: são permissões dele, para os agentes daqui.
 fn ensure_turn_grants(connection:&Connection)->Result<()> {
@@ -883,6 +901,10 @@ fn ensure_turn_grants(connection:&Connection)->Result<()> {
            command TEXT NOT NULL,
            created_at TEXT NOT NULL,
            PRIMARY KEY(project_id,command)
+         );
+         CREATE TABLE IF NOT EXISTS chat_grants (
+           chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+           grants TEXT NOT NULL
          );",
     )?;
     Ok(())
@@ -1854,6 +1876,23 @@ mod tests {
         assert_eq!(store.work_mode(&chat.id).expect("modo"),"plan");
     }
 
+
+    #[test] fn the_picker_grants_last_for_the_whole_chat_until_cleared() {
+        let root=tempfile::tempdir().expect("tempdir");
+        let mut store=store(&root);
+        let project=store.create_project("p",None).expect("projeto");
+        let (chat,other)=(store.create_chat(&project.id,None).expect("chat"),store.create_chat(&project.id,None).expect("outro"));
+        assert!(store.chat_grants(&chat.id).expect("lê").is_empty());
+        let grants=crate::llm::Grants{git:true,commands:vec!["npm test".into()],..Default::default()};
+        store.set_chat_grants(&chat.id,&grants).expect("grava");
+        store.enqueue_prompt(&chat.id,"um",None).expect("turno");
+        store.enqueue_prompt(&chat.id,"dois",None).expect("turno");
+        assert_eq!(store.chat_grants(&chat.id).expect("lê"),grants,"vale para os pedidos seguintes também");
+        assert!(store.chat_grants(&other.id).expect("lê").is_empty(),"cada chat tem as suas");
+        store.set_chat_grants(&chat.id,&crate::llm::Grants::default()).expect("limpa");
+        assert!(store.chat_grants(&chat.id).expect("lê").is_empty());
+        assert!(store.set_chat_grants("chat-que-não-existe",&grants).is_err());
+    }
 
     #[test] fn grants_stay_with_the_turn_and_always_allowed_commands_with_the_project() {
         let root=tempfile::tempdir().expect("tempdir");

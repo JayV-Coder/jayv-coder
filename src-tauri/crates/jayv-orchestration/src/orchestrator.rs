@@ -1121,7 +1121,7 @@ pub fn language_note()->String {
 /// o desenvolvedor não escolheu língua no app.
 pub fn language_reminder()->String {
     match i18n::reply_language() {
-        Some(language)=>format!("\n\nReminder: write your reply in {} (BCP 47 tag `{}`), whatever language the files, code comments or documentation you read are written in.",language.name,language.tag),
+        Some(language)=>format!("\n\nReminder: write your reply in {} (BCP 47 tag `{}`), whatever language the files, code comments or documentation you read are written in, and even when the request above is a line the app wrote in English (an approval, an answer or a gate notice) instead of the developer's own words. Keep code, identifiers, commands and file paths as they are.",language.name,language.tag),
         None=>String::new(),
     }
 }
@@ -1362,6 +1362,7 @@ mod tests {
         crate::i18n::set_reply_language(Some(crate::i18n::ReplyLanguage{tag:"pt-BR".into(),name:"Português".into()}));
         let reminder=language_reminder();
         assert!(reminder.starts_with("\n\n") && reminder.contains("Português") && reminder.contains("`pt-BR`"),"{reminder}");
+        assert!(reminder.contains("wrote in English") && reminder.contains("approval"),"the app's own English lines must not pull the reply into English: {reminder}");
         crate::i18n::set_reply_language(None);
     }
 
