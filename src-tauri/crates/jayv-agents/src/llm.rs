@@ -220,7 +220,7 @@ pub struct GatewayOptions {
 const OPENROUTER_URL:&str="https://openrouter.ai/api/v1";
 /// O LiteLLM é o servidor do próprio usuário: o endereço padrão é o do proxy
 /// local, na porta que a documentação dele usa.
-const LITELLM_URL:&str="http://localhost:4000";
+const LITELLM_URL:&str="http://localhost:4000/v1";
 
 impl GatewayOptions {
     fn fresh(id:AgentId)->Self { Self{base_url:(if id==AgentId::Openrouter {OPENROUTER_URL} else {LITELLM_URL}).into(),..Self::default()} }
@@ -1942,7 +1942,7 @@ mod tests {
     /// gravadas, nem para o que volta à tela.
     #[test] fn the_gateway_key_stays_out_of_the_saved_options() {
         let mut connection=memory();
-        let loaded=settings(vec![agent(AgentId::Litellm,json!({"baseUrl":"http://localhost:4000","apiKey":"sk-segredo"}))]);
+        let loaded=settings(vec![agent(AgentId::Litellm,json!({"baseUrl":"http://localhost:4000/v1","apiKey":"sk-segredo"}))]);
         let saved=save(&mut connection,&loaded).expect("gravação");
         let options=saved.agents.iter().find(|entry|entry.id==AgentId::Litellm).expect("litellm").options.to_string();
         assert!(!options.contains("sk-segredo")&&!options.contains("apiKey"),"{options}");
@@ -1950,7 +1950,7 @@ mod tests {
         let stored:String=connection.query_row("SELECT options FROM llm_agents WHERE id='litellm'",[],|row|row.get(0)).expect("linha");
         assert!(!stored.contains("sk-segredo"));
         assert_eq!(secret(AgentId::Litellm).as_deref(),Some("sk-segredo"));
-        let cleared=settings(vec![agent(AgentId::Litellm,json!({"baseUrl":"http://localhost:4000","clearKey":true}))]);
+        let cleared=settings(vec![agent(AgentId::Litellm,json!({"baseUrl":"http://localhost:4000/v1","clearKey":true}))]);
         save(&mut connection,&cleared).expect("gravação");
         assert_eq!(secret(AgentId::Litellm),None);
     }
