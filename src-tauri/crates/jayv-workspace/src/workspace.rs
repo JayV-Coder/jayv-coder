@@ -200,6 +200,7 @@ impl WorkspaceStore {
         crate::llm::ensure(&connection)?;
         connection.execute_batch(crate::mcp::SCHEMA)?;
         connection.execute_batch(jayv_agents::skills::SCHEMA)?;
+        connection.execute_batch(jayv_agents::org_extensions::SCHEMA)?;
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
         ensure_chat_work_mode(&connection)?;
@@ -711,6 +712,14 @@ impl WorkspaceStore {
     pub fn set_skill_enabled(&mut self, name:&str, enabled:bool) -> Result<()> {jayv_agents::skills::set_enabled(&self.connection,name,enabled)}
 
     pub fn remove_skill(&mut self, root:&Path, name:&str) -> Result<()> {jayv_agents::skills::remove(&self.connection,root,name)}
+
+    /// Os servidores MCP e as skills que as organizações dão ao projeto do chat.
+    pub fn chat_org_extensions(&self, chat_id:&str) -> Result<(Vec<crate::mcp::McpServer>,Vec<jayv_agents::skills::Skill>)> {jayv_agents::org_extensions::for_chat(&self.connection,chat_id)}
+
+    /// O que as organizações de quem usa dão, para a tela (sem segredos).
+    pub fn org_extensions(&self) -> Result<jayv_agents::org_extensions::OrgExtensions> {jayv_agents::org_extensions::listing(&self.connection)}
+
+    pub fn replace_org_extensions(&mut self, rows:&[jayv_agents::org_extensions::Row]) -> Result<()> {jayv_agents::org_extensions::replace_all(&mut self.connection,rows)}
 
     pub fn mcp_servers(&self) -> Result<Vec<crate::mcp::McpServer>> {crate::mcp::load(&self.connection)}
 

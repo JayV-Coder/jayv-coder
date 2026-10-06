@@ -1,0 +1,10 @@
+{
+  "id": "orgExtensions",
+  "category": "team",
+  "since": "0.72.0",
+  "plan": null,
+  "commands": [],
+  "title": "MCP servers and skills of the organization",
+  "summary": "Owners and maintainers set up MCP servers and skills for the organization on the JayV site, and every member receives them in the app on top of their own. In Settings they show as \"from the organization\" and cannot be edited or removed there; in the projects of the organization the agents get the servers and Jev can pick the skills.",
+  "usage": "On the site, open the organization and use the MCP servers and Skills tabs: add a server by form or by pasting an mcpServers JSON, or paste the text of a SKILL.md, and turn each one on or off. In the app, the Settings › MCP and Settings › Skills tabs list what your organizations give you; in Ctrl+K, choose \"manage MCP servers\" or \"manage skills\" for an organization to open its site tab. Servers can carry tokens, so only owners and maintainers see them on the site and they reach only the members' apps. The change arrives at the next sync."
+}

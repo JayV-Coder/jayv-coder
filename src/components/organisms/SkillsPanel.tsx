@@ -8,6 +8,7 @@ import { SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { OrgExtensionsSection } from "./OrgExtensionsSection";
 
 /** Configurações › Skills: as skills (pastas com `SKILL.md`) que o Jev pode
  * escolher para cada pedido. Grava na hora, sem o Salvar da página. */
@@ -45,6 +46,7 @@ export function SkillsPanel() {
         )}
         <p className="text-xs leading-snug text-muted-foreground">{t("skills.notes")}</p>
       </SettingsSection>
+      <OrgExtensionsSection kind="skills" />
       <SettingsSection title={t("skills.paste.title")} description={t("skills.paste.description")}>
         <Textarea rows={6} value={pasted} placeholder={t("skills.paste.placeholder")} className="font-mono text-xs" onChange={(event) => setPasted(event.target.value)} />
         <div className="flex justify-end">

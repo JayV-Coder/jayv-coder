@@ -46,6 +46,7 @@ pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,Re
     download(store,backend,&mut result).await?;
     refresh_policies(store,backend).await;
     refresh_features(store,backend).await;
+    refresh_org_extensions(store,backend).await;
     Ok(result)
 }
 
@@ -57,6 +58,20 @@ async fn refresh_policies(store:&SharedWorkspace,backend:&dyn Backend) {
         Ok(Some(rows))=>{ if let Err(error)=store.lock().await.replace_project_policies(&rows) {eprintln!("política de LLM: {error:#}");} }
         Ok(None)=>{}
         Err(error)=>eprintln!("política de LLM: {error}"),
+    }
+}
+
+/// Os servidores MCP e as skills das organizações descem como a política:
+/// falhar (servidor sem a migração, por exemplo) não para a volta, e o cache
+/// anterior continua valendo.
+async fn refresh_org_extensions(store:&SharedWorkspace,backend:&dyn Backend) {
+    match backend.org_extensions().await {
+        Ok(Some(values))=>{
+            let rows:Vec<jayv_agents::org_extensions::Row>=values.into_iter().filter_map(|value|serde_json::from_value(value).ok()).collect();
+            if let Err(error)=store.lock().await.replace_org_extensions(&rows) {eprintln!("MCP e skills da organização: {error:#}");}
+        }
+        Ok(None)=>{}
+        Err(error)=>eprintln!("MCP e skills da organização: {error}"),
     }
 }
 
@@ -288,6 +303,8 @@ mod tests {
         /// O que `my_project_policies` devolve; `None` é o backend que não
         /// fala da política.
         policies:Plain<Option<Result<Vec<crate::policy::RemotePolicy>,RemoteError>>>,
+        /// O que `my_org_extensions` devolve, linha a linha.
+        extensions:Plain<Option<Result<Vec<Value>,RemoteError>>>,
     }
 
     impl FakeBackend {
@@ -341,6 +358,10 @@ mod tests {
         async fn project_policies(&self)->Result<Option<Vec<crate::policy::RemotePolicy>>,RemoteError> {
             self.policies.lock().unwrap().clone().transpose()
         }
+
+        async fn org_extensions(&self)->Result<Option<Vec<Value>>,RemoteError> {
+            self.extensions.lock().unwrap().clone().transpose()
+        }
     }
 
     fn shared(store:WorkspaceStore)->SharedWorkspace { Arc::new(Mutex::new(store)) }
@@ -392,6 +413,28 @@ mod tests {
         *backend.policies.lock().unwrap()=Some(Ok(vec![]));
         round(&store,&backend).await.expect("volta");
         assert!(store.lock().await.chat_policy(&chat).unwrap().is_none(),"lista vazia tira a política");
+    }
+
+    #[tokio::test] async fn the_round_brings_the_org_servers_and_skills_and_survives_their_failure() {
+        let store=shared(WorkspaceStore::in_memory().unwrap());
+        let (project,chat)=a_chat(&store).await;
+        let backend=FakeBackend::default();
+        let server=json!({"name":"github","transport":"stdio","command":"npx","args":["-y","srv"],"env":{"TOKEN":"x"},"url":"","headers":{},"enabled":true,"agents":[]});
+        let skill=json!({"name":"notes","description":"Writes notes.","body":"# Steps"});
+        *backend.extensions.lock().unwrap()=Some(Ok(vec![json!({"project_id":project,"org_slug":"acme","own":true,"mcp":[server],"skills":[skill]})]));
+        round(&store,&backend).await.expect("volta");
+        let (servers,skills)=store.lock().await.chat_org_extensions(&chat).unwrap();
+        assert_eq!((servers.len(),skills.len()),(1,1),"o chat do projeto recebe o que a organização dá");
+        assert_eq!(store.lock().await.org_extensions().unwrap().mcp[0].org,"acme");
+
+        // Servidor sem a migração: a volta segue e o cache anterior fica.
+        *backend.extensions.lock().unwrap()=Some(Err(RemoteError::Rejected{status:404,detail:"function not found".into()}));
+        round(&store,&backend).await.expect("a falha não derruba a volta");
+        assert_eq!(store.lock().await.chat_org_extensions(&chat).unwrap().0.len(),1);
+
+        *backend.extensions.lock().unwrap()=Some(Ok(vec![]));
+        round(&store,&backend).await.expect("volta");
+        assert!(store.lock().await.chat_org_extensions(&chat).unwrap().0.is_empty(),"o que a organização tirou sai");
     }
 
     #[tokio::test] async fn offline_the_queue_stays_whole() {

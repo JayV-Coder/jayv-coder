@@ -241,6 +241,13 @@ pub(crate) async fn draft_mcp(desk:State<'_,SharedDesktopState>,text:String)->Re
     Ok(McpDraft{servers,from_model:true})
 }
 
+/// O que as organizações de quem usa dão: servidores MCP e skills, que descem
+/// pela sincronização e valem nos projetos delas. Só leitura, e sem segredos.
+#[tauri::command]
+pub(crate) async fn get_org_extensions(workspace:State<'_,SharedWorkspace>)->Result<jayv_agents::org_extensions::OrgExtensions,Text>{
+    workspace.lock().await.org_extensions().map_err(failure)
+}
+
 /// Onde as skills instaladas ficam: dentro da pasta de dados do app.
 fn skills_root()->Result<std::path::PathBuf,Text> {
     crate::workspace::app_data_dir().map(|dir|jayv_agents::skills::root(&dir)).ok_or_else(||Text::new("skills.noFolder"))

@@ -42,6 +42,12 @@ pub struct Skill {
     pub path:String,
     pub enabled:bool,
     pub installed_at:String,
+    /// O `slug` da organização que deu a skill; nulo na instalada aqui. A da
+    /// organização não tem pasta: as instruções vêm em `inline`.
+    #[serde(default)]
+    pub origin:Option<String>,
+    #[serde(skip)]
+    pub inline:Option<String>,
 }
 
 /// O que o `SKILL.md` diz: o nome, a descrição e as instruções.
@@ -95,8 +101,10 @@ pub fn parse(text:&str)->Result<Document> {
 /// As instruções da skill, prontas para o modelo: cortadas no limite, com o
 /// aviso de que o resto está no arquivo.
 pub fn read_body(skill:&Skill)->Result<String> {
-    let text=std::fs::read_to_string(Path::new(&skill.path).join(FILE))?;
-    let body=parse(&text)?.body;
+    let body=match &skill.inline {
+        Some(body)=>body.clone(),
+        None=>parse(&std::fs::read_to_string(Path::new(&skill.path).join(FILE))?)?.body,
+    };
     if body.chars().count()<=BODY_MAX_CHARS { return Ok(body); }
     let cut:String=body.chars().take(BODY_MAX_CHARS).collect();
     Ok(format!("{cut}\n[... cut: the rest of the instructions is in {FILE}]"))
@@ -105,7 +113,7 @@ pub fn read_body(skill:&Skill)->Result<String> {
 /// As skills instaladas, em ordem de nome.
 pub fn load(connection:&Connection)->Result<Vec<Skill>> {
     let mut statement=connection.prepare("SELECT name,description,path,enabled,installed_at FROM skills ORDER BY name")?;
-    let rows=statement.query_map([],|row|Ok(Skill{name:row.get(0)?,description:row.get(1)?,path:row.get(2)?,enabled:row.get::<_,i64>(3)?!=0,installed_at:row.get(4)?}))?;
+    let rows=statement.query_map([],|row|Ok(Skill{name:row.get(0)?,description:row.get(1)?,path:row.get(2)?,enabled:row.get::<_,i64>(3)?!=0,installed_at:row.get(4)?,origin:None,inline:None}))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -114,7 +122,7 @@ fn record(connection:&Connection,document:&Document,path:&Path)->Result<Skill> {
     let installed_at=chrono::Utc::now().to_rfc3339();
     connection.execute("INSERT INTO skills(name,description,path,enabled,installed_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(name) DO UPDATE SET description=?2,path=?3,installed_at=?5",
         params![document.name,document.description,path.to_string_lossy(),enabled as i64,installed_at])?;
-    Ok(Skill{name:document.name.clone(),description:document.description.clone(),path:path.to_string_lossy().into(),enabled,installed_at})
+    Ok(Skill{name:document.name.clone(),description:document.description.clone(),path:path.to_string_lossy().into(),enabled,installed_at,origin:None,inline:None})
 }
 
 /// Copia a pasta da skill para `target`, sem seguir links e sem as pastas de

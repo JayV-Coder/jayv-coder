@@ -65,6 +65,10 @@ pub trait Backend:Send+Sync {
     /// Os recursos do plano de quem está logado (`rpc/my_features`). `None`:
     /// este backend não fala deles.
     async fn features(&self)->Result<Option<RemoteFeatures>,RemoteError> { Ok(None) }
+    /// O que as organizações dão aos projetos de quem está logado
+    /// (`rpc/my_org_extensions`: servidores MCP e skills), linha a linha como
+    /// o servidor devolve. `None`: este backend não fala disso.
+    async fn org_extensions(&self)->Result<Option<Vec<Value>>,RemoteError> { Ok(None) }
 }
 
 pub struct Remote {
@@ -123,6 +127,10 @@ impl Remote {
 
     pub fn project_policies_request(&self)->reqwest::Result<Request> {
         self.request(Method::POST,"rpc/my_project_policies").json(&json!({})).build()
+    }
+
+    pub fn org_extensions_request(&self)->reqwest::Result<Request> {
+        self.request(Method::POST,"rpc/my_org_extensions").json(&json!({})).build()
     }
 
     pub fn features_request(&self)->reqwest::Result<Request> {
@@ -209,6 +217,10 @@ impl Backend for Remote {
 
     async fn features(&self)->Result<Option<RemoteFeatures>,RemoteError> {
         self.get(self.features_request()).await.map(Some)
+    }
+
+    async fn org_extensions(&self)->Result<Option<Vec<Value>>,RemoteError> {
+        self.get(self.org_extensions_request()).await.map(Some)
     }
 }
 
@@ -315,6 +327,12 @@ mod tests {
     #[test] fn the_plan_features_come_from_the_rpc_with_the_users_token() {
         let request=remote().features_request().unwrap();
         assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_features"));
+        assert_eq!(request.headers()["Authorization"],"Bearer jwt");
+    }
+
+    #[test] fn the_org_extensions_come_from_the_rpc_with_the_users_token() {
+        let request=remote().org_extensions_request().unwrap();
+        assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_org_extensions"));
         assert_eq!(request.headers()["Authorization"],"Bearer jwt");
     }
 

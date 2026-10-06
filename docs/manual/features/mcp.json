@@ -1,0 +1,10 @@
+{
+  "id": "mcp",
+  "category": "agents",
+  "since": "0.68.0",
+  "plan": null,
+  "commands": [],
+  "title": "MCP servers",
+  "summary": "Give Claude Code, Codex and Copilot extra tools by registering MCP servers. JayV hands the servers to each agent on the command line for every request, without touching the agents' own configuration files.",
+  "usage": "Open Settings › MCP (or Ctrl+K › Settings › MCP) and add a server by form, or paste a configuration (mcpServers JSON, a claude mcp add line or an npx command). In a chat, type /mcp followed by a configuration or a description: an agent drafts the configuration and nothing is saved until you review it. Servers from your organizations are listed below yours and cannot be edited there."
+}

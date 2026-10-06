@@ -14,6 +14,7 @@ import {
 } from "@/modules/organizations";
 import { allows } from "@/modules/plans";
 import { AGENT_LABELS, AGENTS, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
+import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
 import { checkForUpdate } from "@/modules/updates";
@@ -153,6 +154,13 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   if (can("organizations")) {
     for (const organization of ctx.organizations) {
       all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id).catch(reportError) });
+      // O que a organização dá aos membros (servidores MCP e skills) se cadastra no site.
+      if (SITE_URL) {
+        all.push(
+          { id: `org-site-mcp-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteMcp", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "mcp")).catch(reportError) },
+          { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
+        );
+      }
       const general = organizationChatsOf(data, organization.id);
       for (const item of general.slice(0, 5)) {
         all.push({ id: `general-${item.id}`, group: "palette.group.general", label: chatTitle(item), hint: organization.name, run: () => openChat(item.id) });

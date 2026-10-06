@@ -104,6 +104,14 @@ export interface Skill {
   installedAt: string;
 }
 
+/** O que as organizações de quem usa dão (servidores MCP e skills), como a
+ * sincronização trouxe. Só leitura, e sem segredos: de um servidor vêm o
+ * comando (ou o endereço sem caminho) e os agentes. */
+export interface OrgExtensions {
+  mcp: { org: string; name: string; transport: "stdio" | "http"; command: string; url: string; agents: string[] }[];
+  skills: { org: string; name: string; description: string }[];
+}
+
 export interface McpDraft {
   servers: McpServer[];
   /** Montado por um modelo a partir de uma descrição, não lido do texto. */
