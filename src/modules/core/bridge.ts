@@ -96,7 +96,9 @@ export interface LiveChange { path: string; kind: "created" | "modified" | "remo
 /** O aviso de um arquivo: `discarded` é o que nasceu e sumiu durante o pedido
  * (um temporário) e sai da lista. */
 export interface LiveNotice { path: string; kind: LiveChange["kind"] | "discarded"; at: number }
-export interface LiveList { turnId: string | null; running: boolean; files: LiveChange[] }
+/** `mode`: `git` (olha o `git status`) ou `folder` (pasta sem git); nulo enquanto
+ * nenhum pedido deste chat olhou a pasta. `looks` conta as olhadas já feitas. */
+export interface LiveList { turnId: string | null; running: boolean; files: LiveChange[]; folder: string | null; mode: "git" | "folder" | null; looks: number }
 /** O antes (como estava quando o pedido começou) e o agora de um arquivo.
  * `beforeKnown` falso: pasta sem git, sem como saber o antes. */
 export interface LiveFile {

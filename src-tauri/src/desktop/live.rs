@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter, State};
 /// chama na thread principal não esperam o git de ninguém.
 pub type SharedLive=Arc<Mutex<HashMap<String,Watched>>>;
 
-pub struct Watched { session:Arc<Mutex<Session>>, turn_id:String, running:bool, files:Vec<Change> }
+pub struct Watched { session:Arc<Mutex<Session>>, turn_id:String, running:bool, files:Vec<Change>, folder:String, mode:&'static str, looks:u64 }
 
 fn hold(session:&Mutex<Session>)->std::sync::MutexGuard<'_,Session> { session.lock().unwrap_or_else(|poisoned|poisoned.into_inner()) }
 
@@ -50,10 +50,11 @@ pub(crate) async fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&
     let (app,live,chat,turn_id,flag)=(app.clone(),live.clone(),chat_id.to_string(),turn_id.to_string(),stop.clone());
     let turn=turn_id.clone();
     let Ok(session)=tauri::async_runtime::spawn_blocking(move ||Session::start(&turn,&folder,firewall)).await else {return LiveWatch{stop}};
+    let (folder_shown,mode)=(session.folder().display().to_string(),session.mode());
     let session=Arc::new(Mutex::new(session));
     {
         let mut sessions=locked(&live);
-        sessions.insert(chat.clone(),Watched{session:session.clone(),turn_id:turn_id.clone(),running:true,files:vec![]});
+        sessions.insert(chat.clone(),Watched{session:session.clone(),turn_id:turn_id.clone(),running:true,files:vec![],folder:folder_shown,mode,looks:0});
         if sessions.len()>KEPT {
             let idle:Vec<String>=sessions.iter().filter(|(id,watched)|**id!=chat && !watched.running).map(|(id,_)|id.clone()).collect();
             for id in idle.into_iter().take(sessions.len()-KEPT) {sessions.remove(&id);}
@@ -76,6 +77,7 @@ pub(crate) async fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&
                 let mut sessions=locked(&live2);
                 let watched=sessions.get_mut(&chat2).filter(|watched|Arc::ptr_eq(&watched.session,&mine)&&watched.turn_id==turn2)?;
                 watched.files=files;
+                watched.looks+=1;
                 if last { watched.running=false; }
                 Some(fresh)
             }).await.ok().flatten();
@@ -91,15 +93,15 @@ pub(crate) async fn watch(app:&AppHandle,live:&SharedLive,chat_id:&str,turn_id:&
 
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
-pub(crate) struct LiveList{turn_id:Option<String>,running:bool,files:Vec<Change>}
+pub(crate) struct LiveList{turn_id:Option<String>,running:bool,files:Vec<Change>,folder:Option<String>,mode:Option<&'static str>,looks:u64}
 
 /// O que o último pedido do chat mudou, do mais recente para o mais antigo.
 #[tauri::command]
 pub(crate) fn live_files(live:State<'_,SharedLive>,chat_id:String)->LiveList {
     let sessions=locked(&live);
     match sessions.get(&chat_id) {
-        Some(watched)=>LiveList{turn_id:Some(watched.turn_id.clone()),running:watched.running,files:watched.files.clone()},
-        None=>LiveList{turn_id:None,running:false,files:vec![]},
+        Some(watched)=>LiveList{turn_id:Some(watched.turn_id.clone()),running:watched.running,files:watched.files.clone(),folder:Some(watched.folder.clone()),mode:Some(watched.mode),looks:watched.looks},
+        None=>LiveList{turn_id:None,running:false,files:vec![],folder:None,mode:None,looks:0},
     }
 }
 

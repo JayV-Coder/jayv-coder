@@ -26,13 +26,15 @@ export function LivePanel({ chat }: { chat: Chat }) {
   const follow = useLive((state) => state.follow);
   const editor = useLive((state) => state.editor);
   const editors = useLive((state) => state.editors);
+  const folder = useLive((state) => state.chats[chat.id]?.folder ?? null);
+  const mode = useLive((state) => state.chats[chat.id]?.mode ?? null);
   const running = openTurns(chat).length > 0;
   const current = files.find((file) => file.path === selected) ?? files[0] ?? null;
 
   useEffect(() => { void loadEditors(); }, []);
 
   return (
-    <aside aria-label={t("live.title")} className="flex min-h-0 w-[min(46%,640px)] min-w-[300px] flex-none flex-col border-s border-border bg-card font-mono text-small">
+    <aside aria-label={t("live.title")} className="flex min-h-0 w-[min(38%,520px)] min-w-[280px] flex-none flex-col border-s border-border bg-card font-mono text-small">
       <header className="flex flex-none items-center gap-2 border-b border-border px-3 py-1.5">
         <span aria-hidden="true" className="text-primary">❯</span>
         <span className="text-foreground">{t("live.title")}</span>
@@ -48,6 +50,9 @@ export function LivePanel({ chat }: { chat: Chat }) {
           <XIcon aria-hidden="true" />
         </Button>
       </header>
+      <p className="flex-none truncate border-b border-border px-3 py-1 text-caption text-faint" title={folder ?? undefined}>
+        {folder && mode ? t(mode === "git" ? "live.watching.git" : "live.watching.folder", { folder }) : t(running ? "live.notWatching" : "live.notWatched")}
+      </p>
       {editors && editors.length > 0 && (
         <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-caption text-muted-foreground">
           <span>{t("live.editor")}</span>
