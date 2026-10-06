@@ -585,7 +585,7 @@ impl Orchestrator {
         let request:String=prompt.trim().chars().take(TITLE_PROMPT_CHARS).collect();
         let messages=vec![
             ChatMessage{role:"system".into(),content:format!("{TITLE_INSTRUCTIONS}\n{}",language_note())},
-            ChatMessage{role:"user".into(),content:format!("Intent read by Jev: {intent}\n\nRequest:\n{request}")},
+            ChatMessage{role:"user".into(),content:format!("Intent read by Jev: {intent}\n\nRequest:\n{request}{}",language_reminder())},
         ];
         Some(TitleRequest{provider,model:model.model.clone(),messages})
     }
@@ -612,7 +612,8 @@ impl Orchestrator {
         let agent=selection.agent.as_deref().and_then(|name|self.agents.find(name));
         let system=agent.map(|a|format!("{}\n{}",safe_context.system_instructions,a.system_prompt)).unwrap_or_else(||safe_context.system_instructions.clone());
         let system=format!("{system}\n{}",language_note());
-        let user=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
+        let plain=std::iter::once(task_message(input,&safe_context,provider.explores(),self.rag.symbols())).chain(extras.iter().cloned()).collect::<Vec<_>>().join("\n\n");
+        let user=format!("{plain}{}",language_reminder());
         let effort=Some(effort);
         let instructions=fingerprint(&system);
         let fresh=match self.resume_check(session_id,provider.as_ref(),selection) {
@@ -636,7 +637,7 @@ impl Orchestrator {
         let system=match provider.explores().then(||crate::project_map::render(&self.rag)).flatten() { Some(map)=>format!("{system}\n\n{map}"), None=>system };
         let mut messages=vec![ChatMessage{role:"system".into(),content:system}];
         messages.extend(short_history(self.memory.conversation(session_id)));
-        let user=std::iter::once(user).chain(handoff.iter().cloned()).collect::<Vec<_>>().join("\n\n");
+        let user=format!("{}{}",std::iter::once(plain).chain(handoff.iter().cloned()).collect::<Vec<_>>().join("\n\n"),language_reminder());
         messages.push(ChatMessage{role:"user".into(),content:user});
         Ok((provider.chat_turn(&messages,&selection.model_name,effort,None,pulse).await?,false,instructions))
     }
@@ -649,7 +650,7 @@ impl Orchestrator {
         let planner=ranked.iter().find(|candidate|self.planners.contains_key(&candidate.provider))?;
         let provider=self.planners.get(&planner.provider)?;
         let system=format!("{}\n{}",context.system_instructions,language_note());
-        let messages=[ChatMessage{role:"system".into(),content:system},ChatMessage{role:"user".into(),content:crate::split::prompt(request,&agent_name(&builder.provider))}];
+        let messages=[ChatMessage{role:"system".into(),content:system},ChatMessage{role:"user".into(),content:format!("{}{}",crate::split::prompt(request,&agent_name(&builder.provider)),language_reminder())}];
         pulse.beat(Beat::Plan{provider:planner.provider.clone(),model:planner.model_name.clone()});
         // O plano aparece na faixa linha a linha enquanto é escrito: um plano
         // de pedido complexo leva minutos, e a faixa ficava parada nele.
@@ -701,7 +702,7 @@ impl Orchestrator {
         let pools:Vec<HashMap<String,Box<dyn Provider>>>=copies.iter().map(|dir|{let workdir=Workdir::default(); workdir.focus(dir.join(&prefix)); build_providers(&self.config.providers,&workdir)}).collect();
         let runs=tasks.iter().enumerate().map(|(index,task)|{
             let others:Vec<&crate::parallel::Subtask>=tasks.iter().enumerate().filter(|(other,_)|*other!=index).map(|(_,other)|other).collect();
-            let messages=vec![ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:crate::parallel::task_message(request,task,&others)}];
+            let messages=vec![ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:format!("{}{}",crate::parallel::task_message(request,task,&others),language_reminder())}];
             let (worker,pool)=(&workers[index],&pools[index]);
             let quiet=pulse.quiet();
             async move {
@@ -767,7 +768,7 @@ impl Orchestrator {
         let ranked=rank_models(&self.config,"review",complexity,context,&held(&self.shared.performance),&Tiebreak{sticky:None,seed:session_id});
         let reviewer=crate::review::pick(&ranked,&executor.provider,|provider|self.planners.contains_key(provider))?;
         pulse.beat(Beat::Review{provider:reviewer.provider.clone(),model:reviewer.model_name.clone(),files:watch.changes().len()});
-        let messages=vec![ChatMessage{role:"system".into(),content:language_note()},ChatMessage{role:"user".into(),content:crate::review::prompt(request,&diff,&agent_name(&executor.provider),&agent_name(&reviewer.provider))}];
+        let messages=vec![ChatMessage{role:"system".into(),content:language_note()},ChatMessage{role:"user".into(),content:format!("{}{}",crate::review::prompt(request,&diff,&agent_name(&executor.provider),&agent_name(&reviewer.provider)),language_reminder())}];
         // Um provedor só dela, preso à pasta deste pedido: a revisão roda fora
         // do cadeado do orquestrador, e o pedido seguinte pode ser de outro
         // projeto.
@@ -1085,6 +1086,18 @@ pub fn language_note()->String {
     }
 }
 
+/// O lembrete que vai no fim do pedido, onde o modelo lê por último. A nota
+/// de língua do sistema fica no meio de um texto longo em inglês, e os agentes
+/// de linha de comando a recebem colada nele: sem este lembrete eles tendem a
+/// responder na língua dos arquivos ou da documentação que leram. Vazio quando
+/// o desenvolvedor não escolheu língua no app.
+pub fn language_reminder()->String {
+    match i18n::reply_language() {
+        Some(language)=>format!("\n\nReminder: write your reply in {} (BCP 47 tag `{}`), whatever language the files, code comments or documentation you read are written in.",language.name,language.tag),
+        None=>String::new(),
+    }
+}
+
 /// O que volta do modelo raramente é só o título: vem entre aspas, com marca
 /// de lista, às vezes com um parágrafo de justificativa embaixo. Fica a
 /// primeira linha limpa, e só se ela couber numa aba da barra lateral.
@@ -1308,6 +1321,11 @@ mod tests {
         crate::i18n::set_reply_language(Some(crate::i18n::ReplyLanguage{tag:"  ".into(),name:"".into()}));
         assert!(crate::i18n::reply_language().is_none(),"an empty tag is no choice");
         assert!(language_note().contains("language their request is written in"));
+        assert!(language_reminder().is_empty(),"without a choice there is no reminder");
+        crate::i18n::set_reply_language(Some(crate::i18n::ReplyLanguage{tag:"pt-BR".into(),name:"Português".into()}));
+        let reminder=language_reminder();
+        assert!(reminder.starts_with("\n\n") && reminder.contains("Português") && reminder.contains("`pt-BR`"),"{reminder}");
+        crate::i18n::set_reply_language(None);
     }
 
     fn repository(files:&[(&str,String)])->tempfile::TempDir { let dir=tempfile::tempdir().expect("temporary repository"); for (name,body) in files { std::fs::write(dir.path().join(name),body).expect("fixture"); } dir }
