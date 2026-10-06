@@ -5,6 +5,6 @@
   "plan": null,
   "commands": [],
   "title": "Updates and what's new",
-  "summary": "JayV checks for a new version in the background and, after each update, shows what changed since the last version you saw.",
-  "usage": "When a new version is out, a bar offers What changes and Update now. The full history is in What's new, in the command palette, and on the Release notes page of the site."
+  "summary": "JayV checks for a new version when it opens and in the background, installs the one it finds at startup by itself, and after each update shows what changed since the last version you saw.",
+  "usage": "On open, a short screen looks for the new version and, if there is one, updates and restarts (Skip opens the app right away). Found later, a bar offers What changes and Update now. To turn off updating on open: Settings › App › Version. The full history is in What's new, in the command palette, and on the Release notes page of the site."
 }

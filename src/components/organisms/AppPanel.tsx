@@ -3,7 +3,7 @@ import { formatClock, useT } from "@/modules/i18n";
 import { showChanges } from "@/modules/changelog";
 import { updateCore } from "@/modules/settings";
 import { locks, SENSITIVE_PATTERNS, toggleState, useEntitlements } from "@/modules/plans";
-import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
+import { checkForUpdate, isUpdateBusy, setInstallOnLaunch, useUpdate } from "@/modules/updates";
 import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,6 +20,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   const checking = useUpdate((state) => isUpdateBusy(state.phase));
   const check = () => checkForUpdate(true);
   const checkedAt = useUpdate((state) => state.checkedAt);
+  const installOnLaunch = useUpdate((state) => state.installOnLaunch);
   const entitlements = useEntitlements();
   // A redação de segredos e os arquivos sensíveis são núcleo: ligados, sem
   // interruptor, com a lista padrão sempre por baixo do que quem usa escreve.
@@ -64,6 +65,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
         )}>
         <div className="grid gap-1 text-xs text-muted-foreground">
           <p>{t("app.updates.auto")}</p>
+          <ToggleRow id="update-on-launch" label={t("app.updates.launch")} hint={t("app.updates.launch.hint")} checked={installOnLaunch} onChange={setInstallOnLaunch} className="mb-2 text-foreground" />
           <p>{checkedAt ? t("app.updates.checkedAt", { at: formatClock(checkedAt) }) : t("app.updates.never")}</p>
         </div>
       </SettingsSection>

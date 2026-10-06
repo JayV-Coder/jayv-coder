@@ -20,7 +20,7 @@ import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
-import { FeatureLocked, McpDraftDialog, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
+import { FeatureLocked, LaunchUpdate, McpDraftDialog, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -102,6 +102,7 @@ export function App() {
           {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
         </div>
       </div>
+      <LaunchUpdate />
       <UpdateDialog />
       <WhatsNewDialog />
       <McpDraftDialog />

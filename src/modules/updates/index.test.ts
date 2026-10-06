@@ -83,3 +83,59 @@ describe("checkedAt", () => {
     expect(useUpdate.getState().checkedAt).not.toBeNull();
   });
 });
+
+describe("updateAtLaunch", () => {
+  const fresh = async () => {
+    vi.resetModules();
+    return import("./index");
+  };
+
+  it("installs the version found at startup by itself", async () => {
+    const update = release("1.1.0");
+    check.mockReset();
+    check.mockResolvedValue(update);
+    const { updateAtLaunch, useUpdate: state } = await fresh();
+    state.setState({ installOnLaunch: true });
+    await updateAtLaunch();
+    expect(update.download).toHaveBeenCalled();
+    expect(update.install).toHaveBeenCalled();
+    expect(state.getState()).toMatchObject({ launching: false, phase: "restarting" });
+  });
+
+  it("with the option off, only announces it", async () => {
+    const update = release("1.1.0");
+    check.mockReset();
+    check.mockResolvedValue(update);
+    const { updateAtLaunch, useUpdate: state } = await fresh();
+    state.setState({ installOnLaunch: false });
+    await updateAtLaunch();
+    expect(update.download).not.toHaveBeenCalled();
+    expect(state.getState()).toMatchObject({ phase: "available", next: "1.1.0", launching: false });
+  });
+
+  it("without a network, the app opens after the failed check", async () => {
+    check.mockReset();
+    check.mockRejectedValue(new Error("offline"));
+    const { updateAtLaunch, useUpdate: state } = await fresh();
+    await updateAtLaunch();
+    expect(state.getState()).toMatchObject({ launching: false, phase: "idle", error: null });
+  });
+
+  it("skip opens the app at once and a late answer becomes the notice", async () => {
+    const update = release("1.1.0");
+    let answer: (value: unknown) => void = () => undefined;
+    check.mockReset();
+    check.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const { updateAtLaunch, skipLaunchUpdate, useUpdate: state } = await fresh();
+    state.setState({ installOnLaunch: true });
+    const running = updateAtLaunch();
+    expect(state.getState().launching).toBe(true);
+    skipLaunchUpdate();
+    await running;
+    expect(state.getState().launching).toBe(false);
+    answer(update);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(update.download).not.toHaveBeenCalled();
+    expect(state.getState()).toMatchObject({ phase: "available", next: "1.1.0" });
+  });
+});
