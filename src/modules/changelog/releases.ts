@@ -26,6 +26,12 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.68.1", date: "2026-10-06",
+    items: [
+      { kind: "fix", id: "windowsInstallerKill" },
+    ],
+  },
+  {
     version: "0.68.0", date: "2026-10-06",
     items: [
       { kind: "feature", id: "mcpServers" },

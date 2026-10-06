@@ -1514,6 +1514,8 @@ export const en = {
   "whatsNew.item.messagePermissions.detail": "Next to the mode, Permissions lets you allow commands, Git writes and the network only for the next message you send. The /plan, /build and /auto hint left the message box to make room.",
   "whatsNew.item.blockedCommandAsks.title": "A blocked command now asks you",
   "whatsNew.item.blockedCommandAsks.detail": "When the agent is blocked by a permission (Codex could not run git add because .git is read-only, for example), JayV asks above the message box whether to run the command, deny it or always allow it in the project, instead of only reporting it. Run sends the request again with that permission.",
+  "whatsNew.item.windowsInstallerKill.title": "Windows updates no longer stop at \"Failed to kill JayV\"",
+  "whatsNew.item.windowsInstallerKill.detail": "The Windows installer now waits for JayV to finish closing after an update, then closes any JayV process still running, including agent helpers, instead of giving up.",
   "whatsNew.item.mcpServers.title": "MCP servers for your agents",
   "whatsNew.item.mcpServers.detail": "Settings › MCP lists the servers JayV hands to Claude Code, Codex and Copilot on every request. Add one by hand, paste a configuration, or type /mcp in a chat followed by the configuration or a description; an agent drafts it, and nothing is saved until you check it.",
   "whatsNew.item.planSessionInBuild.title": "The agent no longer stays read-only after planning",
