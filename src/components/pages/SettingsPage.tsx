@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { PlugIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId } from "@/modules/core";
 import { useT } from "@/modules/i18n";
-import { AGENTS, discardChanges, isDirty, problems, restoreCoreDefaults, saveSettings, useSettings } from "@/modules/settings";
+import { AGENTS, discardChanges, isDirty, problems, restoreCoreDefaults, saveSettings, setSettingsTab, useSettings, useSettingsTab, type SettingsTab } from "@/modules/settings";
 import { AgentIcon, GridIcon, LoadingNote, LogoIcon } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
 import { AGENT_NAMES, AgentPanel, AppPanel, JevPanel, McpPanel } from "@/components/organisms";
@@ -18,6 +18,7 @@ export function SettingsPage() {
   const t = useT();
   const { loaded, agents, models, saving, core, coreSnapshot } = useSettings(useShallow(({ loaded, agents, models, saving, core, coreSnapshot }) => ({ loaded, agents, models, saving, core, coreSnapshot })));
   const dirty = useSettings(isDirty);
+  const tab = useSettingsTab((state) => state.tab);
   if (!loaded || !core || !coreSnapshot) return <LoadingNote>{t("settings.loading")}</LoadingNote>;
 
   const found = Object.fromEntries(AGENTS.map((id) => [id, problems({ agents, models }, id)])) as Record<AgentId, ReturnType<typeof problems>>;
@@ -51,7 +52,7 @@ export function SettingsPage() {
         </p>
       )}
 
-      <Tabs defaultValue="app" className="gap-5">
+      <Tabs value={tab} onValueChange={(value) => setSettingsTab(value as SettingsTab)} className="gap-5">
         <TabsList className="h-auto w-full justify-start gap-1 p-1">
           <TabsTrigger value="app" className="flex-none gap-2.5 px-4 py-2">
             <GridIcon className="size-5" />

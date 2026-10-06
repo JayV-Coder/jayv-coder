@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
+import { useIntentHandler } from "@/modules/commands";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { createProject, folderName, folderOwner, useWorkspace } from "@/modules/workspace";
@@ -26,6 +27,8 @@ export function NewProjectDialog({ children }: { children: ReactNode }) {
     setOpen(next);
     if (next) { setName(""); setPath(""); setNote(""); setTyped(false); }
   };
+
+  useIntentHandler("newProject", () => reset(true));
 
   const explore = async () => {
     try {

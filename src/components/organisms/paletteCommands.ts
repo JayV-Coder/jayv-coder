@@ -1,0 +1,209 @@
+import type { Chat, Project, View, WorkspaceData } from "@/modules/core";
+import { WORK_MODES } from "@/modules/core";
+import { signOut } from "@/modules/auth";
+import { showChanges } from "@/modules/changelog";
+import { featureActions, requestIntent, type Shortcut } from "@/modules/commands";
+import { cancelTurn } from "@/modules/conversation";
+import { reportError } from "@/modules/feedback";
+import { setLocale, type Key, type LocaleOption } from "@/modules/i18n";
+import { setLivePanel, useLive } from "@/modules/live";
+import { navigate } from "@/modules/navigation";
+import { clearRead, markAllRead } from "@/modules/notifications";
+import {
+  acceptInvite, declineInvite, openOrganization, organizationChatsOf, type IncomingInvite, type Organization, type OrganizationTab,
+} from "@/modules/organizations";
+import { allows } from "@/modules/plans";
+import { AGENT_LABELS, AGENTS, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, type SettingsTab } from "@/modules/settings";
+import { openDashboard, openSite, SITE_URL } from "@/modules/site";
+import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
+import { checkForUpdate } from "@/modules/updates";
+import { openStats, setPeriod, type Period } from "@/modules/usage";
+import {
+  chatsOf, chatTitle, createChat, findChat, leaveProject, openChat, openProject, openTurns, recentChats, setLayout, setWorkMode, type Layout,
+} from "@/modules/workspace";
+
+export interface Command {
+  id: string;
+  group: Key;
+  label: string;
+  /** Texto apagado ao lado do nome: o caminho do projeto, por exemplo. */
+  hint?: string;
+  shortcut?: Shortcut;
+  run: () => void;
+}
+
+/** O que a paleta precisa saber do app para listar o que dá para fazer agora. */
+export interface PaletteContext {
+  t: (key: Key, params?: Record<string, string | number>) => string;
+  data: WorkspaceData;
+  project: Project | null;
+  activeChatId: string | null;
+  view: View;
+  layout: Layout;
+  locale: string;
+  locales: LocaleOption[];
+  organizations: Organization[];
+  invites: IncomingInvite[];
+  openOrganizationId: string | null;
+  settingsDirty: boolean;
+  rights: Parameters<typeof allows>[0];
+}
+
+type PlanFeature = Parameters<typeof allows>[1];
+
+const ORGANIZATION_TABS: { tab: OrganizationTab; label: Key; feature?: PlanFeature }[] = [
+  { tab: "projects", label: "org.tab.projects" },
+  { tab: "stats", label: "org.tab.stats", feature: "stats" },
+  { tab: "gate", label: "org.tab.gate", feature: "gateBoard" },
+  { tab: "members", label: "org.tab.members" },
+  { tab: "repositories", label: "org.tab.repositories" },
+];
+
+const SETTINGS_TABS: { tab: SettingsTab; label: (t: PaletteContext["t"]) => string }[] = [
+  { tab: "app", label: (t) => t("settings.tab.app") },
+  { tab: "jev", label: (t) => t("settings.tab.jev") },
+  { tab: "mcp", label: (t) => t("settings.tab.mcp") },
+  ...AGENTS.map((id) => ({ tab: id as SettingsTab, label: () => AGENT_LABELS[id] })),
+];
+
+const PERIODS: Period[] = ["today", "7d", "30d", "all"];
+const SEP = " › ";
+
+/** Todos os comandos da paleta (Ctrl+K), na ordem dos grupos: tudo que tem
+ * botão numa tela também tem nome aqui. O que o plano desliga some, como no
+ * menu; o que destrói dados (limpar ou apagar chat e projeto) fica só nos
+ * botões, que pedem confirmação. */
+export function paletteCommands(ctx: PaletteContext): Command[] {
+  const { t, data, project, view, rights } = ctx;
+  const can = (feature: PlanFeature) => allows(rights, feature);
+  const all: Command[] = [];
+  const chat: Chat | null = findChat(data, ctx.activeChatId);
+
+  if (project) {
+    const group = "palette.group.project" as const;
+    all.push(
+      { id: "new-chat", group, label: t("common.newChat"), hint: project.name, shortcut: "newChat", run: () => void createChat(project.id) },
+      { id: "chats", group, label: t("nav.chats"), hint: project.name, run: () => navigate("chats") },
+    );
+    if (can("gateBoard")) all.push({ id: "gate", group, label: t("nav.gate"), hint: project.name, shortcut: "gate", run: () => navigate("gate") });
+    if (can("stats")) all.push({ id: "project-stats", group, label: t("nav.stats"), hint: project.name, run: () => openStats({ kind: "project", id: project.id }) });
+    if (can("projectNotes")) all.push({ id: "project-notes", group, label: t("memory.open"), hint: project.name, run: () => { navigate("chats"); requestIntent("projectNotes"); } });
+    if (can("chatSearch")) all.push({ id: "search-chats", group, label: t("search.label"), hint: project.name, run: () => { navigate("chats"); requestIntent("searchChats"); } });
+    if (chat) {
+      for (const mode of WORK_MODES) {
+        if (mode === (chat.workMode ?? "auto")) continue;
+        all.push({ id: `mode-${mode}`, group, label: t("palette.mode", { name: t(`mode.${mode}`) }), hint: t(`mode.${mode}.hint`), run: () => void setWorkMode(chat.id, mode) });
+      }
+      if (can("liveFiles") && project.rootPath.trim()) {
+        all.push({
+          id: "live", group, label: t("palette.live"),
+          run: () => { openChat(chat.id); setLivePanel(chat.id, useLive.getState().panel[chat.id] !== true); },
+        });
+      }
+      const flying = openTurns(chat).find((turn) => turn.status === "flying");
+      if (flying) all.push({ id: "stop", group, label: t("palette.stop"), run: () => void cancelTurn(flying.id, chat.id) });
+    }
+    for (const recent of recentChats(chatsOf(data, project.id), ctx.activeChatId)) {
+      all.push({ id: `chat-${recent.id}`, group: "palette.group.chats", label: chatTitle(recent), run: () => openChat(recent.id) });
+    }
+  }
+
+  const go = "palette.group.navigate" as const;
+  all.push({ id: "projects", group: go, label: t("nav.projects"), shortcut: "projects", run: leaveProject });
+  if (can("organizations")) all.push({ id: "organizations", group: go, label: t("nav.organizations"), shortcut: "organizations", run: () => navigate("organizations") });
+  if (can("stats")) all.push({ id: "stats", group: go, label: t("nav.stats"), shortcut: "stats", run: () => openStats({ kind: "global" }) });
+  all.push(
+    { id: "system", group: go, label: t("nav.system"), shortcut: "system", run: () => navigate("status") },
+    { id: "settings", group: go, label: t("nav.settings"), shortcut: "settings", run: () => navigate("settings") },
+    { id: "profile", group: go, label: t("nav.profile"), run: () => navigate("profile") },
+    { id: "plans", group: go, label: t("nav.plans"), run: () => navigate("plans") },
+  );
+
+  const projects = "palette.group.projects" as const;
+  all.push({ id: "new-project", group: projects, label: t("projects.new"), run: () => { leaveProject(); requestIntent("newProject"); } });
+  for (const layout of ["grid", "list"] as Layout[]) {
+    if (layout === ctx.layout) continue;
+    all.push({ id: `layout-${layout}`, group: projects, label: `${t("layout.label")}: ${t(`layout.${layout}`)}`, run: () => { leaveProject(); setLayout(layout); } });
+  }
+  for (const item of data.projects) {
+    if (item.id === project?.id) continue;
+    all.push({ id: `project-${item.id}`, group: projects, label: item.name, hint: item.rootPath ?? undefined, run: () => openProject(item.id) });
+  }
+
+  const settings = "palette.group.settings" as const;
+  for (const { tab, label } of SETTINGS_TABS) {
+    all.push({ id: `settings-${tab}`, group: settings, label: `${t("nav.settings")}${SEP}${label(t)}`, run: () => openSettingsTab(tab) });
+  }
+  if (ctx.settingsDirty) {
+    all.push(
+      { id: "settings-save", group: settings, label: t("settings.save"), run: () => void saveSettings() },
+      { id: "settings-discard", group: settings, label: t("settings.discard"), run: discardChanges },
+    );
+  }
+  all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });
+
+  if (view === "stats" && can("stats")) {
+    for (const period of PERIODS) {
+      all.push({ id: `period-${period}`, group: "palette.group.stats", label: `${t("nav.stats")}${SEP}${t(`usage.period.${period}`)}`, run: () => setPeriod(period) });
+    }
+  }
+
+  if (can("organizations")) {
+    for (const organization of ctx.organizations) {
+      all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id).catch(reportError) });
+      const general = organizationChatsOf(data, organization.id);
+      for (const item of general.slice(0, 5)) {
+        all.push({ id: `general-${item.id}`, group: "palette.group.general", label: chatTitle(item), hint: organization.name, run: () => openChat(item.id) });
+      }
+      if (general[0]) {
+        all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), run: () => void createChat(general[0].projectId) });
+      }
+    }
+    const current = ctx.organizations.find((organization) => organization.id === ctx.openOrganizationId);
+    if (current) {
+      for (const { tab, label, feature } of ORGANIZATION_TABS) {
+        if (feature && !can(feature)) continue;
+        all.push({ id: `org-tab-${tab}`, group: "palette.group.organization", label: `${current.name}${SEP}${t(label)}`, run: () => void openOrganization(current.id, tab).catch(reportError) });
+      }
+    }
+    for (const invite of ctx.invites) {
+      all.push(
+        { id: `invite-accept-${invite.id}`, group: "palette.group.organizations", label: `${t("org.invites.accept")}${SEP}${invite.orgName}`, run: () => void acceptInvite(invite.id).catch(reportError) },
+        { id: `invite-decline-${invite.id}`, group: "palette.group.organizations", label: `${t("org.invites.decline")}${SEP}${invite.orgName}`, run: () => void declineInvite(invite.id).catch(reportError) },
+      );
+    }
+  }
+
+  for (const preference of THEME_PREFERENCES) {
+    all.push({ id: `theme-${preference}`, group: "palette.group.appearance", label: t("palette.theme", { name: t(`theme.${preference}`) }), run: () => setThemePreference(preference) });
+  }
+  for (const option of ctx.locales) {
+    if (option.id === ctx.locale) continue;
+    all.push({ id: `language-${option.id}`, group: "palette.group.language", label: t("palette.language", { name: option.name }), run: () => setLocale(option.id) });
+  }
+
+  const account = "palette.group.account" as const;
+  all.push(
+    { id: "notifications", group: account, label: t("notifications.title"), run: () => requestIntent("notifications") },
+    { id: "notifications-read", group: account, label: t("notifications.markAllRead"), run: () => void markAllRead().catch(reportError) },
+    { id: "notifications-clear", group: account, label: t("notifications.clearRead"), run: () => void clearRead().catch(reportError) },
+    { id: "sign-out", group: account, label: t("auth.signOut"), run: () => void signOut() },
+  );
+
+  const help = "palette.group.help" as const;
+  all.push(
+    { id: "whats-new", group: help, label: t("palette.whatsNew"), run: () => void showChanges() },
+    { id: "check-update", group: help, label: t("system.update.check"), run: () => void checkForUpdate(true) },
+    { id: "system-reload", group: help, label: t("system.reload"), run: () => { navigate("status"); featureActions.reloadSystem?.(); } },
+    { id: "system-copy", group: help, label: t("system.copy"), run: () => void featureActions.copySystemReport?.().catch(reportError) },
+  );
+  if (SITE_URL) {
+    all.push(
+      { id: "site-docs", group: help, label: t("palette.docs"), run: () => void openSite("/docs").catch(reportError) },
+      { id: "site-releases", group: help, label: t("palette.releases"), run: () => void openSite("/releases").catch(reportError) },
+      { id: "site-dashboard", group: help, label: t("org.site.manage"), run: () => void openDashboard().catch(reportError) },
+      { id: "site-account", group: help, label: t("palette.siteAccount"), run: () => void openDashboard("/account").catch(reportError) },
+    );
+  }
+  return all;
+}

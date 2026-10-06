@@ -1,10 +1,10 @@
 import { ClipboardCopyIcon, RefreshCwIcon, SparklesIcon, ArrowUpCircleIcon } from "lucide-react";
 import { RELEASES, showChanges } from "@/modules/changelog";
 import { useConnection } from "@/modules/connection";
-import { notify, reportError } from "@/modules/feedback";
+import { reportError } from "@/modules/feedback";
 import { useLocale, useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
-import { AGENT_LABELS, AGENTS, checkAllAgents, useSettings, type ProbeState } from "@/modules/settings";
+import { AGENT_LABELS, AGENTS, useSettings, type ProbeState } from "@/modules/settings";
 import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { Eyebrow, LoadingNote } from "@/components/atoms";
 import { Metric, PageHeading, PathLine } from "@/components/molecules";
@@ -13,8 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DatabaseCard } from "../components/DatabaseCard";
 import { HealthLine } from "../components/HealthLine";
-import { agentHealth, connectionHealth, diagnosticReport, type Health } from "../report";
-import { loadStatus, useSystem } from "../store";
+import { agentHealth, connectionHealth, type Health } from "../report";
+import { copySystemReport, reloadSystem } from "../actions";
+import { useSystem } from "../store";
 
 const LINK: Record<string, Key> = { online: "system.link.online", offline: "system.link.offline", expired: "system.link.expired", signedOut: "system.link.signedOut" };
 
@@ -60,19 +61,8 @@ export function StatusPage() {
     [t("system.router"), number.format(status.performance_records), t("system.router.hint")],
   ];
 
-  const reload = () => {
-    void loadStatus();
-    checkAllAgents();
-  };
-
-  const copy = async () => {
-    const text = diagnosticReport({
-      status, link, pending, refused, platform: navigator.userAgent, language: locale, at: new Date(),
-      agents: AGENTS.map((id) => ({ label: AGENT_LABELS[id], probe: configured[id] === false ? null : probeOf(probes[id]) })),
-    });
-    await navigator.clipboard.writeText(text);
-    notify(t("system.copied"));
-  };
+  const reload = reloadSystem;
+  const copy = copySystemReport;
 
   const released = RELEASES.find((release) => release.version === status.version);
   const updating = isUpdateBusy(update.phase);

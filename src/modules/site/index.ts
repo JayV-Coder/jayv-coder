@@ -13,3 +13,10 @@ export async function openDashboard(path = "") {
   if (!SITE_URL) return;
   await openUrl(dashboardUrl(path));
 }
+
+/** Abre uma página pública do site (a documentação, as versões); sem o
+ * endereço do site no build, não faz nada. */
+export async function openSite(path = "") {
+  if (!SITE_URL) return;
+  await openUrl(`${SITE_URL}${path}`);
+}

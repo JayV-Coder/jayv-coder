@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { bus, commands, type SystemStatus } from "@/modules/core";
+import { featureActions } from "@/modules/commands";
 import { reportError } from "@/modules/feedback";
+import { copySystemReport, reloadSystem } from "./actions";
 
 interface SystemState {
   status: SystemStatus | null;
@@ -19,6 +21,8 @@ export async function loadStatus() {
 /** Os números do sistema mudam quando um pedido entra, quando a configuração
  * muda e quando a vista deles aparece. */
 export function connectSystem() {
+  featureActions.reloadSystem = reloadSystem;
+  featureActions.copySystemReport = copySystemReport;
   const offs = [
     bus.on("prompt:sent", () => void loadStatus()),
     bus.on("settings:saved", () => void loadStatus()),
