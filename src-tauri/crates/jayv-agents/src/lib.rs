@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod llm;
 pub mod mcp;
+pub mod org_extensions;
 pub mod providers;
 pub mod router;
 pub mod skills;

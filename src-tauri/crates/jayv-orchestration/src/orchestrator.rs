@@ -1116,7 +1116,9 @@ pub fn language_reminder()->String {
 /// estão os outros arquivos. Nada se a pasta da skill não pôde ser lida.
 fn skill_note(skill:&jayv_agents::skills::Skill)->Option<String> {
     let body=jayv_agents::skills::read_body(skill).map_err(|error|eprintln!("skills: {} ilegível ({error:#})",skill.name)).ok()?;
-    Some(format!("Jev picked the skill `{name}` for this request: {description}\nFollow its instructions below. Any other file it mentions is in `{path}`; read it from there when you need it.\n<skill name=\"{name}\">\n{body}\n</skill>",name=skill.name,description=skill.description,path=skill.path))
+    // A skill da organização vem só com as instruções: não há pasta a ler.
+    let files=if skill.inline.is_some() { String::new() } else { format!(" Any other file it mentions is in `{}`; read it from there when you need it.",skill.path) };
+    Some(format!("Jev picked the skill `{name}` for this request: {description}\nFollow its instructions below.{files}\n<skill name=\"{name}\">\n{body}\n</skill>",name=skill.name,description=skill.description))
 }
 
 /// O que volta do modelo raramente é só o título: vem entre aspas, com marca

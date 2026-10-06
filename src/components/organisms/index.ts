@@ -50,5 +50,6 @@ export { CommandPalette } from "./CommandPalette";
 export { StatusBar } from "./StatusBar";
 export { FeatureLocked } from "./FeatureLocked";
 export { McpPanel } from "./McpPanel";
+export { OrgExtensionsSection } from "./OrgExtensionsSection";
 export { SkillsPanel } from "./SkillsPanel";
 export { McpDraftDialog } from "./McpDraftDialog";

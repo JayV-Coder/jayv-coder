@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { MCP_AGENTS } from "./McpServerForm";
+import { OrgExtensionsSection } from "./OrgExtensionsSection";
 
 /** Configurações › MCP: os servidores que o JayV entrega ao Claude Code, ao
  * Codex e ao Copilot em cada pedido. Grava na hora, sem o Salvar da página:
@@ -54,6 +55,7 @@ export function McpPanel() {
         )}
         <p className="text-xs leading-snug text-muted-foreground">{t("mcp.notes")}</p>
       </SettingsSection>
+      <OrgExtensionsSection kind="mcp" />
       <SettingsSection title={t("mcp.paste.title")} description={t("mcp.paste.description")}>
         <Textarea rows={5} value={pasted} placeholder={t("mcp.paste.placeholder")} className="font-mono text-xs" onChange={(event) => setPasted(event.target.value)} />
         <div className="flex justify-end">
