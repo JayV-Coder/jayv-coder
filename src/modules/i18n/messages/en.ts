@@ -145,6 +145,7 @@ export const en = {
   "progress.resize": "Drag to resize the progress panel (arrow keys too, double-click to reset)",
   "progress.collapse": "Hide the progress panel",
   "progress.expand": "Show the progress panel",
+  "progress.scrollDown": "Go to the latest step",
 
   "beat.gate": "Gatehouse {verdict} — score {score} of {demand}",
   "beat.gate.pass": "let it through",
@@ -1706,6 +1707,8 @@ export const en = {
   "settings.baseUrlInvalid": "{agent}: the base URL must start with http:// or https://.",
   "settings.keyRequired": "{agent} needs an API key before it can be turned on.",
   "settings.keyInvalid": "{agent}: the API key can't contain spaces.",
+  "whatsNew.item.progressAutoScroll.title": "The progress panel follows the latest step",
+  "whatsNew.item.progressAutoScroll.detail": "The steps list beside the chat now scrolls to the end by itself whenever a new step arrives. If you scroll up to read an earlier step, it stays where you left it and shows a button to jump back to the latest step.",
   "whatsNew.item.providerIcons.title": "Official icons and checked integrations",
   "whatsNew.item.providerIcons.detail": "Kilo Code, OpenRouter and LiteLLM now use their official icons. The integration was checked against each one's documentation: Kilo runs with `kilo run --model provider/model --auto` and lists models with `kilo models`; OpenRouter and LiteLLM use /chat/completions and /models with the Bearer key. LiteLLM's default address is now http://localhost:4000/v1, as in its documentation; addresses you already saved keep working.",
   "whatsNew.item.moreProviders.title": "Kilo Code, OpenRouter and LiteLLM",
