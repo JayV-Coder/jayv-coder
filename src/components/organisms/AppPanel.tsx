@@ -3,6 +3,7 @@ import { formatClock, useT } from "@/modules/i18n";
 import { showChanges } from "@/modules/changelog";
 import { updateCore } from "@/modules/settings";
 import { locks, SENSITIVE_PATTERNS, toggleState, useEntitlements } from "@/modules/plans";
+import { resetTours, setAutoTours, startTour, TOURS, useTutorial } from "@/modules/tutorial";
 import { checkForUpdate, isUpdateBusy, setInstallOnLaunch, useUpdate } from "@/modules/updates";
 import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   const check = () => checkForUpdate(true);
   const checkedAt = useUpdate((state) => state.checkedAt);
   const installOnLaunch = useUpdate((state) => state.installOnLaunch);
+  const tutorial = useTutorial();
   const entitlements = useEntitlements();
   // A redação de segredos e os arquivos sensíveis são núcleo: ligados, sem
   // interruptor, com a lista padrão sempre por baixo do que quem usa escreve.
@@ -53,6 +55,24 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
                 onChange={(event) => updateCore({ privacy: { ...core.privacy, localOnly: lines(event.target.value) } })} />
             </FormField>
           </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title={t("tutorial.section.title")} description={t("tutorial.section.description")}
+        action={<Button variant="ghost" onClick={resetTours}>{t("tutorial.reset")}</Button>}>
+        <div className="grid gap-3">
+          <ToggleRow id="tutorial-auto" label={t("tutorial.auto")} hint={t("tutorial.auto.hint")} checked={tutorial.auto} onChange={setAutoTours} />
+          <ul className="grid gap-1.5">
+            {TOURS.map((tour) => (
+              <li key={tour.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3.5 py-2">
+                <span className="grid text-sm">
+                  <span className="font-medium">{t(`tutorial.tour.${tour.id}` as never)}</span>
+                  <span className="text-xs text-muted-foreground">{t("tutorial.steps", { count: tour.steps.length })}{tutorial.seen.includes(tour.id) ? ` · ${t("tutorial.seen")}` : ""}</span>
+                </span>
+                <Button size="sm" variant="outline" onClick={() => startTour(tour.id)}>{t("tutorial.start")}</Button>
+              </li>
+            ))}
+          </ul>
         </div>
       </SettingsSection>
 

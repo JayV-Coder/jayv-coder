@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { View } from "@/modules/core";
 import { connectAuth, useAuth } from "@/modules/auth";
-import { announceChanges } from "@/modules/changelog";
+import { announceChanges, useChangelog } from "@/modules/changelog";
 import { connectConnection } from "@/modules/connection";
 import { connectI18n, useT } from "@/modules/i18n";
 import { connectConversation } from "@/modules/conversation";
@@ -12,7 +12,8 @@ import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
 import { clearNotifications, connectNotifications, loadNotifications } from "@/modules/notifications";
 import { clearOrganizations, connectOrganizationDashboard, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
-import { connectUpdates } from "@/modules/updates";
+import { connectUpdates, useUpdate } from "@/modules/updates";
+import { connectTutorial } from "@/modules/tutorial";
 import { connectLive } from "@/modules/live";
 import { connectTray } from "@/modules/tray";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
@@ -20,7 +21,7 @@ import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
-import { FeatureLocked, LaunchUpdate, McpDraftDialog, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
+import { FeatureLocked, LaunchUpdate, McpDraftDialog, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -37,6 +38,13 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   organization: OrganizationPage,
 };
 
+/** O tutorial da primeira visita espera: a conta ainda não abriu, a atualização
+ * ou as novidades estão na frente. */
+function tutorialBlocked() {
+  const update = useUpdate.getState();
+  return useAuth.getState().status !== "signedIn" || update.launching || update.open || useChangelog.getState().open;
+}
+
 /** Liga os módulos uma vez: cada um passa a ouvir o núcleo e o barramento por
  * conta própria. A tela só escolhe qual página mostrar. */
 export function App() {
@@ -49,7 +57,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray()];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray(), connectTutorial(tutorialBlocked)];
     return () => disconnect.forEach((off) => off());
   }, []);
 
@@ -102,6 +110,7 @@ export function App() {
           {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
         </div>
       </div>
+      <TutorialOverlay />
       <LaunchUpdate />
       <UpdateDialog />
       <WhatsNewDialog />

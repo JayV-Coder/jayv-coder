@@ -124,6 +124,7 @@ export function Composer({ chat }: { chat: Chat | null }) {
           )}
         {chat && !question && <GrantsPicker chat={chat} />}
         {chat && (
+          <span data-tour="composer-mode" className="inline-flex">
           <SegmentedControl<WorkMode>
             label={`${t("mode.label")} (${shortcutText("workMode")})`}
             value={chat.workMode ?? "auto"}
@@ -131,7 +132,9 @@ export function Composer({ chat }: { chat: Chat | null }) {
             onChange={(mode) => void setWorkMode(chat.id, mode)}
             className="[&_button]:h-6 [&_button]:px-2"
           />
+          </span>
         )}
+        <span data-tour="composer-send" className="inline-flex">
         {flying && chat ? (
           <Button
             type="button"
@@ -149,6 +152,7 @@ export function Composer({ chat }: { chat: Chat | null }) {
             <ArrowUpIcon aria-hidden="true" />
           </Button>
         )}
+        </span>
       </div>
     </form>
   );

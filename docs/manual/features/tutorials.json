@@ -1,0 +1,10 @@
+{
+  "id": "tutorials",
+  "category": "app",
+  "since": "0.74.0",
+  "plan": null,
+  "commands": [],
+  "title": "Tutorials",
+  "summary": "Each screen has a guided tour that explains its features, highlighting the element, using the same text as this documentation.",
+  "usage": "The tutorial opens by itself on the first visit to each screen. To see it again: the help button (?) in the sidebar, Tutorial for this screen in the command palette (Ctrl+K), or Settings › App › Tutorials, where you can also turn off the automatic opening."
+}

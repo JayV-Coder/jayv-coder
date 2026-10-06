@@ -35,7 +35,7 @@ export function AppHeader() {
       {view === "chat" && chat && (
         <div className="flex flex-none items-center gap-1">
         {liveAllowed && project?.rootPath.trim() && (
-          <Button variant={liveOpen ? "secondary" : "ghost"} size="sm" aria-pressed={liveOpen} className="text-muted-foreground" title={t("live.toggle.hint")}
+          <Button data-tour="header-live" variant={liveOpen ? "secondary" : "ghost"} size="sm" aria-pressed={liveOpen} className="text-muted-foreground" title={t("live.toggle.hint")}
             onClick={() => setLivePanel(chat.id, !liveOpen)}>
             <FileDiffIcon aria-hidden="true" />
             {t("live.toggle")}
