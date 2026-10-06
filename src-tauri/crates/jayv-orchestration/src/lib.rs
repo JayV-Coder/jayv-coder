@@ -8,7 +8,7 @@ pub mod review;
 pub mod split;
 
 // As camadas de baixo com os nomes de sempre dentro deste crate.
-use jayv_agents::{agents, llm, providers, router, usage};
+use jayv_agents::{agents, llm, mcp, providers, router, usage};
 use jayv_base::{config, firewall, i18n, model, progress};
 use jayv_code::{context_engine, graph, project_map, rag, symbols};
 use jayv_jev::{core_settings, expertise, jev};

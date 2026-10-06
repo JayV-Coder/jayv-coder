@@ -49,3 +49,5 @@ export { NotificationBell } from "./NotificationBell";
 export { CommandPalette } from "./CommandPalette";
 export { StatusBar } from "./StatusBar";
 export { FeatureLocked } from "./FeatureLocked";
+export { McpPanel } from "./McpPanel";
+export { McpDraftDialog } from "./McpDraftDialog";

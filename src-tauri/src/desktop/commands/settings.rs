@@ -208,3 +208,35 @@ pub(crate) async fn save_lean_code(desk:State<'_,SharedDesktopState>,known:State
     let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
     Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),lean_code))
 }
+
+/// Os servidores MCP configurados neste computador.
+#[tauri::command]
+pub(crate) async fn get_mcp_servers(workspace:State<'_,SharedWorkspace>)->Result<Vec<jayv_agents::mcp::McpServer>,Text>{
+    workspace.lock().await.mcp_servers().map_err(failure)
+}
+
+/// Grava a lista inteira. O pedido seguinte já leva os servidores novos: a
+/// fila os lê a cada pedido.
+#[tauri::command]
+pub(crate) async fn save_mcp_servers(workspace:State<'_,SharedWorkspace>,servers:Vec<jayv_agents::mcp::McpServer>)->Result<Vec<jayv_agents::mcp::McpServer>,Text>{crate::desktop::require_session()?;
+    workspace.lock().await.save_mcp_servers(servers).map_err(failure)
+}
+
+/// O rascunho do `/mcp` do chat: o texto colado é lido aqui (configuração,
+/// `claude mcp add`, comando `npx`); o que não é configuração vai ao agente
+/// mais barato, em somente leitura, que devolve a configuração. Nada é
+/// gravado: a tela abre o rascunho para o desenvolvedor conferir.
+#[derive(Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct McpDraft { pub servers:Vec<jayv_agents::mcp::McpServer>, pub from_model:bool }
+
+#[tauri::command]
+pub(crate) async fn draft_mcp(desk:State<'_,SharedDesktopState>,text:String)->Result<McpDraft,Text>{crate::desktop::require_session()?;
+    let parsed=jayv_agents::mcp::parse(&text);
+    if !parsed.is_empty() { return Ok(McpDraft{servers:parsed,from_model:false}); }
+    let request=desk.lock().await.orchestrator.mcp_draft_request(&text).ok_or_else(||Text::new("mcp.draft.noAgent"))?;
+    let answer=request.run().await.ok_or_else(||Text::new("mcp.draft.failed"))?;
+    let servers=jayv_agents::mcp::from_model(&answer);
+    if servers.is_empty() { return Err(Text::new("mcp.draft.unknown")); }
+    Ok(McpDraft{servers,from_model:true})
+}

@@ -92,6 +92,12 @@ impl LlmSettings {
         if grants.is_empty() { return self.clone(); }
         Self{agents:self.agents.iter().map(|agent|agent.with_grants(grants)).collect(),models:self.models.clone()}
     }
+
+    /// Todos os agentes com os servidores MCP configurados.
+    pub fn with_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
+        if servers.is_empty() { return self.clone(); }
+        Self{agents:self.agents.iter().map(|agent|agent.with_mcp(servers)).collect(),models:self.models.clone()}
+    }
 }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
@@ -118,8 +124,12 @@ pub struct ClaudeOptions {
     /// pedido só (`Grants`): `Bash(git add:*)`. Nunca gravadas.
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub granted:Vec<String>,
+    /// Os servidores MCP configurados (`mcp::McpServer`), postos na hora do
+    /// pedido (`with_mcp`). Nunca gravados aqui: moram na tabela deles.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![]} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![],mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -136,8 +146,10 @@ pub struct CodexOptions {
     pub skip_git_repo_check:bool,
     /// Os mecanismos ligados (`CODEX_MECHANISMS`).
     pub mechanisms:Vec<String>,
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true,mechanisms:strings(&[WEB_SEARCH])} } }
+impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true,mechanisms:strings(&[WEB_SEARCH]),mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -152,8 +164,10 @@ pub struct CopilotOptions {
     /// (`Grants`): `shell(git add)`. Nunca gravadas.
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub granted:Vec<String>,
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![]} } }
+impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![],mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -296,6 +310,12 @@ impl ClaudeOptions {
         // continua bloqueado.
         if !self.blocked_tools.iter().any(|item|item=="Bash") { allowed.extend(self.granted.iter().cloned()); }
         if symbols.is_some() { allowed.push(SYMBOL_SERVER_TOOLS.to_string()); }
+        // As ferramentas dos servidores MCP configurados rodam sem pergunta.
+        if !self.safe_mode { allowed.extend(crate::mcp::claude_tools(&self.mcp)); }
+        // O índice de símbolos e os servidores configurados vão numa
+        // configuração só.
+        let base=symbols.and_then(|config|serde_json::from_str::<Value>(&config).ok()).and_then(|config|config.get("mcpServers").and_then(Value::as_object).cloned()).unwrap_or_default();
+        let symbols=if self.safe_mode { None } else { crate::mcp::config_json(&self.mcp,AgentId::Claude,base) };
         if !allowed.is_empty() { args.extend(["--allowedTools".to_string(),allowed.join(",")]); }
         if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
         // Com as sessões guardadas, o pedido seguinte do mesmo chat retoma a
@@ -348,6 +368,7 @@ impl CodexOptions {
         // que o Codex usa quando ninguém diz nada.
         let search=if self.mechanisms.iter().any(|mechanism|mechanism==WEB_SEARCH) {"live"} else {"disabled"};
         args.extend(["-c".to_string(),format!("web_search=\"{search}\"")]);
+        args.extend(crate::mcp::args_for(&self.mcp,AgentId::Codex));
         // A chamada de apoio não grava sessão.
         args.extend(strings(&[EPHEMERAL,"--ephemeral"]));
         // A sessão do chat, quando há uma para retomar: o agente não relê o
@@ -381,6 +402,7 @@ impl CopilotOptions {
             }
         }
         for tool in &self.granted { args.extend(["--allow-tool".to_string(),tool.clone()]); }
+        args.extend(crate::mcp::args_for(&self.mcp,AgentId::Copilot));
         // A negação vence a liberação no Copilot, então o bloqueio continua
         // valendo mesmo com o mecanismo ligado.
         for tool in &self.blocked_tools { args.extend(["--deny-tool".to_string(),tool.clone()]); }
@@ -488,12 +510,12 @@ impl AgentSettings {
         match self.id {
             AgentId::Claude=>{
                 let options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                ClaudeOptions{permission_mode:"plan".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],..options}.args()
+                ClaudeOptions{permission_mode:"plan".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],mcp:vec![],..options}.args()
             }
-            AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
+            AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,mcp:vec![],..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
             AgentId::Copilot=>{
                 let options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],..options}.args()
+                CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],mcp:vec![],..options}.args()
             }
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
         }
@@ -512,11 +534,13 @@ impl AgentSettings {
                 if options.permission_mode=="bypassPermissions" { options.permission_mode=MANUAL.into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
                 options.granted.clear();
+                options.mcp.clear();
                 serde_json::to_value(options)
             }
             AgentId::Codex=>{
                 let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
                 if options.sandbox=="danger-full-access" { options.sandbox="workspace-write".into(); options.network_access=false; }
+                options.mcp.clear();
                 serde_json::to_value(options)
             }
             AgentId::Copilot=>{
@@ -524,6 +548,7 @@ impl AgentSettings {
                 if options.tool_access=="all" { options.tool_access="edits".into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
                 options.granted.clear();
+                options.mcp.clear();
                 serde_json::to_value(options)
             }
             AgentId::Cursor=>{
@@ -533,6 +558,21 @@ impl AgentSettings {
                 if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
                 serde_json::to_value(options)
             }
+        }.unwrap_or_default();
+        Self{options,..self.clone()}
+    }
+
+    /// O mesmo agente com os servidores MCP configurados que ele recebe. A
+    /// política com `safe_agents`, aplicada depois, os tira: as ferramentas
+    /// deles rodam sem pergunta.
+    pub fn with_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
+        let mine=servers.iter().filter(|server|server.serves(self.id)).cloned().collect::<Vec<_>>();
+        if mine.is_empty() { return self.clone(); }
+        let options=match self.id {
+            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
+            AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
+            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
+            AgentId::Cursor=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }

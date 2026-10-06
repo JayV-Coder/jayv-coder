@@ -81,6 +81,26 @@ export interface Grants {
   commands: string[];
 }
 
+/** Um servidor MCP que o JayV entrega aos agentes. `stdio` sobe `command`;
+ * `http` fala com `url`. `agents` vazio é todos os que sabem receber. */
+export interface McpServer {
+  name: string;
+  transport: "stdio" | "http";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  enabled: boolean;
+  agents: string[];
+}
+
+export interface McpDraft {
+  servers: McpServer[];
+  /** Montado por um modelo a partir de uma descrição, não lido do texto. */
+  fromModel: boolean;
+}
+
 export const NO_GRANTS: Grants = { shell: false, git: false, network: false, commands: [] };
 
 export interface Question {
