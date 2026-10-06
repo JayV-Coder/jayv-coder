@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterScopeGroups, groupByScope, organizationChatOf } from "./scope";
+import { filterScopeGroups, groupByScope, organizationChatOf, organizationChatsOf, splitGeneral } from "./scope";
 
 const project = (id: string) => ({ id });
 
@@ -81,5 +81,32 @@ describe("filterScopeGroups", () => {
     expect(filterScopeGroups(groups, "all", "ACME/API").map((group) => group.key)).toEqual(["o1"]);
     expect(filterScopeGroups(groups, "all", "work/notes")[0].projects.map((project) => project.id)).toEqual(["notes"]);
     expect(filterScopeGroups(groups, "organizations", "notes")).toEqual([]);
+  });
+});
+
+describe("general chats", () => {
+  const data = {
+    projects: [
+      { id: "g1", rootPath: "/work/acme", orgId: "o1" },
+      { id: "r1", rootPath: "/work/acme/api", orgId: null },
+      { id: "g2", rootPath: "", orgId: "o2" },
+    ],
+    chats: [
+      { id: "c1", projectId: "g1", updatedAt: "2026-10-01T10:00:00Z" },
+      { id: "c2", projectId: "g1", updatedAt: "2026-10-02T10:00:00Z" },
+      { id: "c3", projectId: "r1", updatedAt: "2026-10-03T10:00:00Z" },
+      { id: "c4", projectId: "g2", updatedAt: "2026-10-03T10:00:00Z" },
+    ],
+  };
+
+  it("lists only the chats of the organization project, newest first", () => {
+    expect(organizationChatsOf(data, "o1").map((chat) => chat.id)).toEqual(["c2", "c1"]);
+    expect(organizationChatsOf(data, "o2")).toEqual([]);
+  });
+
+  it("splits the general project from the repository projects", () => {
+    const { general, repositories } = splitGeneral(data.projects);
+    expect(general.map((project) => project.id)).toEqual(["g1", "g2"]);
+    expect(repositories.map((project) => project.id)).toEqual(["r1"]);
   });
 });

@@ -119,6 +119,15 @@ de releases depois de cada release; o site e o app só leem de lá pela função
   `npm run test:web` também): todo recurso do catálogo dos planos precisa de
   página.
 
+## Toda funcionalidade nova aparece no Ctrl+K e na documentação
+
+Regra fixa do dono do projeto: toda funcionalidade nova, de qualquer tela,
+precisa estar (1) na paleta de comandos (Ctrl+K / ⌘K,
+`src/components/organisms/CommandPalette.tsx`) — uma entrada para cada ação que
+tem botão — e (2) na documentação (`docs/manual/`), as duas com i18n nos dez
+idiomas, na migração do `JayV-Coder/supabase`. Funcionalidade que ganha botão
+sem entrada na paleta, ou sem página no manual, não está pronta.
+
 ## Mensagem de commit: detalha cada alteração
 
 A mensagem de todo commit no `main` começa por `vX.Y.Z: resumo` (a versão

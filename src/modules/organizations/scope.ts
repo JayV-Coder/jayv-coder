@@ -56,17 +56,37 @@ export function projectOrgId(project: { id: string; orgId?: string | null }, lin
   return links[project.id]?.orgId ?? project.orgId ?? null;
 }
 
-/** O chat mais recente do projeto da organização (o que junta os repositórios
- * dela) com pasta neste computador. Quando existe, o botão leva direto a ele
- * em vez de abrir outro. */
+/** O projeto geral da organização é o que junta todos os repositórios dela
+ * numa pasta só (tem `orgId`); os projetos de cada repositório são ligados
+ * pelo remote e não têm. */
+export function isGeneralProject(project: { orgId?: string | null }): boolean {
+  return !!project.orgId;
+}
+
+/** Separa os projetos de um bloco: o geral da organização (de onde saem os
+ * chats gerais) e os de cada repositório. */
+export function splitGeneral<P extends { orgId?: string | null }>(projects: P[]): { general: P[]; repositories: P[] } {
+  return { general: projects.filter(isGeneralProject), repositories: projects.filter((project) => !isGeneralProject(project)) };
+}
+
+/** Os chats gerais da organização (os do projeto que junta os repositórios
+ * dela) com pasta neste computador, do mais recente para o mais antigo. */
+export function organizationChatsOf<C extends { id: string; projectId: string; updatedAt: string }>(
+  data: { projects: { id: string; rootPath: string; orgId?: string | null }[]; chats: C[] },
+  orgId: string,
+): C[] {
+  const projects = new Set(data.projects.filter((project) => project.orgId === orgId && project.rootPath.trim()).map((project) => project.id));
+  return data.chats
+    .filter((chat) => projects.has(chat.projectId))
+    .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf());
+}
+
+/** O chat geral mais recente da organização, ou `null` quando ainda não há. */
 export function organizationChatOf<C extends { id: string; projectId: string; updatedAt: string }>(
   data: { projects: { id: string; rootPath: string; orgId?: string | null }[]; chats: C[] },
   orgId: string,
 ): C | null {
-  const projects = new Set(data.projects.filter((project) => project.orgId === orgId && project.rootPath.trim()).map((project) => project.id));
-  return data.chats
-    .filter((chat) => projects.has(chat.projectId))
-    .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf())[0] ?? null;
+  return organizationChatsOf(data, orgId)[0] ?? null;
 }
 
 /** O filtro da lista de projetos: tudo, só os pessoais ou só os das

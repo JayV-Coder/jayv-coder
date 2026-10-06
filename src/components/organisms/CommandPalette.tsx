@@ -5,7 +5,7 @@ import { reportError } from "@/modules/feedback";
 import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
-import { openOrganization, useOrganizations } from "@/modules/organizations";
+import { openOrganization, organizationChatsOf, useOrganizations } from "@/modules/organizations";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
 import { openStats } from "@/modules/usage";
 import { WORK_MODES } from "@/modules/core";
@@ -124,6 +124,11 @@ export function CommandPalette() {
     }
     for (const organization of organizations) {
       all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id).catch(reportError) });
+      const general = organizationChatsOf(data, organization.id);
+      for (const chat of general.slice(0, 5)) {
+        all.push({ id: `general-${chat.id}`, group: "palette.group.general", label: chatTitle(chat), hint: organization.name, run: () => openChat(chat.id) });
+      }
+      if (general[0]) all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), run: () => void createChat(general[0].projectId) });
     }
     for (const preference of THEME_PREFERENCES) {
       all.push({ id: `theme-${preference}`, group: "palette.group.appearance", label: t("palette.theme", { name: t(`theme.${preference}`) }), run: () => setThemePreference(preference) });
