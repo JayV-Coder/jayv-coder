@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, Chat, CoreSettings, Grants, McpDraft, McpServer, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, Chat, CoreSettings, Grants, McpDraft, McpServer, Skill, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
   ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -26,6 +26,11 @@ export const commands = {
   getMcpServers: () => invoke<McpServer[]>("get_mcp_servers"),
   saveMcpServers: (servers: McpServer[]) => invoke<McpServer[]>("save_mcp_servers", { servers }),
   draftMcp: (text: string) => invoke<McpDraft>("draft_mcp", { text }),
+  getSkills: () => invoke<Skill[]>("get_skills"),
+  installSkillFolder: (path: string) => invoke<Skill[]>("install_skill_folder", { path }),
+  installSkillText: (text: string) => invoke<Skill[]>("install_skill_text", { text }),
+  setSkillEnabled: (name: string, enabled: boolean) => invoke<Skill[]>("set_skill_enabled", { name, enabled }),
+  removeSkill: (name: string) => invoke<Skill[]>("remove_skill", { name }),
   allowedCommands: (chatId: string) => invoke<string[]>("allowed_commands", { chatId }),
   forgetAllowedCommand: (chatId: string, command: string) => invoke<string[]>("forget_allowed_command", { chatId, command }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),

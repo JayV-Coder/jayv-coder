@@ -4,7 +4,7 @@ import { navigate } from "@/modules/navigation";
 
 /** As abas da tela de configurações: o app, o Jev, os servidores MCP e um
  * agente por aba. */
-export type SettingsTab = "app" | "jev" | "mcp" | AgentId;
+export type SettingsTab = "app" | "jev" | "mcp" | "skills" | AgentId;
 
 export const useSettingsTab = create<{ tab: SettingsTab }>(() => ({ tab: "app" }));
 

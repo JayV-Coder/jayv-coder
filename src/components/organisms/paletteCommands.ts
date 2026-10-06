@@ -63,6 +63,7 @@ const SETTINGS_TABS: { tab: SettingsTab; label: (t: PaletteContext["t"]) => stri
   { tab: "app", label: (t) => t("settings.tab.app") },
   { tab: "jev", label: (t) => t("settings.tab.jev") },
   { tab: "mcp", label: (t) => t("settings.tab.mcp") },
+  { tab: "skills", label: (t) => t("settings.tab.skills") },
   ...AGENTS.map((id) => ({ tab: id as SettingsTab, label: () => AGENT_LABELS[id] })),
 ];
 
@@ -140,6 +141,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       { id: "settings-discard", group: settings, label: t("settings.discard"), run: discardChanges },
     );
   }
+  all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
   all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });
 
   if (view === "stats" && can("stats")) {

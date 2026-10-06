@@ -6,6 +6,7 @@ pub mod llm;
 pub mod mcp;
 pub mod providers;
 pub mod router;
+pub mod skills;
 pub mod tools;
 pub mod usage;
 

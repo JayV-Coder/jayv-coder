@@ -95,6 +95,15 @@ export interface McpServer {
   agents: string[];
 }
 
+/** Uma skill instalada: a pasta com `SKILL.md` que o Jev pode escolher. */
+export interface Skill {
+  name: string;
+  description: string;
+  path: string;
+  enabled: boolean;
+  installedAt: string;
+}
+
 export interface McpDraft {
   servers: McpServer[];
   /** Montado por um modelo a partir de uma descrição, não lido do texto. */

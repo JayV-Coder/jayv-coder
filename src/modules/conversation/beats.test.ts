@@ -16,6 +16,10 @@ describe("beatLine", () => {
     expect(line).not.toContain("refactor ·");
   });
 
+  it("names the skill Jev picked for the request", () => {
+    expect(beatLine("skill", { name: "release-notes" })).toBe("Skill: release-notes");
+  });
+
   it("keeps the router diagnostic out of the route line", () => {
     const line = beatLine("route", { provider: "claude", model: "sonnet", reason: "code/medium wants a capable model" });
     expect(line).not.toContain("wants");

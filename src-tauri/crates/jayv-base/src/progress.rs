@@ -44,6 +44,9 @@ pub enum Beat {
     Review{provider:String,model:String,files:usize},
     /// Um modelo de raciocínio está escrevendo o plano que o agente vai seguir.
     Plan{provider:String,model:String},
+    /// O Jev escolheu uma das skills instaladas para este pedido; o modelo é
+    /// avisado de qual usar.
+    Skill{name:String},
     /// O pedido foi dividido em partes que agentes fazem ao mesmo tempo.
     Split{tasks:Vec<SplitTask>},
     /// Uma das partes terminou: `applied` (as mudanças entraram no projeto),
@@ -61,7 +64,7 @@ impl Beat {
     pub fn kind(&self)->&'static str {
         match self {
             Self::Gate{..}=>"gate", Self::Read{..}=>"read", Self::Context{..}=>"context",
-            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
+            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Skill{..}=>"skill", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
             Self::Chunk{..}=>"chunk", Self::Done{..}=>"done", Self::Failed{..}=>"failed",
         }
     }

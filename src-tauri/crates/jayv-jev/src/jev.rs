@@ -129,7 +129,7 @@ pub fn call_body(set:&str,state:Value,include:Option<&[&str]>)->Value {
 
 /// Os conjuntos que ficam no caminho do pedido: o agente não começa enquanto
 /// eles não respondem.
-const HOT_SETS:[&str;2]=["entry","routing"];
+const HOT_SETS:[&str;3]=["entry","routing","skills"];
 /// No caminho do pedido, uma repetição e só, dentro do prazo.
 pub const HOT_ATTEMPTS:u32=2;
 /// O cabeçalho que identifica a chamada. É o mesmo em todas as repetições: a
@@ -519,6 +519,7 @@ impl RoutingDecision {
         assert_eq!(sets["entry"],crate::gatekeeper::entry_questions());
         assert_eq!(sets["routing"],routing_questions());
         assert_eq!(sets["asking"],crate::asking::questions());
+        assert_eq!(sets["skills"],crate::skill_choice::questions());
         for id in crate::gatekeeper::ENTRY_QUESTION_IDS {assert!(sets["entry"].contains_key(id),"{id}");}
         for id in ROUTING_QUESTION_IDS {assert!(sets["routing"].contains_key(id),"{id}");}
         for id in [crate::asking::KIND_QUESTION,crate::asking::OPTIONS_QUESTION] {assert!(sets["asking"].contains_key(id),"{id}");}
