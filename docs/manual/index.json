@@ -43,6 +43,7 @@
     "orgRepositories",
     "orgChat",
     "orgExtensions",
+    "commandPermissions",
     "profilePhoto",
     "twoFactor",
     "commandPalette",

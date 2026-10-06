@@ -103,6 +103,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
           run: () => { openChat(chat.id); setLivePanel(chat.id, useLive.getState().panel[chat.id] !== true); },
         });
       }
+      all.push({ id: "grants", group, label: t("palette.commandPermissions"), run: () => { openChat(chat.id); requestIntent("commandPermissions"); } });
       const flying = openTurns(chat).find((turn) => turn.status === "flying");
       if (flying) all.push({ id: "stop", group, label: t("palette.stop"), run: () => void cancelTurn(flying.id, chat.id) });
     }
@@ -163,6 +164,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       if (SITE_URL) {
         all.push(
           { id: `org-site-mcp-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteMcp", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "mcp")).catch(reportError) },
+          { id: `org-site-permissions-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSitePermissions", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
           { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
         );
       }

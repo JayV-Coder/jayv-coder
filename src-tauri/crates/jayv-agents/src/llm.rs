@@ -104,6 +104,12 @@ impl LlmSettings {
         Self{agents:self.agents.iter().map(|agent|agent.with_grants(grants)).collect(),models:self.models.clone()}
     }
 
+    /// Todos os agentes sem poder rodar os comandos que a política bloqueia.
+    pub fn without_commands(&self,blocked:&[String])->Self {
+        if blocked.is_empty() { return self.clone(); }
+        Self{agents:self.agents.iter().map(|agent|agent.without_commands(blocked)).collect(),models:self.models.clone()}
+    }
+
     /// Todos os agentes com os servidores MCP configurados.
     pub fn with_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
         if servers.is_empty() { return self.clone(); }
@@ -135,12 +141,16 @@ pub struct ClaudeOptions {
     /// pedido só (`Grants`): `Bash(git add:*)`. Nunca gravadas.
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub granted:Vec<String>,
+    /// As regras do `--disallowed-tools` que a política da organização põe
+    /// (`without_commands`): `Bash(git push:*)`. Nunca gravadas.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub denied:Vec<String>,
     /// Os servidores MCP configurados (`mcp::McpServer`), postos na hora do
     /// pedido (`with_mcp`). Nunca gravados aqui: moram na tabela deles.
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![],mcp:vec![]} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![],denied:vec![],mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -175,10 +185,14 @@ pub struct CopilotOptions {
     /// (`Grants`): `shell(git add)`. Nunca gravadas.
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub granted:Vec<String>,
+    /// As ferramentas do `--deny-tool` que a política da organização põe
+    /// (`without_commands`): `shell(git push)`. Nunca gravadas.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub denied:Vec<String>,
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![],mcp:vec![]} } }
+impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![],denied:vec![],mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -351,7 +365,7 @@ impl ClaudeOptions {
         // falha, e o Claude despejava as perguntas em texto avisando que "não
         // conseguiu abrir o formulário". Sem ele, o Claude pergunta no fim da
         // resposta, e é de lá que o JayV monta o formulário.
-        let blocked=[INTERACTIVE_ONLY_TOOL.to_string()].into_iter().chain(self.blocked_tools.iter().cloned()).collect::<Vec<_>>();
+        let blocked=[INTERACTIVE_ONLY_TOOL.to_string()].into_iter().chain(self.blocked_tools.iter().cloned()).chain(self.denied.iter().cloned()).collect::<Vec<_>>();
         args.extend(["--disallowed-tools".to_string(),blocked.join(",")]);
         // O que roda sem pergunta. Sem terminal, o resto do que pede
         // aprovação — a busca na web inclusive — é negado.
@@ -457,7 +471,7 @@ impl CopilotOptions {
         args.extend(crate::mcp::args_for(&self.mcp,AgentId::Copilot));
         // A negação vence a liberação no Copilot, então o bloqueio continua
         // valendo mesmo com o mecanismo ligado.
-        for tool in &self.blocked_tools { args.extend(["--deny-tool".to_string(),tool.clone()]); }
+        for tool in self.blocked_tools.iter().chain(&self.denied) { args.extend(["--deny-tool".to_string(),tool.clone()]); }
         // Sem o `--silent` o resumo de uso entra na saída — e a saída é a
         // resposta. A opção antiga (`silent`) não desliga mais isto.
         args.push("--silent".into());
@@ -702,6 +716,47 @@ impl AgentSettings {
         Self{options,..self.clone()}
     }
 
+    /// O mesmo agente sem poder rodar os comandos que a política da organização
+    /// bloqueia (`git push`, `npm publish`…). O Claude e o Copilot negam cada
+    /// regra por comando, e a negação vence a liberação. O Codex, o Cursor e o
+    /// Kilo não têm lista de comandos: com qualquer comando bloqueado eles
+    /// rodam no modo mais travado que têm (sem sandbox aberto, sem rede
+    /// liberada, sem `--force` nem `--auto`), para que nenhum comando
+    /// bloqueado passe. Só aperta: nunca libera nada.
+    pub fn without_commands(&self,blocked:&[String])->Self {
+        if blocked.is_empty() { return self.clone(); }
+        let options=match self.id {
+            AgentId::Claude=>{
+                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
+                options.denied=blocked.iter().filter_map(|rule|claude_deny_rule(rule)).collect();
+                options.granted.retain(|rule|!blocked.iter().any(|blocked|claude_deny_rule(blocked).as_deref()==Some(rule.as_str())));
+                serde_json::to_value(options)
+            }
+            AgentId::Copilot=>{
+                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
+                options.denied=blocked.iter().filter_map(|rule|copilot_deny_rule(rule)).collect();
+                options.granted.retain(|tool|!blocked.iter().any(|blocked|copilot_deny_rule(blocked).as_deref()==Some(tool.as_str())));
+                serde_json::to_value(options)
+            }
+            AgentId::Codex=>{
+                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
+                if options.sandbox=="danger-full-access" { options.sandbox="workspace-write".into(); }
+                // Rede é o que instala, publica e empurra; o que a política bloqueia dela fica de fora.
+                if blocked.iter().any(|rule|fetches(rule)) { options.network_access=false; }
+                serde_json::to_value(options)
+            }
+            AgentId::Cursor=>{
+                let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
+                options.force=false;
+                if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
+                serde_json::to_value(options)
+            }
+            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false}),
+            AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
+        }.unwrap_or_default();
+        Self{options,..self.clone()}
+    }
+
     /// O mesmo agente sem os mecanismos que a política bloqueia, escritos
     /// `agente/mecanismo`. A política só tira: nunca liga o que quem usa
     /// deixou desligado.
@@ -740,6 +795,20 @@ impl Grants {
         Self{shell:self.shell||other.shell,git:self.git||other.git,network:self.network||other.network,commands}
     }
 
+    /// O que sobra do liberado depois da política da organização: o pedido
+    /// que libera "todos os comandos" ou "o Git inteiro" não vale com comando
+    /// bloqueado (cada comando se libera um a um), e os comandos bloqueados
+    /// saem da lista.
+    pub fn without_blocked(&self,blocked:&[String])->Self {
+        if blocked.is_empty() { return self.clone(); }
+        Self{
+            shell:false,
+            git:self.git&&!blocked.iter().any(|rule|program(rule)=="git"),
+            network:self.network,
+            commands:self.commands.iter().filter(|command|!command_blocked(blocked,command)).cloned().collect(),
+        }
+    }
+
     /// Algum comando aprovado mexe no git. No Codex é o `.git` aberto.
     pub fn needs_git(&self)->bool { self.git||self.commands.iter().any(|command|program(command)=="git") }
 
@@ -756,6 +825,17 @@ pub fn command_prefix(command:&str)->String {
     words.iter().take(take).copied().collect::<Vec<_>>().join(" ")
 }
 
+/// A regra da organização bloqueia o comando quando as palavras dela são o
+/// começo das palavras dele: `git` bloqueia `git push -f`; `git push` não
+/// bloqueia `git pull`.
+pub fn command_blocked(blocked:&[String],command:&str)->bool {
+    let words=command.split_whitespace().collect::<Vec<_>>();
+    blocked.iter().any(|rule|{
+        let mine=rule.split_whitespace().collect::<Vec<_>>();
+        !mine.is_empty()&&mine.len()<=words.len()&&mine.iter().zip(&words).all(|(left,right)|left==right)
+    })
+}
+
 fn program(command:&str)->&str { command.split_whitespace().next().unwrap_or_default() }
 
 fn fetches(command:&str)->bool {
@@ -768,6 +848,16 @@ fn fetches(command:&str)->bool {
 fn claude_rule(command:&str)->Option<String> {
     let command=command.trim();
     (!command.is_empty()&&!command.contains([',','(',')'])).then(||format!("Bash({command}:*)"))
+}
+
+/// A regra de negação do Claude para uma regra da organização.
+fn claude_deny_rule(rule:&str)->Option<String> { claude_rule(rule) }
+
+/// A negação do Copilot para uma regra da organização: ela inteira, e não só
+/// o programa e o subcomando.
+fn copilot_deny_rule(rule:&str)->Option<String> {
+    let rule=rule.trim();
+    (!rule.is_empty()&&!rule.contains([',','(',')'])).then(||format!("shell({rule})"))
 }
 
 /// A ferramenta do Copilot para o comando: o programa e o subcomando.

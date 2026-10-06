@@ -113,6 +113,9 @@ pub struct Orchestrator {
     /// `use_core` com as configurações já restritas) a marca aqui, para a
     /// orientação dizer quem barrou o pedido.
     pub policy_scope: Option<String>,
+    /// Os comandos que a política da organização bloqueia neste projeto
+    /// (`git push`): o agente é avisado de que não pode rodá-los.
+    pub blocked_commands: Vec<String>,
     /// A leitura de roteamento do Jev pedida junto com a portaria de entrada,
     /// em paralelo, para o pedido não esperar as duas idas uma depois da
     /// outra. `process` a consome uma vez; sem ela, o roteamento é pedido ali.
@@ -173,7 +176,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -341,7 +344,7 @@ impl Orchestrator {
         if let Some((name,note))=skill_note { pulse.beat(Beat::Skill{name}); extras.push(note); }
         let plan=plan_context(&intent.intent,&complexity); let strategy=select_strategy(&intent.intent,&complexity);
         let budget=*self.config.budgets.get(&complexity).unwrap_or(&DEFAULT_BUDGET);
-        let notes=format!("{}{}",mode_notes(&signals,mode),self.lean_note(mode).map(|note|format!("\n{note}")).unwrap_or_default());
+        let notes=format!("{}{}{}",mode_notes(&signals,mode),self.lean_note(mode).map(|note|format!("\n{note}")).unwrap_or_default(),self.commands_note(mode).map(|note|format!("\n{note}")).unwrap_or_default());
         let reserved=self.request_overhead(&normalized,session_id)+if notes.is_empty(){0}else{estimate_tokens(&notes)}+self.pending_gate_note.as_deref().map_or(0,estimate_tokens)+brief.as_deref().map_or(0,|brief|estimate_tokens(brief).saturating_sub(estimate_tokens(&normalized)))+extras.iter().map(|extra|estimate_tokens(extra)).sum::<usize>()+self.project_notes.as_deref().map_or(0,estimate_tokens);
         let context=self.assemble_context(&normalized,&plan,budget,reserved,&signals,mode);
         pulse.beat(Beat::Context{files:context.relevant_files.len(),tokens:context.estimated_tokens});
@@ -507,6 +510,14 @@ impl Orchestrator {
 
     fn lean_note(&self,mode:&str)->Option<&'static str> {
         (self.lean_code&&mode==MODE_BUILD).then(||match self.expertise.lean() { crate::expertise::Lean::Lite=>LEAN_LITE_NOTE, crate::expertise::Lean::Full=>LEAN_FULL_NOTE })
+    }
+
+    /// A nota dos comandos que a organização bloqueia, só em desenvolvimento
+    /// (o único modo em que o agente roda comandos).
+    fn commands_note(&self,mode:&str)->Option<String> {
+        if mode!=MODE_BUILD||self.blocked_commands.is_empty() { return None; }
+        let list=self.blocked_commands.iter().map(|command|format!("`{command}`")).collect::<Vec<_>>().join(", ");
+        Some(format!("{BLOCKED_COMMANDS_NOTE} {list}."))
     }
 
     fn request_overhead(&self,input:&str,session_id:&str)->usize { estimate_tokens(SYSTEM_INSTRUCTIONS)+estimate_tokens(input)+self.history_tokens(session_id)+REQUEST_MARGIN }
@@ -913,6 +924,7 @@ struct Resume { id:String, crossed:bool, instructions:u64 }
 
 /// A nota da volta retomada que trocou de lado da escrita. O que ficou na
 /// conversa da sessão dizia o contrário; a nota diz o que vale agora.
+const BLOCKED_COMMANDS_NOTE:&str="ORGANIZATION POLICY: these commands (and anything that starts with them) are blocked in this project and are never allowed to run:";
 const MODE_TO_BUILD_NOTE:&str="MODE CHANGE: this session continues in BUILD mode. Any earlier instruction in this conversation that the session is read-only, or that you must only plan, no longer applies: make the change within the permissions you have now.";
 const MODE_TO_PLAN_NOTE:&str="MODE CHANGE: this session continues in PLAN mode. Do not change any file from now on; answer with the plan.";
 
@@ -1353,6 +1365,16 @@ mod tests {
 
     fn repository(files:&[(&str,String)])->tempfile::TempDir { let dir=tempfile::tempdir().expect("temporary repository"); for (name,body) in files { std::fs::write(dir.path().join(name),body).expect("fixture"); } dir }
     fn orchestrator(dir:&tempfile::TempDir)->Orchestrator { Orchestrator::new(dir.path().join("missing-config.yaml"),dir.path().to_path_buf()).expect("orchestrator") }
+
+    #[test] fn the_agent_is_told_which_commands_the_organization_blocks() {
+        let dir=tempfile::tempdir().expect("dir");
+        let mut orchestrator=orchestrator(&dir);
+        assert!(orchestrator.commands_note(MODE_BUILD).is_none(),"sem política, sem nota");
+        orchestrator.blocked_commands=vec!["git push".into(),"npm publish".into()];
+        let note=orchestrator.commands_note(MODE_BUILD).expect("nota");
+        assert!(note.starts_with(BLOCKED_COMMANDS_NOTE)&&note.contains("`git push`")&&note.contains("`npm publish`"));
+        assert!(orchestrator.commands_note(MODE_PLAN).is_none(),"em planejamento o agente não roda comandos");
+    }
     fn filler(word:&str,chars:usize)->String { let mut body=format!("fn {word}() {{}}\n"); while body.len()<chars { body.push_str("let padding_value = 1;\n"); } body }
     fn answer(text:&str)->ProviderResponse { ProviderResponse{response:text.into(),..Default::default()} }
     fn sent_tokens(context:&Context)->usize { context.snippets.iter().map(snippet_tokens).sum() }

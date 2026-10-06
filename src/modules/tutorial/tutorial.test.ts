@@ -23,7 +23,7 @@ describe("tours", () => {
   });
 
   it("every highlighted target exists in the screen code", () => {
-    const sources = ["components/organisms/Sidebar.tsx", "components/organisms/Composer.tsx", "components/organisms/AppHeader.tsx", "components/pages/SettingsPage.tsx"]
+    const sources = ["components/organisms/Sidebar.tsx", "components/organisms/Composer.tsx", "components/organisms/GrantsPicker.tsx", "components/organisms/AppHeader.tsx", "components/pages/SettingsPage.tsx"]
       .map((file) => readFileSync(join(root, "src", file), "utf8")).join("\n");
     for (const target of TOURS.flatMap((tour) => tour.steps.flatMap((step) => (step.target ? [step.target] : [])))) {
       expect(sources, target).toContain(`data-tour="${target}"`);

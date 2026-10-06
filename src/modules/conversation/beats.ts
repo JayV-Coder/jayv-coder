@@ -50,6 +50,7 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     case "failed": return t("beat.failed", { error: shownText(String(d.error ?? "")) });
     case "dismissed": return t("beat.dismissed", { prompt: d.prompt ?? "" });
     case "permission_denied": return t("beat.permissionDenied", { commands: Array.isArray(d.commands) ? d.commands.join(", ") : "" });
+    case "permission_blocked": return t("beat.permissionBlocked", { commands: Array.isArray(d.commands) ? d.commands.join(", ") : "", org: Array.isArray(d.orgs) ? d.orgs.join(", ") : "" });
     default: return null;
   }
 }
