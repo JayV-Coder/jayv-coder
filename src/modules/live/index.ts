@@ -11,7 +11,7 @@ export * from "./changes";
 
 /** Os arquivos que o último pedido de um chat mudou, do mais recente para o
  * mais antigo. */
-export interface LiveChat { turnId: string | null; files: LiveChange[] }
+export interface LiveChat { turnId: string | null; files: LiveChange[]; folder?: string | null; mode?: "git" | "folder" | null; looks?: number }
 
 interface LiveState {
   chats: Record<string, LiveChat>;
@@ -50,11 +50,14 @@ export const useLive = create<LiveState>(() => ({
 /** Lê a lista do chat no núcleo: ao abrir o chat, ou ao voltar a ele. */
 export async function loadLive(chatId: string) {
   const list = await commands.liveFiles(chatId);
-  useLive.setState((state) => ({ chats: { ...state.chats, [chatId]: { turnId: list.turnId, files: list.files } } }));
+  useLive.setState((state) => ({ chats: { ...state.chats, [chatId]: { turnId: list.turnId, files: list.files, folder: list.folder, mode: list.mode, looks: list.looks } } }));
 }
 
 export function setLivePanel(chatId: string, open: boolean) {
   useLive.setState((state) => ({ panel: { ...state.panel, [chatId]: open } }));
+  // Ao abrir, relê o que o núcleo viu: o painel aberto no meio do pedido não
+  // pode começar vazio por ter perdido os avisos de antes.
+  if (open) void loadLive(chatId).catch((error) => console.error("live files", error));
 }
 
 export function selectLiveFile(chatId: string, path: string | null) {
@@ -121,19 +124,21 @@ export function connectLive() {
     useLive.setState((state) => {
       const current = state.chats[chatId];
       // Um pedido novo começou a olhar a pasta: a lista recomeça.
-      if (!file) return { chats: { ...state.chats, [chatId]: { turnId, files: [] } }, selected: { ...state.selected, [chatId]: null } };
+      if (!file) return { chats: { ...state.chats, [chatId]: { ...current, turnId, files: [] } }, selected: { ...state.selected, [chatId]: null } };
       const files = withChange(current?.turnId === turnId ? current.files : [], file);
       // O temporário que sumiu sai da lista sem abrir o painel nem roubar a vez.
       if (file.kind === "discarded") {
         const selected = state.selected[chatId] === file.path ? { ...state.selected, [chatId]: null } : state.selected;
-        return { chats: { ...state.chats, [chatId]: { turnId, files } }, selected };
+        return { chats: { ...state.chats, [chatId]: { ...current, turnId, files } }, selected };
       }
       return {
-        chats: { ...state.chats, [chatId]: { turnId, files } },
+        chats: { ...state.chats, [chatId]: { ...current, turnId, files } },
         panel: chatId in state.panel ? state.panel : { ...state.panel, [chatId]: true },
         selected: state.follow || !state.selected[chatId] ? { ...state.selected, [chatId]: file.path } : state.selected,
       };
     });
+    // O pedido novo começou a olhar a pasta: de onde e como, o painel diz.
+    if (!file) void loadLive(chatId).catch((error) => console.error("live files", error));
     if (file && file.kind !== "discarded") followInEditor(chatId, { ...file, kind: file.kind });
   });
   return () => void off.then((unlisten) => unlisten());

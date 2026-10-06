@@ -199,6 +199,12 @@ impl Session {
 
     pub fn changes(&self)->&[Change] {&self.changes}
 
+    /// Como a pasta é olhada: `git` (o `git status` de cada repositório) ou
+    /// `folder` (varredura por data de modificação, pasta sem git).
+    pub fn mode(&self)->&'static str {if self.repos.is_empty() {"folder"} else {"git"}}
+
+    pub fn folder(&self)->&Path {&self.folder}
+
     fn relative(&self,path:&Path)->String {
         path.strip_prefix(&self.folder).unwrap_or(path).to_string_lossy().replace('\\',"/")
     }
@@ -313,10 +319,28 @@ impl Session {
 /// derivados dele).
 pub const EDITORS:[&str;5]=["code","cursor","windsurf","code-insiders","codium"];
 
+/// Onde o editor costuma ficar além do `PATH`: o app aberto pelo menu do
+/// sistema (e não por um terminal) herda um `PATH` curto, sem `/snap/bin`, sem
+/// `~/.local/bin`, sem a pasta do VS Code no Windows e no macOS.
+fn editor_dirs()->Vec<PathBuf> {
+    let mut dirs:Vec<PathBuf>=std::env::var_os("PATH").map(|paths|std::env::split_paths(&paths).collect()).unwrap_or_default();
+    let home=std::env::var_os("HOME").or_else(||std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    for fixed in ["/usr/local/bin","/usr/bin","/snap/bin","/var/lib/flatpak/exports/bin","/opt/homebrew/bin","/Applications/Visual Studio Code.app/Contents/Resources/app/bin","/Applications/Cursor.app/Contents/Resources/app/bin","/Applications/Windsurf.app/Contents/Resources/app/bin","/Applications/VSCodium.app/Contents/Resources/app/bin"] {dirs.push(PathBuf::from(fixed));}
+    if let Some(home)=&home {
+        for relative in [".local/bin",".local/share/flatpak/exports/bin",".cursor/bin",".windsurf/bin"] {dirs.push(home.join(relative));}
+    }
+    if let Some(local)=std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        for relative in ["Programs/Microsoft VS Code/bin","Programs/Microsoft VS Code Insiders/bin","Programs/cursor/resources/app/bin","Programs/Windsurf/bin","Programs/VSCodium/bin"] {dirs.push(local.join(relative));}
+    }
+    for program in ["PROGRAMFILES","PROGRAMFILES(X86)"] {
+        if let Some(root)=std::env::var_os(program).map(PathBuf::from) {dirs.push(root.join("Microsoft VS Code/bin")); dirs.push(root.join("VSCodium/bin"));}
+    }
+    dirs
+}
+
 pub fn find_editor(name:&str)->Option<PathBuf> {
-    let paths=std::env::var_os("PATH")?;
     let names:Vec<String>=if cfg!(windows) {vec![format!("{name}.cmd"),format!("{name}.exe"),name.to_string()]} else {vec![name.to_string()]};
-    std::env::split_paths(&paths).flat_map(|dir|names.iter().map(move |file|dir.join(file))).find(|path|path.is_file())
+    editor_dirs().into_iter().flat_map(|dir|names.iter().map(move |file|dir.join(file))).find(|path|path.is_file())
 }
 
 pub fn editors()->Vec<String> {EDITORS.iter().filter(|name|find_editor(name).is_some()).map(|name|name.to_string()).collect()}
