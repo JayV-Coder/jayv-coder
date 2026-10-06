@@ -266,6 +266,8 @@ export interface ClaudeOptions {
   symbolTools: boolean;
   /** Os mecanismos liberados sem pergunta (`AGENT_MECHANISMS.claude`). */
   mechanisms: Mechanism[];
+  /** "Aprovar servidores MCP": os servidores da aba MCP só chegam com isto ligado. */
+  approveMcps: boolean;
 }
 
 export interface CodexOptions {
@@ -274,6 +276,7 @@ export interface CodexOptions {
   networkAccess: boolean;
   skipGitRepoCheck: boolean;
   mechanisms: Mechanism[];
+  approveMcps: boolean;
 }
 
 export interface CopilotOptions {
@@ -281,6 +284,7 @@ export interface CopilotOptions {
   blockedTools: string[];
   silent: boolean;
   mechanisms: Mechanism[];
+  approveMcps: boolean;
 }
 
 export interface CursorOptions {
@@ -292,12 +296,14 @@ export interface CursorOptions {
 export interface KiloOptions {
   /** Aprova sozinho o que o agente pedir (`kilo run --auto`). */
   auto: boolean;
+  approveMcps: boolean;
 }
 
 /** As opções dos gateways. A chave nunca volta do núcleo: `hasKey` diz se há
  * uma guardada; `apiKey` e `clearKey` só vão da tela ao salvar. */
 export interface GatewayOptions {
   baseUrl: string;
+  approveMcps: boolean;
   hasKey: boolean;
   apiKey?: string;
   clearKey?: boolean;

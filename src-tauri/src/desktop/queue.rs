@@ -632,7 +632,9 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     // A privacidade vem antes dos agentes: o Claude leva os arquivos
     // protegidos na própria linha de comando.
     state.orchestrator.use_core(&plan.enforce_core(&core));
-    state.orchestrator.use_llm(&plan.apply_llm(&llm));
+    let llm=plan.apply_llm(&llm);
+    llm.sync_mcp_files();
+    state.orchestrator.use_llm(&llm);
     state.orchestrator.use_skills(skills);
     state.orchestrator.blocked_commands=blocked;
     state.orchestrator.policy_scope=policy.map(|project|project.org_slug);

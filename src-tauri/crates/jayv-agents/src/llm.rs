@@ -110,6 +110,15 @@ impl LlmSettings {
         Self{agents:self.agents.iter().map(|agent|agent.without_commands(blocked)).collect(),models:self.models.clone()}
     }
 
+    /// O que o pedido precisa em disco antes de abrir os agentes: o bloco do
+    /// JayV no `~/.cursor/mcp.json` (o Cursor não recebe MCP pela linha de
+    /// comando). Sem servidores, o que o JayV pôs antes sai.
+    pub fn sync_mcp_files(&self) {
+        let Some(cursor)=self.agents.iter().find(|agent|agent.id==AgentId::Cursor) else { return };
+        let servers=parse::<CursorOptions>(&cursor.options).unwrap_or_default().mcp;
+        if let Err(error)=crate::mcp::sync_cursor(&servers) { eprintln!("mcp: {error:#}"); }
+    }
+
     /// Todos os agentes com os servidores MCP configurados.
     pub fn with_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
         if servers.is_empty() { return self.clone(); }
@@ -147,10 +156,13 @@ pub struct ClaudeOptions {
     pub denied:Vec<String>,
     /// Os servidores MCP configurados (`mcp::McpServer`), postos na hora do
     /// pedido (`with_mcp`). Nunca gravados aqui: moram na tabela deles.
+    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
+    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
+    pub approve_mcps:bool,
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![],denied:vec![],mcp:vec![]} } }
+impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![],denied:vec![],approve_mcps:false,mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -167,10 +179,13 @@ pub struct CodexOptions {
     pub skip_git_repo_check:bool,
     /// Os mecanismos ligados (`CODEX_MECHANISMS`).
     pub mechanisms:Vec<String>,
+    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
+    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
+    pub approve_mcps:bool,
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true,mechanisms:strings(&[WEB_SEARCH]),mcp:vec![]} } }
+impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true,mechanisms:strings(&[WEB_SEARCH]),approve_mcps:false,mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -189,10 +204,13 @@ pub struct CopilotOptions {
     /// (`without_commands`): `shell(git push)`. Nunca gravadas.
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub denied:Vec<String>,
+    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
+    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
+    pub approve_mcps:bool,
     #[serde(skip_serializing_if="Vec::is_empty")]
     pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![],denied:vec![],mcp:vec![]} } }
+impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![],denied:vec![],approve_mcps:false,mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",default)]
@@ -203,8 +221,12 @@ pub struct CursorOptions {
     /// Aplica as edições e roda os comandos sem pedir aprovação.
     pub force:bool,
     pub approve_mcps:bool,
+    /// Os servidores da aba MCP deste pedido (`with_mcp`), postos no
+    /// `~/.cursor/mcp.json` antes de abrir o agente. Nunca gravados aqui.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
-impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false} } }
+impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false,mcp:vec![]} } }
 
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Default)]
 #[serde(rename_all="camelCase",default)]
@@ -213,6 +235,13 @@ pub struct KiloOptions {
     /// pediria aprovação é recusado, já que ninguém responde no terminal.
     /// O modo desenvolvimento liga; o planejamento desliga.
     pub auto:bool,
+    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
+    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
+    pub approve_mcps:bool,
+    /// Os servidores da aba MCP deste pedido (`with_mcp`), levados na
+    /// configuração em linha. Nunca gravados aqui.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
 
 /// Os dois gateways de API. A chave nunca volta para a tela nem para o banco
@@ -229,6 +258,13 @@ pub struct GatewayOptions {
     #[serde(skip_serializing)]
     pub clear_key:bool,
     pub has_key:bool,
+    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
+    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
+    pub approve_mcps:bool,
+    /// Os servidores da aba MCP deste pedido (`with_mcp`): o JayV os chama
+    /// como cliente MCP. Nunca gravados aqui.
+    #[serde(skip_serializing_if="Vec::is_empty")]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
 
 const OPENROUTER_URL:&str="https://openrouter.ai/api/v1";
@@ -302,6 +338,9 @@ const CURSOR_SANDBOXES:[&str;3]=["default","enabled","disabled"];
 pub const WEB_SEARCH:&str="webSearch";
 pub const WEB_FETCH:&str="webFetch";
 pub const SHELL:&str="shell";
+/// O "Aprovar servidores MCP" como mecanismo que a política da organização
+/// bloqueia (`claude/mcp`).
+pub const MCP:&str="mcp";
 pub const GITHUB_TOOLS:&str="githubTools";
 /// `WebSearch`, `WebFetch` e `Bash` no `--allowedTools`.
 pub const CLAUDE_MECHANISMS:[&str;3]=[WEB_SEARCH,WEB_FETCH,SHELL];
@@ -498,7 +537,9 @@ impl CursorOptions {
         args
     }
     fn plan_args(&self)->Vec<String> {
-        let mut args=CursorOptions{force:false,..self.clone()}.args();
+        // O planejamento só lê: as ferramentas MCP rodam sem pergunta, então
+        // o Cursor não as aprova.
+        let mut args=CursorOptions{force:false,approve_mcps:false,..self.clone()}.args();
         args.extend(strings(&["--mode","plan"]));
         args
     }
@@ -578,7 +619,7 @@ impl AgentSettings {
                 options.args()
             }
             AgentId::Cursor=>self.args(),
-            AgentId::Kilo=>KiloOptions{auto:true}.args(),
+            AgentId::Kilo=>KiloOptions{auto:true,..Default::default()}.args(),
             AgentId::Openrouter|AgentId::Litellm=>vec![],
         }
     }
@@ -600,7 +641,7 @@ impl AgentSettings {
                 CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],mcp:vec![],..options}.args()
             }
             AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
-            AgentId::Kilo=>KiloOptions{auto:false}.args(),
+            AgentId::Kilo=>KiloOptions{auto:false,..Default::default()}.args(),
             AgentId::Openrouter|AgentId::Litellm=>vec![],
         }
     }
@@ -618,12 +659,14 @@ impl AgentSettings {
                 if options.permission_mode=="bypassPermissions" { options.permission_mode=MANUAL.into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
                 options.granted.clear();
+                options.approve_mcps=false;
                 options.mcp.clear();
                 serde_json::to_value(options)
             }
             AgentId::Codex=>{
                 let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
                 if options.sandbox=="danger-full-access" { options.sandbox="workspace-write".into(); options.network_access=false; }
+                options.approve_mcps=false;
                 options.mcp.clear();
                 serde_json::to_value(options)
             }
@@ -632,6 +675,7 @@ impl AgentSettings {
                 if options.tool_access=="all" { options.tool_access="edits".into(); }
                 options.mechanisms=without_shell(&options.mechanisms);
                 options.granted.clear();
+                options.approve_mcps=false;
                 options.mcp.clear();
                 serde_json::to_value(options)
             }
@@ -639,26 +683,36 @@ impl AgentSettings {
                 let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
                 options.force=false;
                 options.approve_mcps=false;
+                options.mcp.clear();
                 if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
                 serde_json::to_value(options)
             }
-            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false}),
-            AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
+            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false,approve_mcps:false,mcp:vec![],..parse::<KiloOptions>(&self.options).unwrap_or_default()}),
+            AgentId::Openrouter|AgentId::Litellm=>{
+                let mut options=parse::<GatewayOptions>(&self.options).unwrap_or_default();
+                options.approve_mcps=false;
+                options.mcp.clear();
+                serde_json::to_value(options)
+            }
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
 
-    /// O mesmo agente com os servidores MCP configurados que ele recebe. A
-    /// política com `safe_agents`, aplicada depois, os tira: as ferramentas
-    /// deles rodam sem pergunta.
+    /// O mesmo agente com os servidores MCP configurados que ele recebe, se o
+    /// "Aprovar servidores MCP" dele está ligado: as ferramentas deles rodam
+    /// sem pergunta, então sem a aprovação nenhum servidor chega. A política
+    /// com `safe_agents`, aplicada depois, os tira.
     pub fn with_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
         let mine=servers.iter().filter(|server|server.serves(self.id)).cloned().collect::<Vec<_>>();
         if mine.is_empty() { return self.clone(); }
+        macro_rules! deliver { ($options:ty)=>{{ let mut options=parse::<$options>(&self.options).unwrap_or_default(); if !options.approve_mcps { return self.clone(); } options.mcp=mine; serde_json::to_value(options) }} }
         let options=match self.id {
-            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
-            AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
-            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mcp=mine; serde_json::to_value(options) }
-            AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
+            AgentId::Claude=>deliver!(ClaudeOptions),
+            AgentId::Codex=>deliver!(CodexOptions),
+            AgentId::Copilot=>deliver!(CopilotOptions),
+            AgentId::Cursor=>deliver!(CursorOptions),
+            AgentId::Kilo=>deliver!(KiloOptions),
+            AgentId::Openrouter|AgentId::Litellm=>deliver!(GatewayOptions),
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
@@ -710,7 +764,7 @@ impl AgentSettings {
                 if grants.shell||grants.git||!grants.commands.is_empty() { options.force=true; }
                 serde_json::to_value(options)
             }
-            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:true}),
+            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:true,..parse::<KiloOptions>(&self.options).unwrap_or_default()}),
             AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
@@ -751,7 +805,7 @@ impl AgentSettings {
                 if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
                 serde_json::to_value(options)
             }
-            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false}),
+            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false,..parse::<KiloOptions>(&self.options).unwrap_or_default()}),
             AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
         }.unwrap_or_default();
         Self{options,..self.clone()}
@@ -766,11 +820,15 @@ impl AgentSettings {
         let gone=|mechanisms:&[String]|mechanisms.iter().filter(|mechanism|!blocked.contains(&format!("{}/{mechanism}",self.id.key()))).cloned().collect::<Vec<_>>();
         // Os comandos liberados para um pedido também são o mecanismo `shell`.
         let shell_blocked=blocked.contains(&format!("{}/{SHELL}",self.id.key()));
+        // `mcp` é o "Aprovar servidores MCP": bloqueado, nenhum servidor chega.
+        let mcp_blocked=blocked.contains(&format!("{}/{MCP}",self.id.key()));
         let options=match self.id {
-            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } serde_json::to_value(options) }
-            AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); serde_json::to_value(options) }
-            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } serde_json::to_value(options) }
-            AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
+            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
+            AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
+            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
+            AgentId::Cursor=>{ let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default(); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
+            AgentId::Kilo=>{ let mut options=parse::<KiloOptions>(&self.options).unwrap_or_default(); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
+            AgentId::Openrouter|AgentId::Litellm=>{ let mut options=parse::<GatewayOptions>(&self.options).unwrap_or_default(); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
         }.unwrap_or_default();
         Self{options,..self.clone()}
     }
@@ -941,6 +999,19 @@ fn remember_secrets(connection:&Connection)->Result<()> {
     Ok(())
 }
 
+/// Os servidores MCP que o próprio JayV entrega a este agente neste pedido:
+/// o Cursor (arquivo dele), o Kilo Code (configuração em linha) e os gateways
+/// (cliente MCP do app). Os outros os recebem pela linha de comando.
+fn mcp_values(agent:&AgentSettings)->Vec<Value> {
+    let servers=match agent.id {
+        AgentId::Cursor=>parse::<CursorOptions>(&agent.options).unwrap_or_default().mcp,
+        AgentId::Kilo=>parse::<KiloOptions>(&agent.options).unwrap_or_default().mcp,
+        AgentId::Openrouter|AgentId::Litellm=>parse::<GatewayOptions>(&agent.options).unwrap_or_default().mcp,
+        AgentId::Claude|AgentId::Codex|AgentId::Copilot=>vec![],
+    };
+    servers.iter().filter_map(|server|serde_json::to_value(server).ok()).collect()
+}
+
 /// O gateway como o provedor HTTP o entende: endereço e chave.
 fn gateway_config(agent:&AgentSettings)->ProviderConfig {
     let options=parse::<GatewayOptions>(&agent.options).unwrap_or_default();
@@ -948,7 +1019,7 @@ fn gateway_config(agent:&AgentSettings)->ProviderConfig {
     ProviderConfig{
         // O LiteLLM pode rodar sem chave (um proxy local); o OpenRouter, não.
         enabled:agent.enabled&&(agent.id==AgentId::Litellm||key.is_some()),
-        kind:"openai-compatible".into(),base_url:Some(if options.base_url.trim().is_empty() { GatewayOptions::fresh(agent.id).base_url } else { options.base_url }),api_key:key,timeout:agent.timeout,..ProviderConfig::default()
+        kind:"openai-compatible".into(),base_url:Some(if options.base_url.trim().is_empty() { GatewayOptions::fresh(agent.id).base_url } else { options.base_url }),api_key:key,timeout:agent.timeout,mcp:mcp_values(agent),..ProviderConfig::default()
     }
 }
 
@@ -1286,7 +1357,7 @@ pub fn guarding(args:&[String],deny:&[String])->Vec<String> {
 /// Os provedores e modelos no formato que o orquestrador já entende.
 pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap<String,ModelConfig>) {
     let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),if agent.id.is_gateway() { gateway_config(agent) } else { ProviderConfig{
-        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.build_args(),plan_args:agent.plan_args(),..ProviderConfig::default()
+        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.build_args(),plan_args:agent.plan_args(),mcp:mcp_values(agent),..ProviderConfig::default()
     } })).collect();
     let models=settings.models.iter().map(|model|(model_key(model),ModelConfig{
         enabled:model.enabled,provider:model.agent.key().into(),model:model.model.clone(),capabilities:model.capabilities.clone(),
@@ -1766,6 +1837,54 @@ mod tests {
         assert!(validate(&wrong).is_err());
         let right=settings(vec![agent(AgentId::Claude,json!({"fallbackModel":"sonnet"}))]);
         assert!(validate(&right).is_ok());
+    }
+
+    fn two_servers()->Vec<crate::mcp::McpServer> { crate::mcp::parse(r#"{"mcpServers":{"github":{"command":"npx","args":["-y","pkg"],"env":{"TOKEN":"x"}},"docs":{"url":"https://mcp.example.com/mcp"}}}"#) }
+
+    /// O mesmo "Aprovar servidores MCP" para os sete agentes: desligado, nada
+    /// chega; ligado, cada um recebe os servidores do jeito dele.
+    #[test] fn every_agent_gets_the_servers_only_with_the_same_toggle_on() {
+        let servers=two_servers();
+        for id in AgentId::ALL {
+            let off=settings(vec![agent(id,json!({"approveMcps":false}))]).with_mcp(&servers);
+            assert!(mcp_values(&off.agents[0]).is_empty()&&!off.agents[0].args().iter().any(|arg|arg.contains("mcp_servers")||arg=="--additional-mcp-config"||arg=="--mcp-config"),"{id:?} desligado não leva servidor");
+            let on=settings(vec![agent(id,json!({"approveMcps":true}))]).with_mcp(&servers);
+            let args=on.agents[0].args();
+            let carried=match id {
+                AgentId::Claude=>args.windows(2).any(|pair|pair[0]=="--allowedTools"&&pair[1].contains("mcp__github"))&&args.iter().any(|arg|arg=="--mcp-config"),
+                AgentId::Codex=>args.iter().any(|arg|arg.starts_with("mcp_servers.github.command")),
+                AgentId::Copilot=>args.iter().any(|arg|arg=="--additional-mcp-config"),
+                AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>mcp_values(&on.agents[0]).len()==2,
+            };
+            assert!(carried,"{id:?} ligado recebe os servidores");
+        }
+    }
+
+    #[test] fn the_toggle_defaults_off_for_every_agent() {
+        for id in AgentId::ALL { assert_eq!(AgentSettings::fresh(id).options.get("approveMcps"),Some(&json!(false)),"{id:?}"); }
+    }
+
+    #[test] fn the_gateway_servers_reach_the_provider_config_and_planning_drops_them() {
+        let all=settings(vec![agent(AgentId::Litellm,json!({"approveMcps":true,"baseUrl":"http://localhost:4000/v1"})),agent(AgentId::Kilo,json!({"approveMcps":true})),agent(AgentId::Cursor,json!({"approveMcps":true}))]).with_mcp(&two_servers());
+        let (providers,_)=to_config(&all);
+        for key in ["litellm","kilo","cursor"] {
+            assert_eq!(providers[key].mcp.len(),2,"{key}");
+            assert!(providers[key].for_planning().mcp.is_empty(),"{key}: o plano não leva servidor");
+        }
+        assert!(agent(AgentId::Cursor,json!({"approveMcps":true})).plan_args().iter().all(|arg|arg!="--approve-mcps"),"o plano do Cursor não aprova MCP");
+    }
+
+    #[test] fn the_organization_can_block_the_toggle_and_safe_agents_drop_the_servers() {
+        let servers=two_servers();
+        for id in AgentId::ALL {
+            let on=settings(vec![agent(id,json!({"approveMcps":true}))]).with_mcp(&servers);
+            let blocked=on.agents[0].without_mechanisms(&[format!("{}/mcp",id.key())]);
+            assert_eq!(blocked.options.get("approveMcps"),Some(&json!(false)),"{id:?} bloqueado");
+            assert!(mcp_values(&blocked).is_empty()&&!blocked.args().iter().any(|arg|arg.contains("mcp_servers")||arg=="--additional-mcp-config"),"{id:?}");
+            let safe=on.agents[0].without_unsafe_modes();
+            assert_eq!(safe.options.get("approveMcps").cloned().unwrap_or(json!(false)),json!(false),"{id:?} seguro");
+            assert!(mcp_values(&safe).is_empty(),"{id:?}");
+        }
     }
 
     #[test] fn the_symbol_tools_are_opt_in_and_start_this_executable_as_mcp() {

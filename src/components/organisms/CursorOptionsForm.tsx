@@ -18,7 +18,6 @@ export function CursorOptionsForm({ agent }: { agent: AgentSettings<"cursor"> })
           options={SANDBOXES.map((value) => ({ value, label: t(`cursor.sandbox.${value}`) }))} />
       </FormField>
       <ToggleRow id="cursor-force" label={t("cursor.force")} hint={t("cursor.force.hint")} checked={options.force} onChange={(force) => set({ force })} />
-      <ToggleRow id="cursor-mcps" label={t("cursor.approveMcps")} hint={t("cursor.approveMcps.hint")} checked={options.approveMcps} onChange={(approveMcps) => set({ approveMcps })} />
       <p className="text-xs leading-snug text-muted-foreground sm:col-span-2">{t("cursor.mechanisms.none")}</p>
     </div>
   );
