@@ -1610,6 +1610,8 @@ export const en = {
   "whatsNew.item.orgGeneralChats.detail": "In the project list, the chats that work on all repositories of an organization now have their own General chats block, separate from the projects of each repository. The Open chat button asks which general chat to continue, or starts a new one, and the command palette (Ctrl+K) lists them too.",
   "whatsNew.item.paletteEverything.title": "Every screen is reachable from Ctrl+K",
   "whatsNew.item.paletteEverything.detail": "The command palette now lists what each screen does: new project and layout, project notes and chat search, the live files panel, stopping a request, every Settings tab and its save, discard and defaults buttons, the organization tabs, accepting invites, language, theme, notifications, sign out, checking for updates, the system diagnostics and the documentation on the site.",
+  "whatsNew.item.replyLanguage.title": "JayV always replies in the language of the app",
+  "whatsNew.item.replyLanguage.detail": "Sometimes the reply came in another language: the language you chose was swapped for English when the language list did not load in time, and the agents read it buried in a long English instruction. JayV now keeps your saved language, tells the core about it right at startup, and repeats it at the end of every request sent to a model.",
   "whatsNew.item.orgChatReach.title": "See which repositories join the chat",
   "whatsNew.item.orgChatReach.detail": "Before opening, a window shows the folder (with a Change button) and sorts the repositories into: in this chat, left out because they are cloned in another folder, and left out because they are not on this computer.",
   "whatsNew.item.orgChatPolicy.title": "The strictest policy applies in the organization chat",

@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { commands, onCore } from "@/modules/core/bridge";
 import type { Key, Message, Messages } from "./types";
 import { en } from "./messages/en";
+import { replyName, resolveLocale } from "./locale";
 
 export type { Key, Message, Messages, Plural } from "./types";
 
@@ -21,27 +22,16 @@ interface I18nState {
   messages: Messages;
 }
 
-/** O idioma salvo, ou o primeiro que o sistema pede e o JayV sabe falar —
- * `pt-PT` cai em `pt-BR`, `zh-TW` em `zh-CN` —, ou inglês. */
-function detect(locales: LocaleOption[]): Locale {
-  const saved = localStorage.getItem(LOCALE_KEY);
-  if (saved && locales.some((locale) => locale.id === saved)) return saved;
-  for (const wanted of navigator.languages ?? [navigator.language]) {
-    const exact = locales.find((locale) => locale.id.toLowerCase() === wanted.toLowerCase());
-    if (exact) return exact.id;
-    const language = wanted.split("-")[0].toLowerCase();
-    const near = locales.find((locale) => locale.id.split("-")[0].toLowerCase() === language);
-    if (near) return near.id;
-  }
-  return FALLBACK;
+/** O idioma da interface; as regras estão em `resolveLocale`. */
+function detect(locales: LocaleOption[], listed = true): Locale {
+  return resolveLocale({ saved: localStorage.getItem(LOCALE_KEY), locales, listed, system: navigator.languages ?? [navigator.language], fallback: FALLBACK });
 }
 
 function apply(locale: Locale, locales: LocaleOption[]) {
   document.documentElement.lang = locale;
   document.documentElement.dir = locales.find((known) => known.id === locale)?.rtl ? "rtl" : "ltr";
   // O modelo responde no idioma da tela, não no do pedido.
-  const name = locales.find((known) => known.id === locale)?.name ?? locale;
-  void commands.setReplyLanguage({ tag: locale, name }).catch(() => {});
+  void commands.setReplyLanguage({ tag: locale, name: replyName(locale, locales) }).catch(() => {});
 }
 
 /** Antes da lista chegar, vale o idioma salvo: sem isso a tela piscaria em
@@ -60,7 +50,7 @@ async function loadMessages(locale: Locale) {
 async function loadLocales() {
   const fetched = await commands.getLocales().catch(() => []);
   const locales = fetched.length ? fetched : BUILT_IN;
-  const locale = detect(locales);
+  const locale = detect(locales, fetched.length > 0);
   useI18n.setState({ locales, locale });
   apply(locale, locales);
   await loadMessages(locale);
@@ -69,6 +59,10 @@ async function loadLocales() {
 /** Pede ao núcleo os idiomas e as traduções, e pede de novo quando o cache
  * dele recebe novidades do Supabase. */
 export function connectI18n() {
+  // O núcleo responde no idioma da tela desde o primeiro pedido: sem esperar a
+  // lista de idiomas, que pode demorar ou nem chegar.
+  const { locale, locales } = useI18n.getState();
+  apply(locale, locales);
   void loadLocales();
   const off = onCore("translations-updated", () => void loadLocales());
   return () => void off.then((unlisten) => unlisten());
