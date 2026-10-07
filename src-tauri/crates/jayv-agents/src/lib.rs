@@ -10,6 +10,7 @@ pub mod org_extensions;
 pub mod providers;
 pub mod router;
 pub mod skills;
+pub mod skills_hub;
 pub mod tools;
 pub mod usage;
 

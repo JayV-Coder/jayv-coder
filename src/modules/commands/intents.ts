@@ -4,7 +4,7 @@ import { create } from "zustand";
 /** O que a paleta pede a uma tela que já tem a janela ou o campo: abrir o
  * formulário do projeto novo, a memória do projeto, focar a busca de chats ou
  * abrir as notificações ou as permissões de comandos do chat. */
-export type Intent = "newProject" | "projectNotes" | "searchChats" | "notifications" | "installSkill" | "commandPermissions";
+export type Intent = "newProject" | "projectNotes" | "searchChats" | "notifications" | "installSkill" | "searchSkillHub" | "commandPermissions";
 
 /** Ações de funcionalidades que moram em `features/` e que a paleta chama sem
  * importá-las (a camada de baixo não depende de funcionalidade): cada uma se

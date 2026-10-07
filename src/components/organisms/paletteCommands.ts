@@ -159,6 +159,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   for (const id of ["openrouter", "litellm"] as const) {
     all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: AGENT_LABELS[id] }), run: () => { openSettingsTab(id); void checkGateway(id); } });
   }
+  all.push({ id: "skills-hub", group: settings, label: t("skills.hub.title"), run: () => { openSettingsTab("skills"); requestIntent("searchSkillHub"); } });
   all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
   all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });
 

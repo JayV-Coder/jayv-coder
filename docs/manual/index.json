@@ -26,6 +26,7 @@
     "consumptionGuard",
     "mcp",
     "skills",
+    "skillsHub",
     "contextCache",
     "leanCode",
     "symbolIndex",

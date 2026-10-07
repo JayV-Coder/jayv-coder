@@ -104,6 +104,15 @@ export interface Skill {
   installedAt: string;
 }
 
+/** Um resultado da busca no skills.sh: a skill `name` do repositório `source`
+ * (`dono/repo`), com quantas instalações o diretório conta. */
+export interface SkillHit {
+  id: string;
+  name: string;
+  source: string;
+  installs: number;
+}
+
 /** O que as organizações de quem usa dão (servidores MCP e skills), como a
  * sincronização trouxe. Só leitura, e sem segredos: de um servidor vêm o
  * comando (ou o endereço sem caminho) e os agentes. */

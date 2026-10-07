@@ -312,3 +312,26 @@ pub(crate) async fn remove_skill(workspace:State<'_,SharedWorkspace>,name:String
     workspace.remove_skill(&root,&name).map_err(failure)?;
     workspace.skills().map_err(failure)
 }
+
+/// Procura skills no skills.sh. Só lê: nada é gravado.
+#[tauri::command]
+pub(crate) async fn search_skill_hub(query:String)->Result<Vec<jayv_agents::skills_hub::Hit>,Text>{crate::desktop::require_session()?;
+    jayv_agents::skills_hub::search(&jayv_agents::skills_hub::Live::default(),&query).await.map_err(failure)
+}
+
+/// Baixa a skill `name` do repositório `source` (`dono/repo`) que o skills.sh
+/// apontou e a instala como qualquer skill da pasta. Devolve a lista inteira.
+#[tauri::command]
+pub(crate) async fn install_hub_skill(workspace:State<'_,SharedWorkspace>,source:String,name:String)->Result<Vec<jayv_agents::skills::Skill>,Text>{crate::desktop::require_session()?;
+    let root=skills_root()?;
+    let staging=root.join(".downloads");
+    // A rede roda sem o cadeado do banco: só a instalação o pega.
+    let folder=jayv_agents::skills_hub::download(&jayv_agents::skills_hub::Live::default(),source.trim(),name.trim(),&staging).await.map_err(failure);
+    let installed=match folder {
+        Ok(folder)=>{ let mut workspace=workspace.lock().await; workspace.install_skill_folder(&root,&folder).map_err(failure) }
+        Err(error)=>Err(error),
+    };
+    let _=std::fs::remove_dir_all(&staging);
+    installed?;
+    workspace.lock().await.skills().map_err(failure)
+}
