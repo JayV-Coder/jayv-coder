@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
   ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -30,6 +30,8 @@ export const commands = {
   getOrgExtensions: () => invoke<OrgExtensions>("get_org_extensions"),
   installSkillFolder: (path: string) => invoke<Skill[]>("install_skill_folder", { path }),
   installSkillText: (text: string) => invoke<Skill[]>("install_skill_text", { text }),
+  searchSkillHub: (query: string) => invoke<SkillHit[]>("search_skill_hub", { query }),
+  installHubSkill: (source: string, name: string) => invoke<Skill[]>("install_hub_skill", { source, name }),
   setSkillEnabled: (name: string, enabled: boolean) => invoke<Skill[]>("set_skill_enabled", { name, enabled }),
   removeSkill: (name: string) => invoke<Skill[]>("remove_skill", { name }),
   chatGrants: (chatId: string) => invoke<Grants>("chat_grants", { chatId }),

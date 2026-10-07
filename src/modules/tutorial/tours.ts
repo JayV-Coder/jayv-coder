@@ -70,6 +70,7 @@ export const TOURS: Tour[] = [
       { feature: "parallelTasks" },
       { feature: "mcp" },
       { feature: "skills" },
+      { feature: "skillsHub" },
       { feature: "contextCache" },
       { feature: "leanCode" },
       { feature: "symbolIndex" },
