@@ -2,7 +2,7 @@ import { ChartColumnIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, UsersI
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
 import { setOrganizationTab, useOrganizations, type OrganizationTab } from "@/modules/organizations";
-import { LoadingNote } from "@/components/atoms";
+import { BackMark, LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
 import { OrganizationChatButton, OrganizationGate, OrganizationMembers, OrganizationProjects, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
@@ -24,7 +24,7 @@ export function OrganizationPage() {
   if (!organization) {
     return (
       <ScrollPage>
-        <Button variant="ghost" onClick={() => navigate("organizations")}>← {t("org.back")}</Button>
+        <Button variant="ghost" onClick={() => navigate("organizations")}><BackMark /> {t("org.back")}</Button>
       </ScrollPage>
     );
   }

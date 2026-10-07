@@ -1615,6 +1615,8 @@ export const en = {
   "whatsNew.item.settingsApplied.detail": "On save, the core tells the screen, which tells the language to the core and the tray menu again, and the next request already uses the new settings, with no restart. If a request is running, it finishes with the old ones and the app says so.",
   "whatsNew.item.skillsInParallel.title": "The chosen skill reaches parallel agents",
   "whatsNew.item.skillsInParallel.detail": "In complex requests split into parallel parts, the skill Jev picked (and the request’s other notes) did not reach each part’s agent. Now it does. In an ordinary request, a real-run test confirms that the skill’s instructions reach the agent along with the request.",
+  "whatsNew.item.backMark.title": "One back button everywhere",
+  "whatsNew.item.backMark.detail": "Every back button in the app (organization, all projects, tutorial, questions to the agent, sign-in) now uses the same green ❯ pointing left that the site uses, in both light and dark themes.",
   "whatsNew.item.skillsHub.title": "Install skills from skills.sh",
   "whatsNew.item.skillsHub.detail": "Settings › Skills (and the organization’s Skills tab on the site) now have a skills.sh section: search the open directory and install a skill with one click. In the app it is a regular local skill; on the site it is delivered to every member. Ctrl+K › Install from skills.sh jumps to the search.",
   "whatsNew.item.mcpAllAgents.title": "MCP servers for every agent",

@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Chat, Question } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { answerForm, answerQuestion, answeringFor, dismissQuestion, formItems, pick, setDraft, setFolded, setStep, setWriting, shownText, useConversation, sourceLabel } from "@/modules/conversation";
-import { ChevronIcon } from "@/components/atoms";
+import { BackMark, ChevronIcon } from "@/components/atoms";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -164,7 +164,7 @@ export function AskingPanel({ chat, question }: { chat: Chat; question: Question
       <small className="block font-mono text-caption text-muted-foreground">{t("ask.from", { source: sourceLabel(question.source) })}</small>
       <div className="mt-3 flex flex-wrap gap-2">
         {answering.writing ? (
-          <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}>{t("ask.back")}</Button>
+          <Button type="button" variant="outline" className={act} onClick={() => { setWriting(question, false); setDraft(chat.id, ""); }}><BackMark /> {t("ask.back")}</Button>
         ) : permission ? (
           <>
             <Button type="button" disabled={busy} className={act} onClick={() => run(() => answerQuestion(question, chat.id, ["run"]))}>{t("ask.permission.run")}</Button>
