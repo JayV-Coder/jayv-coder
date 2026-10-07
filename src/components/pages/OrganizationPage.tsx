@@ -1,10 +1,11 @@
-import { ChartColumnIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, UsersIcon } from "lucide-react";
+import { ChartColumnIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, PlugIcon, SparklesIcon, UsersIcon } from "lucide-react";
+import { allows, useEntitlements } from "@/modules/plans";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
 import { setOrganizationTab, useOrganizations, type OrganizationTab } from "@/modules/organizations";
 import { BackMark, LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { OrganizationChatButton, OrganizationGate, OrganizationMembers, OrganizationProjects, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
+import { FeatureLocked, OrganizationChatButton, OrganizationExtensions, OrganizationGate, OrganizationMembers, OrganizationProjects, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ export function OrganizationPage() {
   const organization = useOrganizations((state) => state.list.find((org) => org.id === state.openId));
   const detail = useOrganizations((state) => (state.detail?.id === openId ? state.detail : null));
   const current = useOrganizations((state) => state.tab);
+  const rights = useEntitlements();
 
   if (!organization) {
     return (
@@ -30,8 +32,8 @@ export function OrganizationPage() {
   }
 
   const tab = (value: string, Icon: typeof UsersIcon, key: Key) => (
-    <TabsTrigger value={value} className="flex-none gap-2">
-      <Icon className="size-4" />
+    <TabsTrigger value={value} className="flex-none gap-2.5 px-3 py-2">
+      <Icon className="size-5" />
       <span>{t(key)}</span>
     </TabsTrigger>
   );
@@ -43,23 +45,28 @@ export function OrganizationPage() {
         <OrganizationChatButton organization={organization} repositories={detail?.repositories ?? null} />
         <SiteDashboardButton path={`/organizations/${organization.id}`} />
       </PageHeading>
-      <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} className="gap-5">
-        <TabsList className="h-auto w-full flex-wrap justify-start">
+      <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} orientation="vertical" className="gap-6">
+        {/* Na vertical, como no site e em Configurações. */}
+        <TabsList className="sticky top-0 h-auto w-52 shrink-0 gap-0.5 py-1 pr-1">
           {tab("projects", FolderKanbanIcon, "org.tab.projects")}
           {tab("stats", ChartColumnIcon, "org.tab.stats")}
           {tab("gate", DoorOpenIcon, "org.tab.gate")}
           {tab("members", UsersIcon, "org.tab.members")}
           {tab("repositories", FolderGit2Icon, "org.tab.repositories")}
+          {tab("mcp", PlugIcon, "settings.tab.mcp")}
+          {tab("skills", SparklesIcon, "settings.tab.skills")}
         </TabsList>
-        <TabsContent value="projects"><OrganizationProjects orgId={organization.id} /></TabsContent>
-        <TabsContent value="stats"><OrganizationStats orgId={organization.id} /></TabsContent>
-        <TabsContent value="gate"><OrganizationGate orgId={organization.id} /></TabsContent>
-        <TabsContent value="members">
+        <TabsContent value="projects" className="min-w-0"><OrganizationProjects orgId={organization.id} /></TabsContent>
+        <TabsContent value="stats" className="min-w-0"><OrganizationStats orgId={organization.id} /></TabsContent>
+        <TabsContent value="gate" className="min-w-0"><OrganizationGate orgId={organization.id} /></TabsContent>
+        <TabsContent value="members" className="min-w-0">
           {detail ? <OrganizationMembers detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
-        <TabsContent value="repositories">
+        <TabsContent value="repositories" className="min-w-0">
           {detail ? <OrganizationRepositories detail={detail} role={organization.role} name={organization.name} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
+        <TabsContent value="mcp" className="min-w-0">{allows(rights, "mcp") ? <OrganizationExtensions organization={organization} kind="mcp" /> : <FeatureLocked feature="mcp" />}</TabsContent>
+        <TabsContent value="skills" className="min-w-0">{allows(rights, "skills") ? <OrganizationExtensions organization={organization} kind="skills" /> : <FeatureLocked feature="skills" />}</TabsContent>
       </Tabs>
     </ScrollPage>
   );
