@@ -53,8 +53,7 @@ pub fn replace_all(connection:&mut Connection,rows:&[Row])->Result<()> {
     for row in rows {
         for value in &row.mcp {
             let Ok(server)=serde_json::from_value::<McpServer>(value.clone()) else { continue };
-            let Ok(mut server)=server.checked() else { continue };
-            server.enabled=true;
+            let Ok(server)=server.checked() else { continue };
             transaction.execute("INSERT OR REPLACE INTO org_extensions(project_id,org_slug,own,kind,name,payload) VALUES(?1,?2,?3,?4,?5,?6)",
                 params![row.project_id,row.org_slug,row.own as i64,MCP,server.name,serde_json::to_string(&server)?])?;
         }
@@ -103,7 +102,7 @@ pub fn listing(connection:&Connection)->Result<OrgExtensions> {
         if kind==MCP {
             if let Ok(server)=serde_json::from_str::<McpServer>(&payload) {
                 let (command,url)=(server.command.split_whitespace().next().unwrap_or_default().to_string(),host_of(&server.url));
-                listing.mcp.push(OrgMcp{org,name:server.name,transport:server.transport,command,url,agents:server.agents});
+                listing.mcp.push(OrgMcp{org,name:server.name,transport:server.transport,command,url,agents:server.agents,enabled:server.enabled});
             }
         } else if let Ok(skill)=serde_json::from_str::<SkillPayload>(&payload) {
             listing.skills.push(OrgSkill{org,name:skill.name,description:skill.description});
@@ -126,14 +125,15 @@ pub struct OrgExtensions { pub mcp:Vec<OrgMcp>, pub skills:Vec<OrgSkill> }
 
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct OrgMcp { pub org:String, pub name:String, pub transport:String, pub command:String, pub url:String, pub agents:Vec<String> }
+pub struct OrgMcp { pub org:String, pub name:String, pub transport:String, pub command:String, pub url:String, pub agents:Vec<String>, pub enabled:bool }
 
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct OrgSkill { pub org:String, pub name:String, pub description:String }
 
 /// Os servidores da pessoa e os da organização: com o mesmo nome, vale o da
-/// organização.
+/// organização, também quando ela o deixa desligado (o servidor desligado
+/// não chega ao agente, e o da pessoa não volta por baixo).
 pub fn merge_servers(own:Vec<McpServer>,org:Vec<McpServer>)->Vec<McpServer> {
     let taken:HashSet<&str>=org.iter().map(|server|server.name.as_str()).collect();
     let mut all:Vec<McpServer>=own.into_iter().filter(|server|!taken.contains(server.name.as_str())).collect();
@@ -218,5 +218,16 @@ mod tests {
         let org=vec![McpServer{name:"db".into(),command:"theirs".into(),..Default::default()}];
         let merged=merge_servers(own,org);
         assert_eq!(merged.iter().map(|server|server.command.as_str()).collect::<Vec<_>>(),vec!["k","theirs"]);
+    }
+
+    #[test] fn a_server_the_organization_turned_off_still_hides_the_persons_one() {
+        let mut connection=database();
+        let mut off=server("fetch","uvx"); off["enabled"]=json!(false);
+        replace_all(&mut connection,&[Row{project_id:"p1".into(),org_slug:"acme".into(),own:true,mcp:vec![off],skills:vec![]}]).expect("troca");
+        let (org,_)=for_chat(&connection,"c1").expect("chat");
+        let own=vec![McpServer{name:"fetch".into(),command:"mine".into(),..Default::default()},McpServer{name:"git".into(),command:"g".into(),..Default::default()}];
+        let merged=merge_servers(own,org);
+        let serving:Vec<&str>=merged.iter().filter(|server|server.serves(crate::llm::AgentId::Claude)).map(|server|server.name.as_str()).collect();
+        assert_eq!(serving,vec!["git"],"o da organização, desligado, vale no lugar do da pessoa");
     }
 }

@@ -24,6 +24,7 @@ export function OrgExtensionsSection({ kind }: { kind: "mcp" | "skills" }) {
               <span className="flex items-center gap-2 text-sm font-medium">{server.name}<Badge variant="outline">{t(`mcp.transport.${server.transport}`)}</Badge></span>
               <code className="truncate font-mono text-xs text-muted-foreground">{server.transport === "stdio" ? server.command : server.url}</code>
             </div>
+            {!server.enabled && <Badge variant="outline">{t("orgExtensions.off")}</Badge>}
             <Badge variant="secondary">{t("orgExtensions.from", { org: server.org })}</Badge>
           </li>
         ))}

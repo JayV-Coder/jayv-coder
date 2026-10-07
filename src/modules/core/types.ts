@@ -108,7 +108,7 @@ export interface Skill {
  * sincronização trouxe. Só leitura, e sem segredos: de um servidor vêm o
  * comando (ou o endereço sem caminho) e os agentes. */
 export interface OrgExtensions {
-  mcp: { org: string; name: string; transport: "stdio" | "http"; command: string; url: string; agents: string[] }[];
+  mcp: { org: string; name: string; transport: "stdio" | "http"; command: string; url: string; agents: string[]; enabled: boolean }[];
   skills: { org: string; name: string; description: string }[];
 }
 

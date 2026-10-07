@@ -199,6 +199,7 @@ impl WorkspaceStore {
         connection.execute_batch(turns::SCHEMA)?;
         crate::llm::ensure(&connection)?;
         connection.execute_batch(crate::mcp::SCHEMA)?;
+        crate::mcp::seed_defaults(&connection)?;
         connection.execute_batch(jayv_agents::skills::SCHEMA)?;
         connection.execute_batch(jayv_agents::org_extensions::SCHEMA)?;
         ensure_message_turns(&connection)?;
