@@ -6,7 +6,7 @@ import { useLocale, useLocales, useT } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { useOrganizations } from "@/modules/organizations";
 import { isDirty, useSettings } from "@/modules/settings";
-import { useEntitlements } from "@/modules/plans";
+import { hasFeature, useEntitlements } from "@/modules/plans";
 import { openStats } from "@/modules/usage";
 import { createChat, findChat, findProject, leaveProject, nextWorkMode, setWorkMode, useWorkspace } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
@@ -39,7 +39,7 @@ function runShortcut(shortcut: Shortcut, projectId: string | null, chatId: strin
     case "settings": navigate("settings"); break;
     case "newChat": if (projectId) void createChat(projectId); break;
     case "gate": if (projectId) navigate("gate"); break;
-    case "find": if (chatId && useNavigation.getState().view === "chat") openChatFind(); break;
+    case "find": if (chatId && useNavigation.getState().view === "chat" && hasFeature("conversationFind")) openChatFind(); break;
     case "workMode": {
       const chat = findChat(useWorkspace.getState().data, chatId);
       if (chat) void setWorkMode(chat.id, nextWorkMode(chat.workMode ?? "auto"));

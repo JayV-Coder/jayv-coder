@@ -1,11 +1,13 @@
+import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { PlugIcon, SparklesIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId } from "@/modules/core";
+import { allows, SETTINGS_TAB_FEATURE, useEntitlements } from "@/modules/plans";
 import { useT } from "@/modules/i18n";
 import { AGENTS, discardChanges, isDirty, problems, restoreCoreDefaults, saveSettings, setSettingsTab, useSettings, useSettingsTab, type SettingsTab } from "@/modules/settings";
 import { AgentIcon, GridIcon, LoadingNote, LogoIcon } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { AGENT_NAMES, AgentPanel, AppPanel, JevPanel, McpPanel, SkillsPanel } from "@/components/organisms";
+import { AGENT_NAMES, AgentPanel, AppPanel, FeatureLocked, JevPanel, McpPanel, SkillsPanel } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +21,12 @@ export function SettingsPage() {
   const { loaded, agents, models, saving, core, coreSnapshot } = useSettings(useShallow(({ loaded, agents, models, saving, core, coreSnapshot }) => ({ loaded, agents, models, saving, core, coreSnapshot })));
   const dirty = useSettings(isDirty);
   const tab = useSettingsTab((state) => state.tab);
+  const rights = useEntitlements();
+  // A aba cujo recurso o plano não tem abre o aviso do plano, não o painel.
+  const panel = (id: SettingsTab, content: ReactNode) => {
+    const feature = SETTINGS_TAB_FEATURE[id];
+    return feature && !allows(rights, feature) ? <FeatureLocked feature={feature} /> : content;
+  };
   if (!loaded || !core || !coreSnapshot) return <LoadingNote>{t("settings.loading")}</LoadingNote>;
 
   const found = Object.fromEntries(AGENTS.map((id) => [id, problems({ agents, models }, id)])) as Record<AgentId, ReturnType<typeof problems>>;
@@ -91,13 +99,13 @@ export function SettingsPage() {
         </TabsList>
         <TabsContent value="app" className="min-w-0"><AppPanel core={core} snapshot={coreSnapshot} /></TabsContent>
         <TabsContent value="jev" className="min-w-0"><JevPanel core={core} snapshot={coreSnapshot} /></TabsContent>
-        <TabsContent value="mcp" className="min-w-0"><McpPanel /></TabsContent>
-        <TabsContent value="skills" className="min-w-0"><SkillsPanel /></TabsContent>
+        <TabsContent value="mcp" className="min-w-0">{panel("mcp", <McpPanel />)}</TabsContent>
+        <TabsContent value="skills" className="min-w-0">{panel("skills", <SkillsPanel />)}</TabsContent>
         {AGENTS.map((id) => {
           const agent = agents.find((item) => item.id === id);
           return agent && (
             <TabsContent key={id} value={id} className="min-w-0">
-              <AgentPanel agent={agent} models={models.filter((model) => model.agent === id)} problems={found[id]} />
+              {panel(id, <AgentPanel agent={agent} models={models.filter((model) => model.agent === id)} problems={found[id]} />)}
             </TabsContent>
           );
         })}

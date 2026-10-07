@@ -2,7 +2,7 @@
   "id": "gatewayProviders",
   "category": "agents",
   "since": "0.75.0",
-  "plan": null,
+  "plan": "gatewayProviders",
   "commands": [],
   "title": "OpenRouter and LiteLLM",
   "summary": "Two API gateways give Jev access to many models through one address and key. They answer with text: they never edit files or run commands, so Jev uses them for questions, analysis, review and planning. With Approve MCP servers on in their tab, JayV also offers them the tools of your MCP servers and runs the calls they ask for.",

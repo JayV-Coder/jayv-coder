@@ -2,7 +2,7 @@
   "id": "mcp",
   "category": "agents",
   "since": "0.68.0",
-  "plan": null,
+  "plan": "mcp",
   "commands": [],
   "title": "MCP servers",
   "summary": "Give every agent (Claude Code, Codex, Copilot, Cursor, Kilo Code, OpenRouter and LiteLLM) extra tools by registering MCP servers. One switch per agent, Approve MCP servers, decides who receives them; JayV hands the servers over on every request, each agent in the way it understands. OpenRouter and LiteLLM have no tools of their own, so JayV calls the MCP tools for them.",

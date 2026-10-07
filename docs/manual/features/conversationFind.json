@@ -2,7 +2,7 @@
   "id": "conversationFind",
   "category": "chat",
   "since": "0.80.0",
-  "plan": null,
+  "plan": "conversationFind",
   "commands": [
     "find"
   ],

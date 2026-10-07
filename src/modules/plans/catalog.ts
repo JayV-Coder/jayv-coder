@@ -25,6 +25,12 @@ export const FEATURES = [
   "answerRecall",
   "leanCode",
   "symbolIndex",
+  "mcp",
+  "skills",
+  "skillsHub",
+  "kiloCode",
+  "gatewayProviders",
+  "conversationFind",
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number];
@@ -37,6 +43,16 @@ export const VIEW_FEATURE: Partial<Record<View, FeatureKey>> = {
   organization: "organizations",
   stats: "stats",
   gate: "gateBoard",
+};
+
+/** A aba das Configurações que só abre com o recurso. O Kilo Code e os
+ * gateways de API têm aba própria; as outras abas abrem sempre. */
+export const SETTINGS_TAB_FEATURE: Partial<Record<string, FeatureKey>> = {
+  mcp: "mcp",
+  skills: "skills",
+  kilo: "kiloCode",
+  openrouter: "gatewayProviders",
+  litellm: "gatewayProviders",
 };
 
 /** O núcleo: está em todo plano, travado, e ninguém o desliga — nem o admin.

@@ -12,7 +12,7 @@ import { clearRead, markAllRead } from "@/modules/notifications";
 import {
   acceptInvite, declineInvite, openOrganization, organizationChatsOf, type IncomingInvite, type Organization, type OrganizationTab,
 } from "@/modules/organizations";
-import { allows } from "@/modules/plans";
+import { allows, SETTINGS_TAB_FEATURE } from "@/modules/plans";
 import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
@@ -103,7 +103,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
           run: () => { openChat(chat.id); setLivePanel(chat.id, useLive.getState().panel[chat.id] !== true); },
         });
       }
-      all.push({ id: "find-in-chat", group, label: t("find.label"), shortcut: "find", run: () => { openChat(chat.id); openChatFind(); } });
+      if (can("conversationFind")) all.push({ id: "find-in-chat", group, label: t("find.label"), shortcut: "find", run: () => { openChat(chat.id); openChatFind(); } });
       all.push({ id: "grants", group, label: t("palette.commandPermissions"), run: () => { openChat(chat.id); requestIntent("commandPermissions"); } });
       const flying = openTurns(chat).find((turn) => turn.status === "flying");
       if (flying) all.push({ id: "stop", group, label: t("palette.stop"), run: () => void cancelTurn(flying.id, chat.id) });
@@ -137,6 +137,8 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
 
   const settings = "palette.group.settings" as const;
   for (const { tab, label } of SETTINGS_TABS) {
+    const tabFeature = SETTINGS_TAB_FEATURE[tab];
+    if (tabFeature && !can(tabFeature)) continue;
     all.push({ id: `settings-${tab}`, group: settings, label: `${t("nav.settings")}${SEP}${label(t)}`, run: () => openSettingsTab(tab) });
   }
   if (ctx.settingsDirty) {
@@ -148,6 +150,8 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   // O "Aprovar servidores MCP" de cada agente: abre a aba dele e vira a chave,
   // e o Salvar da página (ou o comando dele) grava.
   for (const id of AGENTS) {
+    const tabFeature = SETTINGS_TAB_FEATURE[id];
+    if (!can("mcp") || (tabFeature && !can(tabFeature))) continue;
     const on = useSettings.getState().agents.find((agent) => agent.id === id)?.options as { approveMcps?: boolean } | undefined;
     all.push({
       id: `mcp-approve-${id}`, group: settings,
@@ -157,10 +161,10 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   }
   // Conferir o endereço e a chave dos gateways de API (o botão da aba deles).
   for (const id of ["openrouter", "litellm"] as const) {
-    all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: AGENT_LABELS[id] }), run: () => { openSettingsTab(id); void checkGateway(id); } });
+    if (can("gatewayProviders")) all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: AGENT_LABELS[id] }), run: () => { openSettingsTab(id); void checkGateway(id); } });
   }
-  all.push({ id: "skills-hub", group: settings, label: t("skills.hub.title"), run: () => { openSettingsTab("skills"); requestIntent("searchSkillHub"); } });
-  all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
+  if (can("skills") && can("skillsHub")) all.push({ id: "skills-hub", group: settings, label: t("skills.hub.title"), run: () => { openSettingsTab("skills"); requestIntent("searchSkillHub"); } });
+  if (can("skills")) all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
   all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });
 
   if (view === "stats" && can("stats")) {
