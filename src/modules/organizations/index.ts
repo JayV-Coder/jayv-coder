@@ -58,7 +58,7 @@ export interface OrganizationDetail {
   connections: GitConnection[];
 }
 
-export type OrganizationTab = "projects" | "stats" | "gate" | "members" | "repositories";
+export type OrganizationTab = "projects" | "stats" | "gate" | "members" | "repositories" | "mcp" | "skills";
 
 interface OrganizationsState {
   list: Organization[];

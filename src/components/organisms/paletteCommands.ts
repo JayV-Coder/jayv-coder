@@ -59,6 +59,8 @@ const ORGANIZATION_TABS: { tab: OrganizationTab; label: Key; feature?: PlanFeatu
   { tab: "gate", label: "org.tab.gate", feature: "gateBoard" },
   { tab: "members", label: "org.tab.members" },
   { tab: "repositories", label: "org.tab.repositories" },
+  { tab: "mcp", label: "settings.tab.mcp", feature: "mcp" },
+  { tab: "skills", label: "settings.tab.skills", feature: "skills" },
 ];
 
 const SETTINGS_TABS: { tab: SettingsTab; label: (t: PaletteContext["t"]) => string }[] = [
