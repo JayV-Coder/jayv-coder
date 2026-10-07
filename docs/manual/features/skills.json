@@ -2,7 +2,7 @@
   "id": "skills",
   "category": "agents",
   "since": "0.71.0",
-  "plan": null,
+  "plan": "skills",
   "commands": [],
   "title": "Skills",
   "summary": "Install skills (folders with a SKILL.md) and let Jev choose which one the agent should use for each request. Jev reads the request and the skills' names and descriptions, picks at most one, and tells the model to follow it.",

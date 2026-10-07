@@ -45,6 +45,10 @@ pub const ANSWER_RECALL:&str="answerRecall";
 pub const PROJECT_NOTES:&str="projectNotes";
 pub const SYMBOL_INDEX:&str="symbolIndex";
 pub const LEAN_CODE:&str="leanCode";
+pub const MCP:&str="mcp";
+pub const SKILLS:&str="skills";
+pub const KILO_CODE:&str="kiloCode";
+pub const GATEWAY_PROVIDERS:&str="gatewayProviders";
 
 /// O núcleo: o que nenhum plano tira e ninguém desliga. A mesma lista da
 /// migração `core_features` (`features.core`).
@@ -128,9 +132,15 @@ impl Entitlements {
     pub fn apply_core(&self,settings:&CoreSettings)->CoreSettings { self.enforce_core(&self.restrict_core(settings)) }
 
     /// Os agentes com o que o plano tira desligado e o que ele trava ligado:
-    /// as sessões guardadas do Claude e o índice de símbolos.
+    /// o Kilo Code e os gateways de API (OpenRouter e LiteLLM) que o plano não
+    /// tem saem do roteamento, e do Claude, as sessões guardadas e o índice de
+    /// símbolos.
     pub fn apply_llm(&self,settings:&LlmSettings)->LlmSettings {
         let mut settings=settings.clone();
+        for agent in settings.agents.iter_mut() {
+            let included=match agent.id { AgentId::Kilo=>self.allows(KILO_CODE), AgentId::Openrouter|AgentId::Litellm=>self.allows(GATEWAY_PROVIDERS), _=>true };
+            if !included { agent.enabled=false; }
+        }
         for agent in settings.agents.iter_mut().filter(|agent|agent.id==AgentId::Claude) {
             let Ok(mut options)=serde_json::from_value::<ClaudeOptions>(agent.options.clone()) else { continue };
             if self.locks(AGENT_SESSIONS) { options.persist_sessions=true; }
@@ -140,6 +150,12 @@ impl Entitlements {
         }
         settings
     }
+
+    /// Os servidores MCP só chegam aos agentes com o recurso no plano.
+    pub fn mcp_servers<T>(&self,servers:Vec<T>)->Vec<T> { if self.allows(MCP) { servers } else { vec![] } }
+
+    /// As skills só chegam ao Jev com o recurso no plano.
+    pub fn skills<T>(&self,skills:Vec<T>)->Vec<T> { if self.allows(SKILLS) { skills } else { vec![] } }
 
     /// O código enxuto da conta, pelo plano.
     pub fn lean_code(&self,mine:bool)->bool { self.locks(LEAN_CODE)||(mine&&self.allows(LEAN_CODE)) }
@@ -308,6 +324,21 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         settings.agents[0].options=serde_json::json!({"symbolTools":false});
         let locked=Entitlements::from_remote(&RemoteFeatures{locked:vec![SYMBOL_INDEX.into()],..remote(&[])});
         assert!(claude(&locked.apply_llm(&settings)).symbol_tools,"travado ligado");
+    }
+
+    /// Kilo Code, gateways, MCP e skills seguem o plano; sem lista, valem como antes.
+    #[test] fn the_plan_gates_agents_mcp_and_skills() {
+        let agent=|id|crate::llm::AgentSettings{id,enabled:true,command:String::new(),timeout:300,options:serde_json::json!({})};
+        let settings=LlmSettings{agents:vec![agent(AgentId::Claude),agent(AgentId::Kilo),agent(AgentId::Openrouter),agent(AgentId::Litellm)],models:vec![]};
+        let enabled=|settings:&LlmSettings|settings.agents.iter().map(|agent|agent.enabled).collect::<Vec<_>>();
+        assert_eq!(enabled(&Entitlements::default().apply_llm(&settings)),[true,true,true,true]);
+        let without=Entitlements::of(&[]);
+        assert_eq!(enabled(&without.apply_llm(&settings)),[true,false,false,false]);
+        assert_eq!(enabled(&Entitlements::of(&[KILO_CODE.into()]).apply_llm(&settings)),[true,true,false,false]);
+        assert_eq!(enabled(&Entitlements::of(&[GATEWAY_PROVIDERS.into()]).apply_llm(&settings)),[true,false,true,true]);
+        assert!(without.mcp_servers(vec![1]).is_empty()&&without.skills(vec![1]).is_empty());
+        assert_eq!(Entitlements::of(&[MCP.into(),SKILLS.into()]).mcp_servers(vec![1]),vec![1]);
+        assert_eq!(Entitlements::default().skills(vec![1]),vec![1]);
     }
 
     /// O valor de partida do plano vale para quem nunca gravou.

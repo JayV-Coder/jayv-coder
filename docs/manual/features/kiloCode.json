@@ -2,7 +2,7 @@
   "id": "kiloCode",
   "category": "agents",
   "since": "0.75.0",
-  "plan": null,
+  "plan": "kiloCode",
   "commands": [],
   "title": "Kilo Code",
   "summary": "Kilo Code is a command-line coding agent that Jev can pick like Claude Code, Codex, Copilot and Cursor. It edits the project in Development mode and only reads in Planning mode.",

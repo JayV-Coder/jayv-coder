@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DownloadIcon, FolderPlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
 import { useT } from "@/modules/i18n";
 import { useIntentHandler } from "@/modules/commands";
+import { useFeature } from "@/modules/plans";
 import { installFromSkillHub, installSkillFromFolder, installSkillFromText, loadSkills, removeSkill, searchSkillHub, setSkillEnabled, useSkills } from "@/modules/skills";
 import { LoadingNote } from "@/components/atoms";
 import { SettingsSection } from "@/components/molecules";
@@ -23,6 +24,7 @@ export function SkillsPanel() {
   const [pasted, setPasted] = useState("");
   const [query, setQuery] = useState("");
   const searchBox = useRef<HTMLInputElement>(null);
+  const hubAllowed = useFeature("skillsHub");
   useEffect(() => { void loadSkills(); }, []);
   useIntentHandler("installSkill", () => void installSkillFromFolder());
   useIntentHandler("searchSkillHub", () => searchBox.current?.focus());
@@ -53,7 +55,7 @@ export function SkillsPanel() {
         )}
         <p className="text-xs leading-snug text-muted-foreground">{t("skills.notes")}</p>
       </SettingsSection>
-      <SettingsSection title={t("skills.hub.title")} description={t("skills.hub.description")}>
+      {hubAllowed && <SettingsSection title={t("skills.hub.title")} description={t("skills.hub.description")}>
         <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); void searchSkillHub(query); }}>
           <Input ref={searchBox} value={query} placeholder={t("skills.hub.placeholder")} aria-label={t("skills.hub.placeholder")} onChange={(event) => setQuery(event.target.value)} />
           <Button type="submit" variant="outline" disabled={searching || query.trim().length < 2}><SearchIcon aria-hidden="true" />{t(searching ? "skills.hub.searching" : "skills.hub.search")}</Button>
@@ -77,7 +79,7 @@ export function SkillsPanel() {
           </ul>
         ))}
         <p className="text-xs leading-snug text-muted-foreground">{t("skills.hub.notes")}</p>
-      </SettingsSection>
+      </SettingsSection>}
       <OrgExtensionsSection kind="skills" />
       <SettingsSection title={t("skills.paste.title")} description={t("skills.paste.description")}>
         <Textarea rows={6} value={pasted} placeholder={t("skills.paste.placeholder")} className="font-mono text-xs" onChange={(event) => setPasted(event.target.value)} />

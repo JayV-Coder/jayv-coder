@@ -2,7 +2,7 @@
   "id": "skillsHub",
   "category": "agents",
   "since": "0.83.0",
-  "plan": null,
+  "plan": "skillsHub",
   "commands": [],
   "title": "Skills from skills.sh",
   "summary": "Search the skills.sh directory from inside JayV and install a skill with one click, in the app or for a whole organization on the site.",

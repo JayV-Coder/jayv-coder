@@ -619,6 +619,8 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
         let (org_servers,org_skills)=workspace.chat_org_extensions(chat_id).unwrap_or_else(|error|{eprintln!("MCP e skills da organização: ilegíveis ({error:#})"); (vec![],vec![])});
         let servers=jayv_agents::org_extensions::merge_servers(servers,org_servers);
         let skills=jayv_agents::org_extensions::merge_skills(skills,org_skills);
+        // Sem o recurso no plano, nem o que a pessoa tem nem o da organização chega ao agente.
+        let (servers,skills)=(plan.mcp_servers(servers),plan.skills(skills));
         (workspace.llm_settings(),workspace.core_settings(&plan.seed_core(&defaults)).map(|core|plan.restrict_core(&core)),workspace.chat_policy(chat_id),plan,servers,skills)
     };
     let (Ok(llm),Ok(core))=(llm,core) else { eprintln!("política de LLM: configurações ilegíveis, mantidas as anteriores"); return plan };
