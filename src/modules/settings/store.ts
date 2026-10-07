@@ -4,7 +4,7 @@ import {
   type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
-import { t, type Key } from "@/modules/i18n";
+import { syncLanguage, t, type Key } from "@/modules/i18n";
 
 export const AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"];
 export const AGENT_LABELS: Record<AgentId, string> = {
@@ -323,5 +323,12 @@ export function connectSettings() {
     const state = useSettings.getState();
     if (state.loaded && !isAgentsDirty(state)) void commands.getSettings().then(apply).catch(reportError);
   });
-  return () => { stop?.(); off(); void models.then((unlisten) => unlisten()); };
+  // Salvar vale para o app inteiro: o idioma é dito de novo ao núcleo, e quem
+  // olha o que foi salvo (a página Sistema) o relê. Com um pedido no ar, a
+  // troca fica para o próximo — e a pessoa é avisada disso.
+  const applied = onCore("settings-applied", ({ now }) => {
+    syncLanguage();
+    if (!now) notify(t("settings.saved.later"), true);
+  });
+  return () => { stop?.(); off(); void models.then((unlisten) => unlisten()); void applied.then((unlisten) => unlisten()); };
 }

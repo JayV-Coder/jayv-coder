@@ -230,12 +230,14 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // O que o desenvolvedor liberou para este pedido (ao aprovar o comando que
     // o agente pediu), o que ele deixou ligado no seletor do chat inteiro e os
     // comandos sempre permitidos no projeto. O próximo pedido lê de novo.
-    let (grants,granted_here)={
+    let (grants,has_grants)={
         let workspace=workspace.lock().await;
         let mine=workspace.turn_grants(&turn.id).unwrap_or_default();
         let always=crate::llm::Grants{commands:workspace.allowed_commands(chat_id).unwrap_or_default(),..Default::default()};
         let chat=workspace.chat_grants(chat_id).unwrap_or_default();
-        (mine.merged(&chat).merged(&always),!mine.is_empty())
+        let all=mine.merged(&chat).merged(&always);
+        let any=!all.is_empty();
+        (all,any)
     };
     let plan=apply_project_policy(&mut state,workspace,chat_id,&grants).await;
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
@@ -425,9 +427,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // O modo do chat é lido agora, na vez do pedido: trocar de modo com
     // pedidos na fila vale para eles também.
     state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
-    // Permissão liberada para este pedido é pedido de executar: no
-    // automático ele vai ao desenvolvimento. O planejamento fixado continua.
-    if granted_here&&state.orchestrator.pending_work_mode.as_deref().is_none_or(|mode|mode==crate::orchestrator::MODE_AUTO) {
+    // Permissão dada na conversa — a deste pedido, a do seletor do chat ou o
+    // sempre permitido do projeto — é permissão para executar: no automático o
+    // pedido vai ao desenvolvimento, onde ela chega ao agente (o planejamento
+    // as tira). O planejamento fixado continua só leitura.
+    if grants_pick_build(has_grants,state.orchestrator.pending_work_mode.as_deref()) {
         state.orchestrator.pending_work_mode=Some(crate::orchestrator::MODE_BUILD.into());
     }
     // A sessão do agente sobrevive ao reinício do app: a guardada volta para a
@@ -497,6 +501,13 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         });
     }
     if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
+}
+
+/// No automático, quem deu permissão na conversa quer que o agente execute:
+/// o pedido vai ao desenvolvimento, único modo em que a permissão chega ao
+/// agente. Planejamento e desenvolvimento fixados ficam como o chat os fixou.
+fn grants_pick_build(has_grants:bool,pinned:Option<&str>)->bool {
+    has_grants&&pinned.is_none_or(|mode|mode==crate::orchestrator::MODE_AUTO)
 }
 
 /// A resposta do modelo volta ao Jev, e é o retorno dele que **habilita** a
@@ -716,6 +727,16 @@ fn exit_checks(state:&DesktopState,turn:&Turn,answer:&str)->Vec<ExitCheck> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A permissão dada na conversa vale no automático (vai ao build), e o
+    /// planejamento fixado continua só leitura.
+    #[test] fn a_grant_given_in_the_chat_takes_auto_to_build_and_leaves_plan_alone() {
+        use crate::orchestrator::{MODE_AUTO,MODE_BUILD,MODE_PLAN};
+        assert!(grants_pick_build(true,None)&&grants_pick_build(true,Some(MODE_AUTO)));
+        assert!(!grants_pick_build(true,Some(MODE_PLAN)),"o planejamento fixado não escreve");
+        assert!(!grants_pick_build(true,Some(MODE_BUILD)),"já é build");
+        assert!(!grants_pick_build(false,Some(MODE_AUTO)),"sem permissão, o Jev escolhe");
+    }
 
     /// O projeto volta ao atendente que já leu a pasta dele, se estiver livre.
     #[test] fn a_project_goes_back_to_the_lane_that_knows_it() {

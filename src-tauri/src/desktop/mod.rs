@@ -111,8 +111,9 @@ pub(crate) fn facts(desk:&SharedDesktopState,facts:&SharedFacts)->OrchestratorFa
 /// Passa uma configuração já gravada ao orquestrador, se ele estiver livre.
 /// Ocupado, não espera: o atendente relê as configurações do banco no começo
 /// de cada pedido, então o próximo já sai com elas.
-pub(crate) fn when_free(desk:&SharedDesktopState,apply:impl FnOnce(&mut Orchestrator)) {
-    if let Ok(mut desk)=desk.try_lock() { apply(&mut desk.orchestrator); }
+/// Devolve se passou: `false` é pedido no ar, e a troca fica para o próximo.
+pub(crate) fn when_free(desk:&SharedDesktopState,apply:impl FnOnce(&mut Orchestrator))->bool {
+    match desk.try_lock() { Ok(mut desk)=>{ apply(&mut desk.orchestrator); true } Err(_)=>false }
 }
 
 /// O banco vive atrás do seu próprio cadeado, separado do orquestrador. É esta

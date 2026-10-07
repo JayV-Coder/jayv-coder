@@ -26,6 +26,14 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.82.1", date: "2026-10-07",
+    items: [
+      { kind: "fix", id: "autoGrants" },
+      { kind: "fix", id: "settingsApplied" },
+      { kind: "fix", id: "skillsInParallel" },
+    ],
+  },
+  {
     version: "0.82.0", date: "2026-10-07",
     items: [
       { kind: "feature", id: "mcpDefaults" },

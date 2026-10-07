@@ -141,6 +141,8 @@ export interface CoreEvents {
   "link-changed": { link: Link };
   "translations-updated": null;
   "models-updated": null;
+  /** `now` é falso quando um pedido no ar deixou a troca para o próximo. */
+  "settings-applied": { now: boolean };
   "usage-recorded": { projectId: string | null; chatId: string | null };
   "quota-changed": { quota: Omit<QuotaView, "capturedAt">; crossed: number | null };
 }

@@ -389,7 +389,7 @@ impl Orchestrator {
         // divisão que vêm antes do construtor não gastam a vez dele.
         let mut attempt=Instant::now();
         let split=if self.config.jev.parallel_tasks&&mode==MODE_BUILD&&crate::split::wants_plan(&complexity)&&self.config.permissions.write!="deny" {
-            self.run_parallel(brief.as_deref().unwrap_or(&normalized),&context,&ranked,session_id,pulse).await
+            self.run_parallel(brief.as_deref().unwrap_or(&normalized),&extras,&context,&ranked,session_id,pulse).await
         } else { None };
         let effort=if complaints>=2 { raise_effort(effort_for(&complexity)) } else { effort_for(&complexity) };
         // O build que segue um plano do mesmo chat recebe o plano inteiro,
@@ -701,7 +701,7 @@ impl Orchestrator {
     /// primeira parte, que fica como o agente do pedido. Nada quando o
     /// projeto não é um repositório git, quando não há planejador ou quando a
     /// divisão não vale: aí o pedido segue inteiro.
-    async fn run_parallel(&self,request:&str,context:&Context,ranked:&[ModelSelection],session_id:&str,pulse:&Pulse)->Option<(ProviderResponse,ModelSelection)> {
+    async fn run_parallel(&self,request:&str,extras:&[String],context:&Context,ranked:&[ModelSelection],session_id:&str,pulse:&Pulse)->Option<(ProviderResponse,ModelSelection)> {
         let folder=PathBuf::from(self.rag.project_info().root);
         let (top,prefix)=tokio::task::spawn_blocking({let folder=folder.clone(); move ||crate::parallel::repository(&folder)}).await.ok().flatten()?;
         let planners=rank_models(&self.config,"analysis","complex",context,&held(&self.shared.performance),&Tiebreak{sticky:None,seed:session_id});
@@ -731,9 +731,12 @@ impl Orchestrator {
         }
         pulse.beat(Beat::Split{tasks:tasks.iter().zip(&workers).map(|(task,worker)|crate::progress::SplitTask{title:task.title.clone(),provider:worker.provider.clone(),model:worker.model_name.clone()}).collect()});
         let pools:Vec<HashMap<String,Box<dyn Provider>>>=copies.iter().map(|dir|{let workdir=Workdir::default(); workdir.focus(dir.join(&prefix)); build_providers(&self.config.providers,&workdir)}).collect();
+        // O que o Jev juntou ao pedido (a skill escolhida, as notas) vale para
+        // cada parte: sem isto os agentes paralelos nunca a veriam.
+        let notes=extras.iter().map(|extra|format!("\n\n{extra}")).collect::<String>();
         let runs=tasks.iter().enumerate().map(|(index,task)|{
             let others:Vec<&crate::parallel::Subtask>=tasks.iter().enumerate().filter(|(other,_)|*other!=index).map(|(_,other)|other).collect();
-            let messages=vec![ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:format!("{}{}",crate::parallel::task_message(request,task,&others),language_reminder())}];
+            let messages=vec![ChatMessage{role:"system".into(),content:system.clone()},ChatMessage{role:"user".into(),content:format!("{}{notes}{}",crate::parallel::task_message(request,task,&others),language_reminder())}];
             let (worker,pool)=(&workers[index],&pools[index]);
             let quiet=pulse.quiet();
             async move {
@@ -1711,6 +1714,40 @@ mod tests {
         orchestrator.pending_work_mode=Some(MODE_BUILD.into());
         orchestrator.process("agora adicione um teste",Some("chat"),&Pulse::silent()).await;
         assert!(!read("build-6".into()).contains(RETRY_NOTE)&&read("args-7".into()).contains("--effort low"),"pedido novo zera a conta");
+    }
+
+    /// A skill que o Jev escolhe para o pedido chega ao agente junto dele, com
+    /// as instruções e a pasta; sem skill parecida, nada vai.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_skill_the_jev_picked_reaches_the_agent_with_the_request() {
+        let dir=repository(&[("router.rs",filler("route_request",200))]);
+        let (calls,data)=(tempfile::tempdir().expect("chamadas"),tempfile::tempdir().expect("dados"));
+        std::fs::create_dir_all(data.path().join("release-notes")).expect("pasta");
+        std::fs::write(data.path().join("release-notes/SKILL.md"),"---\nname: release-notes\ndescription: Write release notes from merged pull requests.\n---\nSKILL-BODY-MARK: list each merged change.").expect("skill");
+        let skill=jayv_agents::skills::Skill{name:"release-notes".into(),description:"Write release notes from merged pull requests.".into(),path:data.path().join("release-notes").to_string_lossy().into(),enabled:true,installed_at:String::new(),origin:None,inline:None};
+        let mut orchestrator=orchestrator(&dir);
+        let build=format!(r#"cat > "{dir}/sent-$(ls {dir} | wc -l)"; echo pronto"#,dir=calls.path().display());
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build,"agent".into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo plano".into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.use_skills(vec![skill]);
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        let read=|name:&str|std::fs::read_to_string(calls.path().join(name)).unwrap_or_else(|_|panic!("{name}"));
+
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("write the release notes for the merged pull requests",Some("chat"),&Pulse::silent()).await;
+        let sent=read("sent-0");
+        assert!(sent.contains("release notes")&&sent.contains("<skill name=\"release-notes\">")&&sent.contains("SKILL-BODY-MARK"),"{sent}");
+        assert!(sent.contains(&data.path().to_string_lossy().to_string()),"a pasta da skill vai junto");
+
+        orchestrator.pending_work_mode=Some(MODE_BUILD.into());
+        orchestrator.process("rename the variable in router.rs",Some("chat"),&Pulse::silent()).await;
+        assert!(!read("sent-1").contains("SKILL-BODY-MARK"),"pedido sem skill parecida não leva skill");
     }
 
     /// O agente escolhido que não consegue começar passa a vez ao próximo de

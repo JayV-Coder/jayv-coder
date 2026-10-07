@@ -77,6 +77,14 @@ export function connectI18n() {
   return () => void off.then((unlisten) => unlisten());
 }
 
+/** Diz de novo ao núcleo o idioma da tela: depois de gravar as configurações,
+ * o que o modelo responde e o que o menu da bandeja diz seguem o idioma já
+ * escolhido, sem reabrir o app. */
+export function syncLanguage() {
+  const { locale, locales } = useI18n.getState();
+  tellCore(locale, locales, 3);
+}
+
 export function setLocale(locale: Locale) {
   localStorage.setItem(LOCALE_KEY, locale);
   apply(locale, useI18n.getState().locales);

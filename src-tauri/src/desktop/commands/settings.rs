@@ -9,7 +9,8 @@ use crate::orchestrator::Orchestrator;
 use crate::llm::{self, AgentId, KnownModel, LlmSettings, Probe};
 use serde::Serialize;
 use std::collections::HashMap;
-use tauri::State;
+use crate::desktop::events::{SettingsEvent, SETTINGS_EVENT};
+use tauri::{Emitter, State};
 
 /// O que a tela precisa para desenhar as abas sem inventar nada: o que está
 /// gravado e os valores que cada campo aceita.
@@ -87,12 +88,13 @@ pub(crate) async fn get_settings(workspace:State<'_,SharedWorkspace>)->Result<Se
 /// Grava primeiro e só então troca o orquestrador: uma configuração recusada
 /// não deixa o orquestrador pela metade.
 #[tauri::command]
-pub(crate) async fn save_settings(desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:LlmSettings)->Result<SettingsSnapshot,Text>{crate::desktop::require_session()?;
+pub(crate) async fn save_settings(app:tauri::AppHandle,desk:State<'_,SharedDesktopState>,workspace:State<'_,SharedWorkspace>,settings:LlmSettings)->Result<SettingsSnapshot,Text>{crate::desktop::require_session()?;
     let saved={
         let mut workspace=workspace.lock().await;
         workspace.save_llm_settings(&settings).map_err(failure)?
     };
-    when_free(&desk,|orchestrator|orchestrator.use_llm(&saved));
+    let now=when_free(&desk,|orchestrator|orchestrator.use_llm(&saved));
+    let _=app.emit(SETTINGS_EVENT,SettingsEvent{now});
     Ok(snapshot(saved))
 }
 
@@ -187,14 +189,15 @@ fn seeded(workspace:&crate::workspace::WorkspaceStore,defaults:&CoreSettings)->C
 /// um pedido no ar, a troca fica para o próximo: o atendente relê tudo do
 /// banco no começo de cada pedido, já com a política e o plano por cima.
 #[tauri::command]
-pub(crate) async fn save_core_settings(desk:State<'_,SharedDesktopState>,known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>,settings:CoreSettings)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+pub(crate) async fn save_core_settings(app:tauri::AppHandle,desk:State<'_,SharedDesktopState>,known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>,settings:CoreSettings)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
     let defaults=defaults(&known);
     let mut workspace=workspace.lock().await;
     let saved=workspace.save_core_settings(&settings).map_err(failure)?;
     // O orquestrador recebe o que vale de fato: sem o que o plano não tem e
     // com o que ele trava. A tela continua vendo o que quem usa escolheu.
     let effective=workspace.entitlements().unwrap_or_default().apply_core(&saved);
-    when_free(&desk,|orchestrator|orchestrator.use_core(&effective));
+    let now=when_free(&desk,|orchestrator|orchestrator.use_core(&effective));
+    let _=app.emit(SETTINGS_EVENT,SettingsEvent{now});
     let expertise=workspace.expertise().map_err(failure)?;
     Ok(core_snapshot(saved,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
 }

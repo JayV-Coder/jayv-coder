@@ -28,10 +28,17 @@ pub const LINK_EVENT:&str="link-changed";
 pub const TRANSLATIONS_EVENT:&str="translations-updated";
 /// Os modelos dos agentes foram trocados pela lista que os CLIs deram.
 pub const MODELS_EVENT:&str="models-updated";
+/// As configurações gravadas na tela de Configurações já valem: `now` diz se o
+/// orquestrador as recebeu na hora ou se um pedido no ar as deixou para o próximo.
+pub const SETTINGS_EVENT:&str="settings-applied";
 /// Entrou gasto novo no banco: a tela refaz a conta do escopo que mostra.
 pub const USAGE_EVENT:&str="usage-recorded";
 /// Chegou uma leitura nova do limite de um plano.
 pub const QUOTA_EVENT:&str="quota-changed";
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct SettingsEvent{pub now:bool}
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]

@@ -11,5 +11,5 @@
   ],
   "title": "Work modes: Auto, Planning and Development",
   "summary": "Each chat has a work mode. Planning only reads the project and answers with a plan; Development changes files; Auto lets Jev pick for each request.",
-  "usage": "Pick the mode under the message box, type /plan, /build or /auto at the start of a message, or press Ctrl+. (⌘. on Mac). When a chat in Planning asks to implement, Jev switches it to Development. In Development the agent ends its answer with what it ran, what it assumes and what it did not verify."
+  "usage": "Pick the mode under the message box, type /plan, /build or /auto at the start of a message, or press Ctrl+. (⌘. on Mac). When a chat in Planning asks to implement, Jev switches it to Development. In Development the agent ends its answer with what it ran, what it assumes and what it did not verify. A permission you give in the chat (in the picker, Run or Always allow) also counts in Auto: the request goes to Development, where the agent can use it. A pinned Planning stays read-only."
 }
