@@ -3,7 +3,7 @@ import { PROVIDERS, passwordOk, requestPasswordReset, signIn, signInWithProvider
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { DISPLAY_NAME_MAX } from "@/modules/profile";
-import { BrandMark, PROVIDER_NAMES } from "@/components/atoms";
+import { BackMark, BrandMark, PROVIDER_NAMES } from "@/components/atoms";
 import { FormField, LanguageSelect, PasswordRules, ProviderButton } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -110,7 +110,7 @@ export function LoginPage() {
           </div>
         )}
         <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => switchTo(mode === "signIn" ? "signUp" : "signIn")}>
-          {mode === "signIn" ? t("auth.toSignUp") : mode === "signUp" ? t("auth.toSignIn") : t("auth.backToSignIn")}
+          {mode === "signIn" ? t("auth.toSignUp") : mode === "signUp" ? t("auth.toSignIn") : <><BackMark /> {t("auth.backToSignIn")}</>}
         </button>
         <LanguageSelect />
       </div>

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "@/modules/i18n";
 import { endTour, nextStep, previousStep, skipAllTours, tourOf, useStepText, useTutorial, useTutorialKeys } from "@/modules/tutorial";
+import { BackMark } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
 
 const GAP = 14;
@@ -92,7 +93,7 @@ export function TutorialOverlay() {
             <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={skipAllTours}>{t("tutorial.skipAll")}</Button>
           </div>
           <div className="flex gap-1.5">
-            {active.step > 0 && <Button size="sm" variant="outline" onClick={previousStep}>{t("tutorial.back")}</Button>}
+            {active.step > 0 && <Button size="sm" variant="outline" onClick={previousStep}><BackMark /> {t("tutorial.back")}</Button>}
             <Button size="sm" autoFocus onClick={nextStep}>{t(last ? "tutorial.done" : "tutorial.next")}</Button>
           </div>
         </div>

@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
-import { ArrowLeftIcon } from "lucide-react";
-import { Eyebrow } from "@/components/atoms";
+import { BackMark, Eyebrow } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
 
 /** Título de uma vista: onde se está, o nome dela depois do prompt (`❯`) e,
  * à direita, o que se pode fazer nela. Uma vista de dentro (uma organização)
- * troca o "onde se está" pela seta de voltar, colada ao título. */
+ * troca o "onde se está" pela marca de voltar, colada ao título. */
 export function PageHeading({ eyebrow, back, title, description, children }: {
   eyebrow?: string;
   back?: { label: string; onClick: () => void };
@@ -20,7 +19,7 @@ export function PageHeading({ eyebrow, back, title, description, children }: {
         <div className="flex items-center gap-2">
           {back && (
             <Button variant="ghost" size="icon-sm" aria-label={back.label} title={back.label} onClick={back.onClick} className="-ml-2">
-              <ArrowLeftIcon />
+              <BackMark />
             </Button>
           )}
           <h2 className="flex min-w-0 gap-[1ch] text-h2 font-semibold"><span aria-hidden="true" className="text-go">❯</span><span className="break-words">{title}</span></h2>

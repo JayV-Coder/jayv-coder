@@ -1,9 +1,9 @@
-import { ActivityIcon, ArrowLeftIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, CircleHelpIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, CircleHelpIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { startTourHere, tourForView, TOURS, startTour } from "@/modules/tutorial";
-import { BrandMark, LogoIcon, UserAvatar } from "@/components/atoms";
+import { BackMark, BrandMark, LogoIcon, UserAvatar } from "@/components/atoms";
 import { ChatRow, NavItem, ProjectPlate } from "@/components/molecules";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/modules/auth";
@@ -84,7 +84,7 @@ export function Sidebar() {
             onClick={leaveProject}
             className="mb-2 flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-start text-xs font-medium text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <ArrowLeftIcon aria-hidden="true" className="size-4 rtl:-scale-x-100" />
+            <BackMark className="w-4 text-center" />
             {t("nav.allProjects")}
           </button>
           <ProjectPlate project={project} />
