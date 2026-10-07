@@ -226,6 +226,34 @@ pub fn save(connection:&mut Connection,servers:Vec<McpServer>)->Result<Vec<McpSe
     Ok(servers)
 }
 
+/// Os quatro servidores oficiais que já vêm cadastrados, como entradas comuns
+/// (desligar, editar e remover valem para eles). `fetch` e `git` não existem
+/// no npm: os oficiais são em Python e sobem pelo `uvx`, que precisa estar
+/// instalado.
+pub fn defaults()->Vec<McpServer> {
+    let stdio=|name:&str,command:&str,args:&[&str]|McpServer{name:name.into(),command:command.into(),args:args.iter().map(|arg|arg.to_string()).collect(),..Default::default()};
+    vec![
+        stdio("sequential-thinking","npx",&["-y","@modelcontextprotocol/server-sequential-thinking"]),
+        stdio("fetch","uvx",&["mcp-server-fetch"]),
+        stdio("git","uvx",&["mcp-server-git"]),
+        stdio("memory","npx",&["-y","@modelcontextprotocol/server-memory"]),
+    ]
+}
+
+const DEFAULTS_SEEDED:&str="mcp_defaults_v1";
+
+/// Cadastra os servidores de `defaults` uma única vez por instalação: quem
+/// remove um deles não o vê voltar, e um servidor da pessoa com o mesmo nome
+/// fica como está.
+pub fn seed_defaults(connection:&Connection)->Result<()> {
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);")?;
+    if connection.query_row("SELECT 1 FROM app_metadata WHERE key=?1",[DEFAULTS_SEEDED],|_|Ok(())).is_ok() { return Ok(()); }
+    let now=chrono::Utc::now().to_rfc3339();
+    for server in defaults() { connection.execute("INSERT OR IGNORE INTO mcp_servers(name,server,updated_at) VALUES(?1,?2,?3)",params![server.name,serde_json::to_string(&server)?,now])?; }
+    connection.execute("INSERT INTO app_metadata(key,value) VALUES(?1,'1')",[DEFAULTS_SEEDED])?;
+    Ok(())
+}
+
 /// Lê o que foi colado no chat: a configuração `mcpServers` do Claude Desktop
 /// e do Cursor, a `servers` do VS Code, um servidor sozinho, a linha do
 /// `claude mcp add`, ou o comando que sobe o servidor (`npx -y …`). Devolve
@@ -398,6 +426,28 @@ mod tests {
         assert!(!only_codex.serves(AgentId::Claude)&&only_codex.serves(AgentId::Codex));
         let off=McpServer{enabled:false,..servers[0].clone()};
         assert!(args_for(&[off],AgentId::Codex).is_empty());
+    }
+
+    #[test] fn the_four_official_servers_come_once_and_stay_removed() {
+        let mut connection=Connection::open_in_memory().expect("banco");
+        connection.execute_batch(SCHEMA).expect("esquema");
+        seed_defaults(&connection).expect("semeia");
+        let names=|connection:&Connection|load(connection).expect("lê").into_iter().map(|server|server.name).collect::<Vec<_>>();
+        assert_eq!(names(&connection),vec!["fetch","git","memory","sequential-thinking"]);
+        assert!(load(&connection).expect("lê").iter().all(|server|server.enabled&&server.clone().checked().is_ok()));
+        let kept:Vec<McpServer>=load(&connection).expect("lê").into_iter().filter(|server|server.name!="git").collect();
+        save(&mut connection,kept).expect("remove");
+        seed_defaults(&connection).expect("de novo");
+        assert_eq!(names(&connection),vec!["fetch","memory","sequential-thinking"],"o removido não volta");
+    }
+
+    #[test] fn a_persons_own_server_with_a_default_name_is_not_overwritten() {
+        let mut connection=Connection::open_in_memory().expect("banco");
+        connection.execute_batch(SCHEMA).expect("esquema");
+        save(&mut connection,vec![McpServer{name:"fetch".into(),command:"mine".into(),..Default::default()}]).expect("grava");
+        seed_defaults(&connection).expect("semeia");
+        let fetch=load(&connection).expect("lê").into_iter().find(|server|server.name=="fetch").expect("fetch");
+        assert_eq!(fetch.command,"mine");
     }
 
     #[test] fn bad_servers_are_refused() {
