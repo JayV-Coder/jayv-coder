@@ -26,6 +26,12 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.87.0", date: "2026-10-08",
+    items: [
+      { kind: "feature", id: "environmentUsage" },
+    ],
+  },
+  {
     version: "0.86.0", date: "2026-10-08",
     items: [
       { kind: "feature", id: "environments" },

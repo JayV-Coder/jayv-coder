@@ -1,6 +1,8 @@
 import { RefreshCwIcon } from "lucide-react";
 import type { UsageScope } from "@/modules/core";
+import { environmentLabel, useEnvironment } from "@/modules/environments";
 import { useT } from "@/modules/i18n";
+import { useOrganizations } from "@/modules/organizations";
 import { refreshQuotas, setPeriod, setScope, useUsage, type Period } from "@/modules/usage";
 import { chatTitle, chatsOf, useWorkspace } from "@/modules/workspace";
 import { OptionSelect, type Option } from "@/components/molecules";
@@ -15,6 +17,8 @@ const ALL = "*";
 export function StatsToolbar() {
   const t = useT();
   const { data, activeProjectId } = useWorkspace();
+  const organizations = useOrganizations((state) => state.list);
+  const environment = useEnvironment((state) => state.active);
   const { scope, period, range, refreshingQuotas } = useUsage();
   const chat = scope.kind === "chat" ? data.chats.find((found) => found.id === scope.id) ?? null : null;
   const projectId = activeProjectId ?? (scope.kind === "project" ? scope.id : chat?.projectId ?? (scope.kind === "chat" ? null : ALL));
@@ -36,6 +40,11 @@ export function StatsToolbar() {
 
   return (
     <div className="mb-6 flex flex-wrap items-end gap-3">
+      {organizations.length > 0 && (
+        <p className="basis-full text-xs text-muted-foreground">
+          {t("usage.environmentNote", { name: environmentLabel(environment, organizations, t("environment.personal")) })}
+        </p>
+      )}
       {!activeProjectId && (
         <label className="grid w-64 max-w-full gap-1 text-xs text-muted-foreground">
           {t("usage.scope.project")}
