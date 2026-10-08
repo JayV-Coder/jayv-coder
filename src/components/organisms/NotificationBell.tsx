@@ -49,6 +49,7 @@ export function NotificationBell() {
       <PopoverTrigger asChild>
         <button
           type="button"
+          data-tour="notification-bell"
           aria-label={unread > 0 ? t("notifications.unread", { count: unread }) : t("notifications.title")}
           title={t("notifications.title")}
           className={cn(
