@@ -13,7 +13,7 @@ export * from "./filter";
 export * from "./dashboard";
 export * from "./repositories";
 
-import type { Role } from "./rules";
+import { can, type Role } from "./rules";
 import { connectDashboard } from "./dashboard";
 import { storedPolicy, type StoredPolicy } from "./policy";
 import { blockedCommandsOf, type BlockedCommands } from "./commands";
@@ -49,9 +49,14 @@ export interface GitConnection { provider: Provider; account: string; connectedA
 export interface IncomingInvite { id: string; orgId: string; orgName: string; orgSlug: string; role: Role; invitedBy: string | null; expiresAt: string }
 export interface ProjectOrganization { orgId: string; slug: string; name: string }
 
+/** Um convite que ainda espera resposta, como quem gere a organização o vê. */
+export interface PendingInvite { id: string; username: string | null; email: string | null; role: Role; expiresAt: string }
+
 export interface OrganizationDetail {
   id: string;
   members: Member[];
+  /** Os convites pendentes; só owner e maintainer os leem. */
+  invites: PendingInvite[];
   repositories: Repository[];
   /** A política da organização e as dos repositórios dela. */
   policies: StoredPolicy[];
@@ -167,8 +172,10 @@ function repositoryOf(row: Row): Repository {
 }
 
 export async function loadDetail(id: string) {
-  const [members, repositories, policies, connections] = await Promise.all([
+  const mine = useOrganizations.getState().list.find((org) => org.id === id)?.role;
+  const [members, invites, repositories, policies, connections] = await Promise.all([
     call<Row[]>("organization_members_view", { org: id }),
+    can.manage(mine) ? call<Row[]>("organization_invites_view", { org: id }) : Promise.resolve([] as Row[]),
     supabase.from("organization_repositories").select(REPOSITORY_COLUMNS).eq("org_id", id).order("repo_key"),
     supabase.from("organization_llm_policies").select("*").eq("org_id", id),
     supabase.from("organization_git_connections").select("provider, account, connected_at").eq("org_id", id),
@@ -181,6 +188,10 @@ export async function loadDetail(id: string) {
       members: (members ?? []).map((row) => ({
         userId: row.user_id as string, username: row.username as string, displayName: row.display_name as string,
         avatarUrl: (row.avatar_url as string) ?? null, role: row.role as Role, joinedAt: row.joined_at as string,
+      })),
+      invites: (invites ?? []).map((row) => ({
+        id: row.id as string, username: (row.username as string) ?? null, email: (row.email as string) ?? null,
+        role: row.role as Role, expiresAt: row.expires_at as string,
       })),
       repositories: (repositories.data ?? []).map((row) => repositoryOf(row as Row)),
       // Sem a tabela (migração ainda não aplicada), a aba mostra sem política.

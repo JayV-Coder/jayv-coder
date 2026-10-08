@@ -2,6 +2,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
 import { onCore } from "@/modules/core";
+import { resumedFromSwitch } from "@/modules/environments/switch";
 
 /** Em que pé está a atualização. `available` é a versão nova achada sozinha,
  * esperando a pessoa mandar instalar (o aviso no topo e a notificação).
@@ -72,6 +73,8 @@ let launched = false;
 export async function updateAtLaunch() {
   if (launched) return;
   launched = true;
+  // Recarregada por uma troca de ambiente: o app já está aberto e atualizado.
+  if (resumedFromSwitch()) return;
   useUpdate.setState({ launching: true });
   let skipped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;

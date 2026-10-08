@@ -17,12 +17,12 @@ import { connectTutorial } from "@/modules/tutorial";
 import { connectLive } from "@/modules/live";
 import { connectTray } from "@/modules/tray";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
-import { connectEnvironments, loadEnvironment } from "@/modules/environments";
+import { connectEnvironments, finishSwitch, loadEnvironment } from "@/modules/environments";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
-import { FeatureLocked, LaunchUpdate, McpDraftDialog, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
+import { EnvironmentLoading, FeatureLocked, LaunchUpdate, McpDraftDialog, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { LoadingNote } from "@/components/atoms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
@@ -67,6 +67,8 @@ export function App() {
   // do banco que o núcleo acabou de abrir.
   useEffect(() => {
     if (status !== "signedIn") {
+      // Sem conta aberta não há dados a esperar: o carregamento da troca sai.
+      if (status !== "loading") finishSwitch();
       clearProfile();
       clearOrganizations();
       clearNotifications();
@@ -82,7 +84,7 @@ export function App() {
     // Os recursos do plano: sem a migração (ou sem rede), tudo segue liberado.
     startEntitlements().catch((error) => console.error("plans", error));
     void loadEnvironment();
-    Promise.all([loadWorkspace(), loadStatus()]).catch(reportError);
+    Promise.all([loadWorkspace(), loadStatus()]).catch(reportError).finally(finishSwitch);
     // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.
     void refreshQuotas();
     // Depois de uma atualização, o que mudou desde a última versão vista.
@@ -115,6 +117,7 @@ export function App() {
       </div>
       <TutorialOverlay />
       <LaunchUpdate />
+      <EnvironmentLoading />
       <UpdateDialog />
       <WhatsNewDialog />
       <McpDraftDialog />
