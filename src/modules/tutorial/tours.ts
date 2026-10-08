@@ -27,6 +27,7 @@ export const TOURS: Tour[] = [
       { feature: "commandPalette" },
       { feature: "organizations", target: "nav-organizations" },
       { feature: "environments", target: "environment-switch" },
+      { feature: "notifications", target: "notification-bell" },
       { feature: "stats", target: "nav-stats" },
       { feature: "updates" },
       { feature: "tutorials", target: "help-tutorial" },

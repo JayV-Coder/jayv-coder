@@ -1,0 +1,10 @@
+{
+  "id": "notifications",
+  "category": "app",
+  "since": "0.22.0",
+  "plan": null,
+  "commands": [],
+  "title": "Notifications",
+  "summary": "The bell shows what happens in your organizations (invitations, role changes, removals, policy changes) and, in the app, finished answers, questions from the agent, plan limits and new versions. The site has the same bell for the account ones, and reading one on either side marks it read on both.",
+  "usage": "In the app the bell sits to the right of the logo in the sidebar; in Ctrl+K choose Notifications to open it. On the site it sits in the top bar once you are signed in. Click a notification to go to its organization; an invitation can be accepted or declined right in the list. Mark all as read, or clear the read ones, from the panel. The site refreshes the list every minute and when you open it. Answers, questions and limits only exist in the app, on the device where they happened."
+}
