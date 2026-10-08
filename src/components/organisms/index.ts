@@ -34,6 +34,7 @@ export { RepositoryPanel } from "./RepositoryPanel";
 export { UpdateBanner } from "./UpdateBanner";
 export { GatewayConnection } from "./GatewayConnection";
 export { KiloOptionsForm } from "./KiloOptionsForm";
+export { EnvironmentLoading } from "./EnvironmentLoading";
 export { LaunchUpdate } from "./LaunchUpdate";
 export { TutorialOverlay } from "./TutorialOverlay";
 export { WhatsNewDialog } from "./WhatsNewDialog";

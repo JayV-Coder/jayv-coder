@@ -3,6 +3,7 @@ import { commands, onCore } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 import { refreshWorkspace } from "@/modules/workspace";
 import type { Role } from "@/modules/organizations/rules";
+import { markSwitching, resumedFromSwitch } from "./switch";
 
 /** O ambiente do pessoal; os das organizações são o id delas. */
 export const PERSONAL = "personal";
@@ -21,7 +22,14 @@ interface EnvironmentState {
   switching: boolean;
 }
 
-export const useEnvironment = create<EnvironmentState>(() => ({ active: PERSONAL, switching: false }));
+/** Depois de uma troca, a janela abre já com o carregamento na frente, até os
+ * dados do ambiente novo chegarem (`finishSwitch`). */
+export const useEnvironment = create<EnvironmentState>(() => ({ active: PERSONAL, switching: resumedFromSwitch() }));
+
+/** Os dados do ambiente novo chegaram: o carregamento sai da frente. */
+export function finishSwitch() {
+  if (useEnvironment.getState().switching) useEnvironment.setState({ switching: false });
+}
 
 /** Os ambientes que dá para abrir: o pessoal primeiro, depois uma organização
  * por nome. */
@@ -56,6 +64,7 @@ export async function switchEnvironment(id: string) {
   if (id === active || switching) return;
   useEnvironment.setState({ switching: true });
   try {
+    markSwitching();
     useEnvironment.setState({ active: await commands.setEnvironment(id) });
     window.location.reload();
   } catch (error) {

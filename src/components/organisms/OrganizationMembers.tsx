@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { reportError } from "@/modules/feedback";
-import { useT, type Key } from "@/modules/i18n";
+import { useLocale, useT, type Key } from "@/modules/i18n";
 import { can, removeMember, ROLES, setMemberRole, type OrganizationDetail, type Role } from "@/modules/organizations";
 import { useProfile } from "@/modules/profile";
 import { UserAvatar } from "@/components/atoms";
@@ -8,10 +8,11 @@ import { ConfirmAction, OptionSelect, SettingsSection } from "@/components/molec
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-/** Os membros, com papel e remoção para quem gere. Convidar mora no painel
- * do site. */
+/** Os membros, com papel e remoção para quem gere, e os convites que ainda
+ * esperam resposta. Convidar e revogar moram no painel do site. */
 export function OrganizationMembers({ detail, role }: { detail: OrganizationDetail; role: Role }) {
   const t = useT();
+  const locale = useLocale();
   const me = useProfile((state) => state.profile?.username);
   const [busy, setBusy] = useState(false);
   const roleName = (value: Role) => t(`org.role.${value}` as Key);
@@ -52,6 +53,19 @@ export function OrganizationMembers({ detail, role }: { detail: OrganizationDeta
           })}
         </ul>
       </SettingsSection>
+      {detail.invites.length > 0 && (
+        <SettingsSection title={t("org.pending.title")} description={t("org.invites.count", { count: detail.invites.length })}>
+          <ul className="grid gap-2">
+            {detail.invites.map((invite) => (
+              <li key={invite.id} className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border/70 px-3 py-2.5">
+                <span className="min-w-0 flex-1 truncate text-sm">{invite.username ? `@${invite.username}` : invite.email}</span>
+                <Badge variant="outline">{roleName(invite.role)}</Badge>
+                <span className="text-xs text-muted-foreground">{t("org.invite.expires", { date: new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(invite.expiresAt)) })}</span>
+              </li>
+            ))}
+          </ul>
+        </SettingsSection>
+      )}
     </div>
   );
 }

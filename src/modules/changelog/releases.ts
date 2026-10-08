@@ -26,6 +26,13 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.88.0", date: "2026-10-08",
+    items: [
+      { kind: "fix", id: "environmentSwitchLoading" },
+      { kind: "fix", id: "orgPendingInvites" },
+    ],
+  },
+  {
     version: "0.87.1", date: "2026-10-08",
     items: [
       { kind: "fix", id: "environmentSwitchLogin" },
