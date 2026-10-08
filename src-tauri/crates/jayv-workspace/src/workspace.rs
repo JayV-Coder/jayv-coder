@@ -1,4 +1,4 @@
-use crate::{gatekeeper::{EntryCheck, ExitCheck, GateFeed}, i18n::Text, model::ChatMessage, turns::{self, QuestionView, Turn, TurnStatus, TurnView}};
+use crate::{environment::Environment, gatekeeper::{EntryCheck, ExitCheck, GateFeed}, i18n::Text, model::ChatMessage, turns::{self, QuestionView, Turn, TurnStatus, TurnView}};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -137,6 +137,7 @@ fn database_location_in(config_path:&Path,root:&Path,data_dir:Option<PathBuf>)->
 pub struct WorkspaceStore {
     connection: Connection,
     path: PathBuf,
+    environment: Environment,
 }
 
 impl WorkspaceStore {
@@ -161,9 +162,25 @@ impl WorkspaceStore {
     /// de um token já validado, mas ainda assim só entra no nome do arquivo
     /// se for um UUID: é caminho de disco.
     pub fn for_user(dir: &Path, user_id: &str) -> Result<Self> {
-        let user=Uuid::parse_str(user_id).with_context(||format!("invalid user id: `{user_id}`"))?;
-        Self::open(dir.join(format!("workspace-{}.sqlite3",user.hyphenated())))
+        Self::for_environment(dir,user_id,&Environment::Personal)
     }
+
+    /// O banco de um ambiente do usuário: o pessoal é o arquivo de sempre e
+    /// cada organização tem o seu, com as suas configurações e os seus dados.
+    pub fn for_environment(dir: &Path, user_id: &str, environment: &Environment) -> Result<Self> {
+        let user=Uuid::parse_str(user_id).with_context(||format!("invalid user id: `{user_id}`"))?;
+        let mut store=Self::open(dir.join(environment.database_name(&user)))?;
+        store.environment=environment.clone();
+        Ok(store)
+    }
+
+    /// Onde mora o banco de um ambiente do usuário.
+    pub fn environment_path(dir: &Path, user_id: &str, environment: &Environment) -> Result<PathBuf> {
+        let user=Uuid::parse_str(user_id).with_context(||format!("invalid user id: `{user_id}`"))?;
+        Ok(dir.join(environment.database_name(&user)))
+    }
+
+    pub fn environment(&self) -> &Environment { &self.environment }
 
     fn prepare(connection: Connection, path: PathBuf) -> Result<Self> {
         connection.execute_batch(
@@ -220,7 +237,7 @@ impl WorkspaceStore {
         connection.execute_batch(AGENT_SESSIONS)?;
         crate::local::outbox::install(&connection)?;
         fail_interrupted_turns(&connection)?;
-        let mut store=Self{connection,path};
+        let mut store=Self{connection,path,environment:Environment::Personal};
         store.ensure_chat_codes()?;
         // Os remotes mudam fora do app (um `git remote add`): a abertura
         // confere de novo. Pasta que sumiu só deixa a lista como estava.

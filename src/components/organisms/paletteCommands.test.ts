@@ -32,6 +32,7 @@ const context = (patch = {}) => ({
   organizations: [{ id: "o1", name: "Acme", slug: "acme", role: "owner" as const, members: 1, repositories: 1 }],
   invites: [],
   openOrganizationId: "o1",
+  environment: "personal",
   settingsDirty: true,
   rights: { features: null, locked: new Set<string>() },
   ...patch,

@@ -2,6 +2,8 @@ export { Sidebar } from "./Sidebar";
 export { AppHeader } from "./AppHeader";
 export { ProjectCard } from "./ProjectCard";
 export { ProjectScopeSection } from "./ProjectScopeSection";
+export { EnvironmentSwitch } from "./EnvironmentSwitch";
+export { EnvironmentGate } from "./EnvironmentGate";
 export { ChatCard } from "./ChatCard";
 export { NewProjectDialog } from "./NewProjectDialog";
 export { Timeline } from "./Timeline";

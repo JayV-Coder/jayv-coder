@@ -3,6 +3,7 @@
 //! precisa saber que ela mora aqui.
 
 pub mod config;
+pub mod environment;
 pub mod firewall;
 pub mod i18n;
 pub mod lockdown;

@@ -3,7 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import { PlugIcon, SparklesIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId } from "@/modules/core";
 import { allows, SETTINGS_TAB_FEATURE, useEntitlements } from "@/modules/plans";
+import { environmentLabel, useEnvironment } from "@/modules/environments";
 import { useT } from "@/modules/i18n";
+import { useOrganizations } from "@/modules/organizations";
 import { AGENTS, discardChanges, isDirty, problems, restoreCoreDefaults, saveSettings, setSettingsTab, useSettings, useSettingsTab, type SettingsTab } from "@/modules/settings";
 import { AgentIcon, GridIcon, LoadingNote, LogoIcon } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
@@ -22,6 +24,8 @@ export function SettingsPage() {
   const dirty = useSettings(isDirty);
   const tab = useSettingsTab((state) => state.tab);
   const rights = useEntitlements();
+  const organizations = useOrganizations((state) => state.list);
+  const environment = useEnvironment((state) => state.active);
   // A aba cujo recurso o plano não tem abre o aviso do plano, não o painel.
   const panel = (id: SettingsTab, content: ReactNode) => {
     const feature = SETTINGS_TAB_FEATURE[id];
@@ -41,7 +45,13 @@ export function SettingsPage() {
 
   return (
     <ScrollPage>
-      <PageHeading eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={t("settings.description")}>
+      <PageHeading eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={
+        <span className="grid gap-2">
+          <span>{t("settings.description")}</span>
+          {/* Cada ambiente tem as suas configurações: o selo diz de qual são estas. */}
+          {organizations.length > 0 && <span><Badge variant="outline">{t("environment.current", { name: environmentLabel(environment, organizations, t("environment.personal")) })}</Badge></span>}
+        </span>
+      }>
         {/* O aviso fica em cima dos botões, num lugar que existe mesmo sem
             alteração: aparecer não empurra os botões para baixo nem para o lado. */}
         <div className="grid justify-items-end gap-1.5">

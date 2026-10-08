@@ -54,6 +54,12 @@ impl GlobalCache {
 
     pub fn set_last_user(&self,user_id:Option<&str>)->Result<()> { self.set_setting("last_user",user_id) }
 
+    /// O ambiente em que o usuário estava quando fechou o app: `personal` ou o
+    /// id de uma organização. Quem lê confere o texto; aqui é só o que foi guardado.
+    pub fn last_environment(&self,user_id:&str)->Result<Option<String>> { self.setting(&format!("environment:{user_id}")) }
+
+    pub fn set_last_environment(&self,user_id:&str,environment:&str)->Result<()> { self.set_setting(&format!("environment:{user_id}"),Some(environment)) }
+
     pub fn locales(&self)->Result<Vec<LocaleRow>> {
         let mut statement=self.connection.prepare("SELECT id,name,rtl,position FROM locales ORDER BY position,id")?;
         Ok(statement.query_map([],|row|Ok(LocaleRow{id:row.get(0)?,name:row.get(1)?,rtl:row.get(2)?,position:row.get(3)?}))?.collect::<rusqlite::Result<_>>()?)
@@ -122,6 +128,15 @@ mod tests {
         assert_eq!(cache.last_user().expect("usuário").as_deref(),Some("u1"));
         cache.set_last_user(None).expect("logout");
         assert_eq!(cache.last_user().expect("usuário"),None);
+    }
+
+    #[test] fn each_user_remembers_the_environment_they_left() {
+        let cache=GlobalCache::in_memory().expect("cache");
+        assert_eq!(cache.last_environment("u1").unwrap(),None);
+        cache.set_last_environment("u1","personal").unwrap();
+        cache.set_last_environment("u2","11111111-1111-1111-1111-111111111111").unwrap();
+        assert_eq!(cache.last_environment("u1").unwrap().as_deref(),Some("personal"));
+        assert_eq!(cache.last_environment("u2").unwrap().as_deref(),Some("11111111-1111-1111-1111-111111111111"));
     }
 
     #[test] fn locales_and_translations_come_back_as_stored() {

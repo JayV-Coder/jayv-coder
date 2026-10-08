@@ -65,6 +65,9 @@ export const commands = {
   checkGateway: (agent: AgentId) => invoke<GatewayCheck>("check_gateway", { agent }),
   refreshModels: (agent: AgentId) => invoke<ModelsRefresh>("refresh_models", { agent }),
   setSession: (token: string) => invoke<SessionView>("set_session", { token }),
+  currentEnvironment: () => invoke<string>("current_environment"),
+  /** Troca o banco aberto pelo de outro ambiente: `personal` ou o id de uma organização. */
+  setEnvironment: (environment: string) => invoke<string>("set_environment", { environment }),
   clearSession: () => invoke<void>("clear_session"),
   connectionStatus: () => invoke<ConnectionStatus>("connection_status"),
   getLocales: () => invoke<{ id: string; name: string; rtl: boolean; position: number }[]>("get_locales"),
@@ -147,6 +150,8 @@ export interface CoreEvents {
   "settings-applied": { now: boolean };
   "usage-recorded": { projectId: string | null; chatId: string | null };
   "quota-changed": { quota: Omit<QuotaView, "capturedAt">; crossed: number | null };
+  /** O banco aberto mudou de ambiente, ou projetos de organização saíram do pessoal. */
+  "environment-changed": { environment: string };
 }
 
 export function onCore<K extends keyof CoreEvents>(event: K, handler: (payload: CoreEvents[K]) => void): Promise<UnlistenFn> {

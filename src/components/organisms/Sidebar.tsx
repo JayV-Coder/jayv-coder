@@ -13,6 +13,7 @@ import { openStats } from "@/modules/usage";
 import { allows, useEntitlements } from "@/modules/plans";
 import { cn } from "@/lib/utils";
 import { displayName } from "./ProfileCard";
+import { EnvironmentSwitch } from "./EnvironmentSwitch";
 import { NotificationBell } from "./NotificationBell";
 
 /** A lateral. Sem projeto aberto, ela é o menu principal; com projeto, só mostra
@@ -63,6 +64,8 @@ export function Sidebar() {
       </Tooltip>
         </div>
       </div>
+
+      <EnvironmentSwitch />
 
       {!project ? (
         <nav className="grid gap-0.5">
