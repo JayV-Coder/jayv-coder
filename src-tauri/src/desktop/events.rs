@@ -35,6 +35,13 @@ pub const SETTINGS_EVENT:&str="settings-applied";
 pub const USAGE_EVENT:&str="usage-recorded";
 /// Chegou uma leitura nova do limite de um plano.
 pub const QUOTA_EVENT:&str="quota-changed";
+/// O banco aberto mudou de ambiente, ou projetos de outro ambiente saíram dele:
+/// a tela relê os projetos e as configurações.
+pub const ENVIRONMENT_EVENT:&str="environment-changed";
+
+#[derive(Clone,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct EnvironmentEvent{pub environment:String}
 
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]

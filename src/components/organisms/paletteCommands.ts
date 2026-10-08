@@ -6,6 +6,7 @@ import { featureActions, requestIntent, type Shortcut } from "@/modules/commands
 import { cancelTurn, openChatFind } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { setLocale, type Key, type LocaleOption } from "@/modules/i18n";
+import { environmentOptions, switchEnvironment } from "@/modules/environments";
 import { setLivePanel, useLive } from "@/modules/live";
 import { navigate } from "@/modules/navigation";
 import { clearRead, markAllRead } from "@/modules/notifications";
@@ -47,6 +48,8 @@ export interface PaletteContext {
   organizations: Organization[];
   invites: IncomingInvite[];
   openOrganizationId: string | null;
+  /** O ambiente aberto: `personal` ou o id de uma organização. */
+  environment: string;
   settingsDirty: boolean;
   rights: Parameters<typeof allows>[0];
 }
@@ -118,6 +121,13 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   const go = "palette.group.navigate" as const;
   all.push({ id: "projects", group: go, label: t("nav.projects"), shortcut: "projects", run: leaveProject });
   if (can("organizations")) all.push({ id: "organizations", group: go, label: t("nav.organizations"), shortcut: "organizations", run: () => navigate("organizations") });
+  // Cada ambiente, menos o que está aberto.
+  if (can("organizations")) {
+    for (const item of environmentOptions(ctx.organizations)) {
+      if (item.id === ctx.environment || ctx.organizations.length === 0) continue;
+      all.push({ id: `environment-${item.id}`, group: go, label: t("palette.environment", { name: item.kind === "personal" ? t("environment.personal") : item.name ?? item.id }), run: () => void switchEnvironment(item.id) });
+    }
+  }
   if (can("stats")) all.push({ id: "stats", group: go, label: t("nav.stats"), shortcut: "stats", run: () => openStats({ kind: "global" }) });
   all.push(
     { id: "system", group: go, label: t("nav.system"), shortcut: "system", run: () => navigate("status") },

@@ -11,7 +11,7 @@
 
 /// Camada e os módulos dela, na ordem em que podem depender umas das outras.
 pub const LAYERS:&[(&str,&[&str])]=&[
-    ("base",&["i18n","config","model","lockdown","firewall","progress"]),
+    ("base",&["i18n","config","environment","model","lockdown","firewall","progress"]),
     ("store",&["local","cache","checkpoint"]),
     ("cloud",&["cloud"]),
     ("agents",&["llm","providers","agents","router","tools","usage"]),
@@ -20,7 +20,7 @@ pub const LAYERS:&[(&str,&[&str])]=&[
     ("orgs",&["checkout","repo_keys"]),
     ("code",&["rag","search","symbols","project_map","graph","context_engine"]),
     ("memory",&["memory","project_memory"]),
-    ("workspace",&["workspace"]),
+    ("workspace",&["workspace","environments"]),
     ("live",&["live_files"]),
     ("orchestration",&["orchestrator","parallel","split","review"]),
     ("app",&["desktop","mcp","sync","bench","layers","outbox_tests","usage_tests"]),

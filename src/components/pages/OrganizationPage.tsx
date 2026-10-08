@@ -2,10 +2,11 @@ import { ChartColumnIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, PlugIc
 import { allows, useEntitlements } from "@/modules/plans";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
+import { useEnvironment } from "@/modules/environments";
 import { setOrganizationTab, useOrganizations, type OrganizationTab } from "@/modules/organizations";
 import { BackMark, LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { FeatureLocked, OrganizationChatButton, OrganizationExtensions, OrganizationGate, OrganizationMembers, OrganizationProjects, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
+import { EnvironmentGate, FeatureLocked, OrganizationChatButton, OrganizationExtensions, OrganizationGate, OrganizationMembers, OrganizationProjects, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ export function OrganizationPage() {
   const detail = useOrganizations((state) => (state.detail?.id === openId ? state.detail : null));
   const current = useOrganizations((state) => state.tab);
   const rights = useEntitlements();
+  const environment = useEnvironment((state) => state.active);
 
   if (!organization) {
     return (
@@ -42,7 +44,7 @@ export function OrganizationPage() {
     <ScrollPage>
       <PageHeading back={{ label: t("org.back"), onClick: () => navigate("organizations") }} title={organization.name}
         description={<span className="flex items-center gap-2"><span className="font-mono">@{organization.slug}</span><Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge></span>}>
-        <OrganizationChatButton organization={organization} repositories={detail?.repositories ?? null} />
+        {environment === organization.id && <OrganizationChatButton organization={organization} repositories={detail?.repositories ?? null} />}
         <SiteDashboardButton path={`/organizations/${organization.id}`} />
       </PageHeading>
       <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} orientation="vertical" className="gap-6">
@@ -56,14 +58,16 @@ export function OrganizationPage() {
           {tab("mcp", PlugIcon, "settings.tab.mcp")}
           {tab("skills", SparklesIcon, "settings.tab.skills")}
         </TabsList>
-        <TabsContent value="projects" className="min-w-0"><OrganizationProjects orgId={organization.id} /></TabsContent>
-        <TabsContent value="stats" className="min-w-0"><OrganizationStats orgId={organization.id} /></TabsContent>
-        <TabsContent value="gate" className="min-w-0"><OrganizationGate orgId={organization.id} /></TabsContent>
+        <TabsContent value="projects" className="min-w-0"><EnvironmentGate organization={organization}><OrganizationProjects /></EnvironmentGate></TabsContent>
+        <TabsContent value="stats" className="min-w-0"><EnvironmentGate organization={organization}><OrganizationStats orgId={organization.id} /></EnvironmentGate></TabsContent>
+        <TabsContent value="gate" className="min-w-0"><EnvironmentGate organization={organization}><OrganizationGate orgId={organization.id} /></EnvironmentGate></TabsContent>
         <TabsContent value="members" className="min-w-0">
           {detail ? <OrganizationMembers detail={detail} role={organization.role} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
         <TabsContent value="repositories" className="min-w-0">
-          {detail ? <OrganizationRepositories detail={detail} role={organization.role} name={organization.name} /> : <LoadingNote>{t("settings.loading")}</LoadingNote>}
+          {detail
+            ? <EnvironmentGate organization={organization}><OrganizationRepositories detail={detail} role={organization.role} name={organization.name} /></EnvironmentGate>
+            : <LoadingNote>{t("settings.loading")}</LoadingNote>}
         </TabsContent>
         <TabsContent value="mcp" className="min-w-0">{allows(rights, "mcp") ? <OrganizationExtensions organization={organization} kind="mcp" /> : <FeatureLocked feature="mcp" />}</TabsContent>
         <TabsContent value="skills" className="min-w-0">{allows(rights, "skills") ? <OrganizationExtensions organization={organization} kind="skills" /> : <FeatureLocked feature="skills" />}</TabsContent>

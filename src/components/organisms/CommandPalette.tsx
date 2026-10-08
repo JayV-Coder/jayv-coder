@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { openChatFind } from "@/modules/conversation";
 import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
+import { useEnvironment } from "@/modules/environments";
 import { useLocale, useLocales, useT } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { useOrganizations } from "@/modules/organizations";
@@ -86,12 +87,13 @@ export function CommandPalette() {
   const locales = useLocales();
   const invites = useOrganizations((state) => state.incoming);
   const openOrganizationId = useOrganizations((state) => state.openId);
+  const environment = useEnvironment((state) => state.active);
   const settingsDirty = useSettings(isDirty);
   const rights = useEntitlements();
 
   const commands = useMemo<Command[]>(() => paletteCommands({
-    t, data, project, activeChatId, view, layout, locale, locales, organizations, invites, openOrganizationId, settingsDirty, rights,
-  }), [t, project, data, activeChatId, view, layout, locale, locales, organizations, invites, openOrganizationId, settingsDirty, rights]);
+    t, data, project, activeChatId, view, layout, locale, locales, organizations, invites, openOrganizationId, environment, settingsDirty, rights,
+  }), [t, project, data, activeChatId, view, layout, locale, locales, organizations, invites, openOrganizationId, environment, settingsDirty, rights]);
 
   const shown = useMemo(() => {
     const matched = commands

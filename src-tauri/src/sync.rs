@@ -4,6 +4,8 @@
 
 use crate::cloud::remote::{Backend, RemoteError};
 use crate::desktop::SharedWorkspace;
+use crate::environment::Environment;
+use crate::workspace::WorkspaceStore;
 use crate::local::outbox::{self, Op, Pending, SyncTable, TABLES};
 use chrono::{DateTime, Duration as Span, SecondsFormat, Utc};
 use serde_json::Value;
@@ -39,11 +41,22 @@ impl Connectivity {
 #[derive(Debug,Default,Clone,PartialEq,Eq)]
 pub struct Round { pub pushed:usize, pub failed:usize, pub pulled:usize }
 
-/// Uma volta: sobe a fila inteira e baixa todas as tabelas.
+/// O banco, desde que ainda seja o do ambiente em que a volta começou. Trocar
+/// de ambiente no meio dela não pode subir linhas de um ambiente para o outro:
+/// a volta para e recomeça no ambiente novo.
+async fn locked<'a>(store:&'a SharedWorkspace,environment:&Environment)->Result<tokio::sync::MutexGuard<'a,WorkspaceStore>,RemoteError> {
+    let guard=store.lock().await;
+    if guard.environment()!=environment {return Err(RemoteError::Offline("the environment changed during the sync round".into()));}
+    Ok(guard)
+}
+
+/// Uma volta: sobe a fila inteira e baixa todas as tabelas, tudo no ambiente
+/// do banco aberto quando ela começa.
 pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,RemoteError> {
+    let environment=store.lock().await.environment().clone();
     let mut result=Round::default();
-    upload(store,backend,&mut result).await?;
-    download(store,backend,&mut result).await?;
+    upload(store,backend,&environment,&mut result).await?;
+    download(store,backend,&environment,&mut result).await?;
     refresh_policies(store,backend).await;
     refresh_features(store,backend).await;
     refresh_org_extensions(store,backend).await;
@@ -113,55 +126,55 @@ fn next_batch(store:&crate::workspace::WorkspaceStore,limit:usize)->anyhow::Resu
     Ok(batch)
 }
 
-async fn send(backend:&dyn Backend,table:&SyncTable,op:Op,batch:&[(Pending,Option<Value>)])->Result<(),RemoteError> {
+async fn send(backend:&dyn Backend,environment:&Environment,table:&SyncTable,op:Op,batch:&[(Pending,Option<Value>)])->Result<(),RemoteError> {
     match op {
-        Op::Upsert=>backend.push(table,batch.iter().filter_map(|(_,row)|row.clone()).collect()).await,
+        Op::Upsert=>backend.push(environment,table,batch.iter().filter_map(|(_,row)|row.clone()).collect()).await,
         // A hora de cada exclusão é a da entrada; o lote vai com a mais
         // recente, que é a que decide contra uma edição em outra máquina.
         Op::Delete=>{
             let keys:Vec<Value>=batch.iter().map(|(entry,_)|entry.key.clone()).collect();
             let at=batch.iter().map(|(entry,_)|entry.at.as_str()).max().unwrap_or_default().to_string();
-            backend.soft_delete(table,&keys,&at).await
+            backend.soft_delete(environment,table,&keys,&at).await
         }
     }
 }
 
-async fn upload(store:&SharedWorkspace,backend:&dyn Backend,result:&mut Round)->Result<(),RemoteError> {
+async fn upload(store:&SharedWorkspace,backend:&dyn Backend,environment:&Environment,result:&mut Round)->Result<(),RemoteError> {
     let mut renumbered=0;
     loop {
-        let batch=next_batch(&*store.lock().await,BATCH).map_err(local)?;
+        let batch=next_batch(&*locked(store,environment).await?,BATCH).map_err(local)?;
         let Some((first,_))=batch.first() else {return Ok(())};
         let Some(table)=outbox::table(&first.table) else {
             // Uma tabela que esta versão não conhece: a entrada não tem para
             // onde ir.
-            outbox::fail(store.lock().await.connection(),first.seq,"tabela desconhecida").map_err(local)?;
+            outbox::fail(locked(store,environment).await?.connection(),first.seq,"tabela desconhecida").map_err(local)?;
             result.failed+=1;
             continue;
         };
         let op=first.op;
-        match send(backend,table,op,&batch).await {
-            Ok(())=>{settle(store,&batch).await?; result.pushed+=batch.len();}
+        match send(backend,environment,table,op,&batch).await {
+            Ok(())=>{settle(store,environment,&batch).await?; result.pushed+=batch.len();}
             Err(error) if transient(&error)=>return Err(error),
             Err(_) if batch.len()>1=>{
                 // Uma linha do lote foi recusada e o servidor não diz qual:
                 // cada uma sobe sozinha, e só a culpada fica para trás.
                 for single in batch.chunks(1) {
-                    match send(backend,table,op,single).await {
-                        Ok(())=>{settle(store,single).await?; result.pushed+=1;}
+                    match send(backend,environment,table,op,single).await {
+                        Ok(())=>{settle(store,environment,single).await?; result.pushed+=1;}
                         Err(error)=>{
                             if transient(&error) {return Err(error);}
-                            refuse(store,table,&single[0].0,error,result,&mut renumbered).await?;
+                            refuse(store,environment,table,&single[0].0,error,result,&mut renumbered).await?;
                         }
                     }
                 }
             }
-            Err(error)=>refuse(store,table,first,error,result,&mut renumbered).await?,
+            Err(error)=>refuse(store,environment,table,first,error,result,&mut renumbered).await?,
         }
     }
 }
 
-async fn settle(store:&SharedWorkspace,batch:&[(Pending,Option<Value>)])->Result<(),RemoteError> {
-    let guard=store.lock().await;
+async fn settle(store:&SharedWorkspace,environment:&Environment,batch:&[(Pending,Option<Value>)])->Result<(),RemoteError> {
+    let guard=locked(store,environment).await?;
     for (entry,_) in batch {outbox::settle(guard.connection(),entry.seq,entry.version).map_err(local)?;}
     Ok(())
 }
@@ -169,8 +182,8 @@ async fn settle(store:&SharedWorkspace,batch:&[(Pending,Option<Value>)])->Result
 /// O que fazer com uma entrada recusada. Turno com número repetido no chat —
 /// outra máquina abriu o mesmo número sem rede — ganha o próximo número livre
 /// e volta à fila; o resto sai da fila com o motivo.
-async fn refuse(store:&SharedWorkspace,table:&SyncTable,entry:&Pending,error:RemoteError,result:&mut Round,renumbered:&mut usize)->Result<(),RemoteError> {
-    let guard=store.lock().await;
+async fn refuse(store:&SharedWorkspace,environment:&Environment,table:&SyncTable,entry:&Pending,error:RemoteError,result:&mut Round,renumbered:&mut usize)->Result<(),RemoteError> {
+    let guard=locked(store,environment).await?;
     if table.name=="turns" && matches!(&error,RemoteError::Conflict{code,..} if code=="23505") && *renumbered<RENUMBER_LIMIT {
         let id=entry.key.get(0).and_then(Value::as_str).unwrap_or_default();
         guard.connection().execute(
@@ -184,20 +197,20 @@ async fn refuse(store:&SharedWorkspace,table:&SyncTable,entry:&Pending,error:Rem
     Ok(())
 }
 
-async fn download(store:&SharedWorkspace,backend:&dyn Backend,result:&mut Round)->Result<(),RemoteError> {
+async fn download(store:&SharedWorkspace,backend:&dyn Backend,environment:&Environment,result:&mut Round)->Result<(),RemoteError> {
     for table in &TABLES {
-        let mut since=outbox::cursor(store.lock().await.connection(),table).map_err(local)?.unwrap_or_default();
+        let mut since=outbox::cursor(locked(store,environment).await?.connection(),table).map_err(local)?.unwrap_or_default();
         loop {
             // Tabela que o servidor recusa (a migração dela ainda não rodou,
             // uma coluna nova) fica para a próxima volta; as outras descem e a
             // fila de pedidos não fica parada como se faltasse rede.
-            let rows=match backend.pull(table,&since,PAGE).await {
+            let rows=match backend.pull(environment,table,&since,PAGE).await {
                 Ok(rows)=>rows,
                 Err(RemoteError::Rejected{status,detail})=>{eprintln!("sincronização: `{}` recusada ({status}): {detail}",table.name); break;}
                 Err(error)=>return Err(error),
             };
             let Some(last)=rows.last().and_then(|row|row["synced_at"].as_str()).map(str::to_string) else {break};
-            let mut guard=store.lock().await;
+            let mut guard=locked(store,environment).await?;
             result.pulled+=outbox::apply_remote(guard.connection_mut(),table,&rows).map_err(local)?;
             outbox::set_cursor(guard.connection(),table,&behind(&last)).map_err(local)?;
             drop(guard);
@@ -318,8 +331,9 @@ mod tests {
 
     #[async_trait]
     impl Backend for FakeBackend {
-        async fn push(&self,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError> {
+        async fn push(&self,environment:&Environment,table:&SyncTable,mut rows:Vec<Value>)->Result<(),RemoteError> {
             self.calls.lock().unwrap().push(format!("push {} {}",table.name,rows.len()));
+            for row in &mut rows {row["environment_id"]=json!(environment.id());}
             if let Some(error)=self.failures.lock().unwrap().pop_front() {return Err(error);}
             let stored=self.rows.lock().unwrap();
             for row in &rows {
@@ -337,7 +351,7 @@ mod tests {
             Ok(())
         }
 
-        async fn soft_delete(&self,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError> {
+        async fn soft_delete(&self,_environment:&Environment,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError> {
             self.calls.lock().unwrap().push(format!("delete {} {}",table.name,keys.len()));
             if let Some(error)=self.failures.lock().unwrap().pop_front() {return Err(error);}
             for key in keys {
@@ -347,9 +361,10 @@ mod tests {
             Ok(())
         }
 
-        async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError> {
+        async fn pull(&self,environment:&Environment,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError> {
             self.calls.lock().unwrap().push(format!("pull {} {since}",table.name));
-            let mut rows:Vec<Value>=self.rows.lock().unwrap().iter().filter(|((name,_),row)|name==table.name && row["synced_at"].as_str().unwrap_or("")>=since).map(|(_,row)|row.clone()).collect();
+            // Linha sem ambiente, de teste antigo, é do pessoal.
+            let mut rows:Vec<Value>=self.rows.lock().unwrap().iter().filter(|((name,_),row)|name==table.name && row["environment_id"].as_str().unwrap_or("personal")==environment.id() && row["synced_at"].as_str().unwrap_or("")>=since).map(|(_,row)|row.clone()).collect();
             rows.sort_by(|a,b|a["synced_at"].as_str().cmp(&b["synced_at"].as_str()));
             rows.truncate(limit);
             Ok(rows)
@@ -394,6 +409,39 @@ mod tests {
         assert_eq!(sent["name"],"Loja");
         assert!(sent["row_updated_at"].is_string(),"a hora da escrita local sobe junto");
         assert!(sent["row_deleted_at"].is_null(),"recriar desfaz uma exclusão anterior");
+    }
+
+    const USER:&str="22222222-2222-2222-2222-222222222222";
+    const ORG:&str="11111111-1111-1111-1111-111111111111";
+
+    #[tokio::test] async fn each_environment_syncs_only_its_own_rows() {
+        let dir=tempfile::tempdir().unwrap();
+        let org=Environment::parse(ORG).unwrap();
+        let personal=shared(WorkspaceStore::for_environment(dir.path(),USER,&Environment::Personal).unwrap());
+        let organization=shared(WorkspaceStore::for_environment(dir.path(),USER,&org).unwrap());
+        let (mine,_)=a_chat(&personal).await;
+        let (theirs,_)=a_chat(&organization).await;
+        let backend=FakeBackend::default();
+        round(&personal,&backend).await.expect("personal round");
+        round(&organization,&backend).await.expect("organization round");
+        assert_eq!(backend.row("projects",json!([mine])).expect("personal project")["environment_id"],"personal");
+        assert_eq!(backend.row("projects",json!([theirs])).expect("organization project")["environment_id"],ORG);
+        // Cada banco baixa só o ambiente dele: o projeto do outro não aparece.
+        assert_eq!(personal.lock().await.overview().unwrap().projects.iter().map(|project|project.id.clone()).collect::<Vec<_>>(),[mine.clone()]);
+        assert_eq!(organization.lock().await.overview().unwrap().projects.iter().map(|project|project.id.clone()).collect::<Vec<_>>(),[theirs.clone()]);
+        // Um banco novo do mesmo ambiente recebe o que o servidor já guarda dele.
+        let other_dir=tempfile::tempdir().unwrap();
+        let fresh=shared(WorkspaceStore::for_environment(other_dir.path(),USER,&org).unwrap());
+        round(&fresh,&backend).await.expect("fresh round");
+        assert_eq!(fresh.lock().await.overview().unwrap().projects.iter().map(|project|project.id.clone()).collect::<Vec<_>>(),[theirs]);
+    }
+
+    #[tokio::test] async fn a_round_stops_when_the_open_database_changes_environment() {
+        let dir=tempfile::tempdir().unwrap();
+        let store=shared(WorkspaceStore::for_environment(dir.path(),USER,&Environment::Personal).unwrap());
+        assert!(locked(&store,&Environment::Personal).await.is_ok());
+        let error=locked(&store,&Environment::parse(ORG).unwrap()).await.err().expect("another environment");
+        assert!(matches!(error,RemoteError::Offline(_)),"the round retries later, in the right environment");
     }
 
     #[tokio::test] async fn the_round_brings_the_llm_policies_and_survives_their_failure() {

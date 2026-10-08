@@ -206,7 +206,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     let bell:QueueBell=Arc::new(Notify::new());
     let sync_bell=SyncBell(Arc::new(Notify::new()));
     let connectivity=Connectivity::default();
-    let session:SharedSession=Arc::new(Mutex::new(SessionState{cache,data_dir,identity:None,http:http.clone()}));
+    let session:SharedSession=Arc::new(Mutex::new(SessionState{cache,data_dir,identity:None,http:http.clone(),environment:crate::environment::Environment::Personal,relocated_for:None}));
     tauri::Builder::default()
         // Primeiro de todos: o segundo processo — aberto pelo link do login —
         // entrega a URL a este e sai antes de subir qualquer outra coisa.
@@ -256,7 +256,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            session::set_session,session::clear_session,session::connection_status,session::get_locales,session::get_translations,
+            session::set_session,session::clear_session,session::connection_status,session::current_environment,session::set_environment,session::get_locales,session::get_translations,
             prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,prompts::cancel_turn,prompts::allowed_commands,prompts::chat_grants,prompts::set_chat_grants,prompts::forget_allowed_command,
             projects::get_workspace,projects::get_chat,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::set_work_mode,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::get_mcp_servers,settings::save_mcp_servers,settings::get_skills,settings::get_org_extensions,settings::install_skill_folder,settings::install_skill_text,settings::search_skill_hub,settings::install_hub_skill,settings::set_skill_enabled,settings::remove_skill,settings::draft_mcp,settings::refresh_models,settings::check_agent,settings::check_gateway,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,settings::save_expertise,settings::save_lean_code,

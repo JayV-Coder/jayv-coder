@@ -4,11 +4,21 @@
 //! decide o que ele vê.
 
 use super::{PROJECT_URL, PUBLISHABLE_KEY};
+use crate::environment::Environment;
 use crate::local::{global::LocaleRow, outbox::SyncTable};
 use async_trait::async_trait;
 use reqwest::{Method, Request};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+/// Um projeto que o servidor guarda num ambiente de organização.
+#[derive(Debug,Clone,PartialEq,Eq,Deserialize)]
+pub struct MovedProject { pub id:String, pub environment_id:String }
+
+/// Um ambiente de `my_environments`: o pessoal ou uma organização de que a
+/// pessoa é membro.
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
+pub struct EnvironmentInfo { pub id:String, pub kind:String, pub name:Option<String>, pub slug:Option<String>, pub role:Option<String> }
 
 /// Uma linha de `my_project_policies`; quem a lê é a política de LLM.
 #[derive(Debug,Clone,Deserialize)]
@@ -54,11 +64,16 @@ pub enum RemoteError {
 
 #[async_trait]
 pub trait Backend:Send+Sync {
-    async fn push(&self,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError>;
-    async fn soft_delete(&self,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError>;
-    /// As linhas com `synced_at >= since`, em ordem de `synced_at`. `since`
-    /// vazio é a tabela inteira.
-    async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError>;
+    /// As linhas sobem para o ambiente `environment`: o do banco de onde saem.
+    async fn push(&self,environment:&Environment,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError>;
+    async fn soft_delete(&self,environment:&Environment,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError>;
+    /// As linhas do ambiente com `synced_at >= since`, em ordem de
+    /// `synced_at`. `since` vazio é a tabela inteira.
+    async fn pull(&self,environment:&Environment,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError>;
+    /// Os projetos de quem está logado que o servidor guarda num ambiente de
+    /// organização (id do projeto e ambiente). `None`: este backend não fala
+    /// disso.
+    async fn moved_projects(&self)->Result<Option<Vec<MovedProject>>,RemoteError> { Ok(None) }
     /// A política de LLM dos projetos de quem está logado
     /// (`rpc/my_project_policies`). `None`: este backend não fala dela.
     async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> { Ok(None) }
@@ -79,14 +94,19 @@ pub struct Remote {
 }
 
 /// A chave de conflito no Supabase. As tabelas de LLM e as da conta são por
-/// usuário — dois usuários têm cada um o seu agente `claude` e o seu nível —,
-/// então o `user_id` entra na chave; nas outras o id já é único.
+/// usuário e por ambiente — cada um tem o seu agente `claude` e o seu nível em
+/// cada ambiente —, então `user_id` e `environment_id` entram na chave; nas
+/// outras o id já é único.
 pub fn conflict_target(table:&SyncTable)->String {
     match table.name {
-        "llm_agents"|"llm_models"|"account_settings"=>format!("user_id,{}",table.key.join(",")),
+        "llm_agents"|"llm_models"|"account_settings"=>format!("user_id,environment_id,{}",table.key.join(",")),
         _=>table.key.join(","),
     }
 }
+
+/// A cota é da conta do provedor, igual em todo ambiente; as outras tabelas
+/// têm ambiente.
+fn scoped(table:&SyncTable)->bool { table.name!="quota_snapshots" }
 
 impl Remote {
     pub fn new(http:reqwest::Client,token:Option<String>)->Self { Self::with_base(http,PROJECT_URL,PUBLISHABLE_KEY,token) }
@@ -100,27 +120,33 @@ impl Remote {
         self.http.request(method,format!("{}/rest/v1/{path}",self.base)).header("apikey",&self.key).bearer_auth(bearer)
     }
 
-    pub fn push_request(&self,table:&SyncTable,rows:&[Value])->reqwest::Result<Request> {
+    pub fn push_request(&self,environment:&Environment,table:&SyncTable,rows:&[Value])->reqwest::Result<Request> {
+        let rows:Vec<Value>=rows.iter().cloned().map(|mut row|{
+            if scoped(table) {row["environment_id"]=Value::String(environment.id());}
+            row
+        }).collect();
         self.request(Method::POST,table.name)
             .query(&[("on_conflict",conflict_target(table))])
             // `missing=default`: o `user_id` não vem no corpo e tem de nascer
             // de `auth.uid()`, não como NULL.
             .header("Prefer","resolution=merge-duplicates,missing=default,return=minimal")
-            .json(rows).build()
+            .json(&rows).build()
     }
 
     /// Uma requisição por chave: o filtro de chave composta em lote é um `or`
     /// que o PostgREST aceita, mas que se escreve mal e se lê pior.
-    pub fn soft_delete_request(&self,table:&SyncTable,key:&Value,at:&str)->reqwest::Result<Request> {
+    pub fn soft_delete_request(&self,environment:&Environment,table:&SyncTable,key:&Value,at:&str)->reqwest::Result<Request> {
         let parts=key.as_array().cloned().unwrap_or_default();
-        let filters:Vec<(String,String)>=table.key.iter().zip(parts.iter()).map(|(column,value)|((*column).to_string(),format!("eq.{}",plain(value)))).collect();
+        let mut filters:Vec<(String,String)>=table.key.iter().zip(parts.iter()).map(|(column,value)|((*column).to_string(),format!("eq.{}",plain(value)))).collect();
+        if scoped(table) {filters.push(("environment_id".into(),format!("eq.{}",environment.id())));}
         self.request(Method::PATCH,table.name).query(&filters)
             .header("Prefer","return=minimal")
             .json(&json!({"row_deleted_at":at,"row_updated_at":at})).build()
     }
 
-    pub fn pull_request(&self,table:&SyncTable,since:&str,limit:usize)->reqwest::Result<Request> {
+    pub fn pull_request(&self,environment:&Environment,table:&SyncTable,since:&str,limit:usize)->reqwest::Result<Request> {
         let mut query=vec![("select".to_string(),"*".to_string()),("order".to_string(),"synced_at.asc".to_string()),("limit".to_string(),limit.to_string())];
+        if scoped(table) {query.push(("environment_id".into(),format!("eq.{}",environment.id())));}
         if !since.is_empty() {query.push(("synced_at".into(),format!("gte.{since}")));}
         self.request(Method::GET,table.name).query(&query).build()
     }
@@ -131,6 +157,24 @@ impl Remote {
 
     pub fn org_extensions_request(&self)->reqwest::Result<Request> {
         self.request(Method::POST,"rpc/my_org_extensions").json(&json!({})).build()
+    }
+
+    /// Os projetos do usuário que o servidor guarda num ambiente de organização,
+    /// uma página: `offset` e `limit` para quem os junta.
+    pub fn moved_projects_request(&self,offset:usize,limit:usize)->reqwest::Result<Request> {
+        self.request(Method::GET,"projects").query(&[
+            ("select","id,environment_id".to_string()),("environment_id","neq.personal".to_string()),("row_deleted_at","is.null".to_string()),
+            ("order","id.asc".to_string()),("offset",offset.to_string()),("limit",limit.to_string()),
+        ]).build()
+    }
+
+    pub fn environments_request(&self)->reqwest::Result<Request> {
+        self.request(Method::POST,"rpc/my_environments").json(&json!({})).build()
+    }
+
+    /// Os ambientes de quem está logado: o pessoal e um por organização.
+    pub async fn environments(&self)->Result<Vec<EnvironmentInfo>,RemoteError> {
+        self.get(self.environments_request()).await
     }
 
     pub fn features_request(&self)->reqwest::Result<Request> {
@@ -180,6 +224,8 @@ impl Remote {
 const PAGE:usize=1000;
 /// Um teto para nunca girar para sempre se o servidor repetir páginas.
 const MAX_PAGES:usize=100;
+/// Quantas linhas pedir por página quando a consulta é nossa.
+const PAGE_SIZE:usize=1000;
 
 /// Pede página atrás de página até vir uma vazia. Não para numa página menor
 /// que `PAGE`: o servidor pode ter um `max_rows` menor que o pedido, e a
@@ -197,18 +243,22 @@ where F:FnMut(usize)->Fut, Fut:std::future::Future<Output=Result<Vec<T>,RemoteEr
 
 #[async_trait]
 impl Backend for Remote {
-    async fn push(&self,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError> {
+    async fn push(&self,environment:&Environment,table:&SyncTable,rows:Vec<Value>)->Result<(),RemoteError> {
         if rows.is_empty() {return Ok(());}
-        self.send(self.push_request(table,&rows)).await.map(drop)
+        self.send(self.push_request(environment,table,&rows)).await.map(drop)
     }
 
-    async fn soft_delete(&self,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError> {
-        for key in keys {self.send(self.soft_delete_request(table,key,at)).await?;}
+    async fn soft_delete(&self,environment:&Environment,table:&SyncTable,keys:&[Value],at:&str)->Result<(),RemoteError> {
+        for key in keys {self.send(self.soft_delete_request(environment,table,key,at)).await?;}
         Ok(())
     }
 
-    async fn pull(&self,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError> {
-        self.get(self.pull_request(table,since,limit)).await
+    async fn pull(&self,environment:&Environment,table:&SyncTable,since:&str,limit:usize)->Result<Vec<Value>,RemoteError> {
+        self.get(self.pull_request(environment,table,since,limit)).await
+    }
+
+    async fn moved_projects(&self)->Result<Option<Vec<MovedProject>>,RemoteError> {
+        all_pages(|offset|self.get(self.moved_projects_request(offset,PAGE_SIZE))).await.map(Some)
     }
 
     async fn project_policies(&self)->Result<Option<Vec<RemotePolicy>>,RemoteError> {
@@ -271,7 +321,7 @@ mod tests {
     fn query(request:&Request)->Vec<(String,String)> { request.url().query_pairs().map(|(key,value)|(key.into_owned(),value.into_owned())).collect() }
 
     #[test] fn the_upsert_uses_each_tables_key() {
-        let request=remote().push_request(table("projects").unwrap(),&[json!({"id":"p1"})]).expect("request");
+        let request=remote().push_request(&Environment::Personal,table("projects").unwrap(),&[json!({"id":"p1"})]).expect("request");
         assert_eq!(request.method(),Method::POST);
         assert_eq!(request.url().path(),"/rest/v1/projects");
         assert_eq!(query(&request),[("on_conflict".to_string(),"id".to_string())]);
@@ -280,33 +330,63 @@ mod tests {
         assert_eq!(request.headers()["Prefer"],"resolution=merge-duplicates,missing=default,return=minimal");
         assert_eq!(request.headers()["Authorization"],"Bearer jwt");
         assert_eq!(request.headers()["apikey"],PUBLISHABLE_KEY);
-        assert_eq!(query(&remote().push_request(table("messages").unwrap(),&[]).unwrap())[0].1,"uid");
-        assert_eq!(query(&remote().push_request(table("llm_agents").unwrap(),&[]).unwrap())[0].1,"user_id,id");
-        assert_eq!(query(&remote().push_request(table("llm_models").unwrap(),&[]).unwrap())[0].1,"user_id,agent,model");
+        assert_eq!(query(&remote().push_request(&Environment::Personal,table("messages").unwrap(),&[]).unwrap())[0].1,"uid");
+        assert_eq!(query(&remote().push_request(&Environment::Personal,table("llm_agents").unwrap(),&[]).unwrap())[0].1,"user_id,environment_id,id");
+        assert_eq!(query(&remote().push_request(&Environment::Personal,table("llm_models").unwrap(),&[]).unwrap())[0].1,"user_id,environment_id,agent,model");
+        assert_eq!(query(&remote().push_request(&Environment::Personal,table("account_settings").unwrap(),&[]).unwrap())[0].1,"user_id,environment_id,key");
     }
 
     #[test] fn without_session_the_token_is_the_publishable_key() {
         let anonymous=Remote::with_base(reqwest::Client::new(),"https://exemplo.supabase.co",PUBLISHABLE_KEY,None);
-        let request=anonymous.pull_request(table("projects").unwrap(),"",10).unwrap();
+        let request=anonymous.pull_request(&Environment::Personal,table("projects").unwrap(),"",10).unwrap();
         assert_eq!(request.headers()["Authorization"],format!("Bearer {PUBLISHABLE_KEY}"));
     }
 
     #[test] fn the_download_asks_for_what_changed_since_the_cursor() {
-        let request=remote().pull_request(table("chats").unwrap(),"2026-09-30T12:00:00Z",1000).unwrap();
+        let request=remote().pull_request(&Environment::Personal,table("chats").unwrap(),"2026-09-30T12:00:00Z",1000).unwrap();
         assert_eq!(request.method(),Method::GET);
         let pairs=query(&request);
         for expected in [("select","*"),("order","synced_at.asc"),("limit","1000"),("synced_at","gte.2026-09-30T12:00:00Z")] {
             assert!(pairs.contains(&(expected.0.to_string(),expected.1.to_string())),"{pairs:?}");
         }
-        assert!(!query(&remote().pull_request(table("chats").unwrap(),"",1000).unwrap()).iter().any(|(key,_)|key=="synced_at"),"sem cursor baixa tudo");
+        assert!(!query(&remote().pull_request(&Environment::Personal,table("chats").unwrap(),"",1000).unwrap()).iter().any(|(key,_)|key=="synced_at"),"sem cursor baixa tudo");
     }
 
     #[test] fn delete_marks_the_row_by_its_key() {
-        let request=remote().soft_delete_request(table("llm_models").unwrap(),&json!(["claude","opus, \"novo\""]),"2026-09-30T12:00:00Z").unwrap();
+        let request=remote().soft_delete_request(&Environment::Personal,table("llm_models").unwrap(),&json!(["claude","opus, \"novo\""]),"2026-09-30T12:00:00Z").unwrap();
         assert_eq!(request.method(),Method::PATCH);
-        assert_eq!(query(&request),[("agent".to_string(),"eq.claude".to_string()),("model".to_string(),"eq.opus, \"novo\"".to_string())]);
+        assert_eq!(query(&request),[("agent".to_string(),"eq.claude".to_string()),("model".to_string(),"eq.opus, \"novo\"".to_string()),("environment_id".to_string(),"eq.personal".to_string())]);
         let body:Value=serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
         assert_eq!(body,json!({"row_deleted_at":"2026-09-30T12:00:00Z","row_updated_at":"2026-09-30T12:00:00Z"}));
+    }
+
+    const ORG:&str="11111111-1111-1111-1111-111111111111";
+
+    #[test] fn every_request_names_the_environment_but_the_quota_has_none() {
+        let org=Environment::parse(ORG).unwrap();
+        let pull=query(&remote().pull_request(&org,table("chats").unwrap(),"",1000).unwrap());
+        assert!(pull.contains(&("environment_id".to_string(),format!("eq.{ORG}"))),"{pull:?}");
+        let push=remote().push_request(&org,table("projects").unwrap(),&[json!({"id":"p1"})]).unwrap();
+        let body:Vec<Value>=serde_json::from_slice(push.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body,[json!({"id":"p1","environment_id":ORG})]);
+        let delete=query(&remote().soft_delete_request(&org,table("chats").unwrap(),&json!(["c1"]),"2026-10-08T00:00:00Z").unwrap());
+        assert!(delete.contains(&("environment_id".to_string(),format!("eq.{ORG}"))),"{delete:?}");
+        // A cota é da conta do provedor, igual em todo ambiente.
+        let quota=query(&remote().pull_request(&org,table("quota_snapshots").unwrap(),"",1000).unwrap());
+        assert!(!quota.iter().any(|(key,_)|key=="environment_id"),"{quota:?}");
+        let body:Vec<Value>=serde_json::from_slice(remote().push_request(&org,table("quota_snapshots").unwrap(),&[json!({"id":"q"})]).unwrap().body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body,[json!({"id":"q"})]);
+    }
+
+    #[test] fn the_environments_and_the_moved_projects_come_from_the_server() {
+        let request=remote().environments_request().unwrap();
+        assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_environments"));
+        let request=remote().moved_projects_request(2000,1000).unwrap();
+        assert_eq!(request.url().path(),"/rest/v1/projects");
+        let pairs=query(&request);
+        for expected in [("select","id,environment_id"),("environment_id","neq.personal"),("row_deleted_at","is.null"),("offset","2000"),("limit","1000")] {
+            assert!(pairs.contains(&(expected.0.to_string(),expected.1.to_string())),"{pairs:?}");
+        }
     }
 
     #[test] fn each_status_becomes_the_error_the_queue_understands() {
@@ -338,6 +418,6 @@ mod tests {
 
     #[tokio::test] async fn without_network_the_error_is_offline() {
         let unreachable=Remote::with_base(reqwest::Client::new(),"http://127.0.0.1:9",PUBLISHABLE_KEY,Some("jwt".into()));
-        assert!(matches!(unreachable.pull(table("projects").unwrap(),"",1).await,Err(RemoteError::Offline(_))));
+        assert!(matches!(unreachable.pull(&Environment::Personal,table("projects").unwrap(),"",1).await,Err(RemoteError::Offline(_))));
     }
 }

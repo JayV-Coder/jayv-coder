@@ -6,7 +6,7 @@ pub mod session;
 
 // As camadas de baixo com os nomes de sempre: `crate::i18n` e `crate::local`
 // continuam valendo dentro deste crate.
-use jayv_base::i18n;
+use jayv_base::{environment, i18n};
 use jayv_store::local;
 
 pub const PROJECT_URL:&str="https://exvsozyemolrjbjetqww.supabase.co";

@@ -4,7 +4,9 @@
 
 use crate::i18n::{failure, Text};
 use crate::cloud::{remote::Remote, session::{self, fetch_jwks, validate_offline, Identity, SessionError}};
-use crate::desktop::events::{LinkEvent, LINK_EVENT, MODELS_EVENT, TRANSLATIONS_EVENT};
+use crate::cloud::remote::Backend;
+use crate::desktop::events::{EnvironmentEvent, LinkEvent, ENVIRONMENT_EVENT, LINK_EVENT, MODELS_EVENT, TRANSLATIONS_EVENT};
+use crate::environment::Environment;
 use crate::desktop::{Lanes, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
 use crate::local::global::{GlobalCache, LocaleRow};
 use crate::memory::MemoryManager;
@@ -22,6 +24,11 @@ pub struct SessionState {
     pub data_dir:PathBuf,
     pub identity:Option<Identity>,
     pub http:reqwest::Client,
+    /// O ambiente do banco aberto: o pessoal ou o de uma organização.
+    pub environment:Environment,
+    /// O usuário cujos projetos de organização já saíram do banco pessoal
+    /// nesta execução.
+    pub relocated_for:Option<String>,
 }
 
 pub type SharedSession=Arc<Mutex<SessionState>>;
@@ -101,10 +108,18 @@ pub(crate) async fn set_session(app:AppHandle,lanes:State<'_,Lanes>,workspace:St
     };
     session::set_current(Some(token));
     if changed {
-        let store=WorkspaceStore::for_user(&dir,&identity.user_id).map_err(failure)?;
+        // O app volta ao ambiente em que o usuário estava; o que não se lê
+        // ou não existe mais cai no pessoal.
+        let environment={
+            let state=session.lock().await;
+            state.cache.last_environment(&identity.user_id).ok().flatten().and_then(|text|Environment::parse(&text)).unwrap_or_default()
+        };
+        let store=WorkspaceStore::for_environment(&dir,&identity.user_id,&environment).map_err(failure)?;
         adopt(&lanes,&workspace,store).await.map_err(failure)?;
+        session.lock().await.environment=environment;
         tauri::async_runtime::spawn(refresh_models(app.clone(),lanes.first(),workspace.inner().clone()));
     }
+    tauri::async_runtime::spawn(relocate_moved_projects(app.clone(),session.inner().clone(),workspace.inner().clone()));
     sync.0.notify_one();
     queue.notify_one();
     tauri::async_runtime::spawn(refresh_jev_parameters(session.inner().clone()));
@@ -118,6 +133,8 @@ pub(crate) async fn clear_session(lanes:State<'_,Lanes>,workspace:State<'_,Share
     {
         let mut state=session.lock().await;
         state.identity=None;
+        state.environment=Environment::Personal;
+        state.relocated_for=None;
         state.cache.set_last_user(None).map_err(failure)?;
     }
     adopt(&lanes,&workspace,WorkspaceStore::in_memory().map_err(failure)?).await.map_err(failure)?;
@@ -201,4 +218,92 @@ pub(crate) async fn announce_links(app:AppHandle,connectivity:Connectivity) {
         let link=*changes.borrow_and_update();
         let _=app.emit(LINK_EVENT,LinkEvent{link});
     }
+}
+
+/// O ambiente do banco aberto.
+#[tauri::command]
+pub(crate) async fn current_environment(session:State<'_,SharedSession>)->Result<String,Text> {
+    Ok(session.lock().await.environment.id())
+}
+
+/// Troca o banco aberto pelo de outro ambiente do mesmo usuário: cada um tem
+/// as suas configurações e os seus dados. Uma organização que ainda não tem
+/// banco neste computador só abre se o servidor confirma que a pessoa é membro.
+#[tauri::command]
+pub(crate) async fn set_environment(app:AppHandle,lanes:State<'_,Lanes>,workspace:State<'_,SharedWorkspace>,session:State<'_,SharedSession>,sync:State<'_,SyncBell>,queue:State<'_,QueueBell>,environment:String)->Result<String,Text> {
+    let wanted=Environment::parse(&environment).ok_or_else(||Text::new("environment.unknown").with("environment",environment.clone()))?;
+    let (user,dir,http)={
+        let state=session.lock().await;
+        let identity=state.identity.as_ref().ok_or_else(||Text::new("session.required"))?;
+        if state.environment==wanted {return Ok(wanted.id());}
+        (identity.user_id.clone(),state.data_dir.clone(),state.http.clone())
+    };
+    if !wanted.is_personal() {
+        let known=WorkspaceStore::environment_path(&dir,&user,&wanted).map_err(failure)?.exists();
+        if !known {
+            let listed=remote(http).environments().await.map_err(|error|Text::new("environment.listFailed").with("reason",error.to_string()))?;
+            if !listed.iter().any(|item|item.id==wanted.id()) {return Err(Text::new("environment.notMember"));}
+        }
+    }
+    let store=WorkspaceStore::for_environment(&dir,&user,&wanted).map_err(failure)?;
+    adopt(&lanes,&workspace,store).await.map_err(failure)?;
+    {
+        let mut state=session.lock().await;
+        state.environment=wanted.clone();
+        state.cache.set_last_environment(&user,&wanted.id()).map_err(failure)?;
+    }
+    tauri::async_runtime::spawn(refresh_models(app.clone(),lanes.first(),workspace.inner().clone()));
+    let _=app.emit(ENVIRONMENT_EVENT,EnvironmentEvent{environment:wanted.id()});
+    sync.0.notify_one();
+    queue.notify_one();
+    Ok(wanted.id())
+}
+
+/// Antes dos ambientes, os projetos de uma organização moravam no banco
+/// pessoal. O servidor já os guarda no ambiente de cada organização; aqui o
+/// que é da máquina (pasta, sessões dos agentes, permissões) vai para o banco
+/// dessa organização e o pessoal fica só com o que é pessoal. Roda uma vez por
+/// execução e usuário; sem rede ou com um pedido no ar, tenta de novo na
+/// próxima sessão.
+async fn relocate_moved_projects(app:AppHandle,session:SharedSession,workspace:SharedWorkspace) {
+    let (user,dir,http)={
+        let state=session.lock().await;
+        let Some(identity)=state.identity.as_ref() else {return};
+        if !state.environment.is_personal() || state.relocated_for.as_deref()==Some(identity.user_id.as_str()) {return;}
+        (identity.user_id.clone(),state.data_dir.clone(),state.http.clone())
+    };
+    let moved=match remote(http).moved_projects().await {
+        Ok(Some(moved))=>moved,
+        Ok(None)=>return,
+        Err(error)=>{eprintln!("ambientes: não consegui ler os projetos das organizações ({error})"); return;}
+    };
+    let mut groups:BTreeMap<String,Vec<String>>=BTreeMap::new();
+    for project in moved {
+        if Environment::parse(&project.environment_id).is_some_and(|environment|!environment.is_personal()) {
+            groups.entry(project.environment_id).or_default().push(project.id);
+        }
+    }
+    let mut state_changed=false;
+    {
+        let store=workspace.lock().await;
+        if !store.environment().is_personal() || store.turn_in_flight().unwrap_or(true) {return;}
+        for (environment,ids) in &groups {
+            let Some(environment)=Environment::parse(environment) else {continue};
+            let Ok(path)=WorkspaceStore::environment_path(&dir,&user,&environment) else {continue};
+            let Ok(personal)=WorkspaceStore::environment_path(&dir,&user,&Environment::Personal) else {continue};
+            // Uma cópia do banco de antes: a mudança só tira do pessoal, e isto
+            // deixa voltar atrás se algo der errado.
+            let backup=personal.with_extension("sqlite3.before-environments");
+            if !backup.exists() && store.connection().query_row("SELECT COUNT(*) FROM projects WHERE id IN (SELECT value FROM json_each(?1))",[serde_json::to_string(ids).unwrap_or_default()],|row|row.get::<_,i64>(0)).unwrap_or(0)>0 {
+                if let Err(error)=std::fs::copy(&personal,&backup) {eprintln!("ambientes: sem cópia de segurança, nada foi movido ({error})"); return;}
+            }
+            match crate::environments::relocate(store.connection(),&path,ids) {
+                Ok(0)=>{}
+                Ok(moved)=>{eprintln!("ambientes: {moved} projeto(s) foram para o ambiente {environment}"); state_changed=true;}
+                Err(error)=>{eprintln!("ambientes: não consegui mover projetos para {environment}: {error:#}"); return;}
+            }
+        }
+    }
+    session.lock().await.relocated_for=Some(user);
+    if state_changed {let _=app.emit(ENVIRONMENT_EVENT,EnvironmentEvent{environment:Environment::Personal.id()});}
 }

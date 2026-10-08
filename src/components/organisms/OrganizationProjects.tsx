@@ -1,16 +1,15 @@
 import { ChevronRightIcon } from "lucide-react";
 import { useT } from "@/modules/i18n";
-import { projectOrgId, useOrganizations } from "@/modules/organizations";
 import { openProject, useWorkspace } from "@/modules/workspace";
 import { FolderIcon, PathText } from "@/components/atoms";
 import { SettingsSection } from "@/components/molecules";
 
 /** Os projetos deste computador que entraram na organização: a volta da
  * organização para o trabalho. */
-export function OrganizationProjects({ orgId }: { orgId: string }) {
+export function OrganizationProjects() {
   const t = useT();
-  const links = useOrganizations((state) => state.projects);
-  const projects = useWorkspace((state) => state.data.projects).filter((project) => projectOrgId(project, links) === orgId);
+  // O banco do ambiente da organização só tem projetos dela.
+  const projects = useWorkspace((state) => state.data.projects);
   return (
     <SettingsSection title={t("org.projects.title")} description={t("org.projects.description")}>
       {projects.length === 0

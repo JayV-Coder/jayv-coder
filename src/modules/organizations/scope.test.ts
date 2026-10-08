@@ -1,39 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterScopeGroups, groupByScope, organizationChatOf, organizationChatsOf, splitGeneral } from "./scope";
-
-const project = (id: string) => ({ id });
-
-describe("groupByScope", () => {
-  it("puts unlinked projects in the personal group, first", () => {
-    const groups = groupByScope([project("a"), project("b")], { b: { orgId: "o1", slug: "acme", name: "Acme" } },
-      [{ id: "o1", name: "Acme", slug: "acme", role: "member" }]);
-    expect(groups.map((group) => group.key)).toEqual(["personal", "o1"]);
-    expect(groups[0].projects.map((item) => item.id)).toEqual(["a"]);
-    expect(groups[1].projects.map((item) => item.id)).toEqual(["b"]);
-    expect(groups[1].role).toBe("member");
-  });
-
-  it("keeps organizations without local projects, sorted by name", () => {
-    const groups = groupByScope([], {}, [
-      { id: "o2", name: "Zeta", slug: "zeta", role: "owner" },
-      { id: "o1", name: "Acme", slug: "acme", role: "member" },
-    ]);
-    expect(groups.map((group) => group.key)).toEqual(["personal", "o1", "o2"]);
-    expect(groups.every((group) => group.projects.length === 0)).toBe(true);
-  });
-
-  it("creates a group from the link when the organization is not listed yet", () => {
-    const groups = groupByScope([project("a")], { a: { orgId: "o9", slug: "beta", name: "Beta" } }, []);
-    expect(groups[1]).toMatchObject({ key: "o9", name: "Beta", slug: "beta", role: null });
-    expect(groups[0].projects).toEqual([]);
-  });
-
-  it("places the organization chat project by its own organization before the server links it", () => {
-    const groups = groupByScope([{ id: "a", orgId: "o1" }, { id: "b", orgId: "gone" }], {}, [{ id: "o1", name: "Acme", slug: "acme", role: "owner" }]);
-    expect(groups[1].projects.map((item) => item.id)).toEqual(["a"]);
-    expect(groups[0].projects.map((item) => item.id)).toEqual(["b"]);
-  });
-});
+import { organizationChatOf, organizationChatsOf, searchScopeGroups, splitGeneral } from "./scope";
 
 describe("organizationChatOf", () => {
   const data = {
@@ -63,24 +29,24 @@ describe("organizationChatOf", () => {
   });
 });
 
-describe("filterScopeGroups", () => {
-  const item = (name: string, rootPath = `/work/${name}`, repoKeys: string[] = []) => ({ id: name, name, rootPath, repoKeys });
-  const groups = groupByScope(
-    [item("notes"), item("api", "/work/api", ["github.com/acme/api"]), item("web")],
-    { api: { orgId: "o1", slug: "acme", name: "Acme" }, web: { orgId: "o2", slug: "zeta", name: "Zeta" } },
-    [{ id: "o1", name: "Acme", slug: "acme", role: "member" }, { id: "o2", name: "Zeta", slug: "zeta", role: "owner" }],
-  );
+describe("searchScopeGroups", () => {
+  const groups = [{
+    key: "o1", scope: { kind: "organization" as const, orgId: "o1" }, name: "Acme", slug: "acme", role: "owner" as const,
+    projects: [
+      { id: "a", name: "Shop", rootPath: "/work/shop", repoKeys: ["github.com/acme/web"] },
+      { id: "b", name: "Docs", rootPath: "/work/docs", repoKeys: [] },
+    ],
+  }];
 
-  it("keeps every group for all, only personal or only organizations otherwise", () => {
-    expect(filterScopeGroups(groups, "all", "").map((group) => group.key)).toEqual(["personal", "o1", "o2"]);
-    expect(filterScopeGroups(groups, "personal", "").map((group) => group.key)).toEqual(["personal"]);
-    expect(filterScopeGroups(groups, "organizations", "").map((group) => group.key)).toEqual(["o1", "o2"]);
+  it("keeps every project when the search is empty", () => {
+    expect(searchScopeGroups(groups, "  ")).toBe(groups);
   });
 
   it("searches name, folder and repositories and hides groups without matches", () => {
-    expect(filterScopeGroups(groups, "all", "ACME/API").map((group) => group.key)).toEqual(["o1"]);
-    expect(filterScopeGroups(groups, "all", "work/notes")[0].projects.map((project) => project.id)).toEqual(["notes"]);
-    expect(filterScopeGroups(groups, "organizations", "notes")).toEqual([]);
+    expect(searchScopeGroups(groups, "SHOP")[0].projects.map((item) => item.id)).toEqual(["a"]);
+    expect(searchScopeGroups(groups, "/work/docs")[0].projects.map((item) => item.id)).toEqual(["b"]);
+    expect(searchScopeGroups(groups, "acme/web")[0].projects.map((item) => item.id)).toEqual(["a"]);
+    expect(searchScopeGroups(groups, "nothing")).toEqual([]);
   });
 });
 
