@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands, onCore } from "@/modules/core/bridge";
 import { reportError } from "@/modules/feedback";
 import { readCallback } from "./callback";
+import { firstTime } from "./links";
 import { receiveBillingLink } from "@/modules/plans";
 import { CALLBACK_URL, supabase } from "./client";
 import { authFailure } from "./errors";
@@ -102,6 +103,8 @@ async function hand(session: Session | null) {
  * recuperação de senha: o supabase-js sabe qual pelo verificador do PKCE que
  * guardou. Vincular contas mudou para o painel do site. */
 function receive(url: string) {
+  // O mesmo link volta a cada recarga da janela (troca de ambiente): só vale uma vez.
+  if (!firstTime(url)) return;
   // A volta do pagamento no Stripe (`jayv://billing/...`) não é de login.
   if (receiveBillingLink(url)) return;
   const callback = readCallback(url);
