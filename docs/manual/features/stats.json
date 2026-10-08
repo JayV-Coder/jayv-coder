@@ -8,5 +8,5 @@
   ],
   "title": "Statistics",
   "summary": "Token usage, cost, agent quotas and charts per project and per organization.",
-  "usage": "Open Statistics from the side menu or press Ctrl+3 (⌘3 on Mac)."
+  "usage": "Open Statistics from the side menu or press Ctrl+3 (⌘3 on Mac). With organizations, the page says which environment the spending belongs to; the limit of each agent's plan is shared by all environments."
 }

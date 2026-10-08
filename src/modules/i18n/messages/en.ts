@@ -1200,6 +1200,7 @@ export const en = {
   "core.agentOrder": "Unknown agent in the preference order: “{agent}”.",
 
   "usage.loading": "Adding up usage…",
+  "usage.environmentNote": "Spending in the {name} environment. The limit of each agent's plan is shared by all environments.",
   "usage.empty": "Nothing recorded in this period yet.",
   "usage.scope.project": "Project",
   "usage.scope.chat": "Chat",
@@ -2069,6 +2070,8 @@ export const en = {
   "docs.environments.title": "Environments",
   "docs.environments.summary": "Your personal projects and each organization live in separate environments. Each one keeps its own projects, chats, notes, usage and settings (agents, models, MCP servers, skills and permissions), so nothing from one leaks into another. Your profile, language, theme, plan and two-factor sign-in are the same everywhere, and so is the limit of each agent's plan.",
   "docs.environments.usage": "With at least one organization, a selector under the logo lists Personal and your organizations; choosing one reloads the window with that environment's data. A new organization environment starts with the default settings and no projects: turn on what you need in Settings, and use the organization's page to open its general chat or clone its repositories. In Ctrl+K, choose \"Switch to environment\" for the one you want. Projects you already had for an organization moved to its environment at the first start after updating, and a copy of the old personal database stays next to it.",
+  "whatsNew.item.environmentUsage.title": "Usage by environment",
+  "whatsNew.item.environmentUsage.detail": "Statistics now say which environment the spending belongs to, and the site's Users page shows each account's projects, chats and usage in every environment.",
   "whatsNew.item.environments.title": "Separate environments",
   "whatsNew.item.environments.detail": "Your personal projects and each organization now have their own environment, with their own projects, chats, notes, usage and settings. Switch between them under the logo or with Ctrl+K. Your profile, language, theme and plan stay the same, and the usage limit of each agent's plan is still shared. Projects that belonged to an organization moved to its environment.",
 } satisfies Record<string, Message>;
