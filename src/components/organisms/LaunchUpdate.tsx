@@ -14,7 +14,6 @@ export function LaunchUpdate() {
       <div className="grid justify-items-center gap-3 px-6 text-center">
         <LoaderCircleIcon aria-hidden="true" className="size-6 animate-spin text-muted-foreground motion-reduce:animate-none" />
         <p className="text-sm font-medium">{t("update.launch.checking")}</p>
-        <p className="max-w-xs text-xs text-muted-foreground">{t("update.launch.note")}</p>
       </div>
     </div>
   );

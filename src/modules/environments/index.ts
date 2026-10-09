@@ -41,6 +41,22 @@ export function environmentOptions(organizations: { id: string; name: string; ro
   ];
 }
 
+/** O id da organização dona do ambiente, ou nada no pessoal. */
+export function organizationOf(environment: string): string | null {
+  return environment === PERSONAL ? null : environment;
+}
+
+/** A organização do ambiente aberto, ou nada no pessoal. No ambiente de uma
+ * organização o menu lateral, a paleta e os atalhos mostram só o que é dela. */
+export function useEnvironmentOrganization(): string | null {
+  return useEnvironment((state) => organizationOf(state.active));
+}
+
+/** A mesma organização, fora de um componente (atalhos, bandeja). */
+export function environmentOrganization(): string | null {
+  return organizationOf(useEnvironment.getState().active);
+}
+
 /** O nome do ambiente: o da organização ou o texto do pessoal. */
 export function environmentLabel(id: string, organizations: { id: string; name: string }[], personal: string): string {
   if (id === PERSONAL) return personal;

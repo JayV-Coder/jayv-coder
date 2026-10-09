@@ -62,6 +62,16 @@ describe("paletteCommands", () => {
     expect(found).not.toContain("project-notes");
   });
 
+  it("shows only the organization inside its environment", () => {
+    const organizations = [
+      { id: "o1", name: "Acme", slug: "acme", role: "owner" as const, members: 1, repositories: 1 },
+      { id: "o2", name: "Zeta", slug: "zeta", role: "member" as const, members: 3, repositories: 0 },
+    ];
+    const found = ids({ environment: "o1", organizations, openOrganizationId: null });
+    for (const id of ["organizations", "system", "plans", "system-reload", "org-o2", "org-tab-projects"]) expect(found).not.toContain(id);
+    for (const id of ["projects", "stats", "settings", "profile", "org-o1", "org-tab-stats", "org-tab-members", "org-tab-repositories", "environment-personal", "environment-o2"]) expect(found).toContain(id);
+  });
+
   it("has unique ids and a label for every command", () => {
     const list = paletteCommands(context());
     expect(new Set(list.map((command) => command.id)).size).toBe(list.length);
