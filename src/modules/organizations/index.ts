@@ -12,6 +12,7 @@ export * from "./local";
 export * from "./filter";
 export * from "./dashboard";
 export * from "./repositories";
+export * from "./tabs";
 
 import { can, type Role } from "./rules";
 import { connectDashboard } from "./dashboard";

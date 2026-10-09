@@ -1,14 +1,19 @@
-import { ActivityIcon, Building2Icon, ChartColumnIcon, CreditCardIcon, FolderKanbanIcon, MessagesSquareIcon, CircleHelpIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import {
+  ActivityIcon, Building2Icon, ChartColumnIcon, CircleHelpIcon, CreditCardIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, MessagesSquareIcon,
+  PlugIcon, PlusIcon, SettingsIcon, SparklesIcon, UsersIcon, type LucideIcon,
+} from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
 import { chatsOf, createChat, deleteChat, findProject, leaveProject, openChat, recentChats, useWorkspace } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { startTourHere, tourForView, TOURS, startTour } from "@/modules/tutorial";
 import { BackMark, BrandMark, LogoIcon, UserAvatar } from "@/components/atoms";
-import { ChatRow, NavItem, ProjectPlate } from "@/components/molecules";
+import { ChatRow, NavItem, OrganizationPlate, ProjectPlate } from "@/components/molecules";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/modules/auth";
 import { useProfile } from "@/modules/profile";
-import { useOrganizations } from "@/modules/organizations";
+import { openOrganization, ORGANIZATION_TABS, useOrganizations, type OrganizationTab } from "@/modules/organizations";
+import { useEnvironmentOrganization } from "@/modules/environments";
+import { reportError } from "@/modules/feedback";
 import { openStats } from "@/modules/usage";
 import { allows, useEntitlements } from "@/modules/plans";
 import { cn } from "@/lib/utils";
@@ -16,8 +21,21 @@ import { displayName } from "./ProfileCard";
 import { EnvironmentSwitch } from "./EnvironmentSwitch";
 import { NotificationBell } from "./NotificationBell";
 
+/** O ícone de cada aba da organização no menu, os mesmos da página dela. */
+const TAB_ICONS: Record<OrganizationTab, LucideIcon> = {
+  projects: FolderKanbanIcon,
+  stats: ChartColumnIcon,
+  gate: DoorOpenIcon,
+  members: UsersIcon,
+  repositories: FolderGit2Icon,
+  mcp: PlugIcon,
+  skills: SparklesIcon,
+};
+
 /** A lateral. Sem projeto aberto, ela é o menu principal; com projeto, só mostra
- * a placa dele, a portaria e os chats recentes. */
+ * a placa dele, a portaria e os chats recentes. No ambiente de uma
+ * organização, o menu principal é o dela: a placa da organização no alto e as
+ * abas dela como itens; Organizações, Sistema e Planos ficam só no pessoal. */
 export function Sidebar() {
   const t = useT();
   const email = useAuth((state) => state.email);
@@ -30,6 +48,10 @@ export function Sidebar() {
   // O que o plano (ou o admin) desligou some do menu; Planos fica sempre.
   const entitlements = useEntitlements();
   const can = { organizations: allows(entitlements, "organizations"), stats: allows(entitlements, "stats"), gate: allows(entitlements, "gateBoard") };
+  const orgId = useEnvironmentOrganization();
+  const organization = useOrganizations((state) => (orgId ? state.list.find((item) => item.id === orgId) ?? null : null));
+  // A aba da organização aberta só acende o item quando é a do ambiente.
+  const orgTab = useOrganizations((state) => (view === "organization" && state.openId === orgId ? state.tab : null));
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const project = findProject(data, activeProjectId);
   // O chat só aparece selecionado enquanto a conversa dele está na tela: na
@@ -67,7 +89,25 @@ export function Sidebar() {
 
       <EnvironmentSwitch />
 
-      {!project ? (
+      {!project && orgId ? (
+        <div className="flex min-h-0 flex-col">
+          <OrganizationPlate organization={organization} />
+          <nav className="grid gap-0.5">
+            {/* Os projetos são a tela de projetos do ambiente, que já só tem os
+                da organização; as outras abas abrem a página dela. */}
+            <NavItem active={view === "projects" || orgTab === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+            {ORGANIZATION_TABS.filter(({ tab, feature }) => tab !== "projects" && (!feature || allows(entitlements, feature))).map(({ tab, label }) => {
+              const Icon = TAB_ICONS[tab];
+              return (
+                <NavItem key={tab} data-tour={tab === "stats" ? "nav-stats" : undefined} active={orgTab === tab} mark={<Icon />} shortcut={tab === "stats" ? "stats" : undefined}
+                  onClick={() => void openOrganization(orgId, tab).catch(reportError)}>
+                  {t(label)}
+                </NavItem>
+              );
+            })}
+          </nav>
+        </div>
+      ) : !project ? (
         <nav className="grid gap-0.5">
           <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
           {can.organizations && <NavItem data-tour="nav-organizations" active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>

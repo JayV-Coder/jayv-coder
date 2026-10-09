@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@/modules/auth/client", () => ({ supabase: {} }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }), Toaster: () => null }));
 
-const { environmentLabel, environmentOptions, PERSONAL } = await import("./index");
+const { environmentLabel, environmentOptions, organizationOf, PERSONAL } = await import("./index");
 
 const orgs = [
   { id: "o2", name: "Zeta", role: "member" as const },
@@ -35,5 +35,12 @@ describe("environmentLabel", () => {
     expect(environmentLabel("o1", orgs, "Personal")).toBe("Acme");
     expect(environmentLabel(PERSONAL, orgs, "Personal")).toBe("Personal");
     expect(environmentLabel("gone", orgs, "Personal")).toBe("Personal");
+  });
+});
+
+describe("organizationOf", () => {
+  it("is the organization of an organization environment and nothing in the personal one", () => {
+    expect(organizationOf("o1")).toBe("o1");
+    expect(organizationOf(PERSONAL)).toBeNull();
   });
 });

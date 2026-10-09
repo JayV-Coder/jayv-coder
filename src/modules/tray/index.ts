@@ -1,13 +1,19 @@
 import { commands, onCore } from "@/modules/core";
+import { environmentOrganization } from "@/modules/environments";
+import { reportError } from "@/modules/feedback";
 import { t, useI18n } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
+import { openOrganization } from "@/modules/organizations";
 import { installUpdate, showUpdate, useUpdate } from "@/modules/updates";
 import { openStats } from "@/modules/usage";
 import { createChat, leaveProject, useWorkspace } from "@/modules/workspace";
 
 /** O que cada item do menu da bandeja faz, depois que o núcleo já trouxe a
- * janela de volta. "Novo chat" sem projeto aberto leva à lista de projetos. */
+ * janela de volta. "Novo chat" sem projeto aberto leva à lista de projetos.
+ * No ambiente de uma organização, Organizações e Sistema só trazem a janela
+ * (não existem lá, como no menu lateral) e Estatísticas abre as dela. */
 export function runTrayAction(action: string) {
+  const orgId = environmentOrganization();
   switch (action) {
     case "newChat": {
       const projectId = useWorkspace.getState().activeProjectId;
@@ -16,9 +22,12 @@ export function runTrayAction(action: string) {
       break;
     }
     case "projects": leaveProject(); break;
-    case "organizations": navigate("organizations"); break;
-    case "stats": openStats({ kind: "global" }); break;
-    case "system": navigate("status"); break;
+    case "organizations": if (!orgId) navigate("organizations"); break;
+    case "stats":
+      if (orgId) void openOrganization(orgId, "stats").catch(reportError);
+      else openStats({ kind: "global" });
+      break;
+    case "system": if (!orgId) navigate("status"); break;
     case "settings": navigate("settings"); break;
     case "update":
       if (useUpdate.getState().phase === "available") void installUpdate();

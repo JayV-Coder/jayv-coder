@@ -3,6 +3,7 @@ export { ConfirmAction } from "./ConfirmAction";
 export { PageHeading } from "./PageHeading";
 export { ChatRow } from "./ChatRow";
 export { ProjectPlate } from "./ProjectPlate";
+export { OrganizationPlate } from "./OrganizationPlate";
 export { LayoutSwitch } from "./LayoutSwitch";
 export { Metric } from "./Metric";
 export { FormField } from "./FormField";

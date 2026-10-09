@@ -6,12 +6,12 @@ import { featureActions, requestIntent, type Shortcut } from "@/modules/commands
 import { cancelTurn, openChatFind } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { setLocale, type Key, type LocaleOption } from "@/modules/i18n";
-import { environmentOptions, switchEnvironment } from "@/modules/environments";
+import { environmentOptions, organizationOf, switchEnvironment } from "@/modules/environments";
 import { setLivePanel, useLive } from "@/modules/live";
 import { navigate } from "@/modules/navigation";
 import { clearRead, markAllRead } from "@/modules/notifications";
 import {
-  acceptInvite, declineInvite, openOrganization, organizationChatsOf, type IncomingInvite, type Organization, type OrganizationTab,
+  acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
 import { allows, SETTINGS_TAB_FEATURE } from "@/modules/plans";
 import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
@@ -56,16 +56,6 @@ export interface PaletteContext {
 
 type PlanFeature = Parameters<typeof allows>[1];
 
-const ORGANIZATION_TABS: { tab: OrganizationTab; label: Key; feature?: PlanFeature }[] = [
-  { tab: "projects", label: "org.tab.projects" },
-  { tab: "stats", label: "org.tab.stats", feature: "stats" },
-  { tab: "gate", label: "org.tab.gate", feature: "gateBoard" },
-  { tab: "members", label: "org.tab.members" },
-  { tab: "repositories", label: "org.tab.repositories" },
-  { tab: "mcp", label: "settings.tab.mcp", feature: "mcp" },
-  { tab: "skills", label: "settings.tab.skills", feature: "skills" },
-];
-
 const SETTINGS_TABS: { tab: SettingsTab; label: (t: PaletteContext["t"]) => string }[] = [
   { tab: "app", label: (t) => t("settings.tab.app") },
   { tab: "jev", label: (t) => t("settings.tab.jev") },
@@ -80,10 +70,13 @@ const SEP = " › ";
 /** Todos os comandos da paleta (Ctrl+K), na ordem dos grupos: tudo que tem
  * botão numa tela também tem nome aqui. O que o plano desliga some, como no
  * menu; o que destrói dados (limpar ou apagar chat e projeto) fica só nos
- * botões, que pedem confirmação. */
+ * botões, que pedem confirmação. No ambiente de uma organização, como no menu
+ * lateral, só aparece o que é dela: sem Organizações, Sistema e Planos, e as
+ * Estatísticas são as da organização. */
 export function paletteCommands(ctx: PaletteContext): Command[] {
   const { t, data, project, view, rights } = ctx;
   const can = (feature: PlanFeature) => allows(rights, feature);
+  const orgId = organizationOf(ctx.environment);
   const all: Command[] = [];
   const chat: Chat | null = findChat(data, ctx.activeChatId);
 
@@ -120,7 +113,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
 
   const go = "palette.group.navigate" as const;
   all.push({ id: "projects", group: go, label: t("nav.projects"), shortcut: "projects", run: leaveProject });
-  if (can("organizations")) all.push({ id: "organizations", group: go, label: t("nav.organizations"), shortcut: "organizations", run: () => navigate("organizations") });
+  if (can("organizations") && !orgId) all.push({ id: "organizations", group: go, label: t("nav.organizations"), shortcut: "organizations", run: () => navigate("organizations") });
   // Cada ambiente, menos o que está aberto.
   if (can("organizations")) {
     for (const item of environmentOptions(ctx.organizations)) {
@@ -128,13 +121,18 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       all.push({ id: `environment-${item.id}`, group: go, label: t("palette.environment", { name: item.kind === "personal" ? t("environment.personal") : item.name ?? item.id }), run: () => void switchEnvironment(item.id) });
     }
   }
-  if (can("stats")) all.push({ id: "stats", group: go, label: t("nav.stats"), shortcut: "stats", run: () => openStats({ kind: "global" }) });
+  if (can("stats")) {
+    all.push({
+      id: "stats", group: go, label: t("nav.stats"), shortcut: "stats",
+      run: orgId ? () => void openOrganization(orgId, "stats").catch(reportError) : () => openStats({ kind: "global" }),
+    });
+  }
+  if (!orgId) all.push({ id: "system", group: go, label: t("nav.system"), shortcut: "system", run: () => navigate("status") });
   all.push(
-    { id: "system", group: go, label: t("nav.system"), shortcut: "system", run: () => navigate("status") },
     { id: "settings", group: go, label: t("nav.settings"), shortcut: "settings", run: () => navigate("settings") },
     { id: "profile", group: go, label: t("nav.profile"), run: () => navigate("profile") },
-    { id: "plans", group: go, label: t("nav.plans"), run: () => navigate("plans") },
   );
+  if (!orgId) all.push({ id: "plans", group: go, label: t("nav.plans"), run: () => navigate("plans") });
 
   const projects = "palette.group.projects" as const;
   all.push({ id: "new-project", group: projects, label: t("projects.new"), run: () => { leaveProject(); requestIntent("newProject"); } });
@@ -186,7 +184,9 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   }
 
   if (can("organizations")) {
-    for (const organization of ctx.organizations) {
+    // No ambiente de uma organização, só ela; as outras se abrem trocando de ambiente.
+    const shown = orgId ? ctx.organizations.filter((organization) => organization.id === orgId) : ctx.organizations;
+    for (const organization of shown) {
       all.push({ id: `org-${organization.id}`, group: "palette.group.organizations", label: organization.name, run: () => void openOrganization(organization.id).catch(reportError) });
       // O que a organização dá aos membros (servidores MCP e skills) se cadastra no site.
       if (SITE_URL) {
@@ -204,10 +204,12 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
         all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), run: () => void createChat(general[0].projectId) });
       }
     }
-    const current = ctx.organizations.find((organization) => organization.id === ctx.openOrganizationId);
+    // As abas da organização aberta ou, no ambiente dela, sempre as dela (os
+    // projetos já são o "Projetos" de Navegar).
+    const current = ctx.organizations.find((organization) => organization.id === (orgId ?? ctx.openOrganizationId));
     if (current) {
       for (const { tab, label, feature } of ORGANIZATION_TABS) {
-        if (feature && !can(feature)) continue;
+        if ((feature && !can(feature)) || (orgId && tab === "projects")) continue;
         all.push({ id: `org-tab-${tab}`, group: "palette.group.organization", label: `${current.name}${SEP}${t(label)}`, run: () => void openOrganization(current.id, tab).catch(reportError) });
       }
     }
@@ -244,9 +246,10 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     ...TOURS.map((tour) => ({ id: `tutorial-${tour.id}`, group: help, label: t("tutorial.palette", { name: t(`tutorial.tour.${tour.id}` as never) }), run: () => startTour(tour.id) })),
     { id: "tutorial-auto", group: help, label: t("tutorial.auto"), run: () => setAutoTours(!useTutorial.getState().auto) },
     { id: "tutorial-reset", group: help, label: t("tutorial.reset"), run: () => resetTours() },
-    { id: "system-reload", group: help, label: t("system.reload"), run: () => { navigate("status"); featureActions.reloadSystem?.(); } },
     { id: "system-copy", group: help, label: t("system.copy"), run: () => void featureActions.copySystemReport?.().catch(reportError) },
   );
+  // Reler o sistema abre a tela Sistema, que só existe no ambiente pessoal.
+  if (!orgId) all.push({ id: "system-reload", group: help, label: t("system.reload"), run: () => { navigate("status"); featureActions.reloadSystem?.(); } });
   if (SITE_URL) {
     all.push(
       { id: "site-docs", group: help, label: t("palette.docs"), run: () => void openSite("/docs").catch(reportError) },

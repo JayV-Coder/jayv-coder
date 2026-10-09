@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { openChatFind } from "@/modules/conversation";
 import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
-import { useEnvironment } from "@/modules/environments";
+import { environmentOrganization, useEnvironment } from "@/modules/environments";
 import { useLocale, useLocales, useT } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
-import { useOrganizations } from "@/modules/organizations";
+import { reportError } from "@/modules/feedback";
+import { openOrganization, useOrganizations } from "@/modules/organizations";
 import { isDirty, useSettings } from "@/modules/settings";
 import { hasFeature, useEntitlements } from "@/modules/plans";
 import { openStats } from "@/modules/usage";
@@ -29,14 +30,20 @@ function Marked({ text, positions }: { text: string; positions: number[] }) {
 }
 
 /** O que cada atalho global faz. Atalho de projeto sem projeto aberto, ou de
- * chat sem chat aberto, não faz nada. */
+ * chat sem chat aberto, não faz nada. No ambiente de uma organização, como no
+ * menu lateral, Organizações e Sistema não existem e as Estatísticas são as
+ * dela. */
 function runShortcut(shortcut: Shortcut, projectId: string | null, chatId: string | null) {
+  const orgId = environmentOrganization();
   switch (shortcut) {
     case "palette": togglePalette(); break;
     case "projects": leaveProject(); break;
-    case "organizations": navigate("organizations"); break;
-    case "stats": openStats({ kind: "global" }); break;
-    case "system": navigate("status"); break;
+    case "organizations": if (!orgId) navigate("organizations"); break;
+    case "stats":
+      if (orgId) void openOrganization(orgId, "stats").catch(reportError);
+      else openStats({ kind: "global" });
+      break;
+    case "system": if (!orgId) navigate("status"); break;
     case "settings": navigate("settings"); break;
     case "newChat": if (projectId) void createChat(projectId); break;
     case "gate": if (projectId) navigate("gate"); break;
