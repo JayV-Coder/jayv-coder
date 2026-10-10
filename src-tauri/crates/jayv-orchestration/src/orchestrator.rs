@@ -233,9 +233,13 @@ impl Orchestrator {
         if self.llm_built.is_some_and(|(built,at)|built==print&&at.elapsed()<LLM_REFRESH) { return; }
         self.llm_built=Some((print,Instant::now()));
         let (mut providers,models)=crate::llm::to_config(settings);
-        if let Some(claude)=providers.get_mut(crate::llm::AgentId::Claude.key()) {
-            claude.args=crate::llm::guarding(&claude.args,&self.config.privacy.deny);
-            claude.plan_args=crate::llm::guarding(&claude.plan_args,&self.config.privacy.deny);
+        // Os arquivos protegidos fora do alcance das ferramentas, no mod que
+        // sabe fazer isso pela linha de comando (o Claude, `LlmMod::guard`).
+        for (name,provider) in providers.iter_mut() {
+            let Ok(id)=crate::llm::AgentId::parse(name) else { continue };
+            let module=id.module();
+            provider.args=module.guard(&provider.args,&self.config.privacy.deny);
+            if !provider.plan_args.is_empty() { provider.plan_args=module.guard(&provider.plan_args,&self.config.privacy.deny); }
         }
         // O agente sem programa, ou sabidamente sem login, sai da disputa
         // (enquanto houver outro): abri-lo só daria o erro, e o do Codex

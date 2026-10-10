@@ -1,10 +1,10 @@
 import { Building2Icon, FolderDownIcon, UserIcon } from "lucide-react";
 import type { Project } from "@/modules/core";
-import { formatSince, useT, type Key } from "@/modules/i18n";
-import { openOrganization, organizationChatsOf, splitGeneral, type ScopeGroup } from "@/modules/organizations";
+import { useT, type Key } from "@/modules/i18n";
+import { openOrganization, splitGeneral, type ScopeGroup } from "@/modules/organizations";
 import { reportError } from "@/modules/feedback";
 import { PERSONAL, useEnvironment } from "@/modules/environments";
-import { chatTitle, chatsOf, createChat, deleteProject, openChat, openProject, useWorkspace, type Layout } from "@/modules/workspace";
+import { chatsOf, createChat, deleteProject, openProject, useWorkspace, type Layout } from "@/modules/workspace";
 import { EmptyText } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,9 @@ import { ProjectCard } from "./ProjectCard";
 
 /** Um bloco da lista de projetos: os pessoais ou os de uma organização, com o
  * cabeçalho dizendo de quem são. No ambiente de uma organização o cabeçalho
- * fica no alto da página (`heading` desligado), com o chat dela. */
+ * fica no alto da página (`heading` desligado), com o chat dela, e os chats
+ * gerais moram na coluna ao lado da lateral (`GeneralChatsColumn`): aqui só
+ * os projetos de cada repositório. */
 export function ProjectScopeSection({ group, layout, heading = true }: { group: ScopeGroup<Project>; layout: Layout; heading?: boolean }) {
   const t = useT();
   const data = useWorkspace((state) => state.data);
@@ -22,10 +24,9 @@ export function ProjectScopeSection({ group, layout, heading = true }: { group: 
   // no site, por owner ou maintainer — nem enquanto a lista delas chega.
   const deletable = useEnvironment((state) => state.active === PERSONAL) && personal;
   const Icon = personal ? UserIcon : Building2Icon;
-  // Os chats gerais (todos os repositórios juntos) ficam num bloco à parte dos
-  // projetos de cada repositório.
+  // O projeto geral (todos os repositórios juntos) não entra: os chats dele
+  // ficam na coluna dos chats gerais.
   const { repositories } = splitGeneral(group.projects);
-  const generalChats = personal ? [] : organizationChatsOf(data, group.key);
   const count = repositories.length;
   return (
     <section aria-labelledby={heading ? `scope-${group.key}` : undefined} className="grid gap-3">
@@ -43,27 +44,6 @@ export function ProjectScopeSection({ group, layout, heading = true }: { group: 
         </div>
         {group.role && <Badge variant="outline">{t(`org.role.${group.role}` as Key)}</Badge>}
       </header>}
-      {generalChats.length > 0 && (
-        <div className="grid gap-2">
-          <h4 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("projects.org.general")}</h4>
-          <p className="text-xs text-muted-foreground">{t("projects.org.generalHint")}</p>
-          <ul className="grid gap-1.5">
-            {generalChats.slice(0, 5).map((chat) => (
-              <li key={chat.id}>
-                <button
-                  type="button"
-                  onClick={() => openChat(chat.id)}
-                  className="flex w-full min-w-0 items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-start hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                >
-                  <span className="truncate text-sm">{chatTitle(chat)}</span>
-                  <span className="shrink-0 text-caption text-muted-foreground">{formatSince(chat.updatedAt)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {generalChats.length > 0 && count > 0 && <h4 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("projects.org.repositories")}</h4>}
       {count === 0
         ? (
           <div className="flex flex-wrap items-center gap-3">

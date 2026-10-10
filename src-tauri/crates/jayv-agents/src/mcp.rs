@@ -53,7 +53,8 @@ impl Default for McpServer {
 /// Todo agente recebe os servidores, cada um do jeito que sabe: Claude, Codex
 /// e Copilot pela linha de comando, o Kilo Code pela configuração em linha
 /// (`KILO_CONFIG_CONTENT`), o Cursor por um bloco gerido do `~/.cursor/mcp.json`
-/// e os gateways de API pelo próprio JayV (`mcp_client`). Só com o "Aprovar
+/// e os gateways e mods de API pelo próprio JayV (`mcp_client`). O mod criado
+/// de linha de comando não tem por onde recebê-los: a tela não oferece. Só com o "Aprovar
 /// servidores MCP" do agente ligado (`AgentSettings::with_mcp`).
 pub fn receives(_agent:AgentId)->bool { true }
 
@@ -71,7 +72,9 @@ impl McpServer {
         self.env=self.env.into_iter().map(|(key,value)|(key.trim().to_string(),value)).filter(|(key,_)|!key.is_empty()).collect();
         self.headers=self.headers.into_iter().map(|(key,value)|(key.trim().to_string(),value)).filter(|(key,_)|!key.is_empty()).collect();
         if self.env.keys().any(|key|!key.chars().all(|char|char.is_ascii_alphanumeric()||char=='_')) { bail!(Text::new("mcp.invalid.env")); }
-        self.agents.retain(|agent|AgentId::ALL.iter().any(|known|known.key()==agent&&receives(*known)));
+        // Os mods do app e os criados (`mod-…`): o servidor de um mod que não
+        // existe mais só não chega a ninguém.
+        self.agents.retain(|agent|AgentId::parse(agent).is_ok_and(receives));
         match self.transport.as_str() {
             STDIO=>{ if self.command.is_empty() { bail!(Text::new("mcp.invalid.command")); } self.url.clear(); self.headers.clear(); }
             HTTP=>{ if !(self.url.starts_with("https://")||self.url.starts_with("http://")) { bail!(Text::new("mcp.invalid.url")); } self.command.clear(); self.args.clear(); self.env.clear(); }
@@ -130,7 +133,7 @@ pub fn args_for(servers:&[McpServer],agent:AgentId)->Vec<String> {
     match agent {
         AgentId::Codex=>servers.iter().filter(|server|server.serves(agent)).flat_map(|server|server.codex_overrides()).flat_map(|value|["-c".to_string(),value]).collect(),
         AgentId::Copilot=>config_json(servers,agent,Map::new()).map(|config|vec!["--additional-mcp-config".to_string(),config]).unwrap_or_default(),
-        AgentId::Claude|AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>vec![],
+        _=>vec![],
     }
 }
 

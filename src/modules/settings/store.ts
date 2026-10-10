@@ -1,6 +1,8 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import {
-  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type GatewayCheck, type KnownModel, isGateway,
+  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type BuiltInAgentId, type CustomAgentId, type CustomModOptions,
+  type GatewayCheck, type KnownModel, CUSTOM_MOD_PREFIX, editsProject, isApiAgent, isCustomMod, isGateway,
   type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
@@ -10,13 +12,17 @@ import { discardSkills, isSkillsDirty, loadSkills, saveSkillChanges, useSkills }
 import { setThemePreference, useTheme, type ThemePreference } from "@/modules/theme";
 import { setAutoTours, useTutorial } from "@/modules/tutorial";
 import { setInstallOnLaunch, useUpdate } from "@/modules/updates";
+import { lineProblem, modId, splitLine } from "./mods";
 
-export const AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"];
-export const AGENT_LABELS: Record<AgentId, string> = {
+/** Os mods que vêm com o app, na ordem das abas. Os criados vêm depois, pelo
+ * nome (`agentIds`). */
+export const AGENTS: BuiltInAgentId[] = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"];
+export const AGENT_LABELS: Record<BuiltInAgentId, string> = {
   claude: "Claude Code", codex: "Codex", copilot: "GitHub Copilot", cursor: "Cursor", kilo: "Kilo Code", openrouter: "OpenRouter", litellm: "LiteLLM",
 };
-/** Os agentes que são um programa na máquina: só neles há o que conferir
- * (instalado, versão, login). Os gateways de API têm endereço e chave. */
+/** Os mods do app que são um programa na máquina: só neles há o que conferir
+ * (instalado, versão, login). Os gateways de API têm endereço e chave. Com as
+ * configurações carregadas, `cliAgentIds` soma os mods criados. */
 export const CLI_AGENTS: AgentId[] = AGENTS.filter((id) => !isGateway(id));
 
 /** O modelo como está na aba: `uid` segura a linha enquanto o identificador
@@ -75,6 +81,32 @@ const DEFAULT_PREFS: Omit<AppPrefs, "locale"> = { theme: "system", tutorialAuto:
 let next = 0;
 const uid = () => `model-${++next}`;
 const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null, copilot: null, cursor: null, kilo: null, openrouter: null, litellm: null });
+
+/** O nome de um mod onde quer que ele apareça (o chat, o uso, a portaria): o
+ * do app, o que a pessoa deu ao criado ou, sem as configurações carregadas, o
+ * id do criado sem o prefixo. Outro texto (um provedor antigo) fica como está. */
+export function agentLabel(id: string, agents: AgentSettings[] = useSettings.getState().agents): string {
+  if (id in AGENT_LABELS) return AGENT_LABELS[id as BuiltInAgentId];
+  if (!isCustomMod(id)) return id;
+  const name = (agents.find((agent) => agent.id === id)?.options as Partial<CustomModOptions> | undefined)?.name?.trim();
+  return name || id.slice(CUSTOM_MOD_PREFIX.length);
+}
+
+/** Os mods na ordem das abas: os do app e depois os criados, pelo nome. */
+export function agentIds(agents: AgentSettings[]): AgentId[] {
+  const customs = agents.filter((agent) => isCustomMod(agent.id)).map((agent) => agent.id)
+    .sort((a, b) => agentLabel(a, agents).localeCompare(agentLabel(b, agents)) || a.localeCompare(b));
+  return [...AGENTS, ...customs];
+}
+
+/** Os mods que são um programa na máquina: os do app e os criados de linha
+ * de comando. */
+export function cliAgentIds(agents: AgentSettings[]): AgentId[] {
+  return agentIds(agents).filter((id) => {
+    const agent = agents.find((item) => item.id === id);
+    return agent ? !isApiAgent(agent) : !isGateway(id);
+  });
+}
 
 export const useSettings = create<SettingsState>(() => ({
   loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [], cursor: [], kilo: [], openrouter: [], litellm: [] }, timeoutRange: [30, 3600],
@@ -151,6 +183,9 @@ function apply(snapshot: SettingsSnapshot) {
   });
 }
 
+/** Os mods na ordem das abas, acompanhando as configurações. */
+export const useAgentIds = () => useSettings(useShallow((state) => agentIds(state.agents)));
+
 export async function loadSettings() {
   try {
     const [agents, core] = await Promise.all([commands.getSettings(), commands.getCoreSettings()]);
@@ -170,7 +205,7 @@ export async function refreshModels(agent: AgentId) {
   try {
     const { snapshot, listed } = await commands.refreshModels(agent);
     apply(snapshot);
-    const name = AGENT_LABELS[agent];
+    const name = agentLabel(agent);
     if (listed) notify(t("model.refresh.done", { count: snapshot.settings.models.filter((model) => model.agent === agent).length, agent: name }));
     else notify(t("model.refresh.silent", { agent: name }), true);
   } catch (error) {
@@ -210,12 +245,63 @@ export function removeModel(uid: string) {
 export function addModel(agent: AgentId) {
   const { catalog, models } = useSettings.getState();
   const taken = new Set(models.filter((model) => model.agent === agent).map((model) => model.model));
-  const known = catalog[agent].find((model) => !taken.has(model.id));
+  const known = (catalog[agent] ?? []).find((model) => !taken.has(model.id));
+  const owner = useSettings.getState().agents.find((item) => item.id === agent);
+  const textOnly = owner ? !editsProject(owner) : isGateway(agent);
   const model: ModelDraft = {
-    uid: uid(), agent, enabled: true, capabilities: known?.capabilities ?? (isGateway(agent) ? ["chat", "reasoning"] : ["chat", "code", "reasoning", "tools"]),
+    uid: uid(), agent, enabled: true, capabilities: known?.capabilities ?? (textOnly ? ["chat", "reasoning"] : ["chat", "code", "reasoning", "tools"]),
     model: known?.id ?? "", contextWindow: known?.contextWindow ?? 128000, costClass: known?.costClass ?? "medium", speed: known?.speed ?? "medium",
   };
   useSettings.setState({ models: [...models, model] });
+}
+
+/** O que o formulário de Criar mod junta. As linhas vão como a pessoa as
+ * escreveu; `model` é o primeiro modelo (os outros se somam na aba do mod). */
+export interface ModDraft {
+  name: string;
+  kind: CustomModOptions["kind"];
+  command: string;
+  args: string;
+  planArgs: string;
+  edits: boolean;
+  protocol: CustomModOptions["protocol"];
+  baseUrl: string;
+  apiKey: string;
+  keyRequired: boolean;
+  model: string;
+}
+
+export const EMPTY_MOD: ModDraft = { name: "", kind: "cli", command: "", args: "", planArgs: "", edits: false, protocol: "openai", baseUrl: "", apiKey: "", keyRequired: false, model: "" };
+
+/** Quantos mods criados um ambiente aceita (o `MAX_MODS` do núcleo). */
+export const MAX_MODS = 20;
+
+/** Cria o mod no rascunho, ligado e com o primeiro modelo, e devolve o id:
+ * como o resto da tela, ele só vale depois do Salvar. */
+export function createMod(draft: ModDraft): CustomAgentId {
+  const state = useSettings.getState();
+  const id = modId(draft.name, state.agents.map((agent) => agent.id));
+  const cli = draft.kind === "cli";
+  const apiKey = draft.apiKey.trim();
+  const options: CustomModOptions = {
+    name: draft.name.trim(), kind: draft.kind,
+    args: cli ? splitLine(draft.args) : [], planArgs: cli ? splitLine(draft.planArgs) : [], edits: cli && draft.edits,
+    protocol: draft.protocol, baseUrl: cli ? "" : draft.baseUrl.trim(), keyRequired: !cli && draft.keyRequired,
+    approveMcps: false, hasKey: false, ...(!cli && apiKey ? { apiKey } : {}),
+  };
+  const agent: AgentSettings = { id, enabled: true, command: cli ? draft.command.trim() : "", timeout: 300, options };
+  const name = draft.model.trim();
+  const models: ModelDraft[] = name
+    ? [{ uid: uid(), agent: id, model: name, enabled: true, capabilities: editsProject(agent) ? ["chat", "code", "reasoning", "tools"] : ["chat", "reasoning"], contextWindow: 128000, costClass: "medium", speed: "medium" }]
+    : [];
+  useSettings.setState({ agents: [...state.agents, agent], models: [...state.models, ...models] });
+  return id;
+}
+
+/** Tira o mod criado do rascunho, com os modelos dele. Os do app não saem. */
+export function removeMod(id: AgentId) {
+  if (!isCustomMod(id)) return;
+  useSettings.setState((state) => ({ agents: state.agents.filter((agent) => agent.id !== id), models: state.models.filter((model) => model.agent !== id) }));
 }
 
 /** Confere se o executável do agente responde. `quiet` é a conferência de
@@ -224,7 +310,7 @@ export function addModel(agent: AgentId) {
 export async function checkAgent(id: AgentId, quiet = false) {
   const agent = useSettings.getState().agents.find((item) => item.id === id);
   if (!agent || !agent.command.trim()) return;
-  const setProbe = (probe: ProbeState) => useSettings.setState((state) => (sameProbe(state.probes[id], probe) ? state : { probes: { ...state.probes, [id]: probe } }));
+  const setProbe = (probe: ProbeState) => useSettings.setState((state) => (sameProbe(state.probes[id] ?? null, probe) ? state : { probes: { ...state.probes, [id]: probe } }));
   if (!quiet) setProbe("checking");
   let probe: ProbeState;
   try {
@@ -259,7 +345,7 @@ function sameProbe(a: ProbeState, b: ProbeState) {
 
 /** Confere todos os agentes agora (o botão da página Sistema). */
 export function checkAllAgents() {
-  for (const agent of CLI_AGENTS) void checkAgent(agent);
+  for (const agent of cliAgentIds(useSettings.getState().agents)) void checkAgent(agent);
 }
 
 /** De quanto em quanto tempo a tela de configurações confere os agentes
@@ -269,7 +355,7 @@ export const PROBE_EVERY_MS = 10_000;
 /** Confere os três agentes agora e depois a cada `PROBE_EVERY_MS`, e também ao
  * voltar para a janela. Devolve quem para tudo. */
 export function watchAgents() {
-  const all = () => { for (const agent of CLI_AGENTS) void checkAgent(agent, true); };
+  const all = () => { for (const agent of cliAgentIds(useSettings.getState().agents)) void checkAgent(agent, true); };
   const timer = window.setInterval(() => { if (document.visibilityState === "visible") all(); }, PROBE_EVERY_MS);
   window.addEventListener("focus", all);
   return () => {
@@ -288,7 +374,23 @@ export function problems(state: Pick<SettingsState, "agents" | "models">, id: Ag
   const agent = state.agents.find((item) => item.id === id);
   if (!agent) return found;
   const command = agent.command.trim();
-  if (isGateway(id)) {
+  if (isCustomMod(id)) {
+    const options = agent.options as CustomModOptions;
+    if (!options.name.trim()) found.name = "mods.name.empty";
+    if (options.kind === "cli") {
+      if (!command) found.command = "agent.command.empty";
+      else if (/\s/.test(command)) found.command = "agent.command.hint";
+      if (lineProblem(options.args)) found.args = lineProblem(options.args)!;
+      if (lineProblem(options.planArgs)) found.planArgs = lineProblem(options.planArgs)!;
+      else if (options.edits && options.planArgs.length === 0) found.planArgs = "mods.planArgs.required";
+    } else {
+      const url = options.baseUrl.trim();
+      if (!url) found.baseUrl = "mods.baseUrl.required";
+      else if (!/^https?:\/\/[^\s/@]+/i.test(url)) found.baseUrl = "gateway.baseUrl.invalid";
+      if (options.keyRequired && agent.enabled && !options.hasKey && !options.apiKey?.trim()) found.apiKey = "gateway.apiKey.required";
+      if (options.apiKey && /\s/.test(options.apiKey)) found.apiKey = "gateway.apiKey.invalid";
+    }
+  } else if (isGateway(id)) {
     const options = (agent as AgentSettings<"openrouter">).options;
     const url = options.baseUrl.trim();
     if (url && !/^https?:\/\/[^\s/@]+/i.test(url)) found.baseUrl = "gateway.baseUrl.invalid";

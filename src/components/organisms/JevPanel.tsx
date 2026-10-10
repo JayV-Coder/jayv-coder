@@ -2,7 +2,7 @@ import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId, type CoreSettings, type CoreSnapshot, type Permission } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { useEntitlements, locks, toggleState, MIN_CACHE_TTL, type FeatureKey } from "@/modules/plans";
-import { AGENTS, AGENT_LABELS, updateCore } from "@/modules/settings";
+import { agentLabel, updateCore, useAgentIds, useSettings } from "@/modules/settings";
 import { AgentIcon } from "@/components/atoms";
 import { FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -124,11 +124,15 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
 }
 
 /** Quem ganha quando dois agentes empatam na nota: espalhados entre os chats,
- * ou na ordem escolhida aqui. A ordem guarda os quatro agentes. */
+ * ou na ordem escolhida aqui. A ordem guarda todos os mods, os do app e os
+ * criados; o mod apagado sai dela. */
 function AgentOrderField({ order }: { order: AgentId[] }) {
   const t = useT();
+  const ids = useAgentIds();
+  const agents = useSettings((state) => state.agents);
   const ordered = order.length > 0;
-  const full = [...order, ...AGENTS.filter((agent) => !order.includes(agent))];
+  const full = [...order.filter((agent) => ids.includes(agent)), ...ids.filter((agent) => !order.includes(agent))];
+  const name = (agent: AgentId) => agentLabel(agent, agents);
   const move = (index: number, step: -1 | 1) => {
     const next = [...full];
     [next[index], next[index + step]] = [next[index + step], next[index]];
@@ -145,9 +149,9 @@ function AgentOrderField({ order }: { order: AgentId[] }) {
               <li key={agent} className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
                 <span className="w-4 text-muted-foreground">{index + 1}</span>
                 <AgentIcon agent={agent} className="size-4" />
-                <span className="flex-1">{AGENT_LABELS[agent]}</span>
-                <Button size="icon-sm" variant="ghost" disabled={index === 0} onClick={() => move(index, -1)} aria-label={t("jev.agentOrder.up", { agent: AGENT_LABELS[agent] })}><ArrowUpIcon /></Button>
-                <Button size="icon-sm" variant="ghost" disabled={index === full.length - 1} onClick={() => move(index, 1)} aria-label={t("jev.agentOrder.down", { agent: AGENT_LABELS[agent] })}><ArrowDownIcon /></Button>
+                <span className="flex-1">{name(agent)}</span>
+                <Button size="icon-sm" variant="ghost" disabled={index === 0} onClick={() => move(index, -1)} aria-label={t("jev.agentOrder.up", { agent: name(agent) })}><ArrowUpIcon /></Button>
+                <Button size="icon-sm" variant="ghost" disabled={index === full.length - 1} onClick={() => move(index, 1)} aria-label={t("jev.agentOrder.down", { agent: name(agent) })}><ArrowDownIcon /></Button>
               </li>
             ))}
           </ol>

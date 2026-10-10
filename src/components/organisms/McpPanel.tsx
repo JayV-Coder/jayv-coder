@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { MCP_AGENTS } from "./McpServerForm";
+import { useMcpAgents } from "./McpServerForm";
 
 /** Configurações › MCP: os servidores que o JayV entrega aos agentes em cada
  * pedido. Ligar, desligar, editar, adicionar e remover mudam só a lista da
@@ -20,12 +20,13 @@ export function McpPanel() {
   const servers = useMcp(mcpList);
   const saved = useMcp((state) => state.servers);
   const drafting = useMcp((state) => state.drafting);
+  const mcpAgents = useMcpAgents();
   const [pasted, setPasted] = useState("");
   // A tela de configurações relê ao abrir; isto só cobre a primeira vez.
   useEffect(() => { if (useMcp.getState().servers === null) void loadMcp(); }, []);
   if (servers === null) return <LoadingNote>{t("settings.loading")}</LoadingNote>;
 
-  const agentsOf = (agents: string[]) => agents.length === 0 ? t("mcp.agents.all") : agents.map((id) => MCP_AGENTS.find((agent) => agent.id === id)?.name ?? id).join(", ");
+  const agentsOf = (agents: string[]) => agents.length === 0 ? t("mcp.agents.all") : agents.map((id) => mcpAgents.find((agent) => agent.id === id)?.name ?? id).join(", ");
   // Novo ou mudado desde o que está gravado: ganha o selo de não salvo.
   const unsaved = (name: string) => {
     const before = saved?.find((server) => server.name === name);

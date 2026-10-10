@@ -255,12 +255,26 @@ export interface SystemStatus {
   performance_records: number;
 }
 
-export type AgentId = "claude" | "codex" | "copilot" | "cursor" | "kilo" | "openrouter" | "litellm";
+/** Os mods de integração que vêm com o app. */
+export type BuiltInAgentId = "claude" | "codex" | "copilot" | "cursor" | "kilo" | "openrouter" | "litellm";
+/** Um mod de integração criado pela pessoa em Configurações › Mods. */
+export type CustomAgentId = `mod-${string}`;
+/** Cada integração com LLM é um mod: um dos que vêm com o app ou um criado. */
+export type AgentId = BuiltInAgentId | CustomAgentId;
+
+/** O prefixo dos mods criados (o mesmo `CUSTOM_PREFIX` do núcleo). */
+export const CUSTOM_MOD_PREFIX = "mod-";
+export const isCustomMod = (id: string): id is CustomAgentId => id.startsWith(CUSTOM_MOD_PREFIX);
 
 /** Os gateways de API: falam por HTTP (endereço e chave) e só respondem por
  * texto, sem editar o projeto. Os outros são programas de linha de comando. */
 export const GATEWAY_AGENTS: AgentId[] = ["openrouter", "litellm"];
 export const isGateway = (id: AgentId) => GATEWAY_AGENTS.includes(id);
+
+/** O mod fala por HTTP (endereço e chave): um gateway ou um mod criado de API. */
+export const isApiAgent = (agent: AgentSettings) => isGateway(agent.id) || (isCustomMod(agent.id) && (agent.options as CustomModOptions).kind === "api");
+/** O mod edita o projeto, ou só responde por texto. */
+export const editsProject = (agent: AgentSettings) => (isCustomMod(agent.id) ? (agent.options as CustomModOptions).kind === "cli" && (agent.options as CustomModOptions).edits : !isGateway(agent.id));
 export type CostClass = "free" | "low" | "medium" | "high";
 export type Speed = "fast" | "medium" | "slow";
 export type Capability = "chat" | "code" | "reasoning" | "tools";
@@ -315,6 +329,27 @@ export interface KiloOptions {
   approveMcps: boolean;
 }
 
+/** A definição de um mod criado (`mods::custom` no núcleo). Linha de comando:
+ * o programa é o `command` do agente, e `args` levam `{model}` e, sozinho num
+ * argumento, `{prompt}`. API: o endereço compatível com a OpenAI ou com a
+ * Anthropic, com a chave guardada só neste computador. */
+export interface CustomModOptions {
+  name: string;
+  kind: "cli" | "api";
+  args: string[];
+  /** A linha que não escreve no projeto: o planejamento e a política. */
+  planArgs: string[];
+  /** O mod escreve no projeto (os modelos podem ter código e ferramentas). */
+  edits: boolean;
+  protocol: "openai" | "anthropic";
+  baseUrl: string;
+  keyRequired: boolean;
+  approveMcps: boolean;
+  hasKey: boolean;
+  apiKey?: string;
+  clearKey?: boolean;
+}
+
 /** As opções dos gateways. A chave nunca volta do núcleo: `hasKey` diz se há
  * uma guardada; `apiKey` e `clearKey` só vão da tela ao salvar. */
 export interface GatewayOptions {
@@ -331,7 +366,7 @@ export type Mechanism = "webSearch" | "webFetch" | "shell" | "githubTools";
 
 /** Os mecanismos que a CLI de cada agente sabe ligar por flag (o mesmo
  * `mechanisms_of` do núcleo). O Cursor não tem flag para nenhum. */
-export const AGENT_MECHANISMS: Record<AgentId, Mechanism[]> = {
+export const AGENT_MECHANISMS: Record<BuiltInAgentId, Mechanism[]> = {
   claude: ["webSearch", "webFetch", "shell"],
   codex: ["webSearch"],
   copilot: ["webFetch", "shell", "githubTools"],
@@ -341,6 +376,9 @@ export const AGENT_MECHANISMS: Record<AgentId, Mechanism[]> = {
   litellm: [],
 };
 
+/** Os mecanismos do mod: o mod criado não liga nenhum por flag. */
+export const mechanismsOf = (id: AgentId): Mechanism[] => (isCustomMod(id) ? [] : AGENT_MECHANISMS[id]);
+
 export interface AgentOptions {
   claude: ClaudeOptions;
   codex: CodexOptions;
@@ -349,6 +387,7 @@ export interface AgentOptions {
   kilo: KiloOptions;
   openrouter: GatewayOptions;
   litellm: GatewayOptions;
+  [custom: CustomAgentId]: CustomModOptions;
 }
 
 export interface AgentSettings<A extends AgentId = AgentId> {

@@ -1,5 +1,5 @@
-import type { Chat, Project, View, WorkspaceData } from "@/modules/core";
-import { WORK_MODES } from "@/modules/core";
+import type { AgentId, Chat, CustomModOptions, Project, View, WorkspaceData } from "@/modules/core";
+import { isApiAgent, isCustomMod, isGateway, WORK_MODES } from "@/modules/core";
 import { signOut } from "@/modules/auth";
 import { showChanges } from "@/modules/changelog";
 import { featureActions, requestIntent, type Shortcut } from "@/modules/commands";
@@ -13,8 +13,8 @@ import { clearRead, markAllRead } from "@/modules/notifications";
 import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
-import { allows, SETTINGS_TAB_FEATURE } from "@/modules/plans";
-import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
+import { allows, settingsTabFeature } from "@/modules/plans";
+import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -61,7 +61,7 @@ const SETTINGS_TABS: { tab: SettingsTab; label: (t: PaletteContext["t"]) => stri
   { tab: "jev", label: (t) => t("settings.tab.jev") },
   { tab: "mcp", label: (t) => t("settings.tab.mcp") },
   { tab: "skills", label: (t) => t("settings.tab.skills") },
-  ...AGENTS.map((id) => ({ tab: id as SettingsTab, label: () => AGENT_LABELS[id] })),
+  { tab: "mods", label: (t) => t("settings.tab.mods") },
 ];
 
 const PERIODS: Period[] = ["today", "7d", "30d", "all"];
@@ -146,10 +146,18 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   }
 
   const settings = "palette.group.settings" as const;
-  for (const { tab, label } of SETTINGS_TABS) {
-    const tabFeature = SETTINGS_TAB_FEATURE[tab];
+  // Uma aba por mod: os do app e os criados, com o nome que a pessoa deu.
+  const agents = useSettings.getState().agents;
+  const mods = agentIds(agents);
+  const tabs = [...SETTINGS_TABS, ...mods.map((id) => ({ tab: id as SettingsTab, label: () => agentLabel(id, agents) }))];
+  for (const { tab, label } of tabs) {
+    const tabFeature = settingsTabFeature(tab);
     if (tabFeature && !can(tabFeature)) continue;
     all.push({ id: `settings-${tab}`, group: settings, label: `${t("nav.settings")}${SEP}${label(t)}`, run: () => openSettingsTab(tab) });
+  }
+  // Criar mod: abre a aba Mods com o formulário.
+  if (can("customMods") && mods.filter(isCustomMod).length < MAX_MODS) {
+    all.push({ id: "mods-create", group: settings, label: t("mods.create"), run: () => { openSettingsTab("mods"); requestIntent("createMod"); } });
   }
   if (ctx.settingsDirty) {
     all.push(
@@ -157,21 +165,30 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       { id: "settings-discard", group: settings, label: t("settings.discard"), run: discardChanges },
     );
   }
-  // O "Aprovar servidores MCP" de cada agente: abre a aba dele e vira a chave,
-  // e o Salvar da página (ou o comando dele) grava.
-  for (const id of AGENTS) {
-    const tabFeature = SETTINGS_TAB_FEATURE[id];
-    if (!can("mcp") || (tabFeature && !can(tabFeature))) continue;
-    const on = useSettings.getState().agents.find((agent) => agent.id === id)?.options as { approveMcps?: boolean } | undefined;
+  // O "Aprovar servidores MCP" de cada mod que recebe servidores: abre a aba
+  // dele e vira a chave, e o Salvar da página (ou o comando dele) grava.
+  const receivesMcp = (id: AgentId) => {
+    if (!isCustomMod(id)) return true;
+    const options = agents.find((agent) => agent.id === id)?.options as CustomModOptions | undefined;
+    return options?.kind === "api" && options.protocol === "openai";
+  };
+  for (const id of mods) {
+    const tabFeature = settingsTabFeature(id);
+    if (!can("mcp") || (tabFeature && !can(tabFeature)) || !receivesMcp(id)) continue;
+    const on = agents.find((agent) => agent.id === id)?.options as { approveMcps?: boolean } | undefined;
     all.push({
       id: `mcp-approve-${id}`, group: settings,
-      label: t(on?.approveMcps ? "palette.mcpRevoke" : "palette.mcpApprove", { name: AGENT_LABELS[id] }),
+      label: t(on?.approveMcps ? "palette.mcpRevoke" : "palette.mcpApprove", { name: agentLabel(id, agents) }),
       run: () => { openSettingsTab(id); updateOptions(id, { approveMcps: !on?.approveMcps } as never); },
     });
   }
-  // Conferir o endereço e a chave dos gateways de API (o botão da aba deles).
-  for (const id of ["openrouter", "litellm"] as const) {
-    if (can("gatewayProviders")) all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: AGENT_LABELS[id] }), run: () => { openSettingsTab(id); void checkGateway(id); } });
+  // Conferir o endereço e a chave dos mods de API (o botão da aba deles): os
+  // gateways e os mods criados de API.
+  for (const id of mods) {
+    const agent = agents.find((item) => item.id === id);
+    const tabFeature = settingsTabFeature(id);
+    if (!(agent ? isApiAgent(agent) : isGateway(id)) || (tabFeature && !can(tabFeature))) continue;
+    all.push({ id: `gateway-check-${id}`, group: settings, label: t("gateway.check.named", { name: agentLabel(id, agents) }), run: () => { openSettingsTab(id); void checkGateway(id); } });
   }
   if (can("skills") && can("skillsHub")) all.push({ id: "skills-hub", group: settings, label: t("skills.hub.title"), run: () => { openSettingsTab("skills"); requestIntent("searchSkillHub"); } });
   if (can("skills")) all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });

@@ -73,6 +73,19 @@ describe("paletteCommands", () => {
     for (const id of ["projects", "stats", "settings", "profile", "org-o1", "org-tab-stats", "org-tab-members", "org-tab-repositories", "environment-personal", "environment-o2"]) expect(found).toContain(id);
   });
 
+  it("reaches the Mods tab, Create mod and each created mod, as the plan allows", async () => {
+    const { useSettings } = await import("@/modules/settings");
+    const options = { name: "Local", kind: "api", args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "http://localhost:8080/v1", keyRequired: false, approveMcps: false, hasKey: false };
+    useSettings.setState({ agents: [{ id: "mod-local", enabled: true, command: "", timeout: 300, options }] as never });
+    const found = paletteCommands(context());
+    for (const id of ["settings-mods", "mods-create", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(found.map((command) => command.id)).toContain(id);
+    expect(found.find((command) => command.id === "settings-mod-local")?.label).toBe("Settings › Local");
+    const locked = ids({ rights: { features: new Set<string>(["mcp"]), locked: new Set<string>() } });
+    for (const id of ["mods-create", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(locked).not.toContain(id);
+    expect(locked).toContain("settings-mods");
+    useSettings.setState({ agents: [] });
+  });
+
   it("has unique ids and a label for every command", () => {
     const list = paletteCommands(context());
     expect(new Set(list.map((command) => command.id)).size).toBe(list.length);

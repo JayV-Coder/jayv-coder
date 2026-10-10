@@ -7,8 +7,9 @@ import { cn } from "@/lib/utils";
 import { ConfirmAction } from "./ConfirmAction";
 
 /** Uma linha de chat na lateral. O chat aberto tem traço na borda, fundo
- * destacado e título em destaque; o que o servidor recusou dele vira um "!". */
-export function ChatRow({ chat, open, onOpen, onDelete }: { chat: Chat; open: boolean; onOpen: () => void; onDelete: () => void }) {
+ * destacado e título em destaque; o que o servidor recusou dele vira um "!".
+ * `detail` é uma segunda linha apagada (quando foi a última conversa). */
+export function ChatRow({ chat, open, onOpen, onDelete, detail }: { chat: Chat; open: boolean; onOpen: () => void; onDelete: () => void; detail?: string }) {
   const t = useT();
   const refused = useChatRefusals(chat.id);
   return (
@@ -23,7 +24,14 @@ export function ChatRow({ chat, open, onOpen, onDelete }: { chat: Chat; open: bo
           open && "bg-sidebar-accent font-medium text-sidebar-foreground before:absolute before:inset-y-1.5 before:start-0 before:w-0.5 before:rounded-full before:bg-foreground",
         )}
       >
-        <span className="flex-1 truncate">{chatTitle(chat)}</span>
+        {detail
+          ? (
+            <span className="grid min-w-0 flex-1">
+              <span className="truncate">{chatTitle(chat)}</span>
+              <span className="truncate text-caption font-normal text-sidebar-muted">{detail}</span>
+            </span>
+          )
+          : <span className="flex-1 truncate">{chatTitle(chat)}</span>}
         {refused > 0 && (
           <span role="status" title={t("chat.refused", { count: refused })} aria-label={t("chat.refused", { count: refused })} className="flex-none font-mono text-caption font-semibold text-warning">!</span>
         )}

@@ -24,17 +24,18 @@ pub struct SettingsSnapshot {
 }
 
 fn snapshot(settings:LlmSettings)->SettingsSnapshot {
-    let catalog=AgentId::ALL.into_iter().map(|agent|(agent,llm::catalog(agent,&settings))).collect();
+    let catalog=settings.agents.iter().map(|agent|(agent.id,llm::catalog(agent.id,&settings))).collect();
     SettingsSnapshot{settings,catalog,timeout_range:llm::TIMEOUT_RANGE,context_range:llm::CONTEXT_RANGE}
 }
 
 /// Pergunta a cada agente quais modelos o `/model` dele oferece e grava a
-/// lista. Os CLIs respondem sem cadeado nenhum preso; só a gravação pega os
-/// dois. Devolve o que ficou gravado e os agentes que não responderam.
+/// lista. `agents` vazia é todos (os mods do app e os criados). Os CLIs
+/// respondem sem cadeado nenhum preso; só a gravação pega os dois. Devolve o
+/// que ficou gravado e os agentes que não responderam.
 pub(crate) async fn rediscover(desk:&SharedDesktopState,workspace:&SharedWorkspace,agents:&[AgentId])->anyhow::Result<(LlmSettings,Vec<AgentId>)> {
     let current=workspace.lock().await.llm_settings()?;
     let mut asked=tokio::task::JoinSet::new();
-    for agent in current.agents.iter().filter(|agent|agents.contains(&agent.id)) {
+    for agent in current.agents.iter().filter(|agent|agents.is_empty()||agents.contains(&agent.id)) {
         let agent=agent.clone();
         asked.spawn(async move {(agent.id,llm::discover_agent(&agent).await)});
     }
@@ -53,18 +54,18 @@ pub(crate) async fn rediscover(desk:&SharedDesktopState,workspace:&SharedWorkspa
     Ok((saved,silent))
 }
 
-/// O que a conferência de um gateway de API achou: quantos modelos ele lista,
+/// O que a conferência de um mod de API achou: quantos modelos ele lista,
 /// ou o motivo de não ter listado (a resposta do servidor, em inglês).
 #[derive(Debug,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct GatewayCheck { pub models:usize, pub error:Option<String> }
 
-/// Confere o gateway com o que está gravado (endereço e chave): pergunta a
-/// lista de modelos a ele. Não grava nada.
+/// Confere o mod de API (um gateway ou um mod criado) com o que está gravado
+/// (endereço e chave): pergunta a lista de modelos a ele. Não grava nada.
 #[tauri::command]
 pub(crate) async fn check_gateway(workspace:State<'_,SharedWorkspace>,agent:AgentId)->Result<GatewayCheck,Text>{
     let settings={ let workspace=workspace.lock().await; workspace.llm_settings().map_err(failure)? };
-    let Some(found)=settings.agents.iter().find(|entry|entry.id==agent&&agent.is_gateway()) else { return Ok(GatewayCheck{models:0,error:Some("not a gateway".into())}) };
+    let Some(found)=settings.agents.iter().find(|entry|entry.id==agent&&entry.is_api()) else { return Ok(GatewayCheck{models:0,error:Some("not a gateway".into())}) };
     Ok(match llm::discover_gateway(found).await { Ok(models)=>GatewayCheck{models:models.len(),error:None}, Err(error)=>GatewayCheck{models:0,error:Some(error.to_string())} })
 }
 

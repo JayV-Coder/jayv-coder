@@ -1,5 +1,5 @@
 import { useState, type ComponentProps } from "react";
-import { FolderTreeIcon } from "lucide-react";
+import { FolderTreeIcon, PlusIcon } from "lucide-react";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { formatSince } from "@/modules/i18n";
@@ -19,12 +19,17 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
  * começar um novo); senão, antes de abrir o primeiro, mostra o que entra e o
  * que fica de fora. Na página da
  * organização os repositórios já vêm carregados; na lista de projetos, são
- * buscados no clique. */
-export function OrganizationChatButton({ organization, repositories, size, variant }: {
+ * buscados no clique.
+ *
+ * `fresh` é o "+" da coluna dos chats gerais, que já mostra a lista: com chat
+ * geral neste computador, começa um novo direto, sem a janela de escolha. */
+export function OrganizationChatButton({ organization, repositories, size, variant, fresh, className }: {
   organization: { id: string; name: string };
   repositories?: Repository[] | null;
   size?: ComponentProps<typeof Button>["size"];
   variant?: ComponentProps<typeof Button>["variant"];
+  fresh?: boolean;
+  className?: string;
 }) {
   const t = useT();
   const allowed = useFeature("orgChat");
@@ -39,6 +44,7 @@ export function OrganizationChatButton({ organization, repositories, size, varia
   const reach = folder && loaded ? chatReach(loaded, projects, folder) : null;
 
   const open = async () => {
+    if (generalChats.length > 0 && fresh) { await another(); return; }
     if (generalChats.length > 0) { setPicking(true); return; }
     if (!repositories) setFetched(await organizationRepositories(organization.id));
     await choose(false);
@@ -95,10 +101,18 @@ export function OrganizationChatButton({ organization, repositories, size, varia
   if (!allowed) return null;
   return (
     <>
-      <Button size={size} variant={variant} disabled={repositories === null} onClick={() => void open().catch(reportError)}>
-        <FolderTreeIcon className="size-4" />
-        {t("orgChat.open")}
-      </Button>
+      {fresh
+        ? (
+          <Button size={size ?? "icon-sm"} variant={variant ?? "ghost"} className={className} disabled={repositories === null} title={t("orgChat.pick.new")} aria-label={t("orgChat.pick.new")} onClick={() => void open().catch(reportError)}>
+            <PlusIcon aria-hidden="true" className="size-4" />
+          </Button>
+        )
+        : (
+          <Button size={size} variant={variant} className={className} disabled={repositories === null} onClick={() => void open().catch(reportError)}>
+            <FolderTreeIcon className="size-4" />
+            {t("orgChat.open")}
+          </Button>
+        )}
       <Dialog open={picking} onOpenChange={setPicking}>
         <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>

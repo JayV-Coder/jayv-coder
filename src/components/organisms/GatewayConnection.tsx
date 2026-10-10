@@ -1,29 +1,33 @@
-import type { AgentId, AgentSettings } from "@/modules/core";
+import { isCustomMod, type AgentId, type AgentSettings, type CustomModOptions, type GatewayOptions } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { checkGateway, isAgentsDirty, updateOptions, useSettings } from "@/modules/settings";
 import { FormField } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-/** O endereço e a chave de um gateway de API (OpenRouter, LiteLLM). A chave
- * fica só neste computador: depois de salva, a tela só sabe que ela existe. */
-export function GatewayConnection({ agent, problems }: { agent: AgentSettings<"openrouter">; problems: Record<string, Key> }) {
+/** O endereço e a chave de um mod de API: um gateway (OpenRouter, LiteLLM) ou
+ * um mod criado de API. A chave fica só neste computador: depois de salva, a
+ * tela só sabe que ela existe. */
+export function GatewayConnection({ agent, problems }: { agent: AgentSettings; problems: Record<string, Key> }) {
   const t = useT();
   const id: AgentId = agent.id;
-  const options = agent.options;
+  const custom = isCustomMod(id);
+  const options = agent.options as GatewayOptions & Partial<Pick<CustomModOptions, "keyRequired">>;
   const check = useSettings((state) => state.gateways[id]);
   const dirty = useSettings(isAgentsDirty);
-  const set = (patch: Partial<typeof options>) => updateOptions(id as "openrouter", patch);
+  const set = (patch: Partial<GatewayOptions>) => updateOptions(id, patch as never);
+  const urlHint: Key = custom ? "mods.baseUrl.hint" : (`gateway.baseUrl.hint.${id}` as Key);
+  const keyOptional = custom ? !options.keyRequired : (id as string) === "litellm";
   const typed = (options.apiKey ?? "").length > 0;
   const forgetting = options.clearKey === true;
 
   return (
     <div className="grid gap-5 sm:grid-cols-2">
-      <FormField label={t("gateway.baseUrl")} htmlFor={`${id}-url`} hint={t(`gateway.baseUrl.hint.${id}` as Key)} error={problems.baseUrl && t(problems.baseUrl)}>
+      <FormField label={t("gateway.baseUrl")} htmlFor={`${id}-url`} hint={t(urlHint)} error={problems.baseUrl && t(problems.baseUrl)}>
         <Input id={`${id}-url`} value={options.baseUrl} spellCheck={false} className="font-mono" aria-invalid={problems.baseUrl ? true : undefined}
           onChange={(event) => set({ baseUrl: event.target.value })} />
       </FormField>
-      <FormField label={t("gateway.apiKey")} htmlFor={`${id}-key`} hint={t((id as string) === "litellm" ? "gateway.apiKey.hint.optional" : "gateway.apiKey.hint")} error={problems.apiKey && t(problems.apiKey)}>
+      <FormField label={t("gateway.apiKey")} htmlFor={`${id}-key`} hint={t(keyOptional ? (custom ? "mods.apiKey.hint" : "gateway.apiKey.hint.optional") : "gateway.apiKey.hint")} error={problems.apiKey && t(problems.apiKey)}>
         <div className="flex gap-2">
           <Input id={`${id}-key`} type="password" autoComplete="off" spellCheck={false} className="font-mono" value={options.apiKey ?? ""}
             placeholder={forgetting ? t("gateway.apiKey.removing") : options.hasKey ? t("gateway.apiKey.saved") : t("gateway.apiKey.paste")}

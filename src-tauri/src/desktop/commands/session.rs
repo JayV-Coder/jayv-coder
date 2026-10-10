@@ -195,7 +195,7 @@ async fn refresh_translations(app:AppHandle,session:SharedSession,locale:String)
 /// Ao abrir o banco de um usuário, a lista de modelos de cada agente vem do
 /// `/model` do CLI dele, e o que é novo nasce ligado para o Jev escolher.
 async fn refresh_models(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace) {
-    match super::settings::rediscover(&desk,&workspace,&crate::llm::AgentId::ALL).await {
+    match super::settings::rediscover(&desk,&workspace,&[]).await {
         Ok(_)=>{let _=app.emit(MODELS_EVENT,());}
         Err(error)=>eprintln!("[llm] model discovery not saved: {error:#}"),
     }

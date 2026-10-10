@@ -1,21 +1,34 @@
-//! Os agentes de linha de comando que o JayV sabe chamar e os modelos de cada
-//! um. Moram no banco, não no `config.yaml`: a tela Configuração do LLM é a
-//! única porta de entrada, e o que ela grava é o que o orquestrador usa.
+//! Os mods de integração com LLM que o JayV sabe chamar e os modelos de cada
+//! um. Moram no banco, não no `config.yaml`: a tela de configurações é a única
+//! porta de entrada, e o que ela grava é o que o orquestrador usa.
 //!
-//! São sete agentes: quatro de linha de comando que editam o projeto (Claude
-//! Code, Codex, Copilot e Cursor), o Kilo Code (também de linha de comando) e
-//! dois gateways de API (OpenRouter e LiteLLM), que só respondem por texto: não
-//! editam arquivos. Nenhum deles recebe argumentos crus. Cada opção da tela tem um conjunto fechado de
-//! valores, e é daqui que sai a linha de comando — um argumento digitado errado
-//! era o jeito mais fácil de quebrar o agente sem saber por quê.
+//! Cada agente é um mod (`crate::mods`): sete vêm com o app — quatro de linha
+//! de comando que editam o projeto (Claude Code, Codex, Copilot e Cursor), o
+//! Kilo Code (também de linha de comando) e dois gateways de API (OpenRouter e
+//! LiteLLM), que só respondem por texto — e a pessoa cria os seus em
+//! Configurações › Mods. Nenhum recebe argumentos crus digitados numa opção:
+//! cada opção dos mods do app tem um conjunto fechado de valores, e é do mod
+//! que sai a linha de comando — um argumento digitado errado era o jeito mais
+//! fácil de quebrar o agente sem saber por quê. O mod criado é a exceção de
+//! propósito: a linha dele é a que a pessoa escreveu, conferida
+//! (`mods::custom`).
 
 use crate::config::{ModelConfig, ProviderConfig};
 use crate::i18n::Text;
+use crate::mods::{LlmMod, ModKind};
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::{collections::{HashMap, HashSet}, env, path::{Path, PathBuf}, process::Stdio, time::Duration};
+
+pub use crate::mods::claude::{ClaudeOptions, CLAUDE_MECHANISMS, CLAUDE_TOOLS};
+pub use crate::mods::codex::{CodexOptions, CODEX_MECHANISMS};
+pub use crate::mods::copilot::{CopilotOptions, COPILOT_MECHANISMS, COPILOT_TOOLS};
+pub use crate::mods::cursor::CursorOptions;
+pub use crate::mods::custom::CustomOptions;
+pub use crate::mods::gateway::GatewayOptions;
+pub use crate::mods::kilo::KiloOptions;
 
 pub const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS llm_agents (
@@ -37,8 +50,9 @@ CREATE TABLE IF NOT EXISTS llm_models (
   position INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (agent, model)
 );
--- A chave de API dos gateways. Só local: não está na lista de tabelas
--- sincronizadas (`TABLES` do `jayv-store`), então nunca sobe para a nuvem.
+-- A chave de API dos gateways e dos mods de API. Só local: não está na lista
+-- de tabelas sincronizadas (`TABLES` do `jayv-store`), então nunca sobe para a
+-- nuvem.
 CREATE TABLE IF NOT EXISTS llm_secrets (
   agent TEXT PRIMARY KEY,
   secret TEXT NOT NULL
@@ -52,25 +66,78 @@ pub const CAPABILITIES:[&str;4]=["chat","code","reasoning","tools"];
 pub const COSTS:[&str;4]=["free","low","medium","high"];
 pub const SPEEDS:[&str;3]=["fast","medium","slow"];
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash,Serialize,Deserialize)]
-#[serde(rename_all="lowercase")]
-pub enum AgentId { Claude, Codex, Copilot, Cursor, Kilo, Openrouter, Litellm }
+/// O mod de um agente, pelo id: um dos que vêm com o app (`claude`, `codex`…)
+/// ou um criado pela pessoa (`mod-<nome>`). Os do app são constantes com o
+/// nome de sempre (`AgentId::Claude`), e casam em `match` como antes; o id de
+/// um mod criado é guardado uma vez (`intern`) e copiado à vontade, como o dos
+/// mods do app.
+#[derive(Clone,Copy,PartialEq,Eq,Hash,PartialOrd,Ord)]
+pub struct AgentId(&'static str);
 
+#[allow(non_upper_case_globals)]
 impl AgentId {
+    pub const Claude:AgentId=AgentId("claude");
+    pub const Codex:AgentId=AgentId("codex");
+    pub const Copilot:AgentId=AgentId("copilot");
+    pub const Cursor:AgentId=AgentId("cursor");
+    pub const Kilo:AgentId=AgentId("kilo");
+    pub const Openrouter:AgentId=AgentId("openrouter");
+    pub const Litellm:AgentId=AgentId("litellm");
+    /// Os mods que vêm com o app, na ordem das abas. Os criados vêm depois,
+    /// pelo nome.
     pub const ALL:[AgentId;7]=[AgentId::Claude,AgentId::Codex,AgentId::Copilot,AgentId::Cursor,AgentId::Kilo,AgentId::Openrouter,AgentId::Litellm];
-    pub fn key(self)->&'static str { match self { Self::Claude=>"claude", Self::Codex=>"codex", Self::Copilot=>"copilot", Self::Cursor=>"cursor", Self::Kilo=>"kilo", Self::Openrouter=>"openrouter", Self::Litellm=>"litellm" } }
-    /// Os gateways de API (OpenRouter e LiteLLM): falam por HTTP com endereço
-    /// e chave, em vez de abrir um programa, e só respondem por texto.
-    pub fn is_gateway(self)->bool { matches!(self,Self::Openrouter|Self::Litellm) }
-    /// O nome do executável. O instalador do Cursor cria `agent` e
-    /// `cursor-agent`; `agent` sozinho é genérico demais para achar no PATH.
-    pub fn binary(self)->&'static str { match self { Self::Cursor=>"cursor-agent", Self::Openrouter|Self::Litellm=>"", other=>other.key() } }
-    fn parse(key:&str)->Result<Self> { Self::ALL.into_iter().find(|agent|agent.key()==key).ok_or_else(||anyhow!("agente desconhecido: `{key}`")) }
-    fn default_timeout(self)->u64 { 300 }
+
+    pub fn key(self)->&'static str { self.0 }
+    /// O mod deste agente.
+    pub fn module(self)->&'static dyn LlmMod { crate::mods::of(self) }
+    /// Um mod criado pela pessoa (`mod-…`).
+    pub fn is_custom(self)->bool { self.0.starts_with(crate::mods::CUSTOM_PREFIX) }
+    /// O nome do executável padrão do mod; vazio no mod de API e no criado.
+    pub fn binary(self)->&'static str { self.module().binary() }
+
+    /// O id de um mod do app ou de um mod criado com o formato aceito
+    /// (`mod-` e de 1 a 32 letras minúsculas, dígitos ou `-`).
+    pub fn parse(key:&str)->Result<Self> {
+        if let Some(known)=Self::ALL.into_iter().find(|agent|agent.key()==key) { return Ok(known); }
+        if valid_custom(key) { if let Some(interned)=intern(key) { return Ok(AgentId(interned)); } }
+        Err(anyhow!("unknown agent: `{key}`"))
+    }
+}
+
+impl std::fmt::Debug for AgentId { fn fmt(&self,formatter:&mut std::fmt::Formatter<'_>)->std::fmt::Result { formatter.write_str(self.0) } }
+impl std::fmt::Display for AgentId { fn fmt(&self,formatter:&mut std::fmt::Formatter<'_>)->std::fmt::Result { formatter.write_str(self.0) } }
+impl Serialize for AgentId { fn serialize<S:Serializer>(&self,serializer:S)->Result<S::Ok,S::Error> { serializer.serialize_str(self.0) } }
+impl<'de> Deserialize<'de> for AgentId {
+    fn deserialize<D:Deserializer<'de>>(deserializer:D)->Result<Self,D::Error> {
+        let key=String::deserialize(deserializer)?;
+        AgentId::parse(&key).map_err(serde::de::Error::custom)
+    }
+}
+
+/// O id de um mod criado: o prefixo e de 1 a 32 letras minúsculas, dígitos ou
+/// `-`, sem `-` nas pontas.
+fn valid_custom(key:&str)->bool {
+    let Some(slug)=key.strip_prefix(crate::mods::CUSTOM_PREFIX) else { return false };
+    (1..=32).contains(&slug.len())&&!slug.starts_with('-')&&!slug.ends_with('-')&&slug.chars().all(|char|char.is_ascii_lowercase()||char.is_ascii_digit()||char=='-')
+}
+
+/// Quantos ids de mods criados um processo guarda. Cada um vira texto que vive
+/// até o app fechar; o teto segura um banco ou uma tela com ids sem fim.
+const INTERN_LIMIT:usize=256;
+
+/// O id guardado uma vez para o processo inteiro.
+fn intern(key:&str)->Option<&'static str> {
+    static INTERNED:std::sync::LazyLock<std::sync::Mutex<HashSet<&'static str>>>=std::sync::LazyLock::new(Default::default);
+    let mut interned=INTERNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(known)=interned.get(key) { return Some(known); }
+    if interned.len()>=INTERN_LIMIT { return None; }
+    let leaked:&'static str=Box::leak(key.to_string().into_boxed_str());
+    interned.insert(leaked);
+    Some(leaked)
 }
 
 /// Um agente como a tela o edita. `options` é o JSON das opções próprias dele;
-/// ao salvar, ele passa pela struct tipada do agente e volta limpo.
+/// ao salvar, ele passa pelas opções tipadas do mod e volta limpo.
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct AgentSettings {
@@ -124,173 +191,18 @@ impl LlmSettings {
         if servers.is_empty() { return self.clone(); }
         Self{agents:self.agents.iter().map(|agent|agent.with_mcp(servers)).collect(),models:self.models.clone()}
     }
+
+    /// O agente deste id, se está nas configurações.
+    pub fn agent(&self,id:AgentId)->Option<&AgentSettings> { self.agents.iter().find(|agent|agent.id==id) }
+
+    /// O nome do agente nas mensagens: o do mod criado sai das opções dele.
+    pub fn label_of(&self,id:AgentId)->String { self.agent(id).map_or_else(||label(id),AgentSettings::label) }
 }
 
-#[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
-#[serde(rename_all="camelCase",default)]
-pub struct ClaudeOptions {
-    /// `manual`, `plan`, `acceptEdits`, `auto`, `dontAsk` ou
-    /// `bypassPermissions`. `default` é o nome antigo do `manual`.
-    pub permission_mode:String,
-    /// `auto` (o Jev escolhe por pedido), `low`, `medium`, `high`, `xhigh`
-    /// ou `max`.
-    pub effort:String,
-    /// Um modelo do catálogo do Claude, ou vazio.
-    pub fallback_model:String,
-    pub max_budget_usd:Option<f64>,
-    pub blocked_tools:Vec<String>,
-    pub append_system_prompt:String,
-    pub persist_sessions:bool,
-    pub safe_mode:bool,
-    /// Dá ao Claude as ferramentas do índice de símbolos do JayV (`jayv mcp`).
-    pub symbol_tools:bool,
-    /// Os mecanismos liberados sem pergunta (`CLAUDE_MECHANISMS`).
-    pub mechanisms:Vec<String>,
-    /// As regras do `--allowedTools` que o desenvolvedor liberou para um
-    /// pedido só (`Grants`): `Bash(git add:*)`. Nunca gravadas.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub granted:Vec<String>,
-    /// As regras do `--disallowed-tools` que a política da organização põe
-    /// (`without_commands`): `Bash(git push:*)`. Nunca gravadas.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub denied:Vec<String>,
-    /// Os servidores MCP configurados (`mcp::McpServer`), postos na hora do
-    /// pedido (`with_mcp`). Nunca gravados aqui: moram na tabela deles.
-    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
-    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
-    pub approve_mcps:bool,
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub mcp:Vec<crate::mcp::McpServer>,
-}
-impl Default for ClaudeOptions { fn default()->Self { Self{permission_mode:MANUAL.into(),effort:AUTO_EFFORT.into(),fallback_model:String::new(),max_budget_usd:None,blocked_tools:vec![],append_system_prompt:String::new(),persist_sessions:true,safe_mode:false,symbol_tools:false,mechanisms:strings(&[WEB_SEARCH]),granted:vec![],denied:vec![],approve_mcps:false,mcp:vec![]} } }
-
-#[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
-#[serde(rename_all="camelCase",default)]
-pub struct CodexOptions {
-    /// `read-only`, `workspace-write` ou `danger-full-access`.
-    pub sandbox:String,
-    /// `auto` (o Jev escolhe por pedido), `low`, `medium` ou `high`.
-    pub reasoning_effort:String,
-    /// A rede do sandbox quando o Codex escreve no projeto: no
-    /// `workspace-write` e no `read-only`, que o modo desenvolvimento sobe para
-    /// `workspace-write`. O `danger-full-access` já tem rede, e o modo
-    /// planejamento nunca tem.
-    pub network_access:bool,
-    pub skip_git_repo_check:bool,
-    /// Os mecanismos ligados (`CODEX_MECHANISMS`).
-    pub mechanisms:Vec<String>,
-    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
-    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
-    pub approve_mcps:bool,
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub mcp:Vec<crate::mcp::McpServer>,
-}
-impl Default for CodexOptions { fn default()->Self { Self{sandbox:"read-only".into(),reasoning_effort:AUTO_EFFORT.into(),network_access:false,skip_git_repo_check:true,mechanisms:strings(&[WEB_SEARCH]),approve_mcps:false,mcp:vec![]} } }
-
-#[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
-#[serde(rename_all="camelCase",default)]
-pub struct CopilotOptions {
-    /// `read`, `edits` ou `all`.
-    pub tool_access:String,
-    pub blocked_tools:Vec<String>,
-    pub silent:bool,
-    /// Os mecanismos liberados sem pergunta (`COPILOT_MECHANISMS`).
-    pub mechanisms:Vec<String>,
-    /// As ferramentas do `--allow-tool` liberadas para um pedido só
-    /// (`Grants`): `shell(git add)`. Nunca gravadas.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub granted:Vec<String>,
-    /// As ferramentas do `--deny-tool` que a política da organização põe
-    /// (`without_commands`): `shell(git push)`. Nunca gravadas.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub denied:Vec<String>,
-    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
-    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
-    pub approve_mcps:bool,
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub mcp:Vec<crate::mcp::McpServer>,
-}
-impl Default for CopilotOptions { fn default()->Self { Self{tool_access:"read".into(),blocked_tools:vec![],silent:true,mechanisms:vec![],granted:vec![],denied:vec![],approve_mcps:false,mcp:vec![]} } }
-
-#[derive(Debug,Clone,Serialize,Deserialize,PartialEq)]
-#[serde(rename_all="camelCase",default)]
-pub struct CursorOptions {
-    /// `default`, `enabled` ou `disabled`. `default` segue a configuração
-    /// do próprio Cursor.
-    pub sandbox:String,
-    /// Aplica as edições e roda os comandos sem pedir aprovação.
-    pub force:bool,
-    pub approve_mcps:bool,
-    /// Os servidores da aba MCP deste pedido (`with_mcp`), postos no
-    /// `~/.cursor/mcp.json` antes de abrir o agente. Nunca gravados aqui.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub mcp:Vec<crate::mcp::McpServer>,
-}
-impl Default for CursorOptions { fn default()->Self { Self{sandbox:"default".into(),force:false,approve_mcps:false,mcp:vec![]} } }
-
-#[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Default)]
-#[serde(rename_all="camelCase",default)]
-pub struct KiloOptions {
-    /// Aprova sozinho o que o agente pedir (`kilo run --auto`). Sem isto, o que
-    /// pediria aprovação é recusado, já que ninguém responde no terminal.
-    /// O modo desenvolvimento liga; o planejamento desliga.
-    pub auto:bool,
-    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
-    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
-    pub approve_mcps:bool,
-    /// Os servidores da aba MCP deste pedido (`with_mcp`), levados na
-    /// configuração em linha. Nunca gravados aqui.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub mcp:Vec<crate::mcp::McpServer>,
-}
-
-/// Os dois gateways de API. A chave nunca volta para a tela nem para o banco
-/// de opções (que sobe para a nuvem): ela mora na tabela local `llm_secrets`.
-/// `api_key` só viaja da tela para o salvar; `has_key` é o que a tela lê.
-#[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Default)]
-#[serde(rename_all="camelCase",default)]
-pub struct GatewayOptions {
-    /// O endereço base compatível com a API da OpenAI (`…/v1`).
-    pub base_url:String,
-    #[serde(skip_serializing)]
-    pub api_key:Option<String>,
-    /// Apaga a chave guardada.
-    #[serde(skip_serializing)]
-    pub clear_key:bool,
-    pub has_key:bool,
-    /// "Aprovar servidores MCP": entrega ao agente os servidores da aba MCP,
-    /// cujas ferramentas rodam sem pergunta. Desligado, nenhum chega.
-    pub approve_mcps:bool,
-    /// Os servidores da aba MCP deste pedido (`with_mcp`): o JayV os chama
-    /// como cliente MCP. Nunca gravados aqui.
-    #[serde(skip_serializing_if="Vec::is_empty")]
-    pub mcp:Vec<crate::mcp::McpServer>,
-}
-
-const OPENROUTER_URL:&str="https://openrouter.ai/api/v1";
-/// O LiteLLM é o servidor do próprio usuário: o endereço padrão é o do proxy
-/// local, na porta que a documentação dele usa.
-const LITELLM_URL:&str="http://localhost:4000/v1";
-
-impl GatewayOptions {
-    fn fresh(id:AgentId)->Self { Self{base_url:(if id==AgentId::Openrouter {OPENROUTER_URL} else {LITELLM_URL}).into(),..Self::default()} }
-    fn checked(mut self,id:AgentId)->Result<Self> {
-        self.base_url=self.base_url.trim().trim_end_matches('/').to_string();
-        if self.base_url.is_empty() { self.base_url=Self::fresh(id).base_url; }
-        let valid=reqwest::Url::parse(&self.base_url).is_ok_and(|url|matches!(url.scheme(),"http"|"https")&&url.host_str().is_some()&&url.username().is_empty()&&url.password().is_none());
-        if !valid { bail!(Text::new("settings.baseUrlInvalid").with("agent",label(id))); }
-        Ok(self)
-    }
-}
-
-const CLAUDE_PERMISSIONS:[&str;6]=[MANUAL,"plan","acceptEdits","auto","dontAsk","bypassPermissions"];
 /// O modo que pergunta antes de cada ferramenta. Sem terminal, ninguém
 /// responde, e o que pediria aprovação é negado. O Claude chamava de `default`
 /// até a 2.1.200; a linha de comando só o recebe como padrão, sem a flag.
-const MANUAL:&str="manual";
-/// Os modos que não escrevem no projeto sem aprovação: no modo
-/// desenvolvimento eles sobem para o `acceptEdits`.
-const READ_ONLY_MODES:[&str;4]=["default",MANUAL,"plan","dontAsk"];
+pub(crate) const MANUAL:&str="manual";
 /// Quem responde aos pedidos de aprovação do Claude no `--print`: ninguém. O
 /// que pediria aprovação é negado na hora, em vez de esperar um anfitrião
 /// que não existe. As versões que não conhecem a flag a perdem (`OPTIONAL_FLAGS`).
@@ -316,24 +228,15 @@ pub const RESUME:&str="{resume}";
 /// Com sessão, vira `resume` e o id; sem, some. As opções do `exec` vêm antes
 /// dele: o `resume` não aceita `--sandbox`, e o do `exec` vale para a retomada.
 pub const RESUME_THREAD:&str="{resume_thread}";
-const CLAUDE_EFFORTS:[&str;6]=["auto","low","medium","high","xhigh","max"];
-/// A ferramenta do Claude que abre um formulário no terminal interativo.
-const INTERACTIVE_ONLY_TOOL:&str="AskUserQuestion";
-pub const CLAUDE_TOOLS:[&str;6]=["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"];
-const CODEX_SANDBOXES:[&str;3]=["read-only","workspace-write","danger-full-access"];
-const CODEX_EFFORTS:[&str;4]=["auto","low","medium","high"];
 
 /// `default` era o nome antigo do `auto`: o esforço deixava a cargo do agente,
 /// que pensava o máximo que o plano dele permitia em todo pedido.
-fn effort_of(stored:&str)->String { if stored=="default" { AUTO_EFFORT.into() } else { stored.into() } }
-const COPILOT_ACCESS:[&str;3]=["read","edits","all"];
-pub const COPILOT_TOOLS:[&str;4]=["shell","write","shell(git push)","shell(rm)"];
-const CURSOR_SANDBOXES:[&str;3]=["default","enabled","disabled"];
+pub(crate) fn effort_of(stored:&str)->String { if stored=="default" { AUTO_EFFORT.into() } else { stored.into() } }
 
 /// Os mecanismos que dão ao agente o que fazer além de ler e editar o
 /// projeto: buscar na web, abrir páginas, rodar comandos. Cada agente roda sem
 /// terminal (`--print`/`exec`), e ninguém responde ao pedido de aprovação
-/// dele: o que não vem liberado na linha de comando é negado. Cada agente só
+/// dele: o que não vem liberado na linha de comando é negado. Cada mod só
 /// mostra os que a CLI dele sabe ligar por flag.
 pub const WEB_SEARCH:&str="webSearch";
 pub const WEB_FETCH:&str="webFetch";
@@ -342,361 +245,87 @@ pub const SHELL:&str="shell";
 /// bloqueia (`claude/mcp`).
 pub const MCP:&str="mcp";
 pub const GITHUB_TOOLS:&str="githubTools";
-/// `WebSearch`, `WebFetch` e `Bash` no `--allowedTools`.
-pub const CLAUDE_MECHANISMS:[&str;3]=[WEB_SEARCH,WEB_FETCH,SHELL];
-/// `web_search = "live"`; desligado é `"disabled"`.
-pub const CODEX_MECHANISMS:[&str;1]=[WEB_SEARCH];
-/// `--allow-all-urls`, `--allow-tool shell` e `--enable-all-github-mcp-tools`.
-pub const COPILOT_MECHANISMS:[&str;3]=[WEB_FETCH,SHELL,GITHUB_TOOLS];
 
 /// Os mecanismos que a CLI do agente sabe ligar. O Cursor não tem flag para
 /// nenhum: a busca na web dele é sempre dele, e os comandos só pelo `--force`.
-pub fn mechanisms_of(agent:AgentId)->&'static [&'static str] {
-    match agent { AgentId::Claude=>&CLAUDE_MECHANISMS, AgentId::Codex=>&CODEX_MECHANISMS, AgentId::Copilot=>&COPILOT_MECHANISMS, AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>&[] }
-}
-
-/// A ferramenta do Claude atrás de cada mecanismo.
-fn claude_tool(mechanism:&str)->Option<&'static str> {
-    match mechanism { WEB_SEARCH=>Some("WebSearch"), WEB_FETCH=>Some("WebFetch"), SHELL=>Some("Bash"), _=>None }
-}
+pub fn mechanisms_of(agent:AgentId)->&'static [&'static str] { agent.module().mechanisms() }
 
 /// `field` é a chave do i18n do nome do campo, sem o prefixo
 /// `settings.field.`.
-fn one_of(field:&str,value:&str,allowed:&[&str])->Result<()> {
+pub(crate) fn one_of(field:&str,value:&str,allowed:&[&str])->Result<()> {
     if allowed.contains(&value) { Ok(()) } else { bail!(Text::new("settings.invalidValue").with("field",Text::new(&format!("settings.field.{field}"))).with("value",value)) }
 }
-fn tools_in(field:&str,tools:&[String],allowed:&[&str])->Result<Vec<String>> {
+pub(crate) fn tools_in(field:&str,tools:&[String],allowed:&[&str])->Result<Vec<String>> {
     let mut seen=Vec::new();
     for tool in tools { one_of(field,tool,allowed)?; if !seen.contains(tool) { seen.push(tool.clone()); } }
     Ok(seen)
 }
 
-impl ClaudeOptions {
-    fn checked(mut self,models:&HashSet<&str>)->Result<Self> {
-        if self.permission_mode=="default" { self.permission_mode=MANUAL.into(); }
-        one_of("claude.permissionMode",&self.permission_mode,&CLAUDE_PERMISSIONS)?;
-        // O `--safe-mode` não sobe servidor MCP nenhum: o índice de símbolos
-        // ligado junto seria uma promessa que o agente não cumpre.
-        if self.safe_mode { self.symbol_tools=false; }
-        self.effort=effort_of(&self.effort);
-        one_of("claude.effort",&self.effort,&CLAUDE_EFFORTS)?;
-        self.fallback_model=self.fallback_model.trim().to_string();
-        if !self.fallback_model.is_empty()&&!models.contains(self.fallback_model.as_str()) { bail!(Text::new("settings.claude.fallback")); }
-        if let Some(budget)=self.max_budget_usd { if !(budget.is_finite()&&budget>0.0&&budget<=1_000.0) { bail!(Text::new("settings.claude.budget")); } }
-        self.blocked_tools=tools_in("claude.blockedTools",&self.blocked_tools,&CLAUDE_TOOLS)?;
-        // Ferramenta bloqueada não se libera: o bloqueio vence.
-        let blocked=self.blocked_tools.clone();
-        self.mechanisms=tools_in("claude.mechanisms",&self.mechanisms,&CLAUDE_MECHANISMS)?.into_iter()
-            .filter(|mechanism|claude_tool(mechanism).is_none_or(|tool|!blocked.iter().any(|item|item==tool))).collect();
-        self.append_system_prompt=self.append_system_prompt.trim().to_string();
-        if self.append_system_prompt.chars().count()>4_000 { bail!(Text::new("settings.claude.instructions").with("max",4_000u32)); }
-        Ok(self)
-    }
-    fn args(&self)->Vec<String> {
-        let mut args=strings(&["--print","--output-format","stream-json","--verbose","--include-partial-messages","--model","{model}"]);
-        if !matches!(self.permission_mode.as_str(),"default"|MANUAL) { args.extend(strings(&["--permission-mode",&self.permission_mode])); }
-        args.extend(strings(&[PERMISSION_PROMPTS,"none"]));
-        let effort=effort_of(&self.effort);
-        args.extend(strings(&["--effort",if effort==AUTO_EFFORT {EFFORT} else {&effort}]));
-        if !self.fallback_model.is_empty() { args.extend(strings(&["--fallback-model",&self.fallback_model])); }
-        if let Some(budget)=self.max_budget_usd { args.extend(["--max-budget-usd".to_string(),format!("{budget:.2}")]); }
-        // O `AskUserQuestion` só existe no terminal interativo: no `--print` ele
-        // falha, e o Claude despejava as perguntas em texto avisando que "não
-        // conseguiu abrir o formulário". Sem ele, o Claude pergunta no fim da
-        // resposta, e é de lá que o JayV monta o formulário.
-        let blocked=[INTERACTIVE_ONLY_TOOL.to_string()].into_iter().chain(self.blocked_tools.iter().cloned()).chain(self.denied.iter().cloned()).collect::<Vec<_>>();
-        args.extend(["--disallowed-tools".to_string(),blocked.join(",")]);
-        // O que roda sem pergunta. Sem terminal, o resto do que pede
-        // aprovação — a busca na web inclusive — é negado.
-        let mut allowed=self.mechanisms.iter().filter_map(|mechanism|claude_tool(mechanism))
-            .filter(|tool|!self.blocked_tools.iter().any(|item|item==tool)).map(str::to_string).collect::<Vec<_>>();
-        let symbols=if self.symbol_tools&&!self.safe_mode { symbol_server_config() } else { None };
-        // O que o desenvolvedor liberou para este pedido; o `Bash` bloqueado
-        // continua bloqueado.
-        if !self.blocked_tools.iter().any(|item|item=="Bash") { allowed.extend(self.granted.iter().cloned()); }
-        if symbols.is_some() { allowed.push(SYMBOL_SERVER_TOOLS.to_string()); }
-        // As ferramentas dos servidores MCP configurados rodam sem pergunta.
-        if !self.safe_mode { allowed.extend(crate::mcp::claude_tools(&self.mcp)); }
-        // O índice de símbolos e os servidores configurados vão numa
-        // configuração só.
-        let base=symbols.and_then(|config|serde_json::from_str::<Value>(&config).ok()).and_then(|config|config.get("mcpServers").and_then(Value::as_object).cloned()).unwrap_or_default();
-        let symbols=if self.safe_mode { None } else { crate::mcp::config_json(&self.mcp,AgentId::Claude,base) };
-        if !allowed.is_empty() { args.extend(["--allowedTools".to_string(),allowed.join(",")]); }
-        if !self.append_system_prompt.is_empty() { args.extend(["--append-system-prompt".to_string(),self.append_system_prompt.clone()]); }
-        // Com as sessões guardadas, o pedido seguinte do mesmo chat retoma a
-        // sessão do anterior: o agente já leu o que leu e não explora tudo de
-        // novo. Sem elas não há o que retomar.
-        if self.persist_sessions { args.extend(["--resume".to_string(),RESUME.to_string(),EPHEMERAL.to_string(),"--no-session-persistence".to_string()]); } else { args.push("--no-session-persistence".into()); }
-        if self.safe_mode { args.push("--safe-mode".into()); }
-        // O índice de símbolos do próprio JayV, como servidor MCP só de
-        // leitura: o Claude pergunta onde algo mora em vez de varrer a pasta.
-        // Desligado por padrão — as definições das ferramentas custam tokens em
-        // toda sessão, e o `jayv bench` diz se se pagam no projeto.
-        if let Some(config)=symbols { args.extend(["--mcp-config".to_string(),config]); }
-        args
-    }
-}
+pub(crate) fn strings(items:&[&str])->Vec<String> { items.iter().map(|item|item.to_string()).collect() }
 
-/// As ferramentas do servidor `jayv` no Claude, liberadas sem pergunta: só leem.
-const SYMBOL_SERVER_TOOLS:&str="mcp__jayv";
-
-/// A configuração MCP que sobe este mesmo executável como `jayv mcp`. O agente
-/// roda na pasta do projeto, e o servidor indexa a pasta onde nasce.
-fn symbol_server_config()->Option<String> {
-    let executable=std::env::current_exe().ok()?;
-    Some(serde_json::json!({"mcpServers":{"jayv":{"command":executable.display().to_string(),"args":["mcp"]}}}).to_string())
-}
-
-impl CodexOptions {
-    fn checked(mut self)->Result<Self> {
-        one_of("codex.sandbox",&self.sandbox,&CODEX_SANDBOXES)?;
-        self.reasoning_effort=effort_of(&self.reasoning_effort);
-        one_of("codex.reasoning",&self.reasoning_effort,&CODEX_EFFORTS)?;
-        if self.sandbox=="danger-full-access" { self.network_access=false; }
-        self.mechanisms=tools_in("codex.mechanisms",&self.mechanisms,&CODEX_MECHANISMS)?;
-        Ok(self)
-    }
-    fn args(&self)->Vec<String> {
-        // `--json` narra em eventos: a fala do agente, os passos e a conta
-        // dos tokens chegam separados, e é dela que sai o uso informado.
-        let mut args=strings(&["exec","--json","--model","{model}","--sandbox",&self.sandbox]);
-        // Fora de um repositório git o Codex recusa o pedido: a pasta do
-        // projeto nem sempre é um. A opção antiga (`skip_git_repo_check`) não
-        // desliga mais isto.
-        args.push("--skip-git-repo-check".into());
-        let effort=effort_of(&self.reasoning_effort);
-        args.extend(["-c".to_string(),format!("model_reasoning_effort=\"{}\"",if effort==AUTO_EFFORT {EFFORT} else {&effort})]);
-        // A chave só existe no `workspace-write`: no `read-only` não há rede,
-        // e o `danger-full-access` não tem sandbox.
-        if self.network_access&&self.sandbox=="workspace-write" { args.extend(strings(&["-c","sandbox_workspace_write.network_access=true"])); }
-        // `live` busca na hora; desligado é desligado mesmo, e não o `cached`
-        // que o Codex usa quando ninguém diz nada.
-        let search=if self.mechanisms.iter().any(|mechanism|mechanism==WEB_SEARCH) {"live"} else {"disabled"};
-        args.extend(["-c".to_string(),format!("web_search=\"{search}\"")]);
-        args.extend(crate::mcp::args_for(&self.mcp,AgentId::Codex));
-        // A chamada de apoio não grava sessão.
-        args.extend(strings(&[EPHEMERAL,"--ephemeral"]));
-        // A sessão do chat, quando há uma para retomar: o agente não relê o
-        // projeto do zero.
-        args.push(RESUME_THREAD.into());
-        // O pedido chega pela entrada padrão.
-        args.push("-".into());
-        args
-    }
-}
-
-impl CopilotOptions {
-    fn checked(mut self)->Result<Self> {
-        one_of("copilot.toolAccess",&self.tool_access,&COPILOT_ACCESS)?;
-        self.blocked_tools=tools_in("copilot.blockedTools",&self.blocked_tools,&COPILOT_TOOLS)?;
-        let shell_blocked=self.blocked_tools.iter().any(|tool|tool==SHELL);
-        self.mechanisms=tools_in("copilot.mechanisms",&self.mechanisms,&COPILOT_MECHANISMS)?.into_iter()
-            .filter(|mechanism|!(shell_blocked&&mechanism==SHELL)).collect();
-        Ok(self)
-    }
-    fn args(&self)->Vec<String> {
-        // O Copilot não lê o pedido da entrada padrão: ele vai no `-p`.
-        let mut args=strings(&["-p","{prompt}","--model","{model}"]);
-        match self.tool_access.as_str() { "edits"=>args.extend(strings(&["--allow-tool","write"])), "all"=>args.push("--allow-all-tools".into()), _=>{} }
-        for mechanism in &self.mechanisms {
-            match mechanism.as_str() {
-                WEB_FETCH=>args.push("--allow-all-urls".into()),
-                SHELL=>args.extend(strings(&["--allow-tool","shell"])),
-                GITHUB_TOOLS=>args.push("--enable-all-github-mcp-tools".into()),
-                _=>{}
-            }
-        }
-        for tool in &self.granted { args.extend(["--allow-tool".to_string(),tool.clone()]); }
-        args.extend(crate::mcp::args_for(&self.mcp,AgentId::Copilot));
-        // A negação vence a liberação no Copilot, então o bloqueio continua
-        // valendo mesmo com o mecanismo ligado.
-        for tool in self.blocked_tools.iter().chain(&self.denied) { args.extend(["--deny-tool".to_string(),tool.clone()]); }
-        // Sem o `--silent` o resumo de uso entra na saída — e a saída é a
-        // resposta. A opção antiga (`silent`) não desliga mais isto.
-        args.push("--silent".into());
-        // A conta do fim vai para um arquivo, que o provedor lê e apaga: o
-        // `--silent` esconde o resumo da saída, e a saída é a resposta.
-        args.extend(strings(&["--usage-output-file","{usage_file}"]));
-        args
-    }
-}
-
-impl CursorOptions {
-    fn checked(self)->Result<Self> {
-        one_of("cursor.sandbox",&self.sandbox,&CURSOR_SANDBOXES)?;
-        Ok(self)
-    }
-    fn args(&self)->Vec<String> {
-        // Em `stream-json` o Cursor narra como o Claude: a fala do assistente
-        // num evento, as ferramentas em outro e a conta no `result`. O pedido
-        // chega pela entrada padrão.
-        let mut args=strings(&["--print","--output-format","stream-json","--model","{model}"]);
-        if self.sandbox!="default" { args.extend(strings(&["--sandbox",&self.sandbox])); }
-        if self.force { args.push("--force".into()); }
-        if self.approve_mcps { args.push("--approve-mcps".into()); }
-        args
-    }
-    fn plan_args(&self)->Vec<String> {
-        // O planejamento só lê: as ferramentas MCP rodam sem pergunta, então
-        // o Cursor não as aprova.
-        let mut args=CursorOptions{force:false,approve_mcps:false,..self.clone()}.args();
-        args.extend(strings(&["--mode","plan"]));
-        args
-    }
-}
-
-impl KiloOptions {
-    fn args(&self)->Vec<String> {
-        // `kilo run` recebe o pedido como argumento e responde em texto.
-        let mut args=strings(&["run","--model","{model}"]);
-        if self.auto { args.push("--auto".into()); }
-        args.push("{prompt}".into());
-        args
-    }
-}
-
-fn strings(items:&[&str])->Vec<String> { items.iter().map(|item|item.to_string()).collect() }
-
-fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
+pub(crate) fn parse<T:for<'de> Deserialize<'de>+Default>(options:&Value)->Result<T> {
     if options.is_null() { return Ok(T::default()); }
     serde_json::from_value(options.clone()).map_err(|error|anyhow::Error::new(Text::new("settings.invalidOptions").with("reason",error.to_string())))
 }
 
+/// Os mecanismos com mais um, sem repetir.
+pub(crate) fn with_mechanism(mechanisms:&[String],mechanism:&str)->Vec<String> {
+    let mut all=mechanisms.to_vec();
+    if !all.iter().any(|known|known==mechanism) { all.push(mechanism.into()); }
+    all
+}
+
 impl AgentSettings {
-    fn fresh(id:AgentId)->Self {
-        let options=match id { AgentId::Claude=>serde_json::to_value(ClaudeOptions::default()), AgentId::Codex=>serde_json::to_value(CodexOptions::default()), AgentId::Copilot=>serde_json::to_value(CopilotOptions::default()), AgentId::Kilo=>serde_json::to_value(KiloOptions::default()), AgentId::Openrouter|AgentId::Litellm=>serde_json::to_value(GatewayOptions::fresh(id)), AgentId::Cursor=>serde_json::to_value(CursorOptions::default()) }.unwrap_or_default();
-        Self{id,enabled:!id.is_gateway()&&locate(id.binary()).is_some(),command:id.binary().into(),timeout:id.default_timeout(),options}
+    /// O agente como nasce: as opções de fábrica do mod e, para o de linha de
+    /// comando, ligado só se o executável está no PATH.
+    pub(crate) fn fresh(id:AgentId)->Self {
+        let module=id.module();
+        let options=module.fresh_options();
+        let cli=module.kind(&options)==ModKind::Cli;
+        Self{id,enabled:cli&&!module.binary().is_empty()&&locate(module.binary()).is_some(),command:module.binary().into(),timeout:300,options}
     }
+
+    pub fn module(&self)->&'static dyn LlmMod { self.id.module() }
+    /// O nome do agente: o do mod criado sai das opções dele.
+    pub fn label(&self)->String { self.module().label(&self.options) }
+    /// O mod fala por HTTP (endereço e chave), sem programa para abrir.
+    pub fn is_api(&self)->bool { self.module().kind(&self.options)==ModKind::Api }
+    /// O mod edita o projeto, ou só responde por texto.
+    pub fn edits_project(&self)->bool { self.module().edits_project(&self.options) }
 
     /// As opções limpas e tipadas, com o que faltava preenchido pelo padrão.
-    fn checked(&self,models:&HashSet<&str>)->Result<Value> {
-        Ok(match self.id {
-            AgentId::Claude=>serde_json::to_value(parse::<ClaudeOptions>(&self.options)?.checked(models)?)?,
-            AgentId::Codex=>serde_json::to_value(parse::<CodexOptions>(&self.options)?.checked()?)?,
-            AgentId::Copilot=>serde_json::to_value(parse::<CopilotOptions>(&self.options)?.checked()?)?,
-            AgentId::Cursor=>serde_json::to_value(parse::<CursorOptions>(&self.options)?.checked()?)?,
-            AgentId::Kilo=>serde_json::to_value(parse::<KiloOptions>(&self.options)?)?,
-            AgentId::Openrouter|AgentId::Litellm=>serde_json::to_value(parse::<GatewayOptions>(&self.options)?.checked(self.id)?)?,
-        })
-    }
+    fn checked(&self,models:&HashSet<&str>)->Result<Value> { self.module().checked(&self.options,models) }
 
-    pub fn args(&self)->Vec<String> {
-        match self.id {
-            AgentId::Claude=>parse::<ClaudeOptions>(&self.options).unwrap_or_default().args(),
-            AgentId::Codex=>parse::<CodexOptions>(&self.options).unwrap_or_default().args(),
-            AgentId::Copilot=>parse::<CopilotOptions>(&self.options).unwrap_or_default().args(),
-            AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().args(),
-            AgentId::Kilo=>parse::<KiloOptions>(&self.options).unwrap_or_default().args(),
-            AgentId::Openrouter|AgentId::Litellm=>vec![],
-        }
-    }
+    pub fn args(&self)->Vec<String> { self.module().args(&self.options) }
 
     /// A linha de comando do modo desenvolvimento. O agente roda sem terminal,
     /// e ninguém responde ao pedido de aprovação dele: o que só se faz com
     /// aprovação é negado. Então o que na configuração só lê sobe para o
     /// degrau que escreve no projeto e nada além — o Claude para o
     /// `acceptEdits`, o Codex para o `workspace-write` (com a rede que a
-    /// configuração deu) e o Copilot
-    /// para o `edits`. O que já escrevia fica como está, e o Cursor também: o
-    /// único degrau dele que escreve é o `--force`, que roda comandos sem
-    /// perguntar. Quem não quer escrita usa o modo planejamento, e a regra de
-    /// escrita do Jev em `deny` manda o pedido para ele.
-    pub fn build_args(&self)->Vec<String> {
-        match self.id {
-            AgentId::Claude=>{
-                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                if READ_ONLY_MODES.contains(&options.permission_mode.as_str()) { options.permission_mode="acceptEdits".into(); }
-                options.args()
-            }
-            AgentId::Codex=>{
-                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
-                if options.sandbox=="read-only" { options.sandbox="workspace-write".into(); }
-                options.args()
-            }
-            AgentId::Copilot=>{
-                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                if options.tool_access=="read" { options.tool_access="edits".into(); }
-                options.args()
-            }
-            AgentId::Cursor=>self.args(),
-            AgentId::Kilo=>KiloOptions{auto:true,..Default::default()}.args(),
-            AgentId::Openrouter|AgentId::Litellm=>vec![],
-        }
-    }
+    /// configuração deu) e o Copilot para o `edits`. O que já escrevia fica
+    /// como está, e o Cursor também: o único degrau dele que escreve é o
+    /// `--force`, que roda comandos sem perguntar. Quem não quer escrita usa o
+    /// modo planejamento, e a regra de escrita do Jev em `deny` manda o pedido
+    /// para ele.
+    pub fn build_args(&self)->Vec<String> { self.module().build_args(&self.options) }
 
     /// A linha de comando do modo planejamento: as opções do desenvolvedor,
     /// com a escrita desligada — e sem rodar comandos sem pergunta, que
-    /// também escrevem. O Claude entra no `--permission-mode plan`, o
-    /// Codex no sandbox `read-only` sem rede, o Copilot só lê e o Cursor entra
-    /// no `--mode plan`, sem `--force`.
-    pub fn plan_args(&self)->Vec<String> {
-        match self.id {
-            AgentId::Claude=>{
-                let options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                ClaudeOptions{permission_mode:"plan".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],mcp:vec![],..options}.args()
-            }
-            AgentId::Codex=>CodexOptions{sandbox:"read-only".into(),network_access:false,mcp:vec![],..parse::<CodexOptions>(&self.options).unwrap_or_default()}.args(),
-            AgentId::Copilot=>{
-                let options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                CopilotOptions{tool_access:"read".into(),mechanisms:without_shell(&options.mechanisms),granted:vec![],mcp:vec![],..options}.args()
-            }
-            AgentId::Cursor=>parse::<CursorOptions>(&self.options).unwrap_or_default().plan_args(),
-            AgentId::Kilo=>KiloOptions{auto:false,..Default::default()}.args(),
-            AgentId::Openrouter|AgentId::Litellm=>vec![],
-        }
-    }
+    /// também escrevem. O Claude entra no `--permission-mode plan`, o Codex no
+    /// sandbox `read-only` sem rede, o Copilot só lê, o Cursor entra no
+    /// `--mode plan`, sem `--force`, e o mod criado usa a linha de
+    /// planejamento que a pessoa escreveu.
+    pub fn plan_args(&self)->Vec<String> { self.module().plan_args(&self.options) }
 
     /// O mesmo agente sem os modos sem trava, para a política de LLM com
     /// `safe_agents`: o Claude sai do `bypassPermissions`, o Codex do
     /// `danger-full-access` (para `workspace-write`, sem rede), o Copilot do
-    /// `all` (para `edits`) e o Cursor perde `--force`, `--approve-mcps` e o
-    /// sandbox desligado. O Claude e o Copilot perdem também os comandos sem
-    /// pergunta (o mecanismo `shell`). O que já tinha trava fica como está.
-    pub fn without_unsafe_modes(&self)->Self {
-        let options=match self.id {
-            AgentId::Claude=>{
-                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                if options.permission_mode=="bypassPermissions" { options.permission_mode=MANUAL.into(); }
-                options.mechanisms=without_shell(&options.mechanisms);
-                options.granted.clear();
-                options.approve_mcps=false;
-                options.mcp.clear();
-                serde_json::to_value(options)
-            }
-            AgentId::Codex=>{
-                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
-                if options.sandbox=="danger-full-access" { options.sandbox="workspace-write".into(); options.network_access=false; }
-                options.approve_mcps=false;
-                options.mcp.clear();
-                serde_json::to_value(options)
-            }
-            AgentId::Copilot=>{
-                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                if options.tool_access=="all" { options.tool_access="edits".into(); }
-                options.mechanisms=without_shell(&options.mechanisms);
-                options.granted.clear();
-                options.approve_mcps=false;
-                options.mcp.clear();
-                serde_json::to_value(options)
-            }
-            AgentId::Cursor=>{
-                let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
-                options.force=false;
-                options.approve_mcps=false;
-                options.mcp.clear();
-                if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
-                serde_json::to_value(options)
-            }
-            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false,approve_mcps:false,mcp:vec![],..parse::<KiloOptions>(&self.options).unwrap_or_default()}),
-            AgentId::Openrouter|AgentId::Litellm=>{
-                let mut options=parse::<GatewayOptions>(&self.options).unwrap_or_default();
-                options.approve_mcps=false;
-                options.mcp.clear();
-                serde_json::to_value(options)
-            }
-        }.unwrap_or_default();
-        Self{options,..self.clone()}
-    }
+    /// `all` (para `edits`), o Cursor perde `--force`, `--approve-mcps` e o
+    /// sandbox desligado, e o mod criado roda com a linha que não escreve. O
+    /// Claude e o Copilot perdem também os comandos sem pergunta (o mecanismo
+    /// `shell`). O que já tinha trava fica como está.
+    pub fn without_unsafe_modes(&self)->Self { Self{options:self.module().without_unsafe_modes(&self.options),..self.clone()} }
 
     /// O mesmo agente com os servidores MCP configurados que ele recebe, se o
     /// "Aprovar servidores MCP" dele está ligado: as ferramentas deles rodam
@@ -705,16 +334,7 @@ impl AgentSettings {
     pub fn with_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
         let mine=servers.iter().filter(|server|server.serves(self.id)).cloned().collect::<Vec<_>>();
         if mine.is_empty() { return self.clone(); }
-        macro_rules! deliver { ($options:ty)=>{{ let mut options=parse::<$options>(&self.options).unwrap_or_default(); if !options.approve_mcps { return self.clone(); } options.mcp=mine; serde_json::to_value(options) }} }
-        let options=match self.id {
-            AgentId::Claude=>deliver!(ClaudeOptions),
-            AgentId::Codex=>deliver!(CodexOptions),
-            AgentId::Copilot=>deliver!(CopilotOptions),
-            AgentId::Cursor=>deliver!(CursorOptions),
-            AgentId::Kilo=>deliver!(KiloOptions),
-            AgentId::Openrouter|AgentId::Litellm=>deliver!(GatewayOptions),
-        }.unwrap_or_default();
-        Self{options,..self.clone()}
+        match self.module().with_mcp(&self.options,mine) { Some(options)=>Self{options,..self.clone()}, None=>self.clone() }
     }
 
     /// O mesmo agente com o que o desenvolvedor liberou para um pedido só
@@ -728,87 +348,20 @@ impl AgentSettings {
     /// `danger-full-access` abre. O Cursor só tem o `--force`.
     pub fn with_grants(&self,grants:&Grants)->Self {
         if grants.is_empty() { return self.clone(); }
-        let with=|mechanisms:&[String],mechanism:&str|{ let mut all=mechanisms.to_vec(); if !all.iter().any(|known|known==mechanism) { all.push(mechanism.into()); } all };
-        let options=match self.id {
-            AgentId::Claude=>{
-                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                if grants.shell { options.mechanisms=with(&options.mechanisms,SHELL); }
-                if grants.network { options.mechanisms=with(&options.mechanisms,WEB_FETCH); }
-                let mut rules=grants.commands.iter().filter_map(|command|claude_rule(command)).collect::<Vec<_>>();
-                if grants.git { rules.push("Bash(git:*)".into()); }
-                // O comando que não cabe numa regra (vírgula, parêntese) libera
-                // o `Bash` inteiro: foi o que o desenvolvedor aprovou.
-                if grants.commands.iter().any(|command|claude_rule(command).is_none()) { options.mechanisms=with(&options.mechanisms,SHELL); }
-                for rule in rules { if !options.granted.contains(&rule) { options.granted.push(rule); } }
-                serde_json::to_value(options)
-            }
-            AgentId::Codex=>{
-                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
-                if grants.needs_git() { options.sandbox="danger-full-access".into(); }
-                if grants.needs_network()&&options.sandbox!="danger-full-access" { options.network_access=true; }
-                serde_json::to_value(options)
-            }
-            AgentId::Copilot=>{
-                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                if grants.shell { options.mechanisms=with(&options.mechanisms,SHELL); }
-                if grants.network { options.mechanisms=with(&options.mechanisms,WEB_FETCH); }
-                if options.tool_access=="read" { options.tool_access="edits".into(); }
-                let mut tools=grants.commands.iter().filter_map(|command|copilot_rule(command)).collect::<Vec<_>>();
-                if grants.git { tools.push("shell(git)".into()); }
-                if grants.commands.iter().any(|command|copilot_rule(command).is_none()) { options.mechanisms=with(&options.mechanisms,SHELL); }
-                for tool in tools { if !options.granted.contains(&tool) { options.granted.push(tool); } }
-                serde_json::to_value(options)
-            }
-            AgentId::Cursor=>{
-                let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
-                if grants.shell||grants.git||!grants.commands.is_empty() { options.force=true; }
-                serde_json::to_value(options)
-            }
-            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:true,..parse::<KiloOptions>(&self.options).unwrap_or_default()}),
-            AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
-        }.unwrap_or_default();
-        Self{options,..self.clone()}
+        match self.module().with_grants(&self.options,grants) { Some(options)=>Self{options,..self.clone()}, None=>self.clone() }
     }
 
     /// O mesmo agente sem poder rodar os comandos que a política da organização
     /// bloqueia (`git push`, `npm publish`…). O Claude e o Copilot negam cada
-    /// regra por comando, e a negação vence a liberação. O Codex, o Cursor e o
-    /// Kilo não têm lista de comandos: com qualquer comando bloqueado eles
-    /// rodam no modo mais travado que têm (sem sandbox aberto, sem rede
-    /// liberada, sem `--force` nem `--auto`), para que nenhum comando
-    /// bloqueado passe. Só aperta: nunca libera nada.
+    /// regra por comando, e a negação vence a liberação. O Codex, o Cursor, o
+    /// Kilo e os mods criados não têm lista de comandos: com qualquer comando
+    /// bloqueado eles rodam no modo mais travado que têm (sem sandbox aberto,
+    /// sem rede liberada, sem `--force` nem `--auto`, com a linha que não
+    /// escreve), para que nenhum comando bloqueado passe. Só aperta: nunca
+    /// libera nada.
     pub fn without_commands(&self,blocked:&[String])->Self {
         if blocked.is_empty() { return self.clone(); }
-        let options=match self.id {
-            AgentId::Claude=>{
-                let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default();
-                options.denied=blocked.iter().filter_map(|rule|claude_deny_rule(rule)).collect();
-                options.granted.retain(|rule|!blocked.iter().any(|blocked|claude_deny_rule(blocked).as_deref()==Some(rule.as_str())));
-                serde_json::to_value(options)
-            }
-            AgentId::Copilot=>{
-                let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default();
-                options.denied=blocked.iter().filter_map(|rule|copilot_deny_rule(rule)).collect();
-                options.granted.retain(|tool|!blocked.iter().any(|blocked|copilot_deny_rule(blocked).as_deref()==Some(tool.as_str())));
-                serde_json::to_value(options)
-            }
-            AgentId::Codex=>{
-                let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default();
-                if options.sandbox=="danger-full-access" { options.sandbox="workspace-write".into(); }
-                // Rede é o que instala, publica e empurra; o que a política bloqueia dela fica de fora.
-                if blocked.iter().any(|rule|fetches(rule)) { options.network_access=false; }
-                serde_json::to_value(options)
-            }
-            AgentId::Cursor=>{
-                let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default();
-                options.force=false;
-                if options.sandbox=="disabled" { options.sandbox="enabled".into(); }
-                serde_json::to_value(options)
-            }
-            AgentId::Kilo=>serde_json::to_value(KiloOptions{auto:false,..parse::<KiloOptions>(&self.options).unwrap_or_default()}),
-            AgentId::Openrouter|AgentId::Litellm=>return self.clone(),
-        }.unwrap_or_default();
-        Self{options,..self.clone()}
+        match self.module().without_commands(&self.options,blocked) { Some(options)=>Self{options,..self.clone()}, None=>self.clone() }
     }
 
     /// O mesmo agente sem os mecanismos que a política bloqueia, escritos
@@ -817,20 +370,7 @@ impl AgentSettings {
     pub fn without_mechanisms(&self,blocked:&[String])->Self {
         let prefix=format!("{}/",self.id.key());
         if !blocked.iter().any(|key|key.starts_with(&prefix)) { return self.clone(); }
-        let gone=|mechanisms:&[String]|mechanisms.iter().filter(|mechanism|!blocked.contains(&format!("{}/{mechanism}",self.id.key()))).cloned().collect::<Vec<_>>();
-        // Os comandos liberados para um pedido também são o mecanismo `shell`.
-        let shell_blocked=blocked.contains(&format!("{}/{SHELL}",self.id.key()));
-        // `mcp` é o "Aprovar servidores MCP": bloqueado, nenhum servidor chega.
-        let mcp_blocked=blocked.contains(&format!("{}/{MCP}",self.id.key()));
-        let options=match self.id {
-            AgentId::Claude=>{ let mut options=parse::<ClaudeOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
-            AgentId::Codex=>{ let mut options=parse::<CodexOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
-            AgentId::Copilot=>{ let mut options=parse::<CopilotOptions>(&self.options).unwrap_or_default(); options.mechanisms=gone(&options.mechanisms); if shell_blocked { options.granted.clear(); } if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
-            AgentId::Cursor=>{ let mut options=parse::<CursorOptions>(&self.options).unwrap_or_default(); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
-            AgentId::Kilo=>{ let mut options=parse::<KiloOptions>(&self.options).unwrap_or_default(); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
-            AgentId::Openrouter|AgentId::Litellm=>{ let mut options=parse::<GatewayOptions>(&self.options).unwrap_or_default(); if mcp_blocked { options.approve_mcps=false; options.mcp.clear(); } serde_json::to_value(options) }
-        }.unwrap_or_default();
-        Self{options,..self.clone()}
+        Self{options:self.module().without_mechanisms(&self.options,blocked),..self.clone()}
     }
 }
 
@@ -896,35 +436,35 @@ pub fn command_blocked(blocked:&[String],command:&str)->bool {
 
 fn program(command:&str)->&str { command.split_whitespace().next().unwrap_or_default() }
 
-fn fetches(command:&str)->bool {
+pub(crate) fn fetches(command:&str)->bool {
     let words=command.split_whitespace().collect::<Vec<_>>();
     matches!(words.first().copied(),Some("curl"|"wget"|"gh"))
         ||words.iter().skip(1).take(2).any(|word|matches!(*word,"install"|"i"|"add"|"ci"|"fetch"|"pull"|"push"|"clone"|"update"|"upgrade"|"download"|"sync"))
 }
 
 /// A regra do Claude para o comando: ele e o que vier depois.
-fn claude_rule(command:&str)->Option<String> {
+pub(crate) fn claude_rule(command:&str)->Option<String> {
     let command=command.trim();
     (!command.is_empty()&&!command.contains([',','(',')'])).then(||format!("Bash({command}:*)"))
 }
 
 /// A regra de negação do Claude para uma regra da organização.
-fn claude_deny_rule(rule:&str)->Option<String> { claude_rule(rule) }
+pub(crate) fn claude_deny_rule(rule:&str)->Option<String> { claude_rule(rule) }
 
 /// A negação do Copilot para uma regra da organização: ela inteira, e não só
 /// o programa e o subcomando.
-fn copilot_deny_rule(rule:&str)->Option<String> {
+pub(crate) fn copilot_deny_rule(rule:&str)->Option<String> {
     let rule=rule.trim();
     (!rule.is_empty()&&!rule.contains([',','(',')'])).then(||format!("shell({rule})"))
 }
 
 /// A ferramenta do Copilot para o comando: o programa e o subcomando.
-fn copilot_rule(command:&str)->Option<String> {
+pub(crate) fn copilot_rule(command:&str)->Option<String> {
     let prefix=command_prefix(command);
     (!prefix.is_empty()&&!prefix.contains([',','(',')'])).then(||format!("shell({prefix})"))
 }
 
-fn without_shell(mechanisms:&[String])->Vec<String> { mechanisms.iter().filter(|mechanism|*mechanism!=SHELL).cloned().collect() }
+pub(crate) fn without_shell(mechanisms:&[String])->Vec<String> { mechanisms.iter().filter(|mechanism|*mechanism!=SHELL).cloned().collect() }
 
 /// Um modelo que o agente oferece, com os números que a tela preenche sozinha
 /// ao escolhê-lo.
@@ -936,8 +476,15 @@ impl KnownModel {
     /// Custo, velocidade e capacidades saem do nome: o CLI não os diz. A
     /// família pequena é barata, rápida e não conta como raciocínio; a grande,
     /// cara e lenta; o resto fica no meio. Os `o1`/`o3`/`o4` da OpenAI são de
-    /// raciocínio, e só a versão `mini` deles é pequena.
-    fn named(agent:AgentId,id:&str,label:Option<String>,context_window:Option<usize>)->Self {
+    /// raciocínio, e só a versão `mini` deles é pequena. O mod que só responde
+    /// por texto não leva `code` nem `tools`.
+    pub(crate) fn named(agent:AgentId,id:&str,label:Option<String>,context_window:Option<usize>)->Self {
+        Self::named_as(agent,!agent.module().edits_project(&Value::Null),id,label,context_window)
+    }
+
+    /// O mesmo, dizendo se o mod só responde por texto: o mod criado só sabe
+    /// com as opções na mão.
+    pub(crate) fn named_as(agent:AgentId,text_only:bool,id:&str,label:Option<String>,context_window:Option<usize>)->Self {
         let lower=id.to_ascii_lowercase();
         let has=|words:&[&str]|words.iter().any(|word|lower.contains(word));
         let (cost_class,mut speed)=if has(&["haiku","mini","flash","luna","nano","lite"]) {("low","fast")}
@@ -945,14 +492,15 @@ impl KnownModel {
             else if has(&["fable"]) {("high","medium")}
             else {("medium","medium")};
         if lower.ends_with("-fast") { speed="fast"; }
-        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {match agent { AgentId::Claude=>200_000, AgentId::Codex=>272_000, AgentId::Copilot=>128_000, AgentId::Cursor|AgentId::Kilo=>200_000, AgentId::Openrouter|AgentId::Litellm=>128_000 }});
-        let capabilities=if agent.is_gateway() { gateway_capabilities(cost_class) } else if cost_class=="low" {strings(&["chat","code","tools"])} else {strings(&CAPABILITIES)};
+        let context=context_window.unwrap_or(if lower.contains("[1m]") {1_000_000} else {agent.module().default_context()});
+        let capabilities=if text_only { gateway_capabilities(cost_class) } else if cost_class=="low" {strings(&["chat","code","tools"])} else {strings(&CAPABILITIES)};
         Self{id:id.into(),label:label.unwrap_or_else(||id.into()),context_window:context.clamp(CONTEXT_RANGE.0,CONTEXT_RANGE.1),cost_class:cost_class.into(),speed:speed.into(),capabilities}
     }
 }
 
-/// O que um modelo de gateway faz: responder e, nos maiores, raciocinar. Sem
-/// `code` e `tools`: o gateway devolve texto, não edita o projeto.
+/// O que um modelo de quem só responde por texto faz: responder e, nos
+/// maiores, raciocinar. Sem `code` e `tools`: ele devolve texto, não edita o
+/// projeto.
 fn gateway_capabilities(cost_class:&str)->Vec<String> { if cost_class=="low" { strings(&["chat"]) } else { strings(&["chat","reasoning"]) } }
 
 /// `o1`, `o3`, `o4`… sozinhos ou com sufixo (`o3-2025`), mas não `gpt-4o`.
@@ -962,33 +510,21 @@ fn reasoning_series(lower:&str)->bool {
 }
 
 /// Os modelos que vêm de fábrica, para a máquina em que o agente ainda não
-/// respondeu à descoberta. Os apelidos do Claude Code seguem sozinhos a
-/// versão mais nova de cada família.
-fn starter_ids(agent:AgentId)->&'static [&'static str] {
-    match agent {
-        AgentId::Claude=>&["sonnet","opus","haiku","fable"],
-        AgentId::Codex=>&["gpt-5.5"],
-        AgentId::Copilot=>&["claude-sonnet-4.5"],
-        AgentId::Cursor=>&["auto"],
-        AgentId::Kilo=>&["anthropic/claude-sonnet-4"],
-        AgentId::Openrouter=>&["anthropic/claude-sonnet-4"],
-        AgentId::Litellm=>&["gpt-4o-mini"],
-    }
-}
-
+/// respondeu à descoberta (`LlmMod::starter_models`).
 fn starter_models(agent:AgentId)->Vec<AgentModel> {
-    starter_ids(agent).iter().map(|id|fresh_model(agent,&KnownModel::named(agent,id,None,None))).collect()
+    agent.module().starter_models().iter().map(|id|fresh_model(agent,&KnownModel::named(agent,id,None,None))).collect()
 }
 
 fn fresh_model(agent:AgentId,known:&KnownModel)->AgentModel {
     AgentModel{agent,model:known.id.clone(),enabled:false,capabilities:known.capabilities.clone(),cost_class:known.cost_class.clone(),speed:known.speed.clone(),context_window:known.context_window}
 }
 
-/// A chave de API de cada gateway, em memória: lida do banco local ao carregar
-/// e ao salvar. Fica fora do `AgentSettings`, que vai para a tela e para a nuvem.
+/// A chave de API de cada gateway e de cada mod de API, em memória: lida do
+/// banco local ao carregar e ao salvar. Fica fora do `AgentSettings`, que vai
+/// para a tela e para a nuvem.
 static SECRETS:std::sync::LazyLock<std::sync::RwLock<HashMap<AgentId,String>>>=std::sync::LazyLock::new(Default::default);
 
-/// A chave guardada do gateway, se houver.
+/// A chave guardada do mod, se houver.
 pub fn secret(agent:AgentId)->Option<String> { SECRETS.read().ok()?.get(&agent).cloned().filter(|key|!key.trim().is_empty()) }
 
 fn remember_secrets(connection:&Connection)->Result<()> {
@@ -999,44 +535,23 @@ fn remember_secrets(connection:&Connection)->Result<()> {
     Ok(())
 }
 
-/// Os servidores MCP que o próprio JayV entrega a este agente neste pedido:
-/// o Cursor (arquivo dele), o Kilo Code (configuração em linha) e os gateways
-/// (cliente MCP do app). Os outros os recebem pela linha de comando.
-fn mcp_values(agent:&AgentSettings)->Vec<Value> {
-    let servers=match agent.id {
-        AgentId::Cursor=>parse::<CursorOptions>(&agent.options).unwrap_or_default().mcp,
-        AgentId::Kilo=>parse::<KiloOptions>(&agent.options).unwrap_or_default().mcp,
-        AgentId::Openrouter|AgentId::Litellm=>parse::<GatewayOptions>(&agent.options).unwrap_or_default().mcp,
-        AgentId::Claude|AgentId::Codex|AgentId::Copilot=>vec![],
-    };
-    servers.iter().filter_map(|server|serde_json::to_value(server).ok()).collect()
-}
-
-/// O gateway como o provedor HTTP o entende: endereço e chave.
-fn gateway_config(agent:&AgentSettings)->ProviderConfig {
-    let options=parse::<GatewayOptions>(&agent.options).unwrap_or_default();
-    let key=secret(agent.id);
-    ProviderConfig{
-        // O LiteLLM pode rodar sem chave (um proxy local); o OpenRouter, não.
-        enabled:agent.enabled&&(agent.id==AgentId::Litellm||key.is_some()),
-        kind:"openai-compatible".into(),base_url:Some(if options.base_url.trim().is_empty() { GatewayOptions::fresh(agent.id).base_url } else { options.base_url }),api_key:key,timeout:agent.timeout,mcp:mcp_values(agent),..ProviderConfig::default()
-    }
-}
-
-/// Os modelos do gateway, pelo `/models` dele. Os gateways só respondem por
-/// texto: nunca levam as capacidades `code` e `tools`.
+/// Os modelos do mod de API, pelo `/models` dele. Quem só responde por texto
+/// nunca leva as capacidades `code` e `tools`.
 pub async fn discover_gateway(agent:&AgentSettings)->Result<Vec<KnownModel>> {
-    let config=gateway_config(agent);
+    let config=agent.module().provider(agent);
     let listed=crate::providers::discover_listing(agent.id.key(),&config).await?;
-    let found:Vec<KnownModel>=unique(listed.into_iter().filter(|model|valid_id(&model.id)).map(|model|KnownModel::named(agent.id,&model.id,None,model.context)));
+    let text_only=!agent.edits_project();
+    let found:Vec<KnownModel>=unique(listed.into_iter().filter(|model|valid_id(&model.id)).map(|model|KnownModel::named_as(agent.id,text_only,&model.id,None,model.context)));
     if let Ok(mut cache)=DISCOVERED.lock() { cache.insert(agent.id,found.clone()); }
     Ok(found)
 }
 
-/// A descoberta de um agente, de qualquer tipo: o CLI pelo comando, o gateway
-/// pelo endereço. `None` quando não respondeu.
+/// A descoberta de um agente, de qualquer tipo: o CLI pelo comando, o de API
+/// pelo endereço. `None` quando não respondeu ou quando o mod não sabe listar
+/// (o mod criado de linha de comando: os modelos dele são os que a pessoa
+/// escreve).
 pub async fn discover_agent(agent:&AgentSettings)->Option<Vec<KnownModel>> {
-    if agent.id.is_gateway() {
+    if agent.is_api() {
         return match discover_gateway(agent).await { Ok(found) if !found.is_empty()=>Some(found), Ok(_)=>None, Err(error)=>{ eprintln!("[llm] {} listed no models: {error}",agent.id.key()); None } };
     }
     discover(agent.id,&agent.command).await
@@ -1054,120 +569,48 @@ pub fn catalog(agent:AgentId,settings:&LlmSettings)->Vec<KnownModel> {
     }).collect()
 }
 
-/// Os argumentos que fazem o agente listar, sem gastar crédito, os modelos
-/// do `/model`. O Claude Code responde ao `/model` no `--print` sem chamar o
-/// modelo; o Codex tem o catálogo no `debug models`; o Copilot lista os
-/// valores aceitos de `model` na ajuda de configuração; o Cursor tem o
-/// `models`.
-fn listing_args(agent:AgentId)->&'static [&'static str] {
-    match agent {
-        AgentId::Claude=>&["--print","/model","--output-format","json","--no-session-persistence"],
-        AgentId::Codex=>&["debug","models"],
-        AgentId::Copilot=>&["help","config"],
-        AgentId::Cursor=>&["models"],
-        AgentId::Kilo=>&["models"],
-        AgentId::Openrouter|AgentId::Litellm=>&[],
-    }
-}
-
-/// Pergunta ao CLI quais modelos ele oferece. `None` quando ele não está
-/// instalado, não respondeu ou respondeu algo que esta versão não lê.
+/// Pergunta ao CLI quais modelos ele oferece, com os argumentos que o mod
+/// diz (`LlmMod::listing_args`), sem gastar crédito. `None` quando ele não está
+/// instalado, não respondeu, respondeu algo que esta versão não lê ou o mod não
+/// sabe listar.
 pub async fn discover(agent:AgentId,command:&str)->Option<Vec<KnownModel>> {
+    let module=agent.module();
+    if module.listing_args().is_empty() { return None; }
     let path=locate(command)?;
     let (program,lead)=launcher(&path);
     let mut process=tokio::process::Command::new(&program);
     if let Some(search)=agent_path(&path) { process.env("PATH",search); }
-    let run=crate::providers::quiet(&mut process).args(lead).args(listing_args(agent)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).output();
+    let run=crate::providers::quiet(&mut process).args(lead).args(module.listing_args()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).output();
     let output=tokio::time::timeout(Duration::from_secs(60),run).await.ok()?.ok()?;
-    let text=String::from_utf8_lossy(&output.stdout);
-    let found=match agent {
-        AgentId::Claude=>parse_claude_listing(&text),
-        AgentId::Codex=>parse_codex_listing(&text),
-        AgentId::Copilot=>parse_copilot_listing(&text),
-        AgentId::Cursor=>parse_cursor_listing(&text),
-        AgentId::Kilo=>parse_kilo_listing(&text),
-        AgentId::Openrouter|AgentId::Litellm=>vec![],
-    };
+    let found=module.parse_listing(&String::from_utf8_lossy(&output.stdout));
     if found.is_empty() { eprintln!("[llm] {} listed no models",agent.key()); return None; }
     if let Ok(mut cache)=DISCOVERED.lock() { cache.insert(agent,found.clone()); }
     Some(found)
 }
 
-/// `Available: sonnet, opus, …, default, or a full model ID.` — `default` é
-/// "o que a conta escolher", não um modelo.
-fn parse_claude_listing(text:&str)->Vec<KnownModel> {
-    let result=serde_json::from_str::<Value>(text).ok().and_then(|value|value["result"].as_str().map(str::to_string)).unwrap_or_else(||text.to_string());
-    let Some(rest)=result.split("Available:").nth(1) else { return vec![] };
-    let list=rest.split(" or a full model ID").next().unwrap_or(rest);
-    let ids=list.split(',').map(|item|item.trim().trim_end_matches('.').trim()).filter(|id|!id.is_empty()&&*id!="default"&&valid_id(id));
-    unique(ids.map(|id|KnownModel::named(AgentId::Claude,id,None,None)))
-}
-
-/// O catálogo do Codex, só com os que o `/model` mostra (`visibility: list`).
-fn parse_codex_listing(text:&str)->Vec<KnownModel> {
-    let Ok(value)=serde_json::from_str::<Value>(text) else { return vec![] };
-    let mut models:Vec<&Value>=value["models"].as_array().map(|models|models.iter().filter(|model|model["visibility"].as_str()==Some("list")).collect()).unwrap_or_default();
-    models.sort_by_key(|model|model["priority"].as_i64().unwrap_or(i64::MAX));
-    unique(models.into_iter().filter_map(|model|{
-        let id=model["slug"].as_str().filter(|id|valid_id(id))?;
-        Some(KnownModel::named(AgentId::Codex,id,model["display_name"].as_str().map(str::to_string),model["context_window"].as_u64().map(|window|window as usize)))
-    }))
-}
-
-/// Os valores da chave `model` na ajuda de configuração: uma linha
-/// `- "id"` por modelo, até a linha em branco.
-fn parse_copilot_listing(text:&str)->Vec<KnownModel> {
-    let mut lines=text.lines().skip_while(|line|!line.trim_start().starts_with("`model`"));
-    lines.next();
-    let ids=lines.map(str::trim).take_while(|line|!line.is_empty()).filter_map(|line|line.strip_prefix("- \"").and_then(|rest|rest.strip_suffix('"'))).filter(|id|valid_id(id));
-    unique(ids.map(|id|KnownModel::named(AgentId::Copilot,id,None,None)))
-}
-
-/// Uma linha `id - Nome` por modelo, depois do `Available models`. O
-/// `(default)` e o `(current)` do fim do nome são da conta, não do modelo.
-fn parse_cursor_listing(text:&str)->Vec<KnownModel> {
-    let found=text.lines().map(str::trim).filter_map(|line|line.split_once(" - ")).filter(|(id,_)|valid_id(id)).map(|(id,name)|{
-        let name=name.trim().trim_end_matches("(default)").trim_end_matches("(current)").trim();
-        KnownModel::named(AgentId::Cursor,id,Some(name.to_string()).filter(|name|!name.is_empty()),None)
-    });
-    unique(found)
-}
-
-/// Uma linha `provedor/modelo` por modelo; o resto (cabeçalho, aviso) não passa
-/// pelo `valid_id` ou não tem a barra.
-fn parse_kilo_listing(text:&str)->Vec<KnownModel> {
-    let ids=text.lines().map(str::trim).filter(|line|line.contains('/')&&valid_id(line));
-    unique(ids.map(|id|KnownModel::named(AgentId::Kilo,id,None,None)))
-}
-
-fn unique(models:impl Iterator<Item=KnownModel>)->Vec<KnownModel> {
+pub(crate) fn unique(models:impl Iterator<Item=KnownModel>)->Vec<KnownModel> {
     let mut seen=HashSet::new();
     models.filter(|model|seen.insert(model.id.clone())).collect()
 }
 
-fn valid_id(id:&str)->bool { !id.is_empty()&&id.chars().all(|char|char.is_ascii_alphanumeric()||"._-:/@[]".contains(char)) }
+pub(crate) fn valid_id(id:&str)->bool { !id.is_empty()&&id.chars().all(|char|char.is_ascii_alphanumeric()||"._-:/@[]".contains(char)) }
 
 /// Troca os modelos do agente pela lista do CLI, na ordem dele. O que já
 /// estava gravado guarda o que o usuário mudou (ligado, custo, capacidades);
 /// o que é novo nasce ligado, para o Jev poder escolhê-lo; o que o CLI deixou
-/// de oferecer sai — e sai também do modelo reserva do Claude.
+/// de oferecer sai — e sai também das opções do mod (o modelo reserva do
+/// Claude).
 pub fn adopt_listing(settings:&LlmSettings,agent:AgentId,found:&[KnownModel])->LlmSettings {
     let mut models:Vec<AgentModel>=settings.models.iter().filter(|model|model.agent!=agent).cloned().collect();
     models.extend(found.iter().map(|known|settings.models.iter().find(|model|model.agent==agent&&model.model==known.id).cloned().unwrap_or_else(||fresh_model(agent,known))));
     let mut agents=settings.agents.clone();
-    if agent==AgentId::Claude {
-        for entry in agents.iter_mut().filter(|entry|entry.id==AgentId::Claude) {
-            let mut options=parse::<ClaudeOptions>(&entry.options).unwrap_or_default();
-            if !options.fallback_model.is_empty()&&!found.iter().any(|known|known.id==options.fallback_model) {
-                options.fallback_model.clear();
-                entry.options=serde_json::to_value(options).unwrap_or(Value::Null);
-            }
-        }
+    for entry in agents.iter_mut().filter(|entry|entry.id==agent) {
+        if let Some(options)=entry.module().adopted(&entry.options,found) { entry.options=options; }
     }
     LlmSettings{agents,models}
 }
 
-/// Cria as tabelas e, na primeira vez, cadastra os agentes com os modelos
+/// Cria as tabelas e, na primeira vez, cadastra os mods do app com os modelos
 /// de fábrica — a descoberta troca-os pela lista do CLI assim que ele
 /// responde. Um agente cujo binário não está no PATH nasce desligado: ligado,
 /// ele seria escolhido pelo roteador e falharia no primeiro pedido.
@@ -1180,7 +623,7 @@ pub fn ensure(connection:&Connection)->Result<()> {
         write(connection,&LlmSettings{agents,models})?;
         return Ok(());
     }
-    // Um agente que chegou numa versão nova entra no banco que já existia com
+    // Um mod que chegou numa versão nova entra no banco que já existia com
     // os modelos de fábrica: ligado e sem modelo, ele travaria o salvar.
     for id in AgentId::ALL {
         let present:i64=connection.query_row("SELECT COUNT(*) FROM llm_agents WHERE id=?1",[id.key()],|row|row.get(0))?;
@@ -1199,20 +642,11 @@ fn legacy_effort(mut options:Value)->Value {
     options
 }
 
-/// As opções gravadas com o que faltava preenchido pelo padrão: a opção
-/// nova de uma versão (os mecanismos, por exemplo) chega à tela com o valor
-/// que o agente de fato usa. O que não se lê fica como veio, para a
-/// validação dizer o quê.
-fn filled(id:AgentId,options:Value)->Value {
-    let typed=match id {
-        AgentId::Claude=>parse::<ClaudeOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
-        AgentId::Codex=>parse::<CodexOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
-        AgentId::Copilot=>parse::<CopilotOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
-        AgentId::Cursor=>parse::<CursorOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
-        AgentId::Kilo=>parse::<KiloOptions>(&options).and_then(|options|Ok(serde_json::to_value(options)?)),
-        AgentId::Openrouter|AgentId::Litellm=>parse::<GatewayOptions>(&options).and_then(|mut options|{ if options.base_url.trim().is_empty() { options.base_url=GatewayOptions::fresh(id).base_url; } Ok(serde_json::to_value(options)?) }),
-    };
-    typed.unwrap_or(options)
+/// A posição do agente nas abas: os mods do app na ordem deles, depois os
+/// criados pelo nome.
+fn tab_order(agent:&AgentSettings)->(usize,String,AgentId) {
+    let position=AgentId::ALL.iter().position(|id|*id==agent.id).unwrap_or(AgentId::ALL.len());
+    (position,if position<AgentId::ALL.len() { String::new() } else { agent.label().to_lowercase() },agent.id)
 }
 
 pub fn load(connection:&Connection)->Result<LlmSettings> {
@@ -1223,62 +657,75 @@ pub fn load(connection:&Connection)->Result<LlmSettings> {
         for row in rows {
             let (id,enabled,command,timeout,options)=row?;
             let Ok(id)=AgentId::parse(&id) else { continue };
-            agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:filled(id,legacy_effort(serde_json::from_str(&options).unwrap_or(Value::Null)))});
+            agents.push(AgentSettings{id,enabled,command,timeout:timeout.max(0) as u64,options:id.module().filled(legacy_effort(serde_json::from_str(&options).unwrap_or(Value::Null)))});
         }
     }
     remember_secrets(connection)?;
-    for agent in agents.iter_mut().filter(|agent|agent.id.is_gateway()) {
+    for agent in agents.iter_mut().filter(|agent|agent.is_api()) {
         if let Some(options)=agent.options.as_object_mut() { options.insert("hasKey".into(),Value::Bool(secret(agent.id).is_some())); }
     }
-    // Um agente que falte no banco volta com o padrão: a tela sempre tem uma
-    // aba por agente.
+    // Um mod do app que falte no banco volta com o padrão: a tela sempre tem
+    // uma aba por mod do app.
     for id in AgentId::ALL { if !agents.iter().any(|agent|agent.id==id) { agents.push(AgentSettings::fresh(id)); } }
-    agents.sort_by_key(|agent|AgentId::ALL.iter().position(|id|*id==agent.id));
+    agents.sort_by_cached_key(tab_order);
+    let order:HashMap<AgentId,usize>=agents.iter().enumerate().map(|(position,agent)|(agent.id,position)).collect();
     let mut models=Vec::new();
     let mut statement=connection.prepare("SELECT agent,model,enabled,capabilities,cost_class,speed,context_window FROM llm_models ORDER BY agent,position,model")?;
     let rows=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,bool>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,i64>(6)?)))?;
     for row in rows {
         let (agent,model,enabled,capabilities,cost_class,speed,context_window)=row?;
         let Ok(agent)=AgentId::parse(&agent) else { continue };
+        // O modelo de um mod que não está mais aqui não tem dono.
+        if !order.contains_key(&agent) { continue; }
         models.push(AgentModel{agent,model,enabled,capabilities:serde_json::from_str(&capabilities).unwrap_or_default(),cost_class,speed,context_window:context_window.max(0) as usize});
     }
     // Na ordem dos agentes do app, não na do nome: o banco ordena o texto.
-    models.sort_by_key(|model|AgentId::ALL.iter().position(|id|*id==model.agent));
+    models.sort_by_key(|model|order.get(&model.agent).copied().unwrap_or(usize::MAX));
     Ok(LlmSettings{agents,models})
 }
 
 /// Confere tudo antes de gravar e devolve a versão limpa. Nada chega ao banco
 /// sem passar por aqui.
 pub fn validate(settings:&LlmSettings)->Result<LlmSettings> {
+    let customs=settings.agents.iter().filter(|agent|agent.id.is_custom()).count();
+    if customs>crate::mods::custom::MAX_MODS { bail!(Text::new("mods.tooMany").with("max",crate::mods::custom::MAX_MODS as u32)); }
+    let mut ids:Vec<AgentId>=AgentId::ALL.to_vec();
+    for agent in &settings.agents { if agent.id.is_custom()&&!ids.contains(&agent.id) { ids.push(agent.id); } }
     let mut agents=Vec::new();
-    for id in AgentId::ALL {
+    for id in ids {
         let agent=settings.agents.iter().find(|agent|agent.id==id).cloned().unwrap_or_else(||AgentSettings::fresh(id));
-        // O gateway não abre programa: o endereço dele mora nas opções.
-        let command=if id.is_gateway() { String::new() } else { agent.command.trim().to_string() };
-        if command.is_empty()&&!id.is_gateway() { bail!(Text::new("settings.commandRequired").with("agent",label(id))); }
-        if command.chars().any(char::is_whitespace) { bail!(Text::new("settings.commandArgs").with("agent",label(id))); }
-        if !(TIMEOUT_RANGE.0..=TIMEOUT_RANGE.1).contains(&agent.timeout) { bail!(Text::new("settings.timeout").with("agent",label(id)).with("min",TIMEOUT_RANGE.0).with("max",TIMEOUT_RANGE.1)); }
+        let name=agent.label();
+        // O mod de API não abre programa: o endereço dele mora nas opções.
+        let api=agent.is_api();
+        let command=if api { String::new() } else { agent.command.trim().to_string() };
+        if command.is_empty()&&!api { bail!(Text::new("settings.commandRequired").with("agent",&name)); }
+        if command.chars().any(char::is_whitespace) { bail!(Text::new("settings.commandArgs").with("agent",&name)); }
+        if !(TIMEOUT_RANGE.0..=TIMEOUT_RANGE.1).contains(&agent.timeout) { bail!(Text::new("settings.timeout").with("agent",&name).with("min",TIMEOUT_RANGE.0).with("max",TIMEOUT_RANGE.1)); }
         let own:HashSet<&str>=settings.models.iter().filter(|model|model.agent==id).map(|model|model.model.trim()).collect();
         let options=agent.checked(&own)?;
         agents.push(AgentSettings{id,enabled:agent.enabled,command,timeout:agent.timeout,options});
     }
     let mut seen=HashSet::new();
     let mut models=Vec::new();
+    let checked=LlmSettings{agents,models:vec![]};
     for model in &settings.models {
+        // O modelo de um mod apagado sai junto com ele.
+        let Some(owner)=checked.agent(model.agent) else { continue };
         let name=model.model.trim().to_string();
-        if name.is_empty() { bail!(Text::new("settings.modelNoId").with("agent",label(model.agent))); }
+        if name.is_empty() { bail!(Text::new("settings.modelNoId").with("agent",owner.label())); }
         if !valid_id(&name) { bail!(Text::new("settings.modelBadId").with("name",&name)); }
-        if !seen.insert((model.agent,name.clone())) { bail!(Text::new("settings.modelDuplicate").with("name",&name).with("agent",label(model.agent))); }
+        if !seen.insert((model.agent,name.clone())) { bail!(Text::new("settings.modelDuplicate").with("name",&name).with("agent",owner.label())); }
         let mut capabilities=Vec::new();
         for capability in &model.capabilities { one_of("model.capability",capability,&CAPABILITIES)?; if !capabilities.contains(capability) { capabilities.push(capability.clone()); } }
-        // O gateway só responde por texto: sem escrever no projeto nem usar ferramentas.
-        if model.agent.is_gateway() { capabilities.retain(|capability|capability!="code"&&capability!="tools"); if capabilities.is_empty() { capabilities.push("chat".into()); } }
+        // O mod que só responde por texto não escreve no projeto nem usa ferramentas.
+        if !owner.edits_project() { capabilities.retain(|capability|capability!="code"&&capability!="tools"); if capabilities.is_empty() { capabilities.push("chat".into()); } }
         if capabilities.is_empty() { bail!(Text::new("settings.modelNoCapability").with("name",&name)); }
         one_of("model.cost",&model.cost_class,&COSTS)?;
         one_of("model.speed",&model.speed,&SPEEDS)?;
         if !(CONTEXT_RANGE.0..=CONTEXT_RANGE.1).contains(&model.context_window) { bail!(Text::new("settings.contextWindow").with("name",&name).with("min",CONTEXT_RANGE.0).with("max",CONTEXT_RANGE.1)); }
         models.push(AgentModel{model:name,capabilities,..model.clone()});
     }
+    let LlmSettings{agents,..}=checked;
     if !agents.iter().any(|agent|agent.enabled) { bail!(Text::new("settings.noAgent")); }
     Ok(LlmSettings{agents,models})
 }
@@ -1287,32 +734,42 @@ pub fn save(connection:&mut Connection,settings:&LlmSettings)->Result<LlmSetting
     let incoming=settings;
     let mut settings=validate(settings)?;
     let transaction=connection.transaction()?;
-    // A chave do gateway: a que veio nas opções entra na tabela local e some
-    // do que se grava (o `validate` já a tirou); `clearKey` apaga.
-    for agent in incoming.agents.iter().filter(|agent|agent.id.is_gateway()) {
-        let options=parse::<GatewayOptions>(&agent.options)?;
-        if options.clear_key { transaction.execute("DELETE FROM llm_secrets WHERE agent=?1",[agent.id.key()])?; }
-        if let Some(key)=options.api_key.as_deref().map(str::trim).filter(|key|!key.is_empty()) {
-            if key.chars().any(char::is_whitespace) { bail!(Text::new("settings.keyInvalid").with("agent",label(agent.id))); }
+    // A chave do mod de API: a que veio nas opções entra na tabela local e
+    // some do que se grava (o `validate` já a tirou); `clearKey` apaga.
+    for agent in incoming.agents.iter().filter(|agent|agent.is_api()) {
+        if agent.options.get("clearKey").and_then(Value::as_bool)==Some(true) { transaction.execute("DELETE FROM llm_secrets WHERE agent=?1",[agent.id.key()])?; }
+        if let Some(key)=agent.options.get("apiKey").and_then(Value::as_str).map(str::trim).filter(|key|!key.is_empty()) {
+            if key.chars().any(char::is_whitespace) { bail!(Text::new("settings.keyInvalid").with("agent",agent.label())); }
             transaction.execute("INSERT INTO llm_secrets(agent,secret) VALUES(?1,?2) ON CONFLICT(agent) DO UPDATE SET secret=excluded.secret",params![agent.id.key(),key])?;
         }
     }
-    for agent in settings.agents.iter().filter(|agent|agent.id==AgentId::Openrouter&&agent.enabled) {
+    for agent in settings.agents.iter().filter(|agent|agent.enabled&&agent.is_api()&&agent.module().requires_key(&agent.options)) {
         let stored:i64=transaction.query_row("SELECT COUNT(*) FROM llm_secrets WHERE agent=?1",[agent.id.key()],|row|row.get(0))?;
-        if stored==0 { bail!(Text::new("settings.keyRequired").with("agent",label(agent.id))); }
+        if stored==0 { bail!(Text::new("settings.keyRequired").with("agent",agent.label())); }
     }
     write(&transaction,&settings)?;
     transaction.commit()?;
     remember_secrets(connection)?;
-    for agent in settings.agents.iter_mut().filter(|agent|agent.id.is_gateway()) {
+    for agent in settings.agents.iter_mut().filter(|agent|agent.is_api()) {
         if let Some(options)=agent.options.as_object_mut() { options.insert("hasKey".into(),Value::Bool(secret(agent.id).is_some())); }
     }
     Ok(settings)
 }
 
+/// Grava os agentes e os modelos. O mod criado que saiu da lista sai do banco
+/// (e da nuvem, pela fila de sync) com os modelos e a chave dele; os mods do
+/// app nunca saem.
 fn write(connection:&Connection,settings:&LlmSettings)->Result<()> {
     let now=chrono::Utc::now().to_rfc3339();
     connection.execute("DELETE FROM llm_models",[])?;
+    let stored:Vec<String>={
+        let mut statement=connection.prepare("SELECT id FROM llm_agents")?;
+        statement.query_map([],|row|row.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for gone in stored.iter().filter(|id|AgentId::parse(id).is_ok_and(|id|id.is_custom()&&settings.agent(id).is_none())) {
+        connection.execute("DELETE FROM llm_agents WHERE id=?1",[gone])?;
+        connection.execute("DELETE FROM llm_secrets WHERE agent=?1",[gone])?;
+    }
     for agent in &settings.agents {
         connection.execute(
             "INSERT INTO llm_agents(id,enabled,command,timeout,options,updated_at) VALUES(?1,?2,?3,?4,?5,?6)
@@ -1354,11 +811,10 @@ pub fn guarding(args:&[String],deny:&[String])->Vec<String> {
     guarded
 }
 
-/// Os provedores e modelos no formato que o orquestrador já entende.
+/// Os provedores e modelos no formato que o orquestrador já entende: cada mod
+/// diz o provedor dele (`LlmMod::provider`).
 pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap<String,ModelConfig>) {
-    let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),if agent.id.is_gateway() { gateway_config(agent) } else { ProviderConfig{
-        enabled:agent.enabled,kind:"cli".into(),command:Some(agent.command.clone()),timeout:agent.timeout,args:agent.build_args(),plan_args:agent.plan_args(),mcp:mcp_values(agent),..ProviderConfig::default()
-    } })).collect();
+    let providers=settings.agents.iter().map(|agent|(agent.id.key().to_string(),agent.module().provider(agent))).collect();
     let models=settings.models.iter().map(|model|(model_key(model),ModelConfig{
         enabled:model.enabled,provider:model.agent.key().into(),model:model.model.clone(),capabilities:model.capabilities.clone(),
         cost_class:model.cost_class.clone(),speed:model.speed.clone(),context_window:model.context_window,
@@ -1366,7 +822,8 @@ pub fn to_config(settings:&LlmSettings)->(HashMap<String,ProviderConfig>,HashMap
     (providers,models)
 }
 
-fn label(agent:AgentId)->&'static str { match agent { AgentId::Claude=>"Claude Code", AgentId::Codex=>"Codex", AgentId::Copilot=>"Copilot", AgentId::Cursor=>"Cursor", AgentId::Kilo=>"Kilo Code", AgentId::Openrouter=>"OpenRouter", AgentId::Litellm=>"LiteLLM" } }
+/// O nome do mod sem as opções na mão: o do mod criado é o id.
+fn label(agent:AgentId)->String { agent.module().label(&Value::Null) }
 
 /// Onde o executável está, procurando como o shell faria: no PATH e, depois,
 /// nas pastas onde os instaladores dos agentes os põem — o app aberto pelo menu
@@ -1574,9 +1031,12 @@ pub fn logged_out(command:&str)->bool {
     logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(command).is_some_and(|(at,login)|*login==Some(Login::Out)&&at.elapsed()<LOGIN_TTL)
 }
 
-/// Pergunta ao agente se está logado e guarda a resposta.
+/// Pergunta ao agente se está logado e guarda a resposta. Só o mod que sabe
+/// perguntar (`LlmMod::login_args`) é perguntado.
 pub async fn check_login(agent:AgentId,command:&str)->Option<Login> {
-    let ask:&[&str]=match agent { AgentId::Claude=>&["auth","status","--json"], AgentId::Codex=>&["login","status"], _=>return None };
+    let module=agent.module();
+    let ask=module.login_args();
+    if ask.is_empty() { return None; }
     // Marca a pergunta em andamento: outro pedido não pergunta de novo.
     logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(command.to_string(),(std::time::Instant::now(),None));
     let path=locate(command)?;
@@ -1585,32 +1045,20 @@ pub async fn check_login(agent:AgentId,command:&str)->Option<Login> {
     if let Some(search)=agent_path(&path) { run.env("PATH",search); }
     let output=crate::providers::quiet(&mut run).args(lead).args(ask).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).output();
     let login=match tokio::time::timeout(Duration::from_secs(20),output).await {
-        Ok(Ok(output))=>read_login(agent,output.status.success(),&String::from_utf8_lossy(&output.stdout),&String::from_utf8_lossy(&output.stderr)),
+        Ok(Ok(output))=>module.read_login(output.status.success(),&String::from_utf8_lossy(&output.stdout),&String::from_utf8_lossy(&output.stderr)),
         _=>None,
     };
     logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(command.to_string(),(std::time::Instant::now(),login));
     login
 }
 
-fn read_login(agent:AgentId,success:bool,stdout:&str,stderr:&str)->Option<Login> {
-    let said=format!("{stdout}\n{stderr}").to_lowercase();
-    match agent {
-        AgentId::Claude=>match serde_json::from_str::<Value>(stdout.trim()).ok().and_then(|status|status.get("loggedIn").and_then(Value::as_bool)) {
-            Some(true)=>Some(Login::In),
-            Some(false)=>Some(Login::Out),
-            None=>None,
-        },
-        AgentId::Codex if said.contains("not logged in")=>Some(Login::Out),
-        AgentId::Codex if success&&said.contains("logged in")=>Some(Login::In),
-        _=>None,
-    }
-}
 
 /// Lê de antemão a ajuda dos agentes ligados que levam flag opcional, para o
 /// primeiro pedido não esperar o `--help` (`understood`). Sem esperar.
 pub fn warm_up(settings:&LlmSettings) {
     for agent in settings.agents.iter().filter(|agent|agent.enabled) {
-        let subcommands:Vec<String>=match agent.id { AgentId::Claude=>vec![], AgentId::Codex=>vec!["exec".into()], _=>continue };
+        let Some(subcommands)=agent.module().help_subcommands() else { continue };
+        let subcommands:Vec<String>=subcommands.iter().map(|subcommand|subcommand.to_string()).collect();
         let command=agent.command.clone();
         tokio::spawn(async move { if let Some(path)=locate(&command) { help_of(&path,&subcommands).await; } });
     }
@@ -1618,7 +1066,7 @@ pub fn warm_up(settings:&LlmSettings) {
 
 /// Renova, sem esperar, o login dos agentes ligados cuja resposta venceu.
 pub fn refresh_logins(settings:&LlmSettings) {
-    let stale:Vec<(AgentId,String)>=settings.agents.iter().filter(|agent|agent.enabled&&matches!(agent.id,AgentId::Claude|AgentId::Codex))
+    let stale:Vec<(AgentId,String)>=settings.agents.iter().filter(|agent|agent.enabled&&!agent.module().login_args().is_empty())
         .filter(|agent|logins().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&agent.command).is_none_or(|(at,_)|at.elapsed()>=LOGIN_TTL))
         .map(|agent|(agent.id,agent.command.clone())).collect();
     for (agent,command) in stale { tokio::spawn(async move { check_login(agent,&command).await; }); }
@@ -1657,7 +1105,12 @@ pub async fn probe_agent(agent:AgentId,command:&str)->Probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mods::{claude::{parse_claude_listing, SYMBOL_SERVER_TOOLS}, codex::parse_codex_listing, copilot::parse_copilot_listing, cursor::parse_cursor_listing, kilo::parse_kilo_listing};
     use serde_json::json;
+
+    fn read_login(agent:AgentId,success:bool,stdout:&str,stderr:&str)->Option<Login> { agent.module().read_login(success,stdout,stderr) }
+    /// Os servidores que o próprio JayV entrega ao agente.
+    fn mcp_values(agent:&AgentSettings)->Vec<crate::mcp::McpServer> { agent.module().delivered_mcp(&agent.options) }
 
     fn memory()->Connection { let connection=Connection::open_in_memory().expect("banco"); ensure(&connection).expect("tabelas"); connection }
     fn agent(id:AgentId,options:Value)->AgentSettings { AgentSettings{id,enabled:true,command:id.binary().into(),timeout:300,options} }
@@ -1854,7 +1307,7 @@ mod tests {
                 AgentId::Claude=>args.windows(2).any(|pair|pair[0]=="--allowedTools"&&pair[1].contains("mcp__github"))&&args.iter().any(|arg|arg=="--mcp-config"),
                 AgentId::Codex=>args.iter().any(|arg|arg.starts_with("mcp_servers.github.command")),
                 AgentId::Copilot=>args.iter().any(|arg|arg=="--additional-mcp-config"),
-                AgentId::Cursor|AgentId::Kilo|AgentId::Openrouter|AgentId::Litellm=>mcp_values(&on.agents[0]).len()==2,
+                _=>mcp_values(&on.agents[0]).len()==2,
             };
             assert!(carried,"{id:?} ligado recebe os servidores");
         }
@@ -2179,5 +1632,75 @@ mod tests {
         assert!(format!("{error:?}").contains("settings.keyRequired"),"{error:?}");
         loaded.agents.iter_mut().find(|entry|entry.id==AgentId::Openrouter).expect("openrouter").enabled=false;
         save(&mut connection,&loaded).expect("desligado não pede chave");
+    }
+
+    fn custom(slug:&str,options:Value)->AgentSettings { AgentSettings{id:AgentId::parse(&format!("mod-{slug}")).expect("id"),enabled:true,command:"local-ai".into(),timeout:300,options} }
+    fn custom_model(agent:AgentId,name:&str)->AgentModel { AgentModel{agent,model:name.into(),enabled:true,capabilities:strings(&["chat","code"]),cost_class:"medium".into(),speed:"medium".into(),context_window:128_000} }
+
+    /// Os mods criados têm o próprio prefixo: nunca colidem com um mod do app,
+    /// e o id viaja como texto, como o dos outros.
+    #[test] fn custom_mod_ids_have_their_own_namespace() {
+        assert!(AgentId::parse("mod-local-ai").is_ok_and(|id|id.is_custom()));
+        assert_eq!(AgentId::parse("claude").expect("claude"),AgentId::Claude);
+        assert!(!AgentId::Claude.is_custom());
+        for bad in ["mod-".to_string(),"mod--x".into(),"mod-X".into(),"mod-a_b".into(),"local".into(),"mod-x-".into(),format!("mod-{}","a".repeat(33))] { assert!(AgentId::parse(&bad).is_err(),"{bad}"); }
+        assert_eq!(serde_json::to_string(&AgentId::parse("mod-a").expect("id")).expect("json"),"\"mod-a\"");
+        assert!(serde_json::from_str::<AgentId>("\"nope\"").is_err());
+        assert_eq!(AgentId::parse("mod-a").expect("id"),AgentId::parse("mod-a").expect("id"),"o mesmo id é o mesmo");
+    }
+
+    /// O mod criado grava e volta depois dos mods do app, pelo nome; vira
+    /// provedor como os outros; tirado da lista, sai do banco com os modelos e
+    /// a chave.
+    #[test] fn a_custom_mod_is_saved_listed_after_the_built_ins_and_removed() {
+        let mut connection=memory();
+        let writer=custom("writer",json!({"name":"Zeta","kind":"cli","args":["--model","{model}","{prompt}"],"planArgs":["--read-only","{prompt}"],"edits":true}));
+        let proxy=AgentSettings{command:String::new(),..custom("proxy",json!({"name":"Alpha","kind":"api","protocol":"openai","baseUrl":"http://localhost:8080/v1","apiKey":"sk-mod"}))};
+        let mut wanted=settings(vec![agent(AgentId::Claude,Value::Null),writer.clone(),proxy.clone()]);
+        wanted.models.extend([custom_model(writer.id,"local-1"),custom_model(proxy.id,"remote-1")]);
+        save(&mut connection,&wanted).expect("gravação");
+        let loaded=load(&connection).expect("leitura");
+        let ids=loaded.agents.iter().map(|entry|entry.id.key()).collect::<Vec<_>>();
+        assert_eq!(&ids[..7],AgentId::ALL.map(AgentId::key));
+        assert_eq!(&ids[7..],["mod-proxy","mod-writer"],"pelo nome: Alpha antes de Zeta");
+        let capabilities=|id:AgentId|loaded.models.iter().find(|model|model.agent==id).expect("modelo").capabilities.clone();
+        assert_eq!(capabilities(proxy.id),["chat"],"o mod de API só responde por texto");
+        assert_eq!(capabilities(writer.id),["chat","code"]);
+        let stored:String=connection.query_row("SELECT options FROM llm_agents WHERE id='mod-proxy'",[],|row|row.get(0)).expect("linha");
+        assert!(!stored.contains("sk-mod")&&!stored.contains("apiKey"),"{stored}");
+        let key:String=connection.query_row("SELECT secret FROM llm_secrets WHERE agent='mod-proxy'",[],|row|row.get(0)).expect("chave");
+        assert_eq!(key,"sk-mod");
+        let (providers,models)=to_config(&loaded);
+        assert_eq!((providers["mod-writer"].kind.as_str(),providers["mod-writer"].plan_args.clone()),("cli",strings(&["--read-only","{prompt}"])));
+        assert_eq!(providers["mod-proxy"].kind,"openai-compatible");
+        assert!(models.contains_key("mod-proxy/remote-1")&&models.contains_key("mod-writer/local-1"));
+
+        let mut fewer=loaded.clone();
+        fewer.agents.retain(|entry|entry.id!=writer.id);
+        save(&mut connection,&fewer).expect("gravação");
+        let count=|connection:&Connection,sql:&str|connection.query_row(sql,[],|row|row.get::<_,i64>(0)).expect("contagem");
+        assert_eq!((count(&connection,"SELECT COUNT(*) FROM llm_agents WHERE id='mod-writer'"),count(&connection,"SELECT COUNT(*) FROM llm_models WHERE agent='mod-writer'")),(0,0),"o modelo do mod apagado sai junto");
+        let mut none=load(&connection).expect("leitura");
+        none.agents.retain(|entry|!entry.id.is_custom());
+        save(&mut connection,&none).expect("gravação");
+        assert_eq!(count(&connection,"SELECT COUNT(*) FROM llm_secrets WHERE agent='mod-proxy'"),0,"a chave sai com o mod");
+        assert!(load(&connection).expect("leitura").agents.iter().all(|entry|!entry.id.is_custom()));
+    }
+
+    #[test] fn custom_mods_are_checked_before_saving() {
+        let mut connection=memory();
+        let claude=||agent(AgentId::Claude,Value::Null);
+        let nameless=custom("nameless",json!({"name":" ","kind":"cli","args":["{prompt}"]}));
+        let error=save(&mut connection,&settings(vec![claude(),nameless])).expect_err("sem nome");
+        assert!(format!("{error:?}").contains("mods.nameInvalid"),"{error:?}");
+        let commandless=AgentSettings{command:String::new(),..custom("commandless",json!({"name":"C","kind":"cli"}))};
+        let error=save(&mut connection,&settings(vec![claude(),commandless])).expect_err("sem programa");
+        assert!(format!("{error:?}").contains("settings.commandRequired"),"{error:?}");
+        let keyless=AgentSettings{command:String::new(),..custom("keyless",json!({"name":"K","kind":"api","baseUrl":"https://api.example.com/v1","keyRequired":true}))};
+        let error=save(&mut connection,&settings(vec![claude(),keyless])).expect_err("sem chave");
+        assert!(format!("{error:?}").contains("settings.keyRequired"),"{error:?}");
+        let many=(0..=crate::mods::custom::MAX_MODS).map(|n|custom(&format!("many{n}"),json!({"name":format!("M{n}"),"kind":"cli","args":["{prompt}"]})));
+        let error=validate(&settings([claude()].into_iter().chain(many).collect())).expect_err("demais");
+        assert!(format!("{error:?}").contains("mods.tooMany"),"{error:?}");
     }
 }

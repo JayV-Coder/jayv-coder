@@ -1,4 +1,4 @@
-import { AGENT_MECHANISMS, type AgentId, type Mechanism } from "@/modules/core";
+import { mechanismsOf, type AgentId, type Mechanism } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { useOrganizations } from "@/modules/organizations";
 import { FormField, ToggleRow } from "@/components/molecules";
@@ -11,7 +11,7 @@ import { FormField, ToggleRow } from "@/components/molecules";
 export function MechanismsField({ agent, selected, onChange }: { agent: AgentId; selected: Mechanism[]; onChange: (mechanisms: Mechanism[]) => void }) {
   const t = useT();
   const blocked = useOrganizations((state) => state.blockedMechanisms);
-  const supported = AGENT_MECHANISMS[agent];
+  const supported = mechanismsOf(agent);
   if (supported.length === 0) return null;
   const toggle = (mechanism: Mechanism, on: boolean) =>
     onChange(on ? supported.filter((item) => item === mechanism || selected.includes(item)) : selected.filter((item) => item !== mechanism));

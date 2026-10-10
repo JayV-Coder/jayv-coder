@@ -31,6 +31,7 @@ export const FEATURES = [
   "kiloCode",
   "gatewayProviders",
   "conversationFind",
+  "customMods",
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number];
@@ -53,6 +54,10 @@ export const SETTINGS_TAB_FEATURE: Partial<Record<string, FeatureKey>> = {
   openrouter: "gatewayProviders",
   litellm: "gatewayProviders",
 };
+
+/** O recurso de uma aba das Configurações: a de cada mod criado (`mod-…`) é o
+ * `customMods`; a aba Mods, que lista todos, abre sempre. */
+export const settingsTabFeature = (tab: string): FeatureKey | undefined => SETTINGS_TAB_FEATURE[tab] ?? (tab.startsWith("mod-") ? "customMods" : undefined);
 
 /** O núcleo: está em todo plano, travado, e ninguém o desliga — nem o admin.
  * A mesma lista da migração `core_features` e do `CORE` do Rust: sem a lista do

@@ -1,6 +1,6 @@
 import { commands, type TurnEvidence } from "@/modules/core";
 import type { Key, Params } from "@/modules/i18n";
-import { AGENT_LABELS } from "@/modules/settings";
+import { agentLabel } from "@/modules/settings";
 import { EXIT_KINDS } from "./store";
 
 /** O que sustenta uma resposta, em três grupos que não se misturam: o que o
@@ -18,7 +18,7 @@ type Say = (key: Key, params?: Params) => string;
 const COMMANDS = new Set(["command", "comando"]);
 const FILES = new Set(["file", "arquivo"]);
 
-const agentName = (provider: string) => (provider in AGENT_LABELS ? AGENT_LABELS[provider as keyof typeof AGENT_LABELS] : provider);
+const agentName = (provider: string) => agentLabel(provider);
 
 export function evidenceGroups(evidence: TurnEvidence, say: Say): EvidenceGroups {
   const observed: string[] = [];
