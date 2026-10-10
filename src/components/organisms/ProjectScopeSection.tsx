@@ -8,13 +8,12 @@ import { EmptyText } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { OrganizationChatButton } from "./OrganizationChatButton";
 import { ProjectCard } from "./ProjectCard";
 
 /** Um bloco da lista de projetos: os pessoais ou os de uma organização, com o
- * cabeçalho dizendo de quem são, o caminho para a organização e o agente em
- * todos os repositórios dela. */
-export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Project>; layout: Layout }) {
+ * cabeçalho dizendo de quem são. No ambiente de uma organização o cabeçalho
+ * fica no alto da página (`heading` desligado), com o chat dela. */
+export function ProjectScopeSection({ group, layout, heading = true }: { group: ScopeGroup<Project>; layout: Layout; heading?: boolean }) {
   const t = useT();
   const data = useWorkspace((state) => state.data);
   const personal = group.scope.kind === "personal";
@@ -25,8 +24,8 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
   const generalChats = personal ? [] : organizationChatsOf(data, group.key);
   const count = repositories.length;
   return (
-    <section aria-labelledby={`scope-${group.key}`} className="grid gap-3">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
+    <section aria-labelledby={heading ? `scope-${group.key}` : undefined} className="grid gap-3">
+      {heading && <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
         <span aria-hidden="true" className={cn("grid size-8 place-items-center rounded-md border border-border", personal ? "bg-secondary text-foreground" : "bg-card text-success")}>
           <Icon className="size-4" />
         </span>
@@ -39,13 +38,7 @@ export function ProjectScopeSection({ group, layout }: { group: ScopeGroup<Proje
           <p className="text-xs text-muted-foreground">{personal ? t("projects.personal.description") : t("projects.org.description")}</p>
         </div>
         {group.role && <Badge variant="outline">{t(`org.role.${group.role}` as Key)}</Badge>}
-        {!personal && group.role && (
-          <>
-            <Button variant="ghost" size="sm" onClick={() => void openOrganization(group.key).catch(reportError)}>{t("projects.org.open")}</Button>
-            <OrganizationChatButton organization={{ id: group.key, name: group.name }} size="sm" variant="outline" />
-          </>
-        )}
-      </header>
+      </header>}
       {generalChats.length > 0 && (
         <div className="grid gap-2">
           <h4 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("projects.org.general")}</h4>

@@ -64,7 +64,7 @@ export interface OrganizationDetail {
   connections: GitConnection[];
 }
 
-export type OrganizationTab = "projects" | "stats" | "gate" | "members" | "repositories" | "mcp" | "skills";
+export type OrganizationTab = "stats" | "gate" | "members" | "repositories" | "mcp" | "skills";
 
 interface OrganizationsState {
   list: Organization[];
@@ -86,7 +86,7 @@ interface OrganizationsState {
   detail: OrganizationDetail | null;
 }
 
-export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, blockedCommands: {}, loaded: false, openId: null, tab: "projects", detail: null }));
+export const useOrganizations = create<OrganizationsState>(() => ({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, blockedCommands: {}, loaded: false, openId: null, tab: "members", detail: null }));
 
 /** As RPCs falham com uma chave do i18n (`org.forbidden`); o resto segue como
  * veio. */
@@ -228,7 +228,7 @@ export async function organizationRules(orgId: string): Promise<{ repositories: 
   }
 }
 
-export function openOrganization(id: string, tab: OrganizationTab = "projects") {
+export function openOrganization(id: string, tab: OrganizationTab = "members") {
   useOrganizations.setState({ openId: id, tab, detail: null });
   navigate("organization");
   watchOrganization(id);
@@ -270,10 +270,10 @@ async function refresh() {
   if (list.some((org) => org.id === openId)) await loadDetail(openId);
   else {
     // Saiu, foi removido ou a organização foi excluída (pelo site): a vista
-    // volta para a lista.
+    // volta para os projetos.
     watchOrganization(null);
     useOrganizations.setState({ openId: null, detail: null });
-    navigate("organizations");
+    navigate("projects");
   }
 }
 
@@ -284,7 +284,7 @@ export async function declineInvite(invite: string) { await call("decline_invite
 
 export function clearOrganizations() {
   watchOrganization(null);
-  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, blockedCommands: {}, loaded: false, openId: null, tab: "projects", detail: null });
+  useOrganizations.setState({ list: [], incoming: [], projects: {}, policed: {}, blockedMechanisms: {}, blockedCommands: {}, loaded: false, openId: null, tab: "members", detail: null });
 }
 
 export function setOrganizationTab(tab: OrganizationTab) {

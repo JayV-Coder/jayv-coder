@@ -21,7 +21,7 @@ import { connectEnvironments, finishSwitch, loadEnvironment } from "@/modules/en
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
-import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, OrganizationsPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
+import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
 import { EnvironmentLoading, FeatureLocked, LaunchUpdate, McpDraftDialog, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
 import { LoadingNote } from "@/components/atoms";
 import { AppShell } from "@/components/templates";
@@ -36,7 +36,6 @@ const PAGES: Record<View, () => React.JSX.Element> = {
   gate: GatePage,
   settings: SettingsPage,
   profile: ProfilePage,
-  organizations: OrganizationsPage,
   organization: OrganizationPage,
 };
 

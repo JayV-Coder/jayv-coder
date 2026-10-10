@@ -1,5 +1,5 @@
 import {
-  ActivityIcon, Building2Icon, ChartColumnIcon, CircleHelpIcon, CreditCardIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, MessagesSquareIcon,
+  ActivityIcon, ChartColumnIcon, CircleHelpIcon, CreditCardIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, MessagesSquareIcon,
   PlugIcon, PlusIcon, SettingsIcon, SparklesIcon, UsersIcon, type LucideIcon,
 } from "lucide-react";
 import { useNavigation, navigate } from "@/modules/navigation";
@@ -23,7 +23,6 @@ import { NotificationBell } from "./NotificationBell";
 
 /** O ícone de cada aba da organização no menu, os mesmos da página dela. */
 const TAB_ICONS: Record<OrganizationTab, LucideIcon> = {
-  projects: FolderKanbanIcon,
   stats: ChartColumnIcon,
   gate: DoorOpenIcon,
   members: UsersIcon,
@@ -35,7 +34,9 @@ const TAB_ICONS: Record<OrganizationTab, LucideIcon> = {
 /** A lateral. Sem projeto aberto, ela é o menu principal; com projeto, só mostra
  * a placa dele, a portaria e os chats recentes. No ambiente de uma
  * organização, o menu principal é o dela: a placa da organização no alto e as
- * abas dela como itens; Organizações, Sistema e Planos ficam só no pessoal. */
+ * abas dela como itens; Sistema e Planos ficam só no pessoal. As
+ * organizações se abrem pelo seletor de ambiente, e os convites chegam no
+ * sino. */
 export function Sidebar() {
   const t = useT();
   const email = useAuth((state) => state.email);
@@ -44,10 +45,9 @@ export function Sidebar() {
   const photo = useProfile((state) => state.photo);
   const name = displayName(account, profile, email);
   const view = useNavigation((state) => state.view);
-  const invites = useOrganizations((state) => state.incoming.length);
   // O que o plano (ou o admin) desligou some do menu; Planos fica sempre.
   const entitlements = useEntitlements();
-  const can = { organizations: allows(entitlements, "organizations"), stats: allows(entitlements, "stats"), gate: allows(entitlements, "gateBoard") };
+  const can = { stats: allows(entitlements, "stats"), gate: allows(entitlements, "gateBoard") };
   const orgId = useEnvironmentOrganization();
   const organization = useOrganizations((state) => (orgId ? state.list.find((item) => item.id === orgId) ?? null : null));
   // A aba da organização aberta só acende o item quando é a do ambiente.
@@ -95,8 +95,8 @@ export function Sidebar() {
           <nav className="grid gap-0.5">
             {/* Os projetos são a tela de projetos do ambiente, que já só tem os
                 da organização; as outras abas abrem a página dela. */}
-            <NavItem active={view === "projects" || orgTab === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
-            {ORGANIZATION_TABS.filter(({ tab, feature }) => tab !== "projects" && (!feature || allows(entitlements, feature))).map(({ tab, label }) => {
+            <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+            {ORGANIZATION_TABS.filter(({ feature }) => !feature || allows(entitlements, feature)).map(({ tab, label }) => {
               const Icon = TAB_ICONS[tab];
               return (
                 <NavItem key={tab} data-tour={tab === "stats" ? "nav-stats" : undefined} active={orgTab === tab} mark={<Icon />} shortcut={tab === "stats" ? "stats" : undefined}
@@ -110,12 +110,6 @@ export function Sidebar() {
       ) : !project ? (
         <nav className="grid gap-0.5">
           <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
-          {can.organizations && <NavItem data-tour="nav-organizations" active={view === "organizations" || view === "organization"} mark={<Building2Icon />} shortcut={invites > 0 ? undefined : "organizations"} onClick={() => navigate("organizations")}>
-            <span className="flex-1">{t("nav.organizations")}</span>
-            {invites > 0 && (
-              <span title={t("org.invites.count", { count: invites })} className="rounded-md bg-accent px-1.5 font-mono text-caption font-semibold text-accent-foreground tabular-nums">{invites}</span>
-            )}
-          </NavItem>}
           {can.stats && <NavItem data-tour="nav-stats" active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>}
           <NavItem active={view === "status"} mark={<ActivityIcon />} shortcut="system" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
           <NavItem active={view === "plans"} mark={<CreditCardIcon />} onClick={() => navigate("plans")}>{t("nav.plans")}</NavItem>

@@ -3,10 +3,8 @@
   "category": "team",
   "since": null,
   "plan": "organizations",
-  "commands": [
-    "organizations"
-  ],
+  "commands": [],
   "title": "Organizations",
   "summary": "Organizations group people, repositories and the LLM policy the whole team follows.",
-  "usage": "Create an organization, invite members and link its repositories on the JayV site dashboard. In the app, Ctrl+2 (⌘2 on Mac) opens your organizations and their repositories. In the Members tab, owners and maintainers also see the invites still waiting for an answer."
+  "usage": "Create an organization, invite members and link its repositories on the JayV site dashboard. In the app, each organization is an environment: choose it in the selector under the logo and the side menu shows its projects, statistics, gatehouse, members, repositories, MCP and skills. Invitations arrive in the bell, where you accept or decline them. In the Members tab, owners and maintainers also see the invites still waiting for an answer."
 }

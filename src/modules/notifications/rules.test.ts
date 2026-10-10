@@ -43,7 +43,7 @@ describe("targetOf", () => {
   const make = (kind: AppNotification["kind"], data: AppNotification["data"] = {}): AppNotification => ({ id: "n", kind, data, createdAt: "", read: false, local: false });
   it("cada tipo leva para o seu lugar", () => {
     expect(targetOf(make("turn.answered", { chatId: "c1" }))).toEqual({ kind: "chat", chatId: "c1" });
-    expect(targetOf(make("org.invited", { orgId: "o1" }))).toEqual({ kind: "organizations" });
+    expect(targetOf(make("org.invited", { orgId: "o1" }))).toEqual({ kind: "invites" });
     expect(targetOf(make("org.roleChanged", { orgId: "o1" }))).toEqual({ kind: "organization", orgId: "o1" });
     expect(targetOf(make("org.removed", { orgId: "o1" }))).toBeNull();
     expect(targetOf(make("quota.crossed"))).toEqual({ kind: "stats" });

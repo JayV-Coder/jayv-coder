@@ -4,14 +4,17 @@ import { reportError } from "@/modules/feedback";
 import { t, useI18n } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
 import { openOrganization } from "@/modules/organizations";
+import { openDashboard } from "@/modules/site";
 import { installUpdate, showUpdate, useUpdate } from "@/modules/updates";
 import { openStats } from "@/modules/usage";
 import { createChat, leaveProject, useWorkspace } from "@/modules/workspace";
 
 /** O que cada item do menu da bandeja faz, depois que o núcleo já trouxe a
  * janela de volta. "Novo chat" sem projeto aberto leva à lista de projetos.
- * No ambiente de uma organização, Organizações e Sistema só trazem a janela
- * (não existem lá, como no menu lateral) e Estatísticas abre as dela. */
+ * Organizações abre o painel do site, onde elas se criam e se administram (a
+ * da organização aberta, no ambiente dela). No ambiente de uma organização,
+ * Sistema só traz a janela (não existe lá, como no menu lateral) e
+ * Estatísticas abre as dela. */
 export function runTrayAction(action: string) {
   const orgId = environmentOrganization();
   switch (action) {
@@ -22,7 +25,7 @@ export function runTrayAction(action: string) {
       break;
     }
     case "projects": leaveProject(); break;
-    case "organizations": if (!orgId) navigate("organizations"); break;
+    case "organizations": void openDashboard(orgId ? `/organizations/${orgId}` : "/organizations").catch(reportError); break;
     case "stats":
       if (orgId) void openOrganization(orgId, "stats").catch(reportError);
       else openStats({ kind: "global" });

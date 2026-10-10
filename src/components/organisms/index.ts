@@ -47,7 +47,6 @@ export { ProjectUsageLine } from "./ProjectUsageLine";
 export { ProfileForm } from "./ProfileForm";
 export { OrganizationChatButton } from "./OrganizationChatButton";
 export { OrganizationMembers } from "./OrganizationMembers";
-export { OrganizationProjects } from "./OrganizationProjects";
 export { OrganizationGate, OrganizationStats } from "./OrganizationDashboard";
 export { OrganizationRepositories } from "./OrganizationRepositories";
 export { FolderCompareDialog } from "./FolderCompareDialog";

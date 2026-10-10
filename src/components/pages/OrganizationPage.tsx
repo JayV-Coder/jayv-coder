@@ -1,4 +1,4 @@
-import { ChartColumnIcon, DoorOpenIcon, FolderGit2Icon, FolderKanbanIcon, PlugIcon, SparklesIcon, UsersIcon } from "lucide-react";
+import { ChartColumnIcon, DoorOpenIcon, FolderGit2Icon, PlugIcon, SparklesIcon, UsersIcon } from "lucide-react";
 import { allows, useEntitlements } from "@/modules/plans";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
@@ -6,20 +6,21 @@ import { useEnvironment } from "@/modules/environments";
 import { ORGANIZATION_TABS, setOrganizationTab, useOrganizations, type OrganizationTab } from "@/modules/organizations";
 import { BackMark, LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { EnvironmentGate, FeatureLocked, OrganizationChatButton, OrganizationExtensions, OrganizationGate, OrganizationMembers, OrganizationProjects, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
+import { EnvironmentGate, FeatureLocked, OrganizationChatButton, OrganizationExtensions, OrganizationGate, OrganizationMembers, OrganizationRepositories, OrganizationStats, SiteDashboardButton } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-/** Uma organização: os projetos de quem usa o app que entraram nela, as
- * estatísticas e a portaria deles, membros e repositórios. Convidar, a
- * política de LLM e as configurações (renomear, sair, excluir) moram no
- * painel do site. Quem é member vê membros e repositórios só para leitura.
+/** Uma organização: as estatísticas e a portaria dos projetos dela, membros,
+ * repositórios, MCP e skills. Os projetos são a tela de projetos do ambiente
+ * dela. Convidar, a política de LLM e as configurações (renomear, sair,
+ * excluir) moram no painel do site. Quem é member vê membros e repositórios
+ * só para leitura.
  *
  * No ambiente da própria organização as abas moram no menu lateral: a página
- * mostra só a aba aberta, com o nome dela no alto, sem a volta para a lista
- * de organizações (que só existe no pessoal). */
+ * mostra só a aba aberta, com o nome dela no alto. Aberta de fora dele (por
+ * uma notificação ou pelo Ctrl+K), mostra as abas ao lado. */
 export function OrganizationPage() {
   const t = useT();
   const openId = useOrganizations((state) => state.openId);
@@ -36,7 +37,7 @@ export function OrganizationPage() {
       <ScrollPage>
         {embedded
           ? <LoadingNote>{t("settings.loading")}</LoadingNote>
-          : <Button variant="ghost" onClick={() => navigate("organizations")}><BackMark /> {t("org.back")}</Button>}
+          : <Button variant="ghost" onClick={() => navigate("projects")}><BackMark /> {t("nav.projects")}</Button>}
       </ScrollPage>
     );
   }
@@ -51,8 +52,8 @@ export function OrganizationPage() {
   return (
     <ScrollPage>
       <PageHeading
-        eyebrow={embedded ? t(ORGANIZATION_TABS.find((item) => item.tab === current)?.label ?? "org.tab.projects") : undefined}
-        back={embedded ? undefined : { label: t("org.back"), onClick: () => navigate("organizations") }} title={organization.name}
+        eyebrow={embedded ? t(ORGANIZATION_TABS.find((item) => item.tab === current)?.label ?? "org.tab.members") : undefined}
+        title={organization.name}
         description={<span className="flex items-center gap-2"><span className="font-mono">@{organization.slug}</span><Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge></span>}>
         {embedded && <OrganizationChatButton organization={organization} repositories={detail?.repositories ?? null} />}
         <SiteDashboardButton path={`/organizations/${organization.id}`} />
@@ -60,7 +61,6 @@ export function OrganizationPage() {
       <Tabs value={current} onValueChange={(value) => setOrganizationTab(value as OrganizationTab)} orientation="vertical" className="gap-6">
         {/* Na vertical, como no site e em Configurações. */}
         {!embedded && <TabsList className="sticky top-0 h-auto w-52 shrink-0 gap-0.5 py-1 pr-1">
-          {tab("projects", FolderKanbanIcon, "org.tab.projects")}
           {tab("stats", ChartColumnIcon, "org.tab.stats")}
           {tab("gate", DoorOpenIcon, "org.tab.gate")}
           {tab("members", UsersIcon, "org.tab.members")}
@@ -68,7 +68,6 @@ export function OrganizationPage() {
           {tab("mcp", PlugIcon, "settings.tab.mcp")}
           {tab("skills", SparklesIcon, "settings.tab.skills")}
         </TabsList>}
-        <TabsContent value="projects" className="min-w-0"><EnvironmentGate organization={organization}><OrganizationProjects /></EnvironmentGate></TabsContent>
         <TabsContent value="stats" className="min-w-0"><EnvironmentGate organization={organization}><OrganizationStats orgId={organization.id} /></EnvironmentGate></TabsContent>
         <TabsContent value="gate" className="min-w-0"><EnvironmentGate organization={organization}><OrganizationGate orgId={organization.id} /></EnvironmentGate></TabsContent>
         <TabsContent value="members" className="min-w-0">

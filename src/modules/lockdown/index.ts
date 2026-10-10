@@ -3,7 +3,7 @@
  * WebKit) e não do app — o menu de contexto, o inspetor e o código-fonte,
  * recarregar, imprimir, salvar a página, a busca nativa, o zoom, voltar e
  * avançar, abrir arquivo, favoritos, histórico, abas e janelas. O que o app
- * escuta continua valendo (Ctrl/⌘ + K, 1–4, vírgula, N, G, ponto, F), e a
+ * escuta continua valendo (Ctrl/⌘ + K, 1, 3, 4, vírgula, N, G, ponto, F), e a
  * edição de texto nos campos também (copiar, recortar, colar, selecionar tudo,
  * desfazer e refazer). Em desenvolvimento nada muda.
  */
