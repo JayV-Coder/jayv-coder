@@ -7,6 +7,7 @@ import { TOURS, tourForView, tourOf, type Tour } from "./tours";
 
 export { TOURS, tourForView, tourOf, MANUAL };
 export type { Tour, TourStep } from "./tours";
+export { paginate, PAGE_BUDGET, sentences, textWidth, type Page, type Segment } from "./segments";
 
 const KEY = "jayv.tutorial";
 
@@ -24,18 +25,22 @@ function save({ seen, auto }: Saved) {
 }
 
 interface TutorialState extends Saved {
-  /** O tutorial em curso e o passo em que está. */
-  active: { tour: string; step: number } | null;
+  /** O tutorial em curso, o passo e a parte do passo em que está. O passo de
+   * texto longo se divide em partes (`paginate`); a parte -1 é a última, para
+   * quem volta do passo seguinte antes de o cartão contar as partes. */
+  active: { tour: string; step: number; page: number } | null;
+  /** Quantas partes tem o passo aberto, contadas pelo cartão no idioma da tela. */
+  pages: number;
 }
 
-export const useTutorial = create<TutorialState>(() => ({ ...load(), active: null }));
+export const useTutorial = create<TutorialState>(() => ({ ...load(), active: null, pages: 1 }));
 
 const persist = () => { const { seen, auto } = useTutorial.getState(); save({ seen, auto }); };
 
 /** Abre o tutorial pelo começo (o botão, a paleta e a primeira visita). */
 export function startTour(id: string) {
   if (!tourOf(id)) return;
-  useTutorial.setState({ active: { tour: id, step: 0 } });
+  useTutorial.setState({ active: { tour: id, step: 0, page: 0 }, pages: 1 });
 }
 
 /** Abre o tutorial da tela aberta, quando há um. */
@@ -44,17 +49,35 @@ export function startTourHere(view: View) {
   if (tour) startTour(tour.id);
 }
 
+/** Avança uma parte do passo ou, na última, vai ao passo seguinte. */
 export function nextStep() {
-  const { active } = useTutorial.getState();
+  const { active, pages } = useTutorial.getState();
   const tour = active && tourOf(active.tour);
   if (!active || !tour) return;
-  if (active.step + 1 >= tour.steps.length) endTour();
-  else useTutorial.setState({ active: { tour: active.tour, step: active.step + 1 } });
+  const page = active.page < 0 ? pages - 1 : active.page;
+  if (page + 1 < pages) useTutorial.setState({ active: { ...active, page: page + 1 } });
+  else if (active.step + 1 >= tour.steps.length) endTour();
+  else useTutorial.setState({ active: { tour: active.tour, step: active.step + 1, page: 0 }, pages: 1 });
 }
 
+/** Volta uma parte ou, na primeira, vai à última parte do passo anterior. */
 export function previousStep() {
   const { active } = useTutorial.getState();
-  if (active && active.step > 0) useTutorial.setState({ active: { tour: active.tour, step: active.step - 1 } });
+  if (!active) return;
+  if (active.page > 0) useTutorial.setState({ active: { ...active, page: active.page - 1 } });
+  else if (active.step > 0) useTutorial.setState({ active: { tour: active.tour, step: active.step - 1, page: -1 }, pages: 1 });
+}
+
+/** O cartão diz quantas partes o passo aberto tem; a parte "última" (-1) e a
+ * que passou do fim (o idioma mudou) viram uma parte que existe. */
+export function setStepPages(count: number) {
+  const pages = Math.max(1, count);
+  const { active, pages: known } = useTutorial.getState();
+  if (pages === known && (!active || (active.page >= 0 && active.page < pages))) return;
+  useTutorial.setState((state) => ({
+    pages,
+    active: state.active && (state.active.page < 0 || state.active.page >= pages) ? { ...state.active, page: pages - 1 } : state.active,
+  }));
 }
 
 /** Fecha o tutorial e o marca como visto: não abre sozinho de novo. */
