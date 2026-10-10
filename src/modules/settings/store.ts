@@ -4,7 +4,12 @@ import {
   type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
-import { syncLanguage, t, type Key } from "@/modules/i18n";
+import { setLocale, syncLanguage, t, useI18n, type Key, type Locale } from "@/modules/i18n";
+import { discardMcp, isMcpDirty, loadMcp, saveMcpChanges, useMcp } from "@/modules/mcp";
+import { discardSkills, isSkillsDirty, loadSkills, saveSkillChanges, useSkills } from "@/modules/skills";
+import { setThemePreference, useTheme, type ThemePreference } from "@/modules/theme";
+import { setAutoTours, useTutorial } from "@/modules/tutorial";
+import { setInstallOnLaunch, useUpdate } from "@/modules/updates";
 
 export const AGENTS: AgentId[] = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"];
 export const AGENT_LABELS: Record<AgentId, string> = {
@@ -41,7 +46,31 @@ interface SettingsState {
   core: CoreSettings | null;
   coreSnapshot: CoreSnapshot | null;
   savedCore: string;
+  /** O que a aba App muda fora do núcleo (idioma, tema, tutoriais, atualizar
+   * ao abrir), esperando o Salvar: só as escolhas que diferem do que vale. */
+  prefs: Partial<AppPrefs>;
 }
+
+/** As escolhas da aba App que moram na tela, não no núcleo. */
+export interface AppPrefs {
+  locale: Locale;
+  theme: ThemePreference;
+  tutorialAuto: boolean;
+  installOnLaunch: boolean;
+}
+
+/** O que vale agora em cada escolha da aba App. */
+export function livePrefs(): AppPrefs {
+  return {
+    locale: useI18n.getState().locale,
+    theme: useTheme.getState().preference,
+    tutorialAuto: useTutorial.getState().auto,
+    installOnLaunch: useUpdate.getState().installOnLaunch,
+  };
+}
+
+/** Os padrões da aba App que o Restaurar padrões devolve (o idioma fica). */
+const DEFAULT_PREFS: Omit<AppPrefs, "locale"> = { theme: "system", tutorialAuto: true, installOnLaunch: true };
 
 let next = 0;
 const uid = () => `model-${++next}`;
@@ -50,7 +79,7 @@ const noProbes = (): Record<AgentId, ProbeState> => ({ claude: null, codex: null
 export const useSettings = create<SettingsState>(() => ({
   loaded: false, agents: [], models: [], catalog: { claude: [], codex: [], copilot: [], cursor: [], kilo: [], openrouter: [], litellm: [] }, timeoutRange: [30, 3600],
   contextRange: [8000, 2000000], probes: noProbes(), gateways: {}, saved: "", saving: false, refreshing: null,
-  core: null, coreSnapshot: null, savedCore: "",
+  core: null, coreSnapshot: null, savedCore: "", prefs: {},
 }));
 
 const payload = ({ agents, models }: Pick<SettingsState, "agents" | "models">) =>
@@ -59,6 +88,42 @@ const payload = ({ agents, models }: Pick<SettingsState, "agents" | "models">) =
 export const isAgentsDirty = (state: SettingsState) => state.loaded && JSON.stringify(payload(state)) !== state.saved;
 export const isCoreDirty = (state: SettingsState) => state.core !== null && JSON.stringify(state.core) !== state.savedCore;
 export const isDirty = (state: SettingsState) => isAgentsDirty(state) || isCoreDirty(state);
+
+/** As escolhas da aba App que mudam algo ao salvar. */
+function changedPrefs(prefs: Partial<AppPrefs>, live: AppPrefs): Partial<AppPrefs> {
+  return Object.fromEntries(Object.entries(prefs).filter(([key, value]) => live[key as keyof AppPrefs] !== value)) as Partial<AppPrefs>;
+}
+
+/** Há alguma mudança pendente na tela de configurações, de qualquer aba
+ * (agentes, Jev, app, MCP, skills). */
+export function useSettingsDirty() {
+  const settings = useSettings(isDirty);
+  const prefs = useSettings((state) => state.prefs);
+  const live = useAppPrefsLive();
+  const mcp = useMcp(isMcpDirty);
+  const skills = useSkills(isSkillsDirty);
+  return settings || mcp || skills || Object.keys(changedPrefs(prefs, live)).length > 0;
+}
+
+function useAppPrefsLive(): AppPrefs {
+  const locale = useI18n((state) => state.locale);
+  const theme = useTheme((state) => state.preference);
+  const tutorialAuto = useTutorial((state) => state.auto);
+  const installOnLaunch = useUpdate((state) => state.installOnLaunch);
+  return { locale, theme, tutorialAuto, installOnLaunch };
+}
+
+/** As escolhas da aba App como a tela as mostra: a pendente ou a que vale. */
+export function useAppPrefs(): AppPrefs {
+  const live = useAppPrefsLive();
+  const prefs = useSettings((state) => state.prefs);
+  return { ...live, ...prefs };
+}
+
+/** Muda uma escolha da aba App sem aplicar: vale no Salvar. */
+export function updatePrefs(patch: Partial<AppPrefs>) {
+  useSettings.setState((state) => ({ prefs: changedPrefs({ ...state.prefs, ...patch }, livePrefs()) }));
+}
 
 function applyCore(snapshot: CoreSnapshot) {
   useSettings.setState({ core: snapshot.settings, coreSnapshot: snapshot, savedCore: JSON.stringify(snapshot.settings) });
@@ -69,10 +134,12 @@ export function updateCore(patch: Partial<CoreSettings>) {
   useSettings.setState((state) => (state.core ? { core: { ...state.core, ...patch } } : state));
 }
 
-/** Volta as abas do Jev e do app aos valores de partida (sem salvar). */
-export function restoreCoreDefaults() {
+/** Volta as abas do Jev e do app aos valores de partida (sem salvar): o
+ * idioma fica, e os servidores MCP, as skills e os agentes não mudam. */
+export function restoreDefaults() {
   const defaults = useSettings.getState().coreSnapshot?.defaults;
   if (defaults) useSettings.setState({ core: defaults });
+  updatePrefs(DEFAULT_PREFS);
 }
 
 function apply(snapshot: SettingsSnapshot) {
@@ -245,14 +312,25 @@ export function problems(state: Pick<SettingsState, "agents" | "models">, id: Ag
   return found;
 }
 
+/** Grava tudo que está pendente em qualquer aba: nada da tela de
+ * configurações vale antes deste clique. Cada parte só vai ao núcleo se
+ * mudou (salvar o Jev não regrava agentes); uma parte que falha fica
+ * pendente, com o motivo na tela. */
 export async function saveSettings() {
   const state = useSettings.getState();
   useSettings.setState({ saving: true });
   try {
-    // Cada parte só vai ao núcleo se mudou: salvar o Jev não regrava agentes.
     if (isAgentsDirty(state)) apply(await commands.saveSettings(payload(state)));
     if (isCoreDirty(state) && state.core) applyCore(await commands.saveCoreSettings(state.core));
+    if (!(await saveMcpChanges()) || !(await saveSkillChanges())) return;
+    const prefs = changedPrefs(useSettings.getState().prefs, livePrefs());
+    useSettings.setState({ prefs: {} });
+    // O aviso sai antes de trocar o idioma: depois, as mensagens ainda estão chegando.
     notify(t("settings.saved"));
+    if (prefs.theme !== undefined) setThemePreference(prefs.theme);
+    if (prefs.tutorialAuto !== undefined) setAutoTours(prefs.tutorialAuto);
+    if (prefs.installOnLaunch !== undefined) setInstallOnLaunch(prefs.installOnLaunch);
+    if (prefs.locale !== undefined) setLocale(prefs.locale);
     bus.emit("settings:saved", {});
   } catch (error) {
     reportError(error);
@@ -296,8 +374,21 @@ export async function saveLeanCode(enabled: boolean) {
   }
 }
 
+/** Joga fora tudo que está pendente, em todas as abas, e relê o gravado. */
 export function discardChanges() {
+  useSettings.setState({ prefs: {} });
   void loadSettings();
+  discardMcp();
+  discardSkills();
+}
+
+/** Ao abrir a tela: relê cada parte que não tem mudança pendente. Voltar à
+ * página com alteração pendente não a joga fora. */
+function refreshSettings() {
+  const state = useSettings.getState();
+  if (!state.loaded || !isDirty(state)) void loadSettings();
+  if (!isMcpDirty(useMcp.getState())) void loadMcp();
+  if (!isSkillsDirty(useSkills.getState())) void loadSkills();
 }
 
 export function connectSettings() {
@@ -313,8 +404,7 @@ export function connectSettings() {
       else void loadSettings();
     }
     if (view !== "settings") return;
-    // Voltar à página com alteração pendente não a joga fora.
-    if (!isDirty(useSettings.getState())) void loadSettings();
+    refreshSettings();
     stop = watchAgents();
   });
   // A descoberta de fundo trocou os modelos: a aba aberta e sem alteração

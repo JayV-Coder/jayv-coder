@@ -27,6 +27,7 @@ import { LoadingNote } from "@/components/atoms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 const PAGES: Record<View, () => React.JSX.Element> = {
   ...featurePages,
@@ -98,6 +99,7 @@ export function App() {
   const loading = <LoadingNote>{t("auth.loading")}</LoadingNote>;
   // Sem perfil (a leitura falhou ou a linha não existe), o app abre mesmo
   // assim: o passo de perfil é convite, não porta.
+  const inShell = status === "signedIn" && !recovering && !profileLoading && !(profile && !profile.completedAt);
   const signedIn = recovering
     ? <NewPasswordPage />
     : profileLoading
@@ -107,10 +109,12 @@ export function App() {
         : <AppShell>{blocked && locked ? <FeatureLocked feature={locked} /> : <Page />}</AppShell>;
   return (
     <TooltipProvider>
-      {/* O aviso de versão nova fica acima de qualquer tela, logada ou não. */}
-      <div className="flex h-screen flex-col">
+      {/* O aviso de versão nova fica acima de qualquer tela, logada ou não.
+          Dentro do app, quem rola é o conteúdo de cada tela, nunca a moldura;
+          as telas de entrada (login, perfil, segundo fator) rolam inteiras. */}
+      <div className="flex h-full flex-col">
         <UpdateBanner />
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={cn("relative min-h-0 flex-1", inShell ? "overflow-hidden" : "overflow-y-auto overscroll-contain")}>
           {status === "signedIn" ? signedIn : status === "secondFactor" ? <SecondFactorPage /> : status === "loading" ? loading : <LoginPage />}
         </div>
       </div>

@@ -9,12 +9,14 @@ import { Button } from "@/components/ui/button";
 import { ProjectUsageLine } from "./ProjectUsageLine";
 import { YardCard } from "./YardCard";
 
+/** O cartão de um projeto. Sem `onDelete`, não há Excluir: o projeto de uma
+ * organização só se exclui no site, por owner ou maintainer. */
 export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
   project: Project;
   chats: Chat[];
   onOpen: () => void;
   onNewChat: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const t = useT();
   const last = chats[0]?.updatedAt ?? project.createdAt;
@@ -28,16 +30,18 @@ export function ProjectCard({ project, chats, onOpen, onNewChat, onDelete }: {
       actions={(
         <>
           <Button variant="ghost" size="sm" onClick={onNewChat}>{t("common.newChat")}</Button>
-          <ConfirmAction
-            title={t("project.delete.title")}
-            description={t("project.delete.description", { name: project.name, count })}
-            onConfirm={onDelete}
-          >
-            <Button variant="ghost" size="sm" className="ms-auto text-muted-foreground hover:text-destructive">
-            <Trash2Icon aria-hidden="true" />
-            {t("common.delete")}
-          </Button>
-          </ConfirmAction>
+          {onDelete && (
+            <ConfirmAction
+              title={t("project.delete.title")}
+              description={t("project.delete.description", { name: project.name, count })}
+              onConfirm={onDelete}
+            >
+              <Button variant="ghost" size="sm" className="ms-auto text-muted-foreground hover:text-destructive">
+                <Trash2Icon aria-hidden="true" />
+                {t("common.delete")}
+              </Button>
+            </ConfirmAction>
+          )}
         </>
       )}
     >

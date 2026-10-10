@@ -6,5 +6,5 @@
   "commands": [],
   "title": "Skills from skills.sh",
   "summary": "Search the skills.sh directory from inside JayV and install a skill with one click, in the app or for a whole organization on the site.",
-  "usage": "Open Settings › Skills (or Ctrl+K › Install from skills.sh), type what you need and press Search, then Install on a result. JayV downloads the skill from its GitHub repository and installs it like any skill from a folder: turn it off or remove it whenever you want, and Jev picks it for the requests it fits. On the site, owners and maintainers do the same in the organization’s Skills tab, which installs the skill’s SKILL.md for every member. Read a skill’s instructions before installing it."
+  "usage": "Open Settings › Skills (or Ctrl+K › Install from skills.sh), type what you need and press Search, then Install on a result. When you click Save settings, JayV downloads the skill from its GitHub repository and installs it like any skill from a folder: turn it off or remove it whenever you want, and Jev picks it for the requests it fits. On the site, owners and maintainers do the same in the organization’s Skills tab, which installs the skill’s SKILL.md for every member. Read a skill’s instructions before installing it."
 }

@@ -3,6 +3,7 @@ import type { Project } from "@/modules/core";
 import { formatSince, useT, type Key } from "@/modules/i18n";
 import { openOrganization, organizationChatsOf, splitGeneral, type ScopeGroup } from "@/modules/organizations";
 import { reportError } from "@/modules/feedback";
+import { PERSONAL, useEnvironment } from "@/modules/environments";
 import { chatTitle, chatsOf, createChat, deleteProject, openChat, openProject, useWorkspace, type Layout } from "@/modules/workspace";
 import { EmptyText } from "@/components/atoms";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,9 @@ export function ProjectScopeSection({ group, layout, heading = true }: { group: 
   const t = useT();
   const data = useWorkspace((state) => state.data);
   const personal = group.scope.kind === "personal";
+  // Excluir só no ambiente pessoal: o projeto de uma organização só se exclui
+  // no site, por owner ou maintainer — nem enquanto a lista delas chega.
+  const deletable = useEnvironment((state) => state.active === PERSONAL) && personal;
   const Icon = personal ? UserIcon : Building2Icon;
   // Os chats gerais (todos os repositórios juntos) ficam num bloco à parte dos
   // projetos de cada repositório.
@@ -80,7 +84,7 @@ export function ProjectScopeSection({ group, layout, heading = true }: { group: 
                 chats={chatsOf(data, project.id)}
                 onOpen={() => openProject(project.id)}
                 onNewChat={() => void createChat(project.id)}
-                onDelete={() => void deleteProject(project.id)}
+                onDelete={deletable ? () => void deleteProject(project.id) : undefined}
               />
             ))}
           </div>

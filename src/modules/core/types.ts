@@ -104,6 +104,13 @@ export interface Skill {
   installedAt: string;
 }
 
+/** Uma skill que instalar traria: o nome e a descrição do `SKILL.md`, lidos
+ * antes de copiar qualquer coisa (`preview_skills`). */
+export interface SkillPreview {
+  name: string;
+  description: string;
+}
+
 /** Um resultado da busca no skills.sh: a skill `name` do repositório `source`
  * (`dono/repo`), com quantas instalações o diretório conta. */
 export interface SkillHit {

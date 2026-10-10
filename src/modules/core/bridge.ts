@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
   ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -25,11 +25,14 @@ export const commands = {
     invoke<Turn | null>("answer_question", { answer: { questionTurnId, picked, text } }),
   getMcpServers: () => invoke<McpServer[]>("get_mcp_servers"),
   saveMcpServers: (servers: McpServer[]) => invoke<McpServer[]>("save_mcp_servers", { servers }),
+  checkMcpServers: (servers: McpServer[]) => invoke<McpServer[]>("check_mcp_servers", { servers }),
   draftMcp: (text: string) => invoke<McpDraft>("draft_mcp", { text }),
   getSkills: () => invoke<Skill[]>("get_skills"),
   getOrgExtensions: () => invoke<OrgExtensions>("get_org_extensions"),
   installSkillFolder: (path: string) => invoke<Skill[]>("install_skill_folder", { path }),
   installSkillText: (text: string) => invoke<Skill[]>("install_skill_text", { text }),
+  previewSkills: (source: { path: string } | { text: string }) =>
+    invoke<SkillPreview[]>("preview_skills", { path: "path" in source ? source.path : null, text: "text" in source ? source.text : null }),
   searchSkillHub: (query: string) => invoke<SkillHit[]>("search_skill_hub", { query }),
   installHubSkill: (source: string, name: string) => invoke<Skill[]>("install_hub_skill", { source, name }),
   setSkillEnabled: (name: string, enabled: boolean) => invoke<Skill[]>("set_skill_enabled", { name, enabled }),

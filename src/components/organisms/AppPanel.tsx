@@ -1,10 +1,10 @@
 import type { CoreSettings, CoreSnapshot } from "@/modules/core";
 import { formatClock, useT } from "@/modules/i18n";
 import { showChanges } from "@/modules/changelog";
-import { updateCore } from "@/modules/settings";
+import { updateCore, updatePrefs, useAppPrefs } from "@/modules/settings";
 import { locks, SENSITIVE_PATTERNS, toggleState, useEntitlements } from "@/modules/plans";
-import { resetTours, setAutoTours, startTour, TOURS, useTutorial } from "@/modules/tutorial";
-import { checkForUpdate, isUpdateBusy, setInstallOnLaunch, useUpdate } from "@/modules/updates";
+import { resetTours, startTour, TOURS, useTutorial } from "@/modules/tutorial";
+import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
 import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,7 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 const lines = (text: string) => text.split("\n");
 
 /** O aplicativo: o idioma da tela e das respostas, o tema, o que nunca sai da máquina
- * e a versão instalada. */
+ * e a versão instalada. Toda escolha daqui espera o Salvar da página; os
+ * botões (rever um tutorial, procurar atualização) são ações e agem na hora. */
 export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: CoreSnapshot }) {
   const t = useT();
   // O botão abre a mesma janela da abertura do app; enquanto ela trabalha,
@@ -21,7 +22,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   const checking = useUpdate((state) => isUpdateBusy(state.phase));
   const check = () => checkForUpdate(true);
   const checkedAt = useUpdate((state) => state.checkedAt);
-  const installOnLaunch = useUpdate((state) => state.installOnLaunch);
+  const prefs = useAppPrefs();
   const tutorial = useTutorial();
   const entitlements = useEntitlements();
   // A redação de segredos e os arquivos sensíveis são núcleo: ligados, sem
@@ -32,11 +33,11 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   return (
     <div className="grid gap-5">
       <SettingsSection title={t("app.section.language")} description={t("app.section.language.description")}>
-        <LanguageSelect />
+        <LanguageSelect value={prefs.locale} onChange={(locale) => updatePrefs({ locale })} />
       </SettingsSection>
 
       <SettingsSection title={t("app.section.theme")} description={t("app.section.theme.description")}>
-        <ThemeSelect />
+        <ThemeSelect value={prefs.theme} onChange={(theme) => updatePrefs({ theme })} />
       </SettingsSection>
 
       <SettingsSection title={t("app.section.privacy")} description={t("app.section.privacy.description")}>
@@ -61,7 +62,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
       <SettingsSection title={t("tutorial.section.title")} description={t("tutorial.section.description")}
         action={<Button variant="ghost" onClick={resetTours}>{t("tutorial.reset")}</Button>}>
         <div className="grid gap-3">
-          <ToggleRow id="tutorial-auto" label={t("tutorial.auto")} hint={t("tutorial.auto.hint")} checked={tutorial.auto} onChange={setAutoTours} />
+          <ToggleRow id="tutorial-auto" label={t("tutorial.auto")} hint={t("tutorial.auto.hint")} checked={prefs.tutorialAuto} onChange={(tutorialAuto) => updatePrefs({ tutorialAuto })} />
           <ul className="grid gap-1.5">
             {TOURS.map((tour) => (
               <li key={tour.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3.5 py-2">
@@ -85,7 +86,7 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
         )}>
         <div className="grid gap-1 text-xs text-muted-foreground">
           <p>{t("app.updates.auto")}</p>
-          <ToggleRow id="update-on-launch" label={t("app.updates.launch")} hint={t("app.updates.launch.hint")} checked={installOnLaunch} onChange={setInstallOnLaunch} className="mb-2 text-foreground" />
+          <ToggleRow id="update-on-launch" label={t("app.updates.launch")} hint={t("app.updates.launch.hint")} checked={prefs.installOnLaunch} onChange={(installOnLaunch) => updatePrefs({ installOnLaunch })} className="mb-2 text-foreground" />
           <p>{checkedAt ? t("app.updates.checkedAt", { at: formatClock(checkedAt) }) : t("app.updates.never")}</p>
         </div>
       </SettingsSection>

@@ -14,7 +14,7 @@ import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
 import { allows, SETTINGS_TAB_FEATURE } from "@/modules/plans";
-import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreCoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
+import { AGENT_LABELS, AGENTS, checkGateway, discardChanges, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -175,7 +175,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   }
   if (can("skills") && can("skillsHub")) all.push({ id: "skills-hub", group: settings, label: t("skills.hub.title"), run: () => { openSettingsTab("skills"); requestIntent("searchSkillHub"); } });
   if (can("skills")) all.push({ id: "skills-install", group: settings, label: t("skills.install"), run: () => { openSettingsTab("skills"); requestIntent("installSkill"); } });
-  all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreCoreDefaults(); } });
+  all.push({ id: "settings-defaults", group: settings, label: t("settings.defaults"), run: () => { navigate("settings"); restoreDefaults(); } });
 
   if (view === "stats" && can("stats")) {
     for (const period of PERIODS) {
