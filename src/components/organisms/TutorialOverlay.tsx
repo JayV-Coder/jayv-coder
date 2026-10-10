@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useT } from "@/modules/i18n";
-import { endTour, nextStep, previousStep, skipAllTours, tourOf, useStepText, useTutorial, useTutorialKeys } from "@/modules/tutorial";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLocale, useT } from "@/modules/i18n";
+import { endTour, nextStep, paginate, previousStep, setStepPages, skipAllTours, tourOf, useStepText, useTutorial, useTutorialKeys } from "@/modules/tutorial";
+import { cn } from "@/lib/utils";
 import { BackMark } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
 
@@ -35,10 +36,13 @@ function useTarget(selector: string | undefined): Box | null {
 
 /** O tutorial na frente da tela: um cartão com o que a funcionalidade faz e
  * como se usa (o texto da documentação) e, quando o passo aponta para um
- * elemento, o destaque em volta dele. Esc fecha; as setas navegam. */
+ * elemento, o destaque em volta dele. O texto longo se divide em partes, sem
+ * cortar frase, com pontos embaixo dizendo em qual se está; Próximo e as
+ * setas passam pelas partes antes de ir ao passo seguinte. Esc fecha. */
 export function TutorialOverlay() {
   const t = useT();
   const text = useStepText();
+  const locale = useLocale();
   const active = useTutorial((state) => state.active);
   useTutorialKeys(active !== null);
   const card = useRef<HTMLDivElement>(null);
@@ -46,6 +50,11 @@ export function TutorialOverlay() {
   const tour = active ? tourOf(active.tour) : undefined;
   const step = tour && active ? tour.steps[active.step] : undefined;
   const box = useTarget(step?.target);
+  const summary = step ? text(step.feature, "summary") : "";
+  const usage = step ? text(step.feature, "usage") : "";
+  const pages = useMemo(() => paginate(summary, usage, locale), [summary, usage, locale]);
+  // Antes de pintar: quem volta do passo seguinte cai direto na última parte.
+  useLayoutEffect(() => { if (step) setStepPages(pages.length); }, [step, pages.length]);
 
   useLayoutEffect(() => {
     const element = card.current;
@@ -53,7 +62,8 @@ export function TutorialOverlay() {
   });
 
   if (!active || !tour || !step) return null;
-  const last = active.step === tour.steps.length - 1;
+  const page = active.page < 0 ? pages.length - 1 : Math.min(active.page, pages.length - 1);
+  const last = active.step === tour.steps.length - 1 && page >= pages.length - 1;
   const viewport = { width: window.innerWidth, height: window.innerHeight };
   const clamp = (value: number, max: number) => Math.max(MARGIN, Math.min(value, max - MARGIN));
 
@@ -84,8 +94,16 @@ export function TutorialOverlay() {
         </div>
         <div className="grid gap-1.5">
           <h2 id="tutorial-title" className="text-base font-semibold">{text(step.feature, "title")}</h2>
-          <p className="text-sm">{text(step.feature, "summary")}</p>
-          <p className="text-sm text-muted-foreground">{text(step.feature, "usage")}</p>
+          {(pages[page] ?? []).map((segment, index) => (
+            <p key={index} className={cn("text-sm", segment.kind === "usage" && "text-muted-foreground")}>{segment.text}</p>
+          ))}
+          {pages.length > 1 && (
+            <div role="img" aria-label={t("tutorial.part", { current: page + 1, total: pages.length })} title={t("tutorial.part", { current: page + 1, total: pages.length })} className="flex gap-1 pt-1">
+              {pages.map((_, index) => (
+                <span key={index} aria-hidden="true" className={cn("h-1 w-3 rounded-full transition-colors", index === page ? "bg-accent" : "bg-border")} />
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex gap-1">
@@ -93,7 +111,7 @@ export function TutorialOverlay() {
             <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={skipAllTours}>{t("tutorial.skipAll")}</Button>
           </div>
           <div className="flex gap-1.5">
-            {active.step > 0 && <Button size="sm" variant="outline" onClick={previousStep}><BackMark /> {t("tutorial.back")}</Button>}
+            {(active.step > 0 || page > 0) && <Button size="sm" variant="outline" onClick={previousStep}><BackMark /> {t("tutorial.back")}</Button>}
             <Button size="sm" autoFocus onClick={nextStep}>{t(last ? "tutorial.done" : "tutorial.next")}</Button>
           </div>
         </div>

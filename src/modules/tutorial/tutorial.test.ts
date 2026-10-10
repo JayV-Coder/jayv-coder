@@ -7,7 +7,7 @@ vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? nu
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
-const { TOURS, MANUAL, endTour, nextStep, previousStep, skipAllTours, startTour, stepText, tourForView, useTutorial, resetTours } = await import("./index");
+const { TOURS, MANUAL, endTour, nextStep, paginate, previousStep, setStepPages, skipAllTours, startTour, stepText, textWidth, tourForView, useTutorial, resetTours, PAGE_BUDGET } = await import("./index");
 
 const root = join(__dirname, "../../..");
 
@@ -38,13 +38,13 @@ describe("tours", () => {
 });
 
 describe("tutorial store", () => {
-  beforeEach(() => { storage.clear(); useTutorial.setState({ active: null, seen: [], auto: true }); });
+  beforeEach(() => { storage.clear(); useTutorial.setState({ active: null, seen: [], auto: true, pages: 1 }); });
 
   it("walks the steps and marks the tour as seen at the end", () => {
     const tour = TOURS[0];
     startTour(tour.id);
     nextStep();
-    expect(useTutorial.getState().active).toEqual({ tour: tour.id, step: 1 });
+    expect(useTutorial.getState().active).toEqual({ tour: tour.id, step: 1, page: 0 });
     previousStep();
     expect(useTutorial.getState().active?.step).toBe(0);
     for (let i = 0; i < tour.steps.length; i++) nextStep();
@@ -67,5 +67,54 @@ describe("tutorial store", () => {
   it("text comes from the translation, falling back to the manual in English", () => {
     expect(stepText("workModes", "title", { "docs.workModes.title": "Modos" })).toBe("Modos");
     expect(stepText("workModes", "title", {})).toBe(MANUAL.workModes.title);
+  });
+
+  it("walks the parts of a long step before the next step, and back into the last part", () => {
+    const tour = TOURS[0];
+    startTour(tour.id);
+    setStepPages(3);
+    nextStep();
+    nextStep();
+    expect(useTutorial.getState().active).toEqual({ tour: tour.id, step: 0, page: 2 });
+    nextStep();
+    expect(useTutorial.getState().active).toEqual({ tour: tour.id, step: 1, page: 0 });
+    previousStep();
+    expect(useTutorial.getState().active).toEqual({ tour: tour.id, step: 0, page: -1 });
+    setStepPages(3);
+    expect(useTutorial.getState().active).toEqual({ tour: tour.id, step: 0, page: 2 });
+    previousStep();
+    expect(useTutorial.getState().active?.page).toBe(1);
+  });
+});
+
+describe("parts of a step", () => {
+  const features = Object.values(MANUAL);
+
+  it("keeps a short step in one part", () => {
+    expect(paginate(MANUAL.secretRedaction.summary, MANUAL.secretRedaction.usage, "en")).toHaveLength(1);
+  });
+
+  it("splits the long steps without losing or cutting any sentence", () => {
+    for (const feature of features) {
+      const pages = paginate(feature.summary, feature.usage, "en");
+      const joined = (kind: "summary" | "usage") => pages.flat().filter((part) => part.kind === kind).map((part) => part.text).join(" ");
+      expect(joined("summary").replace(/\s+/g, " "), feature.id).toBe(feature.summary.trim().replace(/\s+/g, " "));
+      expect(joined("usage").replace(/\s+/g, " "), feature.id).toBe(feature.usage.trim().replace(/\s+/g, " "));
+    }
+    expect(paginate(MANUAL.environments.summary, MANUAL.environments.usage, "en").length).toBeGreaterThan(2);
+  });
+
+  it("shares the text evenly: no part is a leftover sentence next to a full one", () => {
+    for (const feature of features) {
+      const sizes = paginate(feature.summary, feature.usage, "en").map((page) => page.reduce((sum, part) => sum + textWidth(part.text), 0));
+      if (sizes.length < 2) continue;
+      expect(Math.max(...sizes), feature.id).toBeLessThanOrEqual(PAGE_BUDGET * 1.25);
+      expect(Math.min(...sizes), feature.id).toBeGreaterThan(PAGE_BUDGET / 4);
+    }
+  });
+
+  it("counts ideograms as wide, so Chinese and Japanese parts hold fewer characters", () => {
+    expect(textWidth("环境")).toBe(4);
+    expect(textWidth("ab")).toBe(2);
   });
 });

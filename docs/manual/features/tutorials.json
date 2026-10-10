@@ -6,5 +6,5 @@
   "commands": [],
   "title": "Tutorials",
   "summary": "Each screen has a guided tour that explains its features, highlighting the element, using the same text as this documentation.",
-  "usage": "The tutorial opens by itself on the first visit to each screen. To see it again: the help button (?) in the sidebar, Tutorial for this screen in the command palette (Ctrl+K), or Settings › App › Tutorials, where you can also turn off the automatic opening."
+  "usage": "The tutorial opens by itself on the first visit to each screen. To see it again: the help button (?) in the sidebar, Tutorial for this screen in the command palette (Ctrl+K), or Settings › App › Tutorials, where you can also turn off the automatic opening. A step with a lot of text comes in parts: Next and the arrow keys go through them before the next step, Back returns to the previous part, and the small bars under the text show which part you are on."
 }
