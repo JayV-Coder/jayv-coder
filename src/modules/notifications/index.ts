@@ -4,9 +4,10 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { bus, type Chat } from "@/modules/core";
 import { onCore } from "@/modules/core/bridge";
 import { supabase } from "@/modules/auth/client";
+import { requestIntent } from "@/modules/commands";
 import { reportError } from "@/modules/feedback";
 import { t, type Key } from "@/modules/i18n";
-import { navigate, useNavigation } from "@/modules/navigation";
+import { useNavigation } from "@/modules/navigation";
 import { loadOrganizations, openOrganization, useOrganizations } from "@/modules/organizations";
 import { showUpdate, useUpdate } from "@/modules/updates";
 import { agentLabel, openStats, windowLabel } from "@/modules/usage";
@@ -80,8 +81,9 @@ export function openNotification(notification: AppNotification) {
   if (target.kind === "chat") openChat(target.chatId);
   else if (target.kind === "stats") openStats({ kind: "global" });
   else if (target.kind === "update") showUpdate();
-  else if (target.kind === "organization" && useOrganizations.getState().list.some((org) => org.id === target.orgId)) openOrganization(target.orgId).catch(reportError);
-  else navigate("organizations");
+  // O convite se responde no próprio sino.
+  else if (target.kind === "invites") requestIntent("notifications");
+  else if (useOrganizations.getState().list.some((org) => org.id === target.orgId)) openOrganization(target.orgId).catch(reportError);
 }
 
 function announce(notification: AppNotification) {

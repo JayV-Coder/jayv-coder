@@ -39,7 +39,6 @@ export const isFeature = (key: string): key is FeatureKey => (FEATURES as readon
 
 /** A tela que só abre com o recurso. As outras abrem sempre. */
 export const VIEW_FEATURE: Partial<Record<View, FeatureKey>> = {
-  organizations: "organizations",
   organization: "organizations",
   stats: "stats",
   gate: "gateBoard",

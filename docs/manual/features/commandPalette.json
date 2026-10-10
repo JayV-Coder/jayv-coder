@@ -6,7 +6,6 @@
   "commands": [
     "palette",
     "projects",
-    "organizations",
     "stats",
     "system",
     "settings",

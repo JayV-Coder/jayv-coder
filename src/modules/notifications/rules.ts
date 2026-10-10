@@ -30,7 +30,7 @@ export interface AppNotification {
 export type NotificationTarget =
   | { kind: "chat"; chatId: string }
   | { kind: "organization"; orgId: string }
-  | { kind: "organizations" }
+  | { kind: "invites" }
   | { kind: "stats" }
   | { kind: "update" }
   | null;
@@ -40,7 +40,7 @@ export function targetOf(notification: AppNotification): NotificationTarget {
   if (kind.startsWith("turn.") && typeof data.chatId === "string") return { kind: "chat", chatId: data.chatId };
   if (kind === "quota.crossed") return { kind: "stats" };
   if (kind === "update.available") return { kind: "update" };
-  if (kind === "org.invited") return { kind: "organizations" };
+  if (kind === "org.invited") return { kind: "invites" };
   if (kind === "org.removed" || kind === "org.deleted") return null;
   if (typeof data.orgId === "string") return { kind: "organization", orgId: data.orgId };
   return null;

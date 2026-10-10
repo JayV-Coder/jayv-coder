@@ -8,7 +8,7 @@ import type { Organization } from "@/modules/organizations";
 export function OrganizationPlate({ organization }: { organization: Organization | null }) {
   const t = useT();
   return (
-    <div data-tour="nav-organizations" className="mb-3 rounded-lg border border-sidebar-border bg-card px-3 py-2.5">
+    <div className="mb-3 rounded-lg border border-sidebar-border bg-card px-3 py-2.5">
       <span className="mb-1 flex min-w-0 items-center gap-1.5 text-caption font-medium text-success">
         <Building2Icon aria-hidden="true" className="size-3.5 flex-none" />
         <span className="truncate">{organization ? t(`org.role.${organization.role}` as Key) : "—"}</span>

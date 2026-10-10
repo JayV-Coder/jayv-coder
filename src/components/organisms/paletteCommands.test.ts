@@ -42,7 +42,8 @@ const ids = (patch = {}) => paletteCommands(context(patch)).map((command) => com
 describe("paletteCommands", () => {
   it("reaches every screen, every settings tab and the project actions", () => {
     const found = ids();
-    for (const id of ["projects", "organizations", "stats", "system", "settings", "profile", "plans", "gate", "chats", "new-chat", "new-project"]) expect(found).toContain(id);
+    for (const id of ["projects", "stats", "system", "settings", "profile", "plans", "gate", "chats", "new-chat", "new-project"]) expect(found).toContain(id);
+    expect(found).not.toContain("organizations");
     for (const tab of ["app", "jev", "mcp", "skills", "claude", "codex", "copilot", "cursor"]) expect(found).toContain(`settings-${tab}`);
     for (const id of ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"]) expect(found).toContain(`mcp-approve-${id}`);
     for (const id of ["settings-save", "settings-discard", "settings-defaults", "skills-install", "project-notes", "search-chats", "live", "notifications", "sign-out", "check-update", "system-copy", "whats-new"]) expect(found).toContain(id);
@@ -50,7 +51,7 @@ describe("paletteCommands", () => {
 
   it("lists the tabs of the open organization and one language entry per other language", () => {
     const found = ids();
-    for (const tab of ["projects", "stats", "gate", "members", "repositories"]) expect(found).toContain(`org-tab-${tab}`);
+    for (const tab of ["stats", "gate", "members", "repositories"]) expect(found).toContain(`org-tab-${tab}`);
     expect(found).toContain("language-pt-BR");
     expect(found).not.toContain("language-en");
   });
@@ -68,7 +69,7 @@ describe("paletteCommands", () => {
       { id: "o2", name: "Zeta", slug: "zeta", role: "member" as const, members: 3, repositories: 0 },
     ];
     const found = ids({ environment: "o1", organizations, openOrganizationId: null });
-    for (const id of ["organizations", "system", "plans", "system-reload", "org-o2", "org-tab-projects"]) expect(found).not.toContain(id);
+    for (const id of ["organizations", "system", "plans", "system-reload", "new-project", "org-o2", "org-tab-projects"]) expect(found).not.toContain(id);
     for (const id of ["projects", "stats", "settings", "profile", "org-o1", "org-tab-stats", "org-tab-members", "org-tab-repositories", "environment-personal", "environment-o2"]) expect(found).toContain(id);
   });
 

@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { SearchIcon } from "lucide-react";
-import { loadOrganizations, searchScopeGroups, useOrganizations, type ScopeGroup } from "@/modules/organizations";
+import { loadOrganizations, searchScopeGroups, splitGeneral, useOrganizations, type ScopeGroup } from "@/modules/organizations";
 import { PERSONAL, useEnvironment } from "@/modules/environments";
 import type { Project } from "@/modules/core";
 import { setLayout, useWorkspace } from "@/modules/workspace";
-import { useT } from "@/modules/i18n";
+import { useT, type Key } from "@/modules/i18n";
 import { EmptyText } from "@/components/atoms";
 import { LayoutSwitch, PageHeading } from "@/components/molecules";
-import { NewProjectDialog, ProjectScopeSection } from "@/components/organisms";
+import { NewProjectDialog, OrganizationChatButton, ProjectScopeSection } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 /** Os projetos do ambiente aberto: o banco de cada ambiente só tem os dele, então
- * a lista é um bloco só, com o cabeçalho do dono (a pessoa ou a organização). A
- * busca ao lado procura pelo nome, pela pasta e pelos repositórios. */
+ * a lista é um bloco só. No pessoal, o título é Projetos e o bloco diz que são
+ * pessoais; no ambiente de uma organização, o título da página é ela (nome,
+ * @slug, quantos projetos, o papel e de onde eles vêm) e, no lugar de "Novo
+ * projeto", fica o chat dela — os projetos da organização chegam pelos
+ * repositórios dela. A busca procura pelo nome, pela pasta e pelos
+ * repositórios. */
 export function ProjectsPage() {
   const t = useT();
   const { data, layout } = useWorkspace();
@@ -30,12 +35,32 @@ export function ProjectsPage() {
       : { key: "personal", scope: { kind: "personal" }, name: "", slug: null, role: null, projects: data.projects };
   }, [environment, organizations, data.projects]);
   const shown = searchScopeGroups([group], query);
+  // O ambiente é da organização mesmo enquanto a lista dela ainda não chegou.
+  const inOrganization = environment !== PERSONAL;
+  const organization = group.scope.kind === "organization" ? group : null;
+  const heading = organization
+    ? {
+      title: organization.name,
+      description: (
+        <>
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {organization.slug && <span className="font-mono">@{organization.slug}</span>}
+            <span className="font-mono tabular-nums">{t("projects.count", { count: splitGeneral(organization.projects).repositories.length })}</span>
+            {organization.role && <Badge variant="outline">{t(`org.role.${organization.role}` as Key)}</Badge>}
+          </span>
+          <span className="mt-1 block">{t("projects.org.description")}</span>
+        </>
+      ),
+    }
+    : { title: t("nav.projects"), description: t("projects.description") };
 
   return (
     <ScrollPage>
-      <PageHeading eyebrow={t("projects.eyebrow")} title={t("nav.projects")} description={t("projects.description")}>
+      <PageHeading eyebrow={t("projects.eyebrow")} title={heading.title} description={heading.description}>
         <LayoutSwitch value={layout} onChange={setLayout} />
-        <NewProjectDialog><Button>{t("projects.new")}</Button></NewProjectDialog>
+        {organization
+          ? <OrganizationChatButton organization={{ id: organization.key, name: organization.name }} />
+          : !inOrganization && <NewProjectDialog><Button>{t("projects.new")}</Button></NewProjectDialog>}
       </PageHeading>
       {data.projects.length === 0 && group.scope.kind === "personal"
         ? <EmptyText>{t("projects.empty")}</EmptyText>
@@ -49,7 +74,7 @@ export function ProjectsPage() {
               </label>
             </div>
             {query.trim() && shown.length === 0 && <EmptyText>{t("projects.search.empty")}</EmptyText>}
-            {(query.trim() ? shown : [group]).map((item) => <ProjectScopeSection key={item.key} group={item} layout={layout} />)}
+            {(query.trim() ? shown : [group]).map((item) => <ProjectScopeSection key={item.key} group={item} layout={layout} heading={!organization} />)}
           </div>
         )}
     </ScrollPage>

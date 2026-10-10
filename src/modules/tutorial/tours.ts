@@ -25,7 +25,7 @@ export const TOURS: Tour[] = [
     steps: [
       { feature: "agents" },
       { feature: "commandPalette" },
-      { feature: "organizations", target: "nav-organizations" },
+      { feature: "organizations", target: "environment-switch" },
       { feature: "environments", target: "environment-switch" },
       { feature: "notifications", target: "notification-bell" },
       { feature: "stats", target: "nav-stats" },
@@ -82,7 +82,7 @@ export const TOURS: Tour[] = [
     ],
   },
   {
-    id: "organizations", view: "organizations",
+    id: "organizations", view: "organization",
     steps: [
       { feature: "organizations" },
       { feature: "orgRepositories" },

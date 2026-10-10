@@ -31,12 +31,6 @@
       "detail": "Goes to Projects."
     },
     {
-      "id": "organizations",
-      "kind": "shortcut",
-      "usage": "Mod+2",
-      "detail": "Goes to Organizations."
-    },
-    {
       "id": "stats",
       "kind": "shortcut",
       "usage": "Mod+3",

@@ -31,14 +31,12 @@ function Marked({ text, positions }: { text: string; positions: number[] }) {
 
 /** O que cada atalho global faz. Atalho de projeto sem projeto aberto, ou de
  * chat sem chat aberto, não faz nada. No ambiente de uma organização, como no
- * menu lateral, Organizações e Sistema não existem e as Estatísticas são as
- * dela. */
+ * menu lateral, Sistema não existe e as Estatísticas são as dela. */
 function runShortcut(shortcut: Shortcut, projectId: string | null, chatId: string | null) {
   const orgId = environmentOrganization();
   switch (shortcut) {
     case "palette": togglePalette(); break;
     case "projects": leaveProject(); break;
-    case "organizations": if (!orgId) navigate("organizations"); break;
     case "stats":
       if (orgId) void openOrganization(orgId, "stats").catch(reportError);
       else openStats({ kind: "global" });
@@ -60,7 +58,7 @@ function runShortcut(shortcut: Shortcut, projectId: string | null, chatId: strin
  * também tem nome aqui — ir a uma tela, abrir um projeto ou chat, trocar o
  * tema. A busca é difusa e o teclado manda: ↑/↓ movem, Enter roda, Esc fecha.
  *
- * Ela também escuta os atalhos globais (⌘1–4, ⌘, ⌘N, ⌘G), para que eles
+ * Ela também escuta os atalhos globais (⌘1, ⌘3, ⌘4, ⌘, ⌘N, ⌘G), para que eles
  * funcionem em qualquer tela. */
 export function CommandPalette() {
   const t = useT();

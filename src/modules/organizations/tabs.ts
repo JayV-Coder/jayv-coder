@@ -11,9 +11,8 @@ export interface OrganizationTabItem {
 }
 
 /** As abas da organização, na ordem da página, da paleta e do menu lateral do
- * ambiente da organização. */
+ * ambiente da organização (onde Projetos, antes delas, é a tela de projetos). */
 export const ORGANIZATION_TABS: OrganizationTabItem[] = [
-  { tab: "projects", label: "org.tab.projects" },
   { tab: "stats", label: "org.tab.stats", feature: "stats" },
   { tab: "gate", label: "org.tab.gate", feature: "gateBoard" },
   { tab: "members", label: "org.tab.members" },

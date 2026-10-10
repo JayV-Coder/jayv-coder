@@ -3,7 +3,7 @@ import type { WorkMode } from "@/modules/core";
 
 /** O que um atalho de teclado global faz. A tela decide como cumprir; aqui só
  * se reconhece a tecla. */
-export type Shortcut = "palette" | "projects" | "organizations" | "stats" | "system" | "settings" | "newChat" | "gate" | "workMode" | "find";
+export type Shortcut = "palette" | "projects" | "stats" | "system" | "settings" | "newChat" | "gate" | "workMode" | "find";
 
 interface KeyLike {
   key: string;
@@ -25,7 +25,6 @@ export const MOD = isMac() ? "⌘" : "Ctrl";
 const BY_KEY: Record<string, Shortcut> = {
   k: "palette",
   "1": "projects",
-  "2": "organizations",
   "3": "stats",
   "4": "system",
   ",": "settings",

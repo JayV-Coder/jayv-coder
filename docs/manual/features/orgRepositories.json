@@ -6,5 +6,5 @@
   "commands": [],
   "title": "Organization repositories",
   "summary": "The owner links the organization's repositories on the JayV site by signing in to GitHub, GitLab or Bitbucket. The app lists them by itself, and each member clones them with their own git access.",
-  "usage": "On the site, open the organization, go to Repositories, connect a provider and add the repositories. In the app, the organization page lists them as they change: choose the organization folder, clone what is missing, and use Find clones to compare the whole folder, at any depth, with the list from the site. On GitHub, connecting installs the JayV GitHub App on the account or organization you choose, and it reaches only the repositories you pick there; to add more, click GitHub again."
+  "usage": "On the site, open the organization, go to Repositories, connect a provider and add the repositories. In the app, Repositories in the organization's side menu lists them as they change: choose the organization folder, clone what is missing, and use Find clones to compare the whole folder, at any depth, with the list from the site. On GitHub, connecting installs the JayV GitHub App on the account or organization you choose, and it reaches only the repositories you pick there; to add more, click GitHub again."
 }

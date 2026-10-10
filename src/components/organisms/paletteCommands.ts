@@ -71,8 +71,8 @@ const SEP = " › ";
  * botão numa tela também tem nome aqui. O que o plano desliga some, como no
  * menu; o que destrói dados (limpar ou apagar chat e projeto) fica só nos
  * botões, que pedem confirmação. No ambiente de uma organização, como no menu
- * lateral, só aparece o que é dela: sem Organizações, Sistema e Planos, e as
- * Estatísticas são as da organização. */
+ * lateral, só aparece o que é dela: sem Sistema, Planos nem Novo projeto, e
+ * as Estatísticas são as da organização. */
 export function paletteCommands(ctx: PaletteContext): Command[] {
   const { t, data, project, view, rights } = ctx;
   const can = (feature: PlanFeature) => allows(rights, feature);
@@ -113,7 +113,6 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
 
   const go = "palette.group.navigate" as const;
   all.push({ id: "projects", group: go, label: t("nav.projects"), shortcut: "projects", run: leaveProject });
-  if (can("organizations") && !orgId) all.push({ id: "organizations", group: go, label: t("nav.organizations"), shortcut: "organizations", run: () => navigate("organizations") });
   // Cada ambiente, menos o que está aberto.
   if (can("organizations")) {
     for (const item of environmentOptions(ctx.organizations)) {
@@ -135,7 +134,8 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   if (!orgId) all.push({ id: "plans", group: go, label: t("nav.plans"), run: () => navigate("plans") });
 
   const projects = "palette.group.projects" as const;
-  all.push({ id: "new-project", group: projects, label: t("projects.new"), run: () => { leaveProject(); requestIntent("newProject"); } });
+  // Na organização, os projetos chegam pelos repositórios dela (o chat dela clona).
+  if (!orgId) all.push({ id: "new-project", group: projects, label: t("projects.new"), run: () => { leaveProject(); requestIntent("newProject"); } });
   for (const layout of ["grid", "list"] as Layout[]) {
     if (layout === ctx.layout) continue;
     all.push({ id: `layout-${layout}`, group: projects, label: `${t("layout.label")}: ${t(`layout.${layout}`)}`, run: () => { leaveProject(); setLayout(layout); } });
@@ -204,12 +204,11 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
         all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), run: () => void createChat(general[0].projectId) });
       }
     }
-    // As abas da organização aberta ou, no ambiente dela, sempre as dela (os
-    // projetos já são o "Projetos" de Navegar).
+    // As abas da organização aberta ou, no ambiente dela, sempre as dela.
     const current = ctx.organizations.find((organization) => organization.id === (orgId ?? ctx.openOrganizationId));
     if (current) {
       for (const { tab, label, feature } of ORGANIZATION_TABS) {
-        if ((feature && !can(feature)) || (orgId && tab === "projects")) continue;
+        if (feature && !can(feature)) continue;
         all.push({ id: `org-tab-${tab}`, group: "palette.group.organization", label: `${current.name}${SEP}${t(label)}`, run: () => void openOrganization(current.id, tab).catch(reportError) });
       }
     }
