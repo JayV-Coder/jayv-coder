@@ -213,11 +213,18 @@ pub fn load(connection:&Connection)->Result<Vec<McpServer>> {
     Ok(rows.into_iter().filter_map(|json|serde_json::from_str(&json).ok()).collect())
 }
 
-/// Grava a lista inteira, como a tela a mostra: o que saiu dela sai do banco.
-pub fn save(connection:&mut Connection,servers:Vec<McpServer>)->Result<Vec<McpServer>> {
+/// A lista conferida como `save` a gravaria, sem gravar nada: a tela confere
+/// o servidor ao sair do diálogo e só grava no Salvar das configurações.
+pub fn checked_list(servers:Vec<McpServer>)->Result<Vec<McpServer>> {
     let servers=servers.into_iter().map(McpServer::checked).collect::<Result<Vec<_>>>()?;
     let mut names=std::collections::HashSet::new();
     if let Some(repeated)=servers.iter().find(|server|!names.insert(server.name.clone())) { bail!(Text::new("mcp.invalid.duplicate").with("name",&repeated.name)); }
+    Ok(servers)
+}
+
+/// Grava a lista inteira, como a tela a mostra: o que saiu dela sai do banco.
+pub fn save(connection:&mut Connection,servers:Vec<McpServer>)->Result<Vec<McpServer>> {
+    let servers=checked_list(servers)?;
     let transaction=connection.transaction()?;
     transaction.execute("DELETE FROM mcp_servers",[])?;
     let now=chrono::Utc::now().to_rfc3339();
@@ -387,6 +394,15 @@ pub fn from_model(answer:&str)->Vec<McpServer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test] fn the_checked_list_cleans_and_refuses_like_save_without_writing() {
+        let server=|name:&str|McpServer{name:name.into(),command:" npx ".into(),args:vec![" -y ".into(),"".into()],..Default::default()};
+        let checked=checked_list(vec![server(" github ")]).expect("conferida");
+        assert_eq!((checked[0].name.as_str(),checked[0].command.as_str(),checked[0].args.len()),("github","npx",1));
+        assert!(checked_list(vec![server("a"),server("a")]).is_err(),"nome repetido");
+        assert!(checked_list(vec![server("jayv")]).is_err(),"nome reservado");
+        assert!(checked_list(vec![McpServer{name:"web".into(),transport:HTTP.into(),url:"ftp://x".into(),..Default::default()}]).is_err(),"endereço inválido");
+    }
 
     #[test] fn claude_desktop_and_vscode_configs_are_read() {
         let desktop=parse(r#"{"mcpServers":{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"<TOKEN>"}},"docs":{"url":"https://mcp.example.com/mcp"}}}"#);

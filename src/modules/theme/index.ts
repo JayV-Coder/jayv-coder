@@ -24,8 +24,11 @@ function savedPreference(): ThemePreference {
   return "system";
 }
 
+// Fora de uma janela (os testes), o sistema não diz nada: vale o claro.
+const systemDark = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && darkQuery().matches;
+
 const resolve = (preference: ThemePreference): Theme =>
-  preference === "system" ? (darkQuery().matches ? "dark" : "light") : preference;
+  preference === "system" ? (systemDark() ? "dark" : "light") : preference;
 
 function apply(theme: Theme) {
   const root = document.documentElement;

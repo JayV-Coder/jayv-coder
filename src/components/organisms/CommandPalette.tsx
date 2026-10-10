@@ -7,7 +7,7 @@ import { useLocale, useLocales, useT } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
 import { reportError } from "@/modules/feedback";
 import { openOrganization, useOrganizations } from "@/modules/organizations";
-import { isDirty, useSettings } from "@/modules/settings";
+import { useSettingsDirty } from "@/modules/settings";
 import { hasFeature, useEntitlements } from "@/modules/plans";
 import { openStats } from "@/modules/usage";
 import { createChat, findChat, findProject, leaveProject, nextWorkMode, setWorkMode, useWorkspace } from "@/modules/workspace";
@@ -93,7 +93,7 @@ export function CommandPalette() {
   const invites = useOrganizations((state) => state.incoming);
   const openOrganizationId = useOrganizations((state) => state.openId);
   const environment = useEnvironment((state) => state.active);
-  const settingsDirty = useSettings(isDirty);
+  const settingsDirty = useSettingsDirty();
   const rights = useEntitlements();
 
   const commands = useMemo<Command[]>(() => paletteCommands({

@@ -240,6 +240,13 @@ pub(crate) async fn save_mcp_servers(workspace:State<'_,SharedWorkspace>,servers
     workspace.lock().await.save_mcp_servers(servers).map_err(failure)
 }
 
+/// Confere os servidores como o Salvar gravaria, sem gravar: o diálogo só
+/// fecha com a lista aceita, e ela espera o Salvar das configurações.
+#[tauri::command]
+pub(crate) async fn check_mcp_servers(servers:Vec<jayv_agents::mcp::McpServer>)->Result<Vec<jayv_agents::mcp::McpServer>,Text>{crate::desktop::require_session()?;
+    jayv_agents::mcp::checked_list(servers).map_err(failure)
+}
+
 /// O rascunho do `/mcp` do chat: o texto colado é lido aqui (configuração,
 /// `claude mcp add`, comando `npx`); o que não é configuração vai ao agente
 /// mais barato, em somente leitura, que devolve a configuração. Nada é
@@ -275,6 +282,24 @@ fn skills_root()->Result<std::path::PathBuf,Text> {
 #[tauri::command]
 pub(crate) async fn get_skills(workspace:State<'_,SharedWorkspace>)->Result<Vec<jayv_agents::skills::Skill>,Text>{
     workspace.lock().await.skills().map_err(failure)
+}
+
+/// Uma skill que a tela vai instalar no Salvar: o nome e a descrição do
+/// `SKILL.md`, lidos já na escolha.
+#[derive(Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct SkillPreview { pub name:String, pub description:String }
+
+/// O que instalar da pasta (`path`) ou do texto colado (`text`) traria, sem
+/// copiar nem gravar nada: o `SKILL.md` errado é recusado já aqui.
+#[tauri::command]
+pub(crate) async fn preview_skills(path:Option<String>,text:Option<String>)->Result<Vec<SkillPreview>,Text>{crate::desktop::require_session()?;
+    let documents=match (path,text) {
+        (Some(path),_)=>jayv_agents::skills::preview_folder(std::path::Path::new(path.trim())),
+        (None,Some(text))=>jayv_agents::skills::parse(&text).map(|document|vec![document]),
+        (None,None)=>Ok(vec![]),
+    }.map_err(failure)?;
+    Ok(documents.into_iter().map(|document|SkillPreview{name:document.name,description:document.description}).collect())
 }
 
 /// Instala a skill de uma pasta com `SKILL.md` (ou as de uma pasta com várias).

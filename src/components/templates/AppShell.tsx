@@ -8,12 +8,14 @@ import { AppHeader, CommandPalette, Sidebar, StatusBar } from "@/components/orga
  * valer em qualquer tela. */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-background">
+    <div className="relative grid h-full grid-cols-[240px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-background">
       <Sidebar />
       <main className="flex min-h-0 min-w-0 flex-col">
         <AppHeader />
-        {/* Uma vista sem rolagem própria rola aqui, sem levar a lateral junto. */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
+        {/* Uma vista sem rolagem própria rola aqui, sem levar a lateral junto.
+            `relative` prende aqui dentro o que a vista posiciona: nada escapa
+            para a janela. */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">{children}</div>
       </main>
       <div className="col-span-2"><StatusBar /></div>
       <CommandPalette />

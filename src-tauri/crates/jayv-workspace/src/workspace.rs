@@ -609,7 +609,11 @@ impl WorkspaceStore {
         Ok(())
     }
 
+    /// Exclui o projeto e os chats dele. Só no ambiente pessoal: o projeto de
+    /// uma organização só se exclui no site, por owner ou maintainer, e a
+    /// exclusão chega aqui pela sincronização.
     pub fn delete_project(&mut self, project_id: &str) -> Result<Vec<String>> {
+        anyhow::ensure!(self.environment.is_personal(),Text::new("project.delete.onSite"));
         let chat_ids=self.chat_ids_for_project(project_id)?;
         anyhow::ensure!(self.connection.execute("DELETE FROM projects WHERE id=?1",[project_id])?>0,Text::new("project.notFound"));
         Ok(chat_ids)
@@ -1741,6 +1745,17 @@ mod tests {
         let data=store.snapshot().expect("snapshot");
         assert!(data.projects.is_empty());
         assert!(data.chats.is_empty());
+    }
+
+    #[test]
+    fn an_organization_project_is_not_deleted_from_the_app() {
+        let root=tempfile::tempdir().expect("root");
+        let org=Environment::Organization(Uuid::new_v4());
+        let mut store=WorkspaceStore::for_environment(root.path(),&Uuid::new_v4().to_string(),&org).expect("ambiente da organização");
+        let project=store.create_project("Produto",None).expect("project");
+        store.create_chat(&project.id,None).expect("chat");
+        assert!(store.delete_project(&project.id).is_err(),"no ambiente da organização, excluir é no site");
+        assert_eq!(store.snapshot().expect("snapshot").projects.len(),1);
     }
 
     /// A exclusão local do projeto tem de subir para o Supabase também a dos

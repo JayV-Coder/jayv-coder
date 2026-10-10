@@ -271,7 +271,14 @@
 @layer base {
   * { @apply border-border outline-ring/50; }
   html, body, #root { height: 100%; }
+  /* A janela nunca rola nem "quica": só o conteúdo de cada tela rola, dentro
+     dela. O body segura (sem virar área de rolagem) o que for posicionado
+     fora do lugar — rótulos só para leitor de tela, campos escondidos dos
+     componentes —, que antes empurrava a página inteira para baixo. */
+  html, body { overflow: hidden; overscroll-behavior: none; }
   body {
+    position: relative;
+    overflow: clip;
     @apply bg-background font-sans text-body text-foreground antialiased;
     min-width: 760px;
     font-synthesis: none;

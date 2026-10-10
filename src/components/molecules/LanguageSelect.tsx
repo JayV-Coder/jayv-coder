@@ -9,10 +9,13 @@ import { cn } from "@/lib/utils";
 const fold = (text: string) => text.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 
 /** O idioma da interface. Cada idioma aparece com o próprio nome e, embaixo,
- * no idioma atual; a busca aceita os dois, o inglês e o código. */
-export function LanguageSelect() {
+ * no idioma atual; a busca aceita os dois, o inglês e o código. Sem `value`,
+ * escolher troca o idioma na hora (a tela de entrada); com ele, a escolha vai
+ * a `onChange` e quem chama decide quando aplicar (as configurações, no Salvar). */
+export function LanguageSelect({ value, onChange }: { value?: Locale; onChange?: (locale: Locale) => void } = {}) {
   const t = useT();
-  const locale = useLocale();
+  const ui = useLocale();
+  const locale = value ?? ui;
   const locales = useLocales();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -20,13 +23,13 @@ export function LanguageSelect() {
   const list = useRef<HTMLDivElement>(null);
 
   const options = useMemo(() => {
-    const here = new Intl.DisplayNames([locale], { type: "language" });
+    const here = new Intl.DisplayNames([ui], { type: "language" });
     const english = new Intl.DisplayNames(["en"], { type: "language" });
     return locales.map((option) => {
       const translated = here.of(option.id) ?? option.name;
       return { id: option.id as Locale, name: option.name, translated, search: fold([option.name, translated, english.of(option.id), option.id].join(" ")) };
     });
-  }, [locale, locales]);
+  }, [ui, locales]);
   const shown = options.filter((option) => option.search.includes(fold(query.trim())));
   const current = options.find((option) => option.id === locale) ?? options[0];
 
@@ -34,7 +37,7 @@ export function LanguageSelect() {
   useEffect(() => { list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" }); }, [active]);
 
   const choose = (id: Locale) => {
-    setLocale(id);
+    (onChange ?? setLocale)(id);
     setOpen(false);
   };
   const onKeyDown = (event: KeyboardEvent) => {

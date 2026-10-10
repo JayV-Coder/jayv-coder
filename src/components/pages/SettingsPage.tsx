@@ -6,7 +6,7 @@ import { allows, SETTINGS_TAB_FEATURE, useEntitlements } from "@/modules/plans";
 import { environmentLabel, useEnvironment } from "@/modules/environments";
 import { useT } from "@/modules/i18n";
 import { useOrganizations } from "@/modules/organizations";
-import { AGENTS, discardChanges, isDirty, problems, restoreCoreDefaults, saveSettings, setSettingsTab, useSettings, useSettingsTab, type SettingsTab } from "@/modules/settings";
+import { AGENTS, discardChanges, isDirty, problems, restoreDefaults, saveSettings, setSettingsTab, useSettings, useSettingsDirty, useSettingsTab, type SettingsTab } from "@/modules/settings";
 import { AgentIcon, GridIcon, LoadingNote, LogoIcon } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
 import { AGENT_NAMES, AgentPanel, AppPanel, FeatureLocked, JevPanel, McpPanel, SkillsPanel } from "@/components/organisms";
@@ -21,7 +21,9 @@ type Health = "off" | "ok" | "problem";
 export function SettingsPage() {
   const t = useT();
   const { loaded, agents, models, saving, core, coreSnapshot } = useSettings(useShallow(({ loaded, agents, models, saving, core, coreSnapshot }) => ({ loaded, agents, models, saving, core, coreSnapshot })));
-  const dirty = useSettings(isDirty);
+  // Nada da tela vale antes do Salvar: o aviso e os botões olham todas as abas.
+  const dirty = useSettingsDirty();
+  const agentsDirty = useSettings(isDirty);
   const tab = useSettingsTab((state) => state.tab);
   const rights = useEntitlements();
   const organizations = useOrganizations((state) => state.list);
@@ -42,12 +44,16 @@ export function SettingsPage() {
   const coreBroken = COMPLEXITIES.some((level) => !(core.budgets[level] >= minBudget && core.budgets[level] <= maxBudget));
   const broken = coreBroken || AGENTS.some((id) => health(id) === "problem");
   const noneEnabled = !agents.some((agent) => agent.enabled);
+  // Agente ou Jev com problema só seguram o Salvar quando são eles que mudaram:
+  // o idioma, o tema, o MCP e as skills se salvam mesmo sem agente ligado.
+  const blocked = agentsDirty && (broken || noneEnabled);
 
   return (
     <ScrollPage>
       <PageHeading eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={
         <span className="grid gap-2">
           <span>{t("settings.description")}</span>
+          <span>{t("settings.saveHint")}</span>
           {/* Cada ambiente tem as suas configurações: o selo diz de qual são estas. */}
           {organizations.length > 0 && <span><Badge variant="outline">{t("environment.current", { name: environmentLabel(environment, organizations, t("environment.personal")) })}</Badge></span>}
         </span>
@@ -57,9 +63,9 @@ export function SettingsPage() {
         <div className="grid justify-items-end gap-1.5">
           <Badge variant="warning" aria-hidden={!dirty} className={cn(!dirty && "invisible")}>{t("settings.unsaved")}</Badge>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button variant="ghost" disabled={saving} onClick={restoreCoreDefaults} title={t("settings.defaults.hint")}>{t("settings.defaults")}</Button>
+            <Button variant="ghost" disabled={saving} onClick={restoreDefaults} title={t("settings.defaults.hint")}>{t("settings.defaults")}</Button>
             <Button variant="ghost" disabled={!dirty || saving} onClick={discardChanges}>{t("settings.discard")}</Button>
-            <Button disabled={!dirty || saving || broken || noneEnabled} onClick={() => void saveSettings()}>{t("settings.save")}</Button>
+            <Button disabled={!dirty || saving || blocked} onClick={() => void saveSettings()}>{t("settings.save")}</Button>
           </div>
         </div>
       </PageHeading>

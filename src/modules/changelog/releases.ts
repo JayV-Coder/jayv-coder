@@ -26,6 +26,15 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.92.0", date: "2026-10-10",
+    items: [
+      { kind: "feature", id: "settingsSaveOnly" },
+      { kind: "feature", id: "orgProjectDeleteOnSite" },
+      { kind: "fix", id: "settingsOwnExtensions" },
+      { kind: "fix", id: "noWindowScroll" },
+    ],
+  },
+  {
     version: "0.91.0", date: "2026-10-09",
     items: [
       { kind: "feature", id: "tutorialParts" },

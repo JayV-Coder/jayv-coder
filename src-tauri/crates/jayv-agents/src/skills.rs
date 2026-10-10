@@ -144,10 +144,9 @@ fn copy_folder(source:&Path,target:&Path)->Result<()> {
     Ok(())
 }
 
-/// Instala uma skill a partir da pasta dela (com `SKILL.md`) ou de uma pasta
-/// com várias skills (uma por subpasta). Uma skill com o mesmo nome é
-/// substituída, mantendo se estava ligada. Devolve as que entraram.
-pub fn install_folder(connection:&Connection,root:&Path,source:&Path)->Result<Vec<Skill>> {
+/// As pastas de skill de `source`: ela mesma, quando tem `SKILL.md`, ou as
+/// subpastas que têm um (uma pasta com várias skills).
+fn skill_folders(source:&Path)->Result<Vec<PathBuf>> {
     let mut folders=vec![];
     if source.join(FILE).is_file() { folders.push(source.to_path_buf()); } else if source.is_dir() {
         let mut inside:Vec<PathBuf>=std::fs::read_dir(source)?.flatten().map(|entry|entry.path()).filter(|path|path.join(FILE).is_file()).collect();
@@ -155,6 +154,21 @@ pub fn install_folder(connection:&Connection,root:&Path,source:&Path)->Result<Ve
         folders.extend(inside);
     }
     if folders.is_empty() { bail!(Text::new("skills.invalid.none")); }
+    Ok(folders)
+}
+
+/// O que `install_folder` instalaria, sem copiar nem gravar nada: o
+/// `SKILL.md` de cada skill da pasta, já conferido. A tela mostra a skill
+/// na lista e só instala no Salvar das configurações.
+pub fn preview_folder(source:&Path)->Result<Vec<Document>> {
+    skill_folders(source)?.iter().map(|folder|parse(&std::fs::read_to_string(folder.join(FILE))?)).collect()
+}
+
+/// Instala uma skill a partir da pasta dela (com `SKILL.md`) ou de uma pasta
+/// com várias skills (uma por subpasta). Uma skill com o mesmo nome é
+/// substituída, mantendo se estava ligada. Devolve as que entraram.
+pub fn install_folder(connection:&Connection,root:&Path,source:&Path)->Result<Vec<Skill>> {
+    let folders=skill_folders(source)?;
     let mut installed=vec![];
     for folder in folders {
         let document=parse(&std::fs::read_to_string(folder.join(FILE))?)?;
@@ -256,6 +270,21 @@ mod tests {
         assert_eq!(install_folder(&connection,&root,source.path()).expect("instaladas").len(),2);
         let empty=tempfile::tempdir().expect("vazia");
         assert!(install_folder(&connection,&root,empty.path()).is_err());
+    }
+
+    #[test] fn previewing_a_folder_reads_each_skill_without_copying_or_recording() {
+        let (source,data)=(tempfile::tempdir().expect("origem"),tempfile::tempdir().expect("dados"));
+        for name in ["one","two"] {
+            std::fs::create_dir_all(source.path().join(name)).expect("pasta");
+            std::fs::write(source.path().join(name).join(FILE),format!("---\nname: {name}\ndescription: Does {name}.\n---\nSteps")).expect("skill");
+        }
+        let names:Vec<String>=preview_folder(source.path()).expect("prévia").into_iter().map(|document|document.name).collect();
+        assert_eq!(names,["one","two"]);
+        assert!(!root(data.path()).exists(),"a prévia não cria a pasta das skills");
+        let empty=tempfile::tempdir().expect("vazia");
+        assert!(preview_folder(empty.path()).is_err(),"pasta sem SKILL.md é recusada já na prévia");
+        std::fs::write(source.path().join("one").join(FILE),"sem cabeçalho").expect("quebrada");
+        assert!(preview_folder(source.path()).is_err(),"um SKILL.md inválido é recusado já na prévia");
     }
 
     #[test] fn pasted_text_is_installed_and_removing_deletes_only_inside_the_skills_folder() {
