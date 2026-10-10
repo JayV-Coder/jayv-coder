@@ -104,17 +104,26 @@ pub async fn discover_models(name: &str, config: &ProviderConfig) -> Result<Vec<
 
 pub async fn discover_listing(name: &str, config: &ProviderConfig) -> Result<Vec<ListedModel>> {
     if config.kind=="cli" { return Err(anyhow!("CLI providers do not offer model discovery")); }
+    // O endereço gravado vale também para a Anthropic: um mod criado pode
+    // falar com um servidor compatível com a API de mensagens dela.
+    let given=config.base_url.as_deref().filter(|value|!value.trim().is_empty());
     let default_base=match config.kind.as_str() {
         "openai"=>"https://api.openai.com/v1",
-        "anthropic"=>"https://api.anthropic.com/v1",
+        "anthropic"=>given.unwrap_or("https://api.anthropic.com/v1"),
         "openai-compatible"=>config.base_url.as_deref().filter(|value|!value.trim().is_empty()).ok_or_else(||anyhow!("the provider base URL is required"))?,
         _=>return Err(anyhow!("unsupported provider kind")),
     };
     let client=crate::lockdown::http_client(Duration::from_secs(config.timeout.max(5))).build()?;
     let mut request=client.get(format!("{}/models",default_base.trim_end_matches('/')));
     if config.kind=="anthropic" {
-        let key=config.api_key.as_deref().filter(|key|!key.trim().is_empty()).ok_or_else(||anyhow!("an API key is required to load the models"))?;
-        request=request.header("x-api-key",key).header("anthropic-version","2023-06-01");
+        request=request.header("anthropic-version","2023-06-01");
+        // A API da Anthropic exige a chave; um servidor compatível no endereço
+        // do próprio usuário pode não exigir.
+        match config.api_key.as_deref().filter(|key|!key.trim().is_empty()) {
+            Some(key)=>request=request.header("x-api-key",key),
+            None if given.is_none()=>return Err(anyhow!("an API key is required to load the models")),
+            None=>{}
+        }
     } else if let Some(key)=config.api_key.as_deref().filter(|key|!key.trim().is_empty()) {
         request=request.bearer_auth(key);
     } else if config.kind=="openai" {
@@ -730,11 +739,9 @@ impl CliProvider {
         let mut process=Command::new(&program);
         quiet(&mut process);
         if let Some(path)=crate::llm::agent_path(&found) { process.env("PATH",path); }
-        // O Kilo Code recebe os servidores MCP na configuração em linha.
-        if self.name==crate::llm::AgentId::Kilo.key() {
-            let servers:Vec<crate::mcp::McpServer>=self.config.mcp.iter().filter_map(|value|serde_json::from_value(value.clone()).ok()).collect();
-            if let Some(config)=crate::mcp::kilo_config(&servers) { process.env("KILO_CONFIG_CONTENT",config); }
-        }
+        // O ambiente que o mod pede (os servidores MCP do Kilo Code vão na
+        // configuração em linha dele).
+        for (name,value) in &self.config.env { process.env(name,value); }
         let args=crate::llm::understood(&found,self.args_resuming(model,effort,resume,once,prompt,usage_file)).await;
         process.args(lead).args(args).stdin(if self.inline_for(prompt){Stdio::null()}else{Stdio::piped()}).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         // Num grupo só dele: o agente abre shells, servidores de MCP e o node do

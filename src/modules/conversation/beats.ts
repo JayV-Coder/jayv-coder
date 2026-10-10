@@ -1,11 +1,11 @@
-import type { Activity, AgentId, Aspect, EntryVerdict, ExitVerdict, RouteMode, TurnRoute, TurnStatus } from "@/modules/core";
+import type { Activity, Aspect, EntryVerdict, ExitVerdict, RouteMode, TurnRoute, TurnStatus } from "@/modules/core";
 import { t, type Key } from "@/modules/i18n";
-import { AGENT_LABELS } from "@/modules/settings";
+import { agentLabel as modLabel } from "@/modules/settings";
 import { shownText, sourceLabel } from "./notice";
 
 const GATE_WORDS: Record<string, Key> = { pass: "beat.gate.pass", ask: "beat.gate.ask", block: "beat.gate.block" };
 const SUBTASK_WORDS: Record<string, Key> = { applied: "beat.subtask.applied", empty: "beat.subtask.empty", conflict: "beat.subtask.conflict", failed: "beat.subtask.failed" };
-const agentLabel = (provider: unknown) => { const id = String(provider ?? ""); return id in AGENT_LABELS ? AGENT_LABELS[id as AgentId] : id; };
+const agentLabel = (provider: unknown) => modLabel(String(provider ?? ""));
 
 /** Uma etapa em uma linha. O evento cru é JSON; quem espera quer ler o que está
  * acontecendo, não o formato em que foi gravado. */
@@ -26,15 +26,15 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     }
     case "fallback": {
       const provider = String(d.provider ?? "");
-      return t("beat.fallback", { agent: provider in AGENT_LABELS ? AGENT_LABELS[provider as AgentId] : provider, error: shownText(String(d.error ?? "")) });
+      return t("beat.fallback", { agent: agentLabel(provider), error: shownText(String(d.error ?? "")) });
     }
     case "review": {
       const provider = String(d.provider ?? "");
-      return t("beat.review", { agent: provider in AGENT_LABELS ? AGENT_LABELS[provider as AgentId] : provider, model: String(d.model ?? ""), count: Number(d.files ?? 0) });
+      return t("beat.review", { agent: agentLabel(provider), model: String(d.model ?? ""), count: Number(d.files ?? 0) });
     }
     case "plan": {
       const provider = String(d.provider ?? "");
-      return t("beat.plan", { agent: provider in AGENT_LABELS ? AGENT_LABELS[provider as AgentId] : provider, model: String(d.model ?? "") });
+      return t("beat.plan", { agent: agentLabel(provider), model: String(d.model ?? "") });
     }
     case "split": {
       const tasks = Array.isArray(detail.tasks) ? (detail.tasks as { title?: string; provider?: string }[]) : [];
@@ -100,7 +100,7 @@ const ROLE_WORDS: Record<string, Key> = {
 
 /** Quem atendeu, em uma linha: `Claude Code · sonnet · Build · desenvolvedor`. */
 export function routeLabel(route: TurnRoute) {
-  const provider = route.provider in AGENT_LABELS ? AGENT_LABELS[route.provider as AgentId] : route.provider;
+  const provider = agentLabel(route.provider);
   const parts = [provider, route.model];
   if (route.mode && MODE_WORDS[route.mode]) parts.push(t(MODE_WORDS[route.mode]));
   if (route.agent) parts.push(ROLE_WORDS[route.agent] ? t(ROLE_WORDS[route.agent]) : route.agent);

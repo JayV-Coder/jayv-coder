@@ -6,6 +6,7 @@ pub mod guard;
 pub mod llm;
 pub mod mcp;
 pub mod mcp_client;
+pub mod mods;
 pub mod org_extensions;
 pub mod providers;
 pub mod router;

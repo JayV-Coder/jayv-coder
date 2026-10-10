@@ -49,6 +49,8 @@ pub const MCP:&str="mcp";
 pub const SKILLS:&str="skills";
 pub const KILO_CODE:&str="kiloCode";
 pub const GATEWAY_PROVIDERS:&str="gatewayProviders";
+/// Os mods de integração que a pessoa cria (Configurações › Mods).
+pub const CUSTOM_MODS:&str="customMods";
 
 /// O núcleo: o que nenhum plano tira e ninguém desliga. A mesma lista da
 /// migração `core_features` (`features.core`).
@@ -132,13 +134,13 @@ impl Entitlements {
     pub fn apply_core(&self,settings:&CoreSettings)->CoreSettings { self.enforce_core(&self.restrict_core(settings)) }
 
     /// Os agentes com o que o plano tira desligado e o que ele trava ligado:
-    /// o Kilo Code e os gateways de API (OpenRouter e LiteLLM) que o plano não
-    /// tem saem do roteamento, e do Claude, as sessões guardadas e o índice de
-    /// símbolos.
+    /// o mod cujo recurso o plano não tem (`LlmMod::feature`: o Kilo Code, os
+    /// gateways de API e os mods criados) sai do roteamento, e do Claude, as
+    /// sessões guardadas e o índice de símbolos.
     pub fn apply_llm(&self,settings:&LlmSettings)->LlmSettings {
         let mut settings=settings.clone();
         for agent in settings.agents.iter_mut() {
-            let included=match agent.id { AgentId::Kilo=>self.allows(KILO_CODE), AgentId::Openrouter|AgentId::Litellm=>self.allows(GATEWAY_PROVIDERS), _=>true };
+            let included=agent.id.module().feature().is_none_or(|feature|self.allows(feature));
             if !included { agent.enabled=false; }
         }
         for agent in settings.agents.iter_mut().filter(|agent|agent.id==AgentId::Claude) {
@@ -326,16 +328,19 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         assert!(claude(&locked.apply_llm(&settings)).symbol_tools,"travado ligado");
     }
 
-    /// Kilo Code, gateways, MCP e skills seguem o plano; sem lista, valem como antes.
+    /// Kilo Code, gateways, mods criados, MCP e skills seguem o plano; sem
+    /// lista, valem como antes.
     #[test] fn the_plan_gates_agents_mcp_and_skills() {
         let agent=|id|crate::llm::AgentSettings{id,enabled:true,command:String::new(),timeout:300,options:serde_json::json!({})};
-        let settings=LlmSettings{agents:vec![agent(AgentId::Claude),agent(AgentId::Kilo),agent(AgentId::Openrouter),agent(AgentId::Litellm)],models:vec![]};
+        let custom=AgentId::parse("mod-local").expect("mod criado");
+        let settings=LlmSettings{agents:vec![agent(AgentId::Claude),agent(AgentId::Kilo),agent(AgentId::Openrouter),agent(AgentId::Litellm),agent(custom)],models:vec![]};
         let enabled=|settings:&LlmSettings|settings.agents.iter().map(|agent|agent.enabled).collect::<Vec<_>>();
-        assert_eq!(enabled(&Entitlements::default().apply_llm(&settings)),[true,true,true,true]);
+        assert_eq!(enabled(&Entitlements::default().apply_llm(&settings)),[true,true,true,true,true]);
         let without=Entitlements::of(&[]);
-        assert_eq!(enabled(&without.apply_llm(&settings)),[true,false,false,false]);
-        assert_eq!(enabled(&Entitlements::of(&[KILO_CODE.into()]).apply_llm(&settings)),[true,true,false,false]);
-        assert_eq!(enabled(&Entitlements::of(&[GATEWAY_PROVIDERS.into()]).apply_llm(&settings)),[true,false,true,true]);
+        assert_eq!(enabled(&without.apply_llm(&settings)),[true,false,false,false,false]);
+        assert_eq!(enabled(&Entitlements::of(&[KILO_CODE.into()]).apply_llm(&settings)),[true,true,false,false,false]);
+        assert_eq!(enabled(&Entitlements::of(&[GATEWAY_PROVIDERS.into()]).apply_llm(&settings)),[true,false,true,true,false]);
+        assert_eq!(enabled(&Entitlements::of(&[CUSTOM_MODS.into()]).apply_llm(&settings)),[true,false,false,false,true]);
         assert!(without.mcp_servers(vec![1]).is_empty()&&without.skills(vec![1]).is_empty());
         assert_eq!(Entitlements::of(&[MCP.into(),SKILLS.into()]).mcp_servers(vec![1]),vec![1]);
         assert_eq!(Entitlements::default().skills(vec![1]),vec![1]);

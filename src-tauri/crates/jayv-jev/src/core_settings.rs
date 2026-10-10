@@ -131,7 +131,8 @@ impl CoreSettings {
         self.privacy.local_only=patterns(&self.privacy.local_only)?;
         let mut order:Vec<String>=Vec::new();
         for agent in &self.agent_order {
-            if !crate::llm::AgentId::ALL.iter().any(|known|known.key()==agent) { bail!(Text::new("core.agentOrder").with("agent",agent)); }
+            // Um mod do app ou um mod criado (`mod-…`).
+            if crate::llm::AgentId::parse(agent).is_err() { bail!(Text::new("core.agentOrder").with("agent",agent)); }
             if !order.contains(agent) { order.push(agent.clone()); }
         }
         self.agent_order=order;

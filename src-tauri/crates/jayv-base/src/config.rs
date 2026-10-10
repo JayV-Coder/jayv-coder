@@ -89,13 +89,17 @@ pub struct ProviderConfig {
     /// nem sincronizados: levam segredos. Só os agentes que não os recebem pela
     /// linha de comando leem isto (Cursor, Kilo Code e os gateways de API).
     #[serde(skip)] pub mcp: Vec<serde_json::Value>,
+    /// As variáveis de ambiente que o mod põe no programa dele (o Kilo Code
+    /// recebe os servidores MCP assim). Postas na hora do pedido, nunca
+    /// gravadas: levam os mesmos segredos que os servidores.
+    #[serde(skip)] pub env: Vec<(String, String)>,
 }
-impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None, mcp:vec![] } } }
+impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None, mcp:vec![], env:vec![] } } }
 impl ProviderConfig {
     /// O mesmo agente, no modo planejamento.
-    /// Sem servidores MCP: o planejamento só lê, e as ferramentas deles rodam
-    /// sem pergunta.
-    pub fn for_planning(&self)->Self { Self{args:if self.plan_args.is_empty() { self.args.clone() } else { self.plan_args.clone() },mcp:vec![],..self.clone()} }
+    /// Sem servidores MCP (nem o ambiente que os leva): o planejamento só lê,
+    /// e as ferramentas deles rodam sem pergunta.
+    pub fn for_planning(&self)->Self { Self{args:if self.plan_args.is_empty() { self.args.clone() } else { self.plan_args.clone() },mcp:vec![],env:vec![],..self.clone()} }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

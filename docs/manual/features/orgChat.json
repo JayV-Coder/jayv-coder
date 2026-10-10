@@ -5,6 +5,6 @@
   "plan": "orgChat",
   "commands": [],
   "title": "Organization general chats",
-  "summary": "Chats that work on every repository of an organization at once, with the agent, the index and the gate seeing all of them. They are listed apart from the chats of each repository project.",
-  "usage": "In the organization's environment, click Open chat at the top of Projects (or of any organization page) and choose which general chat to continue or start a new one. Without an organization folder on this computer, JayV asks for one first. Also in the command palette (Ctrl+K): General chats."
+  "summary": "Chats that work on every repository of an organization at once, with the agent, the index and the gate seeing all of them. In the organization's environment they have their own column next to the side menu, apart from the projects of each repository.",
+  "usage": "In the organization's environment, the General chats column next to the side menu lists them, newest first, on every screen: click one to continue it or + to start another. The Open chat button at the top of Projects also lets you choose or start one. Without an organization folder on this computer, JayV asks for one first. Also in the command palette (Ctrl+K): General chats."
 }

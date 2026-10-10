@@ -1,0 +1,10 @@
+{
+  "id": "llmMods",
+  "category": "agents",
+  "since": "0.93.0",
+  "plan": "customMods",
+  "commands": [],
+  "title": "LLM mods",
+  "summary": "Every integration with LLM models is a mod: Claude Code, Codex, GitHub Copilot, Cursor, Kilo Code, OpenRouter and LiteLLM come built in, and you can create your own to connect another command-line program or an API compatible with OpenAI or Anthropic. Jev picks among all of them the same way, with the same gates, routing and usage records.",
+  "usage": "Open Settings › Mods (or Ctrl+K › Create mod) and click Create mod. For a command-line mod, give the program and its command line: {model} becomes the model Jev picked and {prompt}, alone in an argument, the request (without it, the request goes through standard input); if the program writes to the project, also give the planning line, which must not. For an API mod, choose OpenAI-compatible or Anthropic, enter the address and, if it needs one, the key, which stays on this computer. Save the settings, then add or refresh the models in the mod's tab and turn on the ones Jev may use. Mods sync with the settings of the environment. In an organization's projects its LLM policy applies to every mod: when it lists the allowed agents, the mods you create stay off there."
+}

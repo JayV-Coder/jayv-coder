@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { isGateway, type AgentId, type AgentSettings } from "@/modules/core";
+import { Trash2Icon } from "lucide-react";
+import { isApiAgent, isCustomMod, type AgentSettings, type CustomModOptions } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { AGENT_LABELS, addModel, checkAgent, isAgentsDirty, refreshModels, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
+import { AGENT_LABELS, addModel, agentLabel, checkAgent, isAgentsDirty, refreshModels, removeMod, setSettingsTab, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
 import { AgentIcon, EmptyText } from "@/components/atoms";
-import { AgentProbeLine, FormField, OptionSelect, PAGE_SIZES, Pager, SettingsSection } from "@/components/molecules";
+import { AgentProbeLine, ConfirmAction, FormField, OptionSelect, PAGE_SIZES, Pager, SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -11,20 +12,31 @@ import { ClaudeOptionsForm } from "./ClaudeOptionsForm";
 import { CodexOptionsForm } from "./CodexOptionsForm";
 import { CopilotOptionsForm } from "./CopilotOptionsForm";
 import { CursorOptionsForm } from "./CursorOptionsForm";
+import { CustomModForm } from "./CustomModForm";
 import { GatewayConnection } from "./GatewayConnection";
 import { KiloOptionsForm } from "./KiloOptionsForm";
 import { McpApproveField } from "./McpApproveField";
 import { ModelRow } from "./ModelRow";
 
-export const AGENT_NAMES: Record<AgentId, string> = AGENT_LABELS;
+export const AGENT_NAMES = AGENT_LABELS;
 const TIMEOUTS = [60, 120, 300, 600, 900, 1800, 3600];
 
-/** Tudo de um agente numa aba: se ele está ligado, como é chamado, o que pode
- * fazer e com quais modelos. */
+/** Tudo de um mod numa aba: se ele está ligado, como é chamado, o que pode
+ * fazer e com quais modelos. O mod criado mostra também o que ele é (as linhas
+ * de comando ou o protocolo) e pode ser apagado daqui. */
 export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; models: ModelDraft[]; problems: Record<string, Key> }) {
   const t = useT();
-  const gateway = isGateway(agent.id);
-  const probe = useSettings((state) => state.probes[agent.id]);
+  const gateway = isApiAgent(agent);
+  const custom = isCustomMod(agent.id);
+  const options = agent.options as Partial<CustomModOptions>;
+  const name = useSettings((state) => agentLabel(agent.id, state.agents));
+  // O mod criado de linha de comando não sabe listar modelos: eles são os que
+  // a pessoa escreve.
+  const lists = !(custom && options.kind === "cli");
+  // As ferramentas MCP chegam por linha de comando, arquivo, ambiente ou pelo
+  // cliente MCP do app — este, só no protocolo da OpenAI.
+  const mcp = !custom || (options.kind === "api" && options.protocol === "openai");
+  const probe = useSettings((state) => state.probes[agent.id] ?? null);
   const [min, max] = useSettings((state) => state.timeoutRange);
   const refreshing = useSettings((state) => state.refreshing);
   const dirty = useSettings(isAgentsDirty);
@@ -44,9 +56,14 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
       <div className="flex flex-wrap items-center gap-4 rounded-xl border border-border/60 bg-card/40 px-6 py-5">
         <AgentIcon agent={agent.id} className="size-11 shrink-0" />
         <div className="min-w-0 flex-1">
-          <h3 className="text-xl font-semibold">{AGENT_NAMES[agent.id]}</h3>
-          <p className="text-sm text-muted-foreground">{t(`agent.${agent.id}.tagline`)}</p>
+          <h3 className="text-xl font-semibold break-words">{name}</h3>
+          <p className="text-sm text-muted-foreground">{custom ? t(gateway ? "mods.tagline.api" : "mods.tagline.cli") : t(`agent.${agent.id}.tagline` as Key)}</p>
         </div>
+        {custom && (
+          <ConfirmAction title={t("mods.remove.title", { name })} description={t("mods.remove.description")} confirm={t("mods.remove")} onConfirm={() => { removeMod(agent.id); setSettingsTab("mods"); }}>
+            <Button type="button" variant="outline" size="sm"><Trash2Icon aria-hidden="true" />{t("mods.remove")}</Button>
+          </ConfirmAction>
+        )}
         <label htmlFor={`${agent.id}-enabled`} className="flex items-center gap-3">
           <span className="grid text-end">
             <span className="text-sm font-medium">{t("agent.enabled")}</span>
@@ -58,12 +75,13 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
 
       <SettingsSection title={t("agent.section.connection")} description={t(gateway ? "gateway.section.description" : "agent.section.connection.description")}>
         <div className="grid gap-5 sm:grid-cols-[1fr_220px]">
-          {gateway ? <div className="sm:col-span-2"><GatewayConnection agent={agent as AgentSettings<"openrouter">} problems={problems} /></div> : <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t("agent.command.locked")} error={problems.command && t(problems.command)}>
+          {gateway ? <div className="sm:col-span-2"><GatewayConnection agent={agent} problems={problems} /></div> : <FormField label={t("agent.command")} htmlFor={`${agent.id}-command`} hint={t(custom ? "mods.command.hint" : "agent.command.locked")} error={problems.command && t(problems.command)}>
             <div className="flex gap-2">
               <Input
                 id={`${agent.id}-command`}
                 value={agent.command}
-                disabled
+                disabled={!custom}
+                onChange={(event) => updateAgent(agent.id, { command: event.target.value })}
                 spellCheck={false}
                 className="font-mono"
                 aria-invalid={problems.command ? true : undefined}
@@ -85,8 +103,9 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         {agent.id === "copilot" && <CopilotOptionsForm agent={agent as AgentSettings<"copilot">} />}
         {agent.id === "cursor" && <CursorOptionsForm agent={agent as AgentSettings<"cursor">} />}
         {agent.id === "kilo" && <KiloOptionsForm agent={agent as AgentSettings<"kilo">} />}
-        <McpApproveField agent={agent} />
-        {gateway && <p className="text-sm leading-snug text-muted-foreground">{t("gateway.textOnly")}</p>}
+        {custom && <CustomModForm agent={agent} problems={problems} />}
+        {mcp && <McpApproveField agent={agent} />}
+        {gateway && !custom && <p className="text-sm leading-snug text-muted-foreground">{t("gateway.textOnly")}</p>}
       </SettingsSection>
 
       <SettingsSection
@@ -97,8 +116,8 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
             <Button
               variant="outline"
               size="sm"
-              disabled={refreshing !== null || dirty}
-              title={dirty ? t("model.refresh.dirty") : t("model.refresh.hint")}
+              disabled={refreshing !== null || dirty || !lists}
+              title={!lists ? t("mods.refresh.none") : dirty ? t("model.refresh.dirty") : t("model.refresh.hint")}
               onClick={() => void refreshModels(agent.id)}
             >
               {refreshing === agent.id ? t("model.refresh.running") : t("model.refresh")}

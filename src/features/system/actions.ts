@@ -1,7 +1,7 @@
 import { useConnection } from "@/modules/connection";
 import { notify } from "@/modules/feedback";
 import { translate, useI18n } from "@/modules/i18n";
-import { AGENT_LABELS, CLI_AGENTS, checkAllAgents, useSettings, type ProbeState } from "@/modules/settings";
+import { agentLabel, checkAllAgents, cliAgentIds, useSettings, type ProbeState } from "@/modules/settings";
 import { diagnosticReport } from "./report";
 import { loadStatus, useSystem } from "./store";
 
@@ -24,7 +24,7 @@ export async function copySystemReport() {
   const probeOf = (probe: ProbeState) => (probe === "checking" ? null : probe);
   const text = diagnosticReport({
     status, link, pending, refused: refusals.unplaced, platform: navigator.userAgent, language: locale, at: new Date(),
-    agents: CLI_AGENTS.map((id) => ({ label: AGENT_LABELS[id], probe: configured[id] === false ? null : probeOf(probes[id]) })),
+    agents: cliAgentIds(agents).map((id) => ({ label: agentLabel(id, agents), probe: configured[id] === false ? null : probeOf(probes[id] ?? null) })),
   });
   await navigator.clipboard.writeText(text);
   notify(translate(locale, "system.copied"));

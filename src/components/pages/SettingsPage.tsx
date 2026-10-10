@@ -1,15 +1,15 @@
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { PlugIcon, SparklesIcon } from "lucide-react";
-import { COMPLEXITIES, type AgentId } from "@/modules/core";
-import { allows, SETTINGS_TAB_FEATURE, useEntitlements } from "@/modules/plans";
+import { PlugIcon, PuzzleIcon, SparklesIcon } from "lucide-react";
+import { COMPLEXITIES, isCustomMod, type AgentId } from "@/modules/core";
+import { allows, settingsTabFeature, useEntitlements } from "@/modules/plans";
 import { environmentLabel, useEnvironment } from "@/modules/environments";
 import { useT } from "@/modules/i18n";
 import { useOrganizations } from "@/modules/organizations";
-import { AGENTS, discardChanges, isDirty, problems, restoreDefaults, saveSettings, setSettingsTab, useSettings, useSettingsDirty, useSettingsTab, type SettingsTab } from "@/modules/settings";
+import { agentLabel, discardChanges, isDirty, problems, restoreDefaults, saveSettings, setSettingsTab, useAgentIds, useSettings, useSettingsDirty, useSettingsTab, type SettingsTab } from "@/modules/settings";
 import { AgentIcon, GridIcon, LoadingNote, LogoIcon } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
-import { AGENT_NAMES, AgentPanel, AppPanel, FeatureLocked, JevPanel, McpPanel, SkillsPanel } from "@/components/organisms";
+import { AgentPanel, AppPanel, FeatureLocked, JevPanel, McpPanel, ModsPanel, SkillsPanel } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,25 +24,28 @@ export function SettingsPage() {
   // Nada da tela vale antes do Salvar: o aviso e os botões olham todas as abas.
   const dirty = useSettingsDirty();
   const agentsDirty = useSettings(isDirty);
-  const tab = useSettingsTab((state) => state.tab);
+  const chosen = useSettingsTab((state) => state.tab);
+  const ids = useAgentIds();
+  // A aba de um mod que saiu do rascunho (Descartar, Apagar) volta para a lista dos mods.
+  const tab: SettingsTab = isCustomMod(chosen) && !ids.includes(chosen) ? "mods" : chosen;
   const rights = useEntitlements();
   const organizations = useOrganizations((state) => state.list);
   const environment = useEnvironment((state) => state.active);
   // A aba cujo recurso o plano não tem abre o aviso do plano, não o painel.
   const panel = (id: SettingsTab, content: ReactNode) => {
-    const feature = SETTINGS_TAB_FEATURE[id];
+    const feature = settingsTabFeature(id);
     return feature && !allows(rights, feature) ? <FeatureLocked feature={feature} /> : content;
   };
   if (!loaded || !core || !coreSnapshot) return <LoadingNote>{t("settings.loading")}</LoadingNote>;
 
-  const found = Object.fromEntries(AGENTS.map((id) => [id, problems({ agents, models }, id)])) as Record<AgentId, ReturnType<typeof problems>>;
+  const found = Object.fromEntries(ids.map((id) => [id, problems({ agents, models }, id)])) as Record<AgentId, ReturnType<typeof problems>>;
   const health = (id: AgentId): Health => {
     if (Object.keys(found[id]).length > 0) return "problem";
     return agents.find((agent) => agent.id === id)?.enabled ? "ok" : "off";
   };
   const [minBudget, maxBudget] = coreSnapshot.budgetRange;
   const coreBroken = COMPLEXITIES.some((level) => !(core.budgets[level] >= minBudget && core.budgets[level] <= maxBudget));
-  const broken = coreBroken || AGENTS.some((id) => health(id) === "problem");
+  const broken = coreBroken || ids.some((id) => health(id) === "problem");
   const noneEnabled = !agents.some((agent) => agent.enabled);
   // Agente ou Jev com problema só seguram o Salvar quando são eles que mudaram:
   // o idioma, o tema, o MCP e as skills se salvam mesmo sem agente ligado.
@@ -97,13 +100,19 @@ export function SettingsPage() {
             <SparklesIcon aria-hidden="true" className="size-5" />
             <span>{t("settings.tab.skills")}</span>
           </TabsTrigger>
+          {/* Toda integração com LLM é um mod: a aba Mods lista todos e cria os
+              novos, e cada mod tem a sua aba logo abaixo. */}
+          <TabsTrigger value="mods" data-tour="settings-mods" className="flex-none gap-2.5 px-3 py-2">
+            <PuzzleIcon aria-hidden="true" className="size-5" />
+            <span>{t("settings.tab.mods")}</span>
+          </TabsTrigger>
           <span aria-hidden="true" className="my-1.5 h-px w-full self-center bg-border" />
-          {AGENTS.map((id) => {
+          {ids.map((id) => {
             const state = health(id);
             return (
               <TabsTrigger key={id} value={id} className="flex-none gap-2.5 px-3 py-2">
-                <AgentIcon agent={id} className="size-5" />
-                <span>{AGENT_NAMES[id]}</span>
+                <AgentIcon agent={id} className="size-5 shrink-0" />
+                <span className="truncate">{agentLabel(id, agents)}</span>
                 <span
                   title={t(`settings.health.${state}`)}
                   aria-label={t(`settings.health.${state}`)}
@@ -117,7 +126,8 @@ export function SettingsPage() {
         <TabsContent value="jev" className="min-w-0"><JevPanel core={core} snapshot={coreSnapshot} /></TabsContent>
         <TabsContent value="mcp" className="min-w-0">{panel("mcp", <McpPanel />)}</TabsContent>
         <TabsContent value="skills" className="min-w-0">{panel("skills", <SkillsPanel />)}</TabsContent>
-        {AGENTS.map((id) => {
+        <TabsContent value="mods" className="min-w-0"><ModsPanel /></TabsContent>
+        {ids.map((id) => {
           const agent = agents.find((item) => item.id === id);
           return agent && (
             <TabsContent key={id} value={id} className="min-w-0">

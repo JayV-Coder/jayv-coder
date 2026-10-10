@@ -1,6 +1,5 @@
-import { AGENT_LABELS } from "@/modules/settings";
+import { agentLabel as modLabel } from "@/modules/settings";
 import type { Key } from "@/modules/i18n";
-import type { AgentId } from "@/modules/core";
 
 /** Tokens, compactos a partir de dez mil: `12,4 mil`, `1,2 mi`. */
 export function formatTokens(value: number, locale: string) {
@@ -25,11 +24,12 @@ export function formatPercent(value: number, locale: string) {
   return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: value < 0.1 && value > 0 ? 1 : 0 }).format(value);
 }
 
-/** O nome de quem gastou. O núcleo grava `claude`, `codex`, `copilot`, `cursor`, `kilo`, `openrouter`, `litellm`,
+/** O nome de quem gastou. O núcleo grava o id do mod (`claude`, `codex`,
+ * `copilot`, `cursor`, `kilo`, `openrouter`, `litellm` ou `mod-…`),
  * `http:<provedor>` e `jev:<etapa>`; a etapa do Jev é traduzida. */
 export function sourceLabel(source: string, t: (key: Key) => string) {
-  if (source in AGENT_LABELS) return AGENT_LABELS[source as AgentId];
-  if (source.startsWith("http:")) return source.slice(5) in AGENT_LABELS ? AGENT_LABELS[source.slice(5) as AgentId] : source.slice(5);
+  if (source.startsWith("http:")) return modLabel(source.slice(5));
+  if (!source.startsWith("jev:")) return modLabel(source);
   if (source.startsWith("jev:")) {
     const stage = source.slice(4);
     const key = `usage.jev.stage.${stage}` as Key;
@@ -41,8 +41,7 @@ export function sourceLabel(source: string, t: (key: Key) => string) {
 
 /** O nome do agente de um limite: os CLIs e o próprio Jev. */
 export function agentLabel(agent: string) {
-  if (agent in AGENT_LABELS) return AGENT_LABELS[agent as AgentId];
-  return agent === "jev" ? "Jev" : agent;
+  return agent === "jev" ? "Jev" : modLabel(agent);
 }
 
 /** A janela de um limite: sessão de 5 horas, semana, mês, dia do Jev, ou a
