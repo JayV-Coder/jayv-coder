@@ -1,7 +1,7 @@
 import type { AgentSettings, ClaudeOptions, Mechanism } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
 import { updateOptions, type ModelDraft } from "@/modules/settings";
-import { toggleState, useEntitlements } from "@/modules/plans";
+import { toggleState, useEntitlements, type ToggleReason } from "@/modules/plans";
 import { CheckList, FormField, OptionSelect, ToggleRow } from "@/components/molecules";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,7 +29,7 @@ export function ClaudeOptionsForm({ agent, models, problems }: { agent: AgentSet
   const symbolsOff = options.safeMode && !symbols.disabled;
   // `default` é o nome antigo do `manual`.
   const mode: Mode = options.permissionMode === "default" ? "manual" : options.permissionMode;
-  const hint = (reason: "required" | "outside" | null, text: string) => (reason ? `${t(reason === "required" ? "plans.required" : "plans.jevLocked")} · ${text}` : text);
+  const hint = (reason: ToggleReason, text: string) => (reason ? `${t(reason === "required" ? "plans.required" : reason === "mod" ? "mods.feature.offHint" : "plans.jevLocked")} · ${text}` : text);
 
   return (
     <div className="grid gap-5 sm:grid-cols-2">

@@ -29,7 +29,7 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
   // que estiver gravado.
   const gated = (feature: FeatureKey, checked: boolean, hint: string) => {
     const state = toggleState(entitlements, feature, checked);
-    const why = state.reason === "required" ? t("plans.required") : state.reason === "outside" ? t("plans.jevLocked") : null;
+    const why = state.reason === "required" ? t("plans.required") : state.reason === "outside" ? t("plans.jevLocked") : state.reason === "mod" ? t("mods.feature.offHint") : null;
     return { checked: state.checked, disabled: state.disabled, hint: why ? `${why} · ${hint}` : hint };
   };
   const cacheFloor = locks(entitlements, "contextCache") ? MIN_CACHE_TTL : 0;

@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
+vi.mock("@/modules/site", () => ({ SITE_URL: "https://site.test", dashboardUrl: (path = "") => `https://site.test/dashboard${path}`, openDashboard: vi.fn(async () => undefined), openSite: vi.fn(async () => undefined) }));
 
 const { paletteCommands } = await import("./paletteCommands");
 const { translate } = await import("@/modules/i18n");
@@ -78,12 +79,36 @@ describe("paletteCommands", () => {
     const options = { name: "Local", kind: "api", args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "http://localhost:8080/v1", keyRequired: false, approveMcps: false, hasKey: false };
     useSettings.setState({ agents: [{ id: "mod-local", enabled: true, command: "", timeout: 300, options }] as never });
     const found = paletteCommands(context());
-    for (const id of ["settings-mods", "mods-create", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(found.map((command) => command.id)).toContain(id);
+    for (const id of ["settings-mods", "mods-create", "mods-site", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(found.map((command) => command.id)).toContain(id);
     expect(found.find((command) => command.id === "settings-mod-local")?.label).toBe("Settings › Local");
     const locked = ids({ rights: { features: new Set<string>(["mcp"]), locked: new Set<string>() } });
     for (const id of ["mods-create", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(locked).not.toContain(id);
     expect(locked).toContain("settings-mods");
+    expect(locked).toContain("mods-site");
     useSettings.setState({ agents: [] });
+  });
+
+  it("turns each feature mod on or off and installs the templates of the catalog", async () => {
+    const { useMods } = await import("@/modules/mods");
+    const texts = (en: string) => ({ en, "pt-BR": en });
+    useMods.setState({
+      appVersion: "0.94.0", states: { stats: false },
+      catalog: [
+        { id: "stats", kind: "feature", category: "project", plan: "stats", defaultOn: true, minApp: "0.94.0", title: texts("Statistics"), summary: texts("Charts.") },
+        { id: "ollama", kind: "template", category: "agents", plan: "customMods", minApp: "0.94.0", title: texts("Ollama"), summary: texts("Local."), template: { kind: "api", protocol: "openai", baseUrl: "http://localhost:11434/v1", keyRequired: false } },
+        { id: "future", kind: "template", category: "agents", plan: "customMods", minApp: "9.0.0", title: texts("Future"), summary: texts("Later."), template: { kind: "api", protocol: "openai", baseUrl: "http://localhost:1/v1", keyRequired: false } },
+      ],
+    });
+    const found = paletteCommands(context());
+    expect(found.find((command) => command.id === "mod-toggle-stats")?.label).toBe("Turn on mod: Statistics");
+    expect(found.map((command) => command.id)).not.toContain("mod-toggle-mcp");
+    expect(found.find((command) => command.id === "mod-install-ollama")?.label).toBe("Install mod: Ollama");
+    expect(found.map((command) => command.id)).not.toContain("mod-install-future");
+    const locked = ids({ rights: { features: new Set<string>(), locked: new Set<string>(["stats"]) } });
+    expect(locked).not.toContain("mod-toggle-stats");
+    expect(locked).not.toContain("mod-install-ollama");
+    useMods.setState({ catalog: null, states: {} });
+    expect(ids()).toContain("mod-toggle-mcp");
   });
 
   it("has unique ids and a label for every command", () => {

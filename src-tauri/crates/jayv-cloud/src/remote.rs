@@ -84,6 +84,9 @@ pub trait Backend:Send+Sync {
     /// (`rpc/my_org_extensions`: servidores MCP e skills), linha a linha como
     /// o servidor devolve. `None`: este backend não fala disso.
     async fn org_extensions(&self)->Result<Option<Vec<Value>>,RemoteError> { Ok(None) }
+    /// O catálogo dos mods (função `mods` do Supabase, que lê o repositório
+    /// `jayv-coder-mods`), como ela devolve. `None`: este backend não fala dele.
+    async fn mod_catalog(&self)->Result<Option<Value>,RemoteError> { Ok(None) }
 }
 
 pub struct Remote {
@@ -181,6 +184,12 @@ impl Remote {
         self.request(Method::POST,"rpc/my_features").json(&json!({})).build()
     }
 
+    /// O catálogo é público: vai só com a chave do projeto, sem o token de
+    /// quem está logado.
+    pub fn mod_catalog_request(&self)->reqwest::Result<Request> {
+        self.http.request(Method::GET,format!("{}/functions/v1/mods/catalog",self.base)).header("apikey",&self.key).bearer_auth(&self.key).build()
+    }
+
     async fn send(&self,request:reqwest::Result<Request>)->Result<String,RemoteError> {
         let request=request.map_err(|error|RemoteError::Rejected{status:0,detail:error.to_string()})?;
         let response=self.http.execute(request).await.map_err(|error|RemoteError::Offline(error.to_string()))?;
@@ -271,6 +280,10 @@ impl Backend for Remote {
 
     async fn org_extensions(&self)->Result<Option<Vec<Value>>,RemoteError> {
         self.get(self.org_extensions_request()).await.map(Some)
+    }
+
+    async fn mod_catalog(&self)->Result<Option<Value>,RemoteError> {
+        self.get(self.mod_catalog_request()).await.map(Some)
     }
 }
 
@@ -414,6 +427,12 @@ mod tests {
         let request=remote().org_extensions_request().unwrap();
         assert_eq!((request.method(),request.url().path()),(&Method::POST,"/rest/v1/rpc/my_org_extensions"));
         assert_eq!(request.headers()["Authorization"],"Bearer jwt");
+    }
+
+    #[test] fn the_mod_catalog_comes_from_the_public_function() {
+        let request=remote().mod_catalog_request().unwrap();
+        assert_eq!((request.method(),request.url().path()),(&Method::GET,"/functions/v1/mods/catalog"));
+        assert_ne!(request.headers()["Authorization"],"Bearer jwt","o catálogo é público: o token de quem usa não vai");
     }
 
     #[tokio::test] async fn without_network_the_error_is_offline() {

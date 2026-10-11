@@ -3,16 +3,18 @@ import { useShallow } from "zustand/react/shallow";
 import {
   bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type BuiltInAgentId, type CustomAgentId, type CustomModOptions,
   type GatewayCheck, type KnownModel, CUSTOM_MOD_PREFIX, editsProject, isApiAgent, isCustomMod, isGateway,
-  type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
+  type CoreSettings, type CoreSnapshot, type Expertise, type ModManifest, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { setLocale, syncLanguage, t, useI18n, type Key, type Locale } from "@/modules/i18n";
 import { discardMcp, isMcpDirty, loadMcp, saveMcpChanges, useMcp } from "@/modules/mcp";
+import { discardMods, isModsDirty, loadMods, modText, restoreModDefaults, saveModChanges, useMods } from "@/modules/mods";
+import { useEntitlements } from "@/modules/plans";
 import { discardSkills, isSkillsDirty, loadSkills, saveSkillChanges, useSkills } from "@/modules/skills";
 import { setThemePreference, useTheme, type ThemePreference } from "@/modules/theme";
 import { setAutoTours, useTutorial } from "@/modules/tutorial";
 import { setInstallOnLaunch, useUpdate } from "@/modules/updates";
-import { lineProblem, modId, splitLine } from "./mods";
+import { lineProblem } from "./mods";
 
 /** Os mods que vêm com o app, na ordem das abas. Os criados vêm depois, pelo
  * nome (`agentIds`). */
@@ -92,11 +94,12 @@ export function agentLabel(id: string, agents: AgentSettings[] = useSettings.get
   return name || id.slice(CUSTOM_MOD_PREFIX.length);
 }
 
-/** Os mods na ordem das abas: os do app e depois os criados, pelo nome. */
-export function agentIds(agents: AgentSettings[]): AgentId[] {
+/** Os mods na ordem das abas: os do app e depois os criados, pelo nome. O
+ * motor do app que saiu do catálogo de mods (`hidden`) não tem aba. */
+export function agentIds(agents: AgentSettings[], hidden: ReadonlySet<string> = useEntitlements.getState().disabled): AgentId[] {
   const customs = agents.filter((agent) => isCustomMod(agent.id)).map((agent) => agent.id)
     .sort((a, b) => agentLabel(a, agents).localeCompare(agentLabel(b, agents)) || a.localeCompare(b));
-  return [...AGENTS, ...customs];
+  return [...AGENTS.filter((id) => !hidden.has(id)), ...customs];
 }
 
 /** Os mods que são um programa na máquina: os do app e os criados de linha
@@ -134,7 +137,8 @@ export function useSettingsDirty() {
   const live = useAppPrefsLive();
   const mcp = useMcp(isMcpDirty);
   const skills = useSkills(isSkillsDirty);
-  return settings || mcp || skills || Object.keys(changedPrefs(prefs, live)).length > 0;
+  const mods = useMods(isModsDirty);
+  return settings || mcp || skills || mods || Object.keys(changedPrefs(prefs, live)).length > 0;
 }
 
 function useAppPrefsLive(): AppPrefs {
@@ -172,6 +176,7 @@ export function restoreDefaults() {
   const defaults = useSettings.getState().coreSnapshot?.defaults;
   if (defaults) useSettings.setState({ core: defaults });
   updatePrefs(DEFAULT_PREFS);
+  restoreModDefaults();
 }
 
 function apply(snapshot: SettingsSnapshot) {
@@ -183,8 +188,11 @@ function apply(snapshot: SettingsSnapshot) {
   });
 }
 
-/** Os mods na ordem das abas, acompanhando as configurações. */
-export const useAgentIds = () => useSettings(useShallow((state) => agentIds(state.agents)));
+/** Os mods na ordem das abas, acompanhando as configurações e o catálogo. */
+export function useAgentIds() {
+  const hidden = useEntitlements((state) => state.disabled);
+  return useSettings(useShallow((state) => agentIds(state.agents, hidden)));
+}
 
 export async function loadSettings() {
   try {
@@ -255,45 +263,32 @@ export function addModel(agent: AgentId) {
   useSettings.setState({ models: [...models, model] });
 }
 
-/** O que o formulário de Criar mod junta. As linhas vão como a pessoa as
- * escreveu; `model` é o primeiro modelo (os outros se somam na aba do mod). */
-export interface ModDraft {
-  name: string;
-  kind: CustomModOptions["kind"];
-  command: string;
-  args: string;
-  planArgs: string;
-  edits: boolean;
-  protocol: CustomModOptions["protocol"];
-  baseUrl: string;
-  apiKey: string;
-  keyRequired: boolean;
-  model: string;
-}
-
-export const EMPTY_MOD: ModDraft = { name: "", kind: "cli", command: "", args: "", planArgs: "", edits: false, protocol: "openai", baseUrl: "", apiKey: "", keyRequired: false, model: "" };
-
 /** Quantos mods criados um ambiente aceita (o `MAX_MODS` do núcleo). */
 export const MAX_MODS = 20;
 
-/** Cria o mod no rascunho, ligado e com o primeiro modelo, e devolve o id:
- * como o resto da tela, ele só vale depois do Salvar. */
-export function createMod(draft: ModDraft): CustomAgentId {
+/** O id do mod pronto instalado: `mod-<id do catálogo>`, o mesmo em toda
+ * máquina e no site, para a aba Mods saber que ele já está instalado. */
+export const templateAgentId = (manifest: Pick<ModManifest, "id">): CustomAgentId => `${CUSTOM_MOD_PREFIX}${manifest.id}` as CustomAgentId;
+
+/** Instala um mod pronto do catálogo como um mod de quem usa: ligado, com a
+ * definição do catálogo e os modelos que ele sugere. Como o resto da tela, só
+ * vale depois do Salvar; depois disso o mod é de quem instalou e se edita no
+ * site ou na aba dele. Nulo quando ele já está instalado ou não tem definição. */
+export function installTemplate(manifest: ModManifest, locale: string = useI18n.getState().locale): CustomAgentId | null {
+  const template = manifest.template;
   const state = useSettings.getState();
-  const id = modId(draft.name, state.agents.map((agent) => agent.id));
-  const cli = draft.kind === "cli";
-  const apiKey = draft.apiKey.trim();
+  const id = templateAgentId(manifest);
+  if (!template || state.agents.some((agent) => agent.id === id)) return null;
+  const cli = template.kind === "cli";
   const options: CustomModOptions = {
-    name: draft.name.trim(), kind: draft.kind,
-    args: cli ? splitLine(draft.args) : [], planArgs: cli ? splitLine(draft.planArgs) : [], edits: cli && draft.edits,
-    protocol: draft.protocol, baseUrl: cli ? "" : draft.baseUrl.trim(), keyRequired: !cli && draft.keyRequired,
-    approveMcps: false, hasKey: false, ...(!cli && apiKey ? { apiKey } : {}),
+    name: modText(manifest.title, locale).slice(0, 40), kind: template.kind,
+    args: cli ? template.args : [], planArgs: cli ? template.planArgs ?? [] : [], edits: cli && (template.edits ?? false),
+    protocol: cli ? "openai" : template.protocol, baseUrl: cli ? "" : template.baseUrl, keyRequired: !cli && template.keyRequired,
+    approveMcps: false, hasKey: false,
   };
-  const agent: AgentSettings = { id, enabled: true, command: cli ? draft.command.trim() : "", timeout: 300, options };
-  const name = draft.model.trim();
-  const models: ModelDraft[] = name
-    ? [{ uid: uid(), agent: id, model: name, enabled: true, capabilities: editsProject(agent) ? ["chat", "code", "reasoning", "tools"] : ["chat", "reasoning"], contextWindow: 128000, costClass: "medium", speed: "medium" }]
-    : [];
+  const agent: AgentSettings = { id, enabled: true, command: cli ? template.command : "", timeout: 300, options };
+  const capabilities: AgentModel["capabilities"] = editsProject(agent) ? ["chat", "code", "reasoning", "tools"] : ["chat", "reasoning"];
+  const models: ModelDraft[] = (template.models ?? []).map((model) => ({ uid: uid(), agent: id, model, enabled: true, capabilities, contextWindow: 128000, costClass: "medium", speed: "medium" }));
   useSettings.setState({ agents: [...state.agents, agent], models: [...state.models, ...models] });
   return id;
 }
@@ -424,7 +419,7 @@ export async function saveSettings() {
   try {
     if (isAgentsDirty(state)) apply(await commands.saveSettings(payload(state)));
     if (isCoreDirty(state) && state.core) applyCore(await commands.saveCoreSettings(state.core));
-    if (!(await saveMcpChanges()) || !(await saveSkillChanges())) return;
+    if (!(await saveMcpChanges()) || !(await saveSkillChanges()) || !(await saveModChanges())) return;
     const prefs = changedPrefs(useSettings.getState().prefs, livePrefs());
     useSettings.setState({ prefs: {} });
     // O aviso sai antes de trocar o idioma: depois, as mensagens ainda estão chegando.
@@ -482,6 +477,7 @@ export function discardChanges() {
   void loadSettings();
   discardMcp();
   discardSkills();
+  discardMods();
 }
 
 /** Ao abrir a tela: relê cada parte que não tem mudança pendente. Voltar à
@@ -491,6 +487,7 @@ function refreshSettings() {
   if (!state.loaded || !isDirty(state)) void loadSettings();
   if (!isMcpDirty(useMcp.getState())) void loadMcp();
   if (!isSkillsDirty(useSkills.getState())) void loadSkills();
+  void loadMods();
 }
 
 export function connectSettings() {

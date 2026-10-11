@@ -1,13 +1,29 @@
-import { LockIcon } from "lucide-react";
-import type { FeatureKey } from "@/modules/plans";
+import { LockIcon, PuzzleIcon } from "lucide-react";
+import { modOff, useEntitlements, type FeatureKey } from "@/modules/plans";
 import { useT, type Key } from "@/modules/i18n";
 import { navigate } from "@/modules/navigation";
+import { openSettingsTab } from "@/modules/settings";
 import { Button } from "@/components/ui/button";
 
 /** O lugar de uma tela cujo recurso não está no plano de quem usa (ou que o
- * admin desligou): o que ele faz e o caminho para os planos. */
+ * admin desligou): o que ele faz e o caminho para os planos. Quando é o mod
+ * que está desligado (ou fora do catálogo), o caminho é a aba Mods. */
 export function FeatureLocked({ feature }: { feature: FeatureKey }) {
   const t = useT();
+  const byMod = useEntitlements((state) => modOff(state, feature) && (state.features === null || state.features.has(feature)));
+  if (byMod) {
+    return (
+      <div className="h-full overflow-y-auto px-5">
+        <div className="mx-auto mt-16 grid max-w-md justify-items-center gap-3 text-center">
+          <span className="grid size-10 place-items-center rounded-full bg-muted text-muted-foreground"><PuzzleIcon aria-hidden="true" className="size-5" /></span>
+          <h2 className="text-h3 font-semibold">{t(`feature.${feature}.title` as Key)}</h2>
+          <p className="text-sm text-muted-foreground">{t(`feature.${feature}.detail` as Key)}</p>
+          <p className="text-sm text-muted-foreground">{t("mods.feature.off")}</p>
+          <Button onClick={() => openSettingsTab("mods")}>{t("mods.open")}</Button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="h-full overflow-y-auto px-5">
       <div className="mx-auto mt-16 grid max-w-md justify-items-center gap-3 text-center">

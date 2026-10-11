@@ -72,7 +72,7 @@ export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
         <span className="grid gap-1">
           <strong className="text-sm">{t("expertise.lean")}</strong>
           <span className="text-xs text-muted-foreground">
-            {lean.reason ? `${t(lean.reason === "required" ? "plans.required" : "plans.jevLocked")} · ` : ""}{t("expertise.lean.hint")}
+            {lean.reason ? `${t(lean.reason === "required" ? "plans.required" : lean.reason === "mod" ? "mods.feature.offHint" : "plans.jevLocked")} · ` : ""}{t("expertise.lean.hint")}
           </span>
         </span>
       </Label>

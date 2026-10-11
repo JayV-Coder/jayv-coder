@@ -66,6 +66,7 @@ export const TOURS: Tour[] = [
       { feature: "kiloCode" },
       { feature: "gatewayProviders" },
       { feature: "llmMods", target: "settings-mods" },
+      { feature: "modCatalog", target: "settings-mods-features" },
       { feature: "adaptiveRouting" },
       { feature: "agentSessions" },
       { feature: "secondOpinion" },

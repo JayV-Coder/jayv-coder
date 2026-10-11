@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
-  ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
+  ModsSnapshot, ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
 
@@ -61,6 +61,8 @@ export const commands = {
   saveSettings: (settings: LlmSettings) => invoke<SettingsSnapshot>("save_settings", { settings }),
   getCoreSettings: () => invoke<CoreSnapshot>("get_core_settings"),
   saveCoreSettings: (settings: CoreSettings) => invoke<CoreSnapshot>("save_core_settings", { settings }),
+  getMods: () => invoke<ModsSnapshot>("get_mods"),
+  saveModStates: (states: Record<string, boolean>) => invoke<ModsSnapshot>("save_mod_states", { states }),
   saveExpertise: (level: Expertise) => invoke<CoreSnapshot>("save_expertise", { level }),
   saveLeanCode: (enabled: boolean) => invoke<CoreSnapshot>("save_lean_code", { enabled }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),

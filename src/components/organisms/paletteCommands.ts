@@ -5,16 +5,17 @@ import { showChanges } from "@/modules/changelog";
 import { featureActions, requestIntent, type Shortcut } from "@/modules/commands";
 import { cancelTurn, openChatFind } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
-import { setLocale, type Key, type LocaleOption } from "@/modules/i18n";
-import { environmentOptions, organizationOf, switchEnvironment } from "@/modules/environments";
+import { setLocale, useI18n, type Key, type LocaleOption } from "@/modules/i18n";
+import { environmentOptions, organizationOf, switchEnvironment, useEnvironment } from "@/modules/environments";
 import { setLivePanel, useLive } from "@/modules/live";
 import { navigate } from "@/modules/navigation";
 import { clearRead, markAllRead } from "@/modules/notifications";
 import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
-import { allows, settingsTabFeature } from "@/modules/plans";
-import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
+import { allows, inPlan, locks, settingsTabFeature } from "@/modules/plans";
+import { FEATURE_MODS, findMod, modOn, modsSitePath, modText, presence, setModOn, templates, usable, useMods } from "@/modules/mods";
+import { agentIds, agentLabel, checkGateway, discardChanges, installTemplate, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, templateAgentId, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -155,9 +156,30 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     if (tabFeature && !can(tabFeature)) continue;
     all.push({ id: `settings-${tab}`, group: settings, label: `${t("nav.settings")}${SEP}${label(t)}`, run: () => openSettingsTab(tab) });
   }
-  // Criar mod: abre a aba Mods com o formulário.
-  if (can("customMods") && mods.filter(isCustomMod).length < MAX_MODS) {
-    all.push({ id: "mods-create", group: settings, label: t("mods.create"), run: () => { openSettingsTab("mods"); requestIntent("createMod"); } });
+  // Criar mod mora no site: abre a página de mods do painel no ambiente aberto.
+  const environment = useEnvironment.getState().active;
+  if (SITE_URL) {
+    if (can("customMods") && mods.filter(isCustomMod).length < MAX_MODS) {
+      all.push({ id: "mods-create", group: settings, label: t("mods.create"), run: () => void openDashboard(modsSitePath(environment, true)).catch(reportError) });
+    }
+    all.push({ id: "mods-site", group: settings, label: t("mods.site"), run: () => void openDashboard(modsSitePath(environment)).catch(reportError) });
+  }
+  // Ligar e desligar cada recurso que é mod, e instalar os mods prontos do
+  // catálogo: abrem a aba Mods e mudam o rascunho; o Salvar grava.
+  const locale = useI18n.getState().locale;
+  const modsState = useMods.getState();
+  for (const id of FEATURE_MODS) {
+    if (!inPlan(ctx.rights, id) || locks(ctx.rights, id) || !["unknown", "present"].includes(presence(modsState, "feature", id))) continue;
+    const on = modOn(modsState, id);
+    const manifest = findMod(modsState.catalog, "feature", id);
+    const name = manifest ? modText(manifest.title, locale) : t(`feature.${id}.title` as Key);
+    all.push({ id: `mod-toggle-${id}`, group: settings, label: t(on ? "palette.modOff" : "palette.modOn", { name }), run: () => { openSettingsTab("mods"); setModOn(id, !on); } });
+  }
+  if (can("customMods")) {
+    for (const manifest of templates(modsState.catalog)) {
+      if (!usable(manifest, modsState.appVersion) || agents.some((agent) => agent.id === templateAgentId(manifest)) || mods.filter(isCustomMod).length >= MAX_MODS) continue;
+      all.push({ id: `mod-install-${manifest.id}`, group: settings, label: t("palette.modInstall", { name: modText(manifest.title, locale) }), run: () => { openSettingsTab("mods"); installTemplate(manifest, locale); } });
+    }
   }
   if (ctx.settingsDirty) {
     all.push(

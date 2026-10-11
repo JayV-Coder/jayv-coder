@@ -13,6 +13,10 @@
 //! O núcleo vem também da lista embutida (`CORE`): sem cache, com o servidor
 //! antigo ou com um cache ilegível, ele continua travado. Sem cache, o resto
 //! vale como antes — quem já usava um recurso não o perde por estar offline.
+//!
+//! Os mods (`crate::mods`) apertam por cima do plano: o recurso cujo mod está
+//! desligado, ou fora do catálogo, vale como fora do plano. O travado continua
+//! ligado — quem trava é o plano, e o mod não destrava nem desliga o núcleo.
 
 use crate::core_settings::CoreSettings;
 use crate::llm::{AgentId, ClaudeOptions, LlmSettings};
@@ -68,13 +72,17 @@ pub const MIN_CACHE_TTL:u64=300;
 pub use crate::cloud::remote::{PlanLimits, RemoteFeatures};
 
 /// Os recursos que valem agora. `known` nulo: nenhuma lista desceu ainda, e o
-/// que não é núcleo vale como antes.
+/// que não é núcleo vale como antes. `disabled`: o que os mods desligam (os
+/// recursos e os motores de LLM do app).
 #[derive(Debug,Clone,PartialEq)]
-pub struct Entitlements { known:Option<BTreeSet<String>>, locked:BTreeSet<String>, defaults:BTreeMap<String,bool>, limits:PlanLimits }
+pub struct Entitlements { known:Option<BTreeSet<String>>, locked:BTreeSet<String>, defaults:BTreeMap<String,bool>, limits:PlanLimits, disabled:BTreeSet<String> }
 
 impl Default for Entitlements {
-    fn default()->Self { Self{known:None,locked:core(),defaults:BTreeMap::new(),limits:PlanLimits::default()} }
+    fn default()->Self { Self{known:None,locked:core(),defaults:BTreeMap::new(),limits:PlanLimits::default(),disabled:BTreeSet::new()} }
 }
+
+/// Os motores de LLM do app, que o catálogo de mods liga.
+fn builtin_agents()->Vec<&'static str> { AgentId::ALL.iter().map(|agent|agent.key()).collect() }
 
 fn core()->BTreeSet<String> { CORE.iter().map(|key|key.to_string()).collect() }
 
@@ -91,7 +99,13 @@ impl Entitlements {
         entitlements
     }
 
-    pub fn allows(&self,feature:&str)->bool { self.locks(feature)||self.known.as_ref().is_none_or(|known|known.contains(feature)) }
+    pub fn allows(&self,feature:&str)->bool { self.locks(feature)||(self.known.as_ref().is_none_or(|known|known.contains(feature))&&!self.disabled.contains(feature)) }
+
+    /// Com o que os mods desligam (`crate::mods::disabled`).
+    pub fn with_disabled(mut self,disabled:BTreeSet<String>)->Self { self.disabled=disabled; self }
+
+    /// O que os mods desligam.
+    pub fn disabled(&self)->&BTreeSet<String> { &self.disabled }
 
     /// Ligado sem interruptor.
     pub fn locks(&self,feature:&str)->bool { self.locked.contains(feature) }
@@ -141,7 +155,8 @@ impl Entitlements {
         let mut settings=settings.clone();
         for agent in settings.agents.iter_mut() {
             let included=agent.id.module().feature().is_none_or(|feature|self.allows(feature));
-            if !included { agent.enabled=false; }
+            // O motor do app fora do catálogo de mods sai do roteamento.
+            if !included||self.disabled.contains(agent.id.key()) { agent.enabled=false; }
         }
         for agent in settings.agents.iter_mut().filter(|agent|agent.id==AgentId::Claude) {
             let Ok(mut options)=serde_json::from_value::<ClaudeOptions>(agent.options.clone()) else { continue };
@@ -181,6 +196,7 @@ struct Extra { locked:Vec<String>, defaults:BTreeMap<String,bool>, limits:PlanLi
 /// A coluna nova do cache, no banco que já existia.
 pub fn ensure(connection:&Connection)->Result<()> {
     connection.execute_batch(SCHEMA)?;
+    connection.execute_batch(crate::mods::CACHE)?;
     let present:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('plan_features') WHERE name='extra')",[],|row|row.get(0))?;
     if !present { connection.execute("ALTER TABLE plan_features ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'",[])?; }
     Ok(())
@@ -199,13 +215,15 @@ pub fn replace(connection:&Connection,remote:&RemoteFeatures)->Result<()> {
 /// formato novo não pode liberar o que o plano não tem. O núcleo vale sempre.
 pub fn load(connection:&Connection)->Result<Entitlements> {
     let raw:Option<(String,String)>=connection.query_row("SELECT features,extra FROM plan_features WHERE id=1",[],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
+    // Os mods que não se leem não desligam nada: vale o plano, como antes deles.
+    let disabled=crate::mods::disabled_in(connection,&builtin_agents()).unwrap_or_else(|error|{ eprintln!("mods: {error:#}"); BTreeSet::new() });
     Ok(match raw {
         None=>Entitlements::default(),
         Some((features,extra))=>{
             let extra=serde_json::from_str::<Extra>(&extra).unwrap_or_default();
             Entitlements::from_remote(&RemoteFeatures{plan:None,features:serde_json::from_str::<Vec<String>>(&features).unwrap_or_default(),locked:extra.locked,defaults:extra.defaults,limits:extra.limits})
         }
-    })
+    }.with_disabled(disabled))
 }
 
 #[cfg(test)] mod tests {
@@ -242,6 +260,36 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         assert_eq!(with(Some(3)).concurrent_turns(),3);
         assert_eq!(with(Some(0)).concurrent_turns(),1);
         assert_eq!(with(Some(50)).concurrent_turns(),8);
+    }
+
+    /// O mod desligado (ou fora do catálogo) vale como fora do plano; o que o
+    /// plano trava continua ligado, e o motor de LLM fora do catálogo sai do
+    /// roteamento.
+    #[test] fn mods_tighten_on_top_of_the_plan() {
+        let connection=database();
+        connection.execute_batch("CREATE TABLE account_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);").expect("conta");
+        replace(&connection,&RemoteFeatures{locked:vec![PLAN_FIRST.into()],..remote(&[SECOND_OPINION,"stats",MCP])}).expect("plano");
+        let mut mods:Vec<serde_json::Value>=crate::mods::FEATURE_MODS.iter().filter(|id|**id!=MCP)
+            .map(|id|serde_json::json!({"id":id,"kind":"feature","defaultOn":true,"title":{},"summary":{}})).collect();
+        mods.push(serde_json::json!({"id":"claude","kind":"llm","title":{},"summary":{}}));
+        assert!(crate::mods::replace(&connection,&serde_json::json!({"schema":1,"mods":mods})).expect("catálogo"));
+        crate::mods::save_states(&connection,&BTreeMap::from([(SECOND_OPINION.to_string(),false),(PLAN_FIRST.to_string(),false)])).expect("escolhas");
+        let entitlements=load(&connection).expect("lê");
+        assert!(!entitlements.allows(SECOND_OPINION),"desligado na aba Mods");
+        assert!(entitlements.allows(PLAN_FIRST),"travado pelo plano: o mod não desliga");
+        assert!(!entitlements.allows(MCP),"fora do catálogo");
+        assert!(entitlements.allows("stats"));
+        assert!(entitlements.allows(SECRET_REDACTION),"o núcleo não é mod");
+        let agent=|id|crate::llm::AgentSettings{id,enabled:true,command:String::new(),timeout:300,options:serde_json::json!({})};
+        let settings=LlmSettings{agents:vec![agent(AgentId::Claude),agent(AgentId::Codex)],models:vec![]};
+        assert_eq!(entitlements.apply_llm(&settings).agents.iter().map(|agent|agent.enabled).collect::<Vec<_>>(),[true,false],"o Codex saiu do catálogo");
+    }
+
+    /// Sem catálogo e sem escolha nenhuma, os mods não mudam nada.
+    #[test] fn without_mods_the_plan_alone_decides() {
+        let connection=database();
+        assert!(load(&connection).expect("lê").disabled().is_empty());
+        assert_eq!(Entitlements::default().with_disabled(BTreeSet::from(["stats".to_string()])).allows("stats"),false);
     }
 
     #[test] fn without_a_list_everything_is_allowed() {
