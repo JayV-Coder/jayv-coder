@@ -60,6 +60,7 @@ pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,Re
     refresh_policies(store,backend).await;
     refresh_features(store,backend).await;
     refresh_org_extensions(store,backend).await;
+    refresh_mod_catalog(store,backend).await;
     Ok(result)
 }
 
@@ -96,6 +97,21 @@ async fn refresh_features(store:&SharedWorkspace,backend:&dyn Backend) {
         Ok(Some(remote))=>{ if let Err(error)=store.lock().await.replace_entitlements(&remote) {eprintln!("recursos do plano: {error:#}");} }
         Ok(None)=>{}
         Err(error)=>eprintln!("recursos do plano: {error}"),
+    }
+}
+
+/// O catálogo dos mods desce como os recursos do plano: falhar (sem rede, a
+/// função fora do ar, um catálogo de formato que esta versão não entende) não
+/// para a volta, e o catálogo anterior continua valendo.
+async fn refresh_mod_catalog(store:&SharedWorkspace,backend:&dyn Backend) {
+    match backend.mod_catalog().await {
+        Ok(Some(value))=>match store.lock().await.replace_mod_catalog(&value) {
+            Ok(true)=>{}
+            Ok(false)=>eprintln!("mods: catálogo em formato desconhecido; fica o anterior"),
+            Err(error)=>eprintln!("mods: {error:#}"),
+        },
+        Ok(None)=>{}
+        Err(error)=>eprintln!("mods: {error}"),
     }
 }
 
@@ -318,6 +334,8 @@ mod tests {
         policies:Plain<Option<Result<Vec<crate::policy::RemotePolicy>,RemoteError>>>,
         /// O que `my_org_extensions` devolve, linha a linha.
         extensions:Plain<Option<Result<Vec<Value>,RemoteError>>>,
+        /// O que a função `mods` devolve.
+        catalog:Plain<Option<Result<Value,RemoteError>>>,
     }
 
     impl FakeBackend {
@@ -376,6 +394,9 @@ mod tests {
 
         async fn org_extensions(&self)->Result<Option<Vec<Value>>,RemoteError> {
             self.extensions.lock().unwrap().clone().transpose()
+        }
+        async fn mod_catalog(&self)->Result<Option<Value>,RemoteError> {
+            self.catalog.lock().unwrap().clone().transpose()
         }
     }
 
@@ -483,6 +504,26 @@ mod tests {
         *backend.extensions.lock().unwrap()=Some(Ok(vec![]));
         round(&store,&backend).await.expect("volta");
         assert!(store.lock().await.chat_org_extensions(&chat).unwrap().0.is_empty(),"o que a organização tirou sai");
+    }
+
+    /// O catálogo dos mods desce na volta e fica em cache; a função fora do ar
+    /// ou um formato que esta versão não entende não derrubam a volta nem
+    /// trocam o catálogo que ela já tinha.
+    #[tokio::test] async fn the_round_brings_the_mod_catalog_and_keeps_the_last_good_one() {
+        let store=shared(WorkspaceStore::in_memory().unwrap());
+        let backend=FakeBackend::default();
+        let stats=json!({"id":"stats","kind":"feature","defaultOn":true,"title":{"en":"Statistics"},"summary":{"en":"Charts."}});
+        *backend.catalog.lock().unwrap()=Some(Ok(json!({"schema":1,"mods":[stats]})));
+        round(&store,&backend).await.expect("volta");
+        let (mods,_)=store.lock().await.mod_catalog().unwrap().expect("catálogo em cache");
+        assert_eq!(mods.iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["stats"]);
+        assert!(store.lock().await.entitlements().unwrap().disabled().contains("mcp"),"o recurso fora do catálogo sai");
+
+        *backend.catalog.lock().unwrap()=Some(Err(RemoteError::Server(502)));
+        round(&store,&backend).await.expect("a função fora do ar não derruba a volta");
+        *backend.catalog.lock().unwrap()=Some(Ok(json!({"schema":99,"mods":[]})));
+        round(&store,&backend).await.expect("formato novo");
+        assert_eq!(store.lock().await.mod_catalog().unwrap().expect("cache").0.len(),1,"fica o último catálogo bom");
     }
 
     #[tokio::test] async fn offline_the_queue_stays_whole() {

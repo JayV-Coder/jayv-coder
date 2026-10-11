@@ -15,6 +15,7 @@ import { connectSettings } from "@/modules/settings";
 import { connectUpdates, useUpdate } from "@/modules/updates";
 import { connectTutorial } from "@/modules/tutorial";
 import { connectLive } from "@/modules/live";
+import { clearMods, connectMods, loadMods } from "@/modules/mods";
 import { connectTray } from "@/modules/tray";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
 import { connectEnvironments, finishSwitch, loadEnvironment } from "@/modules/environments";
@@ -59,7 +60,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectEnvironments(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray(), connectTutorial(tutorialBlocked)];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectEnvironments(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray(), connectMods(), connectTutorial(tutorialBlocked)];
     return () => disconnect.forEach((off) => off());
   }, []);
 
@@ -73,6 +74,7 @@ export function App() {
       clearOrganizations();
       clearNotifications();
       clearEntitlements();
+      clearMods();
       return;
     }
     navigate("projects");
@@ -83,6 +85,9 @@ export function App() {
     loadNotifications().catch((error) => console.error("notifications", error));
     // Os recursos do plano: sem a migração (ou sem rede), tudo segue liberado.
     startEntitlements().catch((error) => console.error("plans", error));
+    // Os mods: o catálogo que desceu do repositório de mods e o que quem usa
+    // desligou. Sem catálogo, nada sai do ar.
+    void loadMods();
     void loadEnvironment();
     Promise.all([loadWorkspace(), loadStatus()]).catch(reportError).finally(finishSwitch);
     // O limite dos planos é lido ao abrir: é da conta, e muda fora do JayV.

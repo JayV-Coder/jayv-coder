@@ -2,6 +2,7 @@
 //! `crate::features`.
 
 pub mod features;
+pub mod mods;
 
 // As camadas de baixo com os nomes de sempre dentro deste crate.
 use jayv_cloud as cloud;

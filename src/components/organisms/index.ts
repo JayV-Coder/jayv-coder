@@ -22,7 +22,6 @@ export { AccountActivity } from "./AccountActivity";
 export { AgentPanel, AGENT_NAMES } from "./AgentPanel";
 export { ModsPanel } from "./ModsPanel";
 export { GeneralChatsColumn, useGeneralChatsColumn } from "./GeneralChatsColumn";
-export { ModCreateDialog } from "./ModCreateDialog";
 export { CustomModForm } from "./CustomModForm";
 export { ExpertisePanel } from "./ExpertisePanel";
 export { JevPanel } from "./JevPanel";

@@ -64,6 +64,8 @@ fn main()->Result<()> {
     #[cfg(windows)]
     // O `mcp` fala pelos canos que o agente abriu: nada de console por cima.
     if std::env::args_os().nth(1).is_none_or(|first|first!="mcp") && std::env::args_os().skip(1).any(|arg|!arg.to_string_lossy().starts_with("jayv://")) { attach_parent_console(); }
+    // A versão do app, para o mod do catálogo que pede uma mais nova esperar por ela.
+    jayv_plans::mods::set_app_version(env!("CARGO_PKG_VERSION"));
     let cli=parse(std::env::args_os()).unwrap_or_else(|error|error.exit());
     let desktop=cli.command.is_none();
     let result=run(cli);

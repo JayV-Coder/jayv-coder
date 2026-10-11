@@ -1,0 +1,10 @@
+{
+  "id": "modCatalog",
+  "category": "agents",
+  "since": "0.94.0",
+  "plan": null,
+  "commands": [],
+  "title": "Mods catalog",
+  "summary": "Every mod of JayV lives in a public repository, jayv-coder-mods, and reaches the app and the site as a catalog: the LLM integrations, the optional features (statistics, gatehouse board, live files, chat search, project notes, second opinion, plan before building, parallel agents, earlier answers, lean code, symbol index, MCP, skills, skills.sh and find in conversation) and ready-made mods to install, like Ollama and LM Studio.",
+  "usage": "Open Settings › Mods. Under Features, turn off what you don't use and save: it leaves the menu, the command palette and the requests. Under From the catalog, Install adds a ready-made mod as one of yours; add the API key, if it needs one, in its tab. The catalog is downloaded on each sync and kept on this computer, so it also works offline; until the first download, the built-in mods apply. Your plan still decides: what it doesn't include stays off, and what it locks stays on. Also in the command palette (Ctrl+K): Turn on mod, Turn off mod and Install mod."
+}

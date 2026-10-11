@@ -1,8 +1,14 @@
 import { useState } from "react";
+import { ExternalLinkIcon } from "lucide-react";
 import type { AgentSettings, CustomModOptions } from "@/modules/core";
+import { useEnvironment } from "@/modules/environments";
+import { reportError } from "@/modules/feedback";
 import { useT, type Key } from "@/modules/i18n";
+import { modsSitePath } from "@/modules/mods";
 import { joinLine, splitLine, updateOptions } from "@/modules/settings";
+import { openDashboard, SITE_URL } from "@/modules/site";
 import { FormField, SegmentedControl, ToggleRow } from "@/components/molecules";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 /** A linha de comando como a pessoa escreve: o texto fica como foi digitado
@@ -23,15 +29,25 @@ function LineField({ id, label, hint, error, value, placeholder, onChange }: {
 
 /** O que o mod criado é: o nome e, na linha de comando, as duas linhas e se
  * ele escreve no projeto; na API, o protocolo e se a chave é obrigatória. O
- * tipo não muda depois de criado (a aba mudaria inteira). */
+ * tipo não muda depois de criado (a aba mudaria inteira). Criar é no site; a
+ * definição se edita lá ou aqui, e as duas mudanças vão pela sincronização. */
 export function CustomModForm({ agent, problems }: { agent: AgentSettings; problems: Record<string, Key> }) {
   const t = useT();
+  const environment = useEnvironment((state) => state.active);
   const options = agent.options as CustomModOptions;
   const set = (patch: Partial<CustomModOptions>) => updateOptions(agent.id, patch as never);
   const error = (field: string) => (problems[field] ? t(problems[field]) : undefined);
 
   return (
     <div className="grid gap-5">
+      {SITE_URL && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-border/60 px-3 py-2">
+          <p className="min-w-0 flex-1 text-xs leading-snug text-muted-foreground">{t("mods.editOnSite.hint")}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void openDashboard(modsSitePath(environment)).catch(reportError)}>
+            {t("mods.editOnSite")}<ExternalLinkIcon aria-hidden="true" />
+          </Button>
+        </div>
+      )}
       <FormField label={t("mods.name")} htmlFor={`${agent.id}-name`} hint={t("mods.name.hint")} error={error("name")}>
         <Input id={`${agent.id}-name`} maxLength={40} value={options.name} aria-invalid={problems.name ? true : undefined} onChange={(event) => set({ name: event.target.value })} />
       </FormField>

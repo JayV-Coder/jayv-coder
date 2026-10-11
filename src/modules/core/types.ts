@@ -350,6 +350,45 @@ export interface CustomModOptions {
   clearKey?: boolean;
 }
 
+/** O tipo de um mod do catálogo (`JayV-Coder/jayv-coder-mods`): liga um
+ * motor de LLM do app, liga um recurso opcional do app ou é um mod pronto que
+ * a pessoa instala como um mod seu. */
+export type ModKind = "llm" | "feature" | "template";
+
+/** A definição de um mod pronto: a mesma de um mod criado, sem o que é da
+ * máquina (a chave, a aprovação dos servidores MCP). */
+export type ModTemplate =
+  | { kind: "api"; protocol: "openai" | "anthropic"; baseUrl: string; keyRequired: boolean; models?: string[] }
+  | { kind: "cli"; command: string; args: string[]; planArgs?: string[]; edits?: boolean; models?: string[] };
+
+/** Um mod como o catálogo o descreve. Os textos vêm nos dez idiomas. */
+export interface ModManifest {
+  id: string;
+  kind: ModKind;
+  category: string;
+  /** O recurso do plano que liga o mod; nulo, nenhum. */
+  plan: string | null;
+  /** Só no recurso: se ele nasce ligado. */
+  defaultOn?: boolean | null;
+  /** A versão do app a partir da qual o mod vale. */
+  minApp?: string | null;
+  docs?: string;
+  homepage?: string;
+  title: Record<string, string>;
+  summary: Record<string, string>;
+  template?: ModTemplate;
+}
+
+/** O que o núcleo sabe dos mods: o catálogo em cache (nulo, nenhum desceu), as
+ * escolhas de quem usa e o que fica desligado no fim. */
+export interface ModsSnapshot {
+  catalog: ModManifest[] | null;
+  fetchedAt: string | null;
+  states: Record<string, boolean>;
+  disabled: string[];
+  appVersion: string;
+}
+
 /** As opções dos gateways. A chave nunca volta do núcleo: `hasKey` diz se há
  * uma guardada; `apiKey` e `clearKey` só vão da tela ao salvar. */
 export interface GatewayOptions {

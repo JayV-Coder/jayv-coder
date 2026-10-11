@@ -660,6 +660,18 @@ impl WorkspaceStore {
     pub fn entitlements(&self) -> Result<crate::features::Entitlements> {crate::features::load(&self.connection)}
     pub fn replace_entitlements(&mut self, remote: &crate::features::RemoteFeatures) -> Result<()> {crate::features::replace(&self.connection,remote)}
 
+    /// Troca o catálogo dos mods em cache. Falso quando esta versão não o entende.
+    pub fn replace_mod_catalog(&mut self, value: &serde_json::Value) -> Result<bool> {jayv_plans::mods::replace(&self.connection,value)}
+
+    /// O catálogo dos mods em cache e quando desceu.
+    pub fn mod_catalog(&self) -> Result<Option<(Vec<jayv_plans::mods::Manifest>,String)>> {jayv_plans::mods::catalog(&self.connection)}
+
+    /// O que quem usa ligou e desligou na aba Mods.
+    pub fn mod_states(&self) -> Result<std::collections::BTreeMap<String,bool>> {jayv_plans::mods::states(&self.connection)}
+
+    /// Grava as escolhas da aba Mods (sincroniza com o ambiente).
+    pub fn save_mod_states(&mut self, states: &std::collections::BTreeMap<String,bool>) -> Result<std::collections::BTreeMap<String,bool>> {jayv_plans::mods::save_states(&self.connection,states)}
+
     pub fn average_output(&self) -> Result<u64> {crate::usage::store::average_output(&self.connection)}
 
     pub fn chat_root(&self, chat_id: &str) -> Result<Option<PathBuf>> {

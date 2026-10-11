@@ -15,6 +15,7 @@
     "kiloCode",
     "gatewayProviders",
     "llmMods",
+    "modCatalog",
     "workModes",
     "stopRequest",
     "progressPanel",

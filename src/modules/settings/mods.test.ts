@@ -6,7 +6,15 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }), Toaster: () => null }));
 
 const { joinLine, lineProblem, modId, splitLine } = await import("./mods");
-const { agentIds, agentLabel, cliAgentIds, createMod, EMPTY_MOD, problems, removeMod, useSettings } = await import("./store");
+const { agentIds, agentLabel, cliAgentIds, installTemplate, problems, removeMod, useSettings } = await import("./store");
+const { useEntitlements } = await import("@/modules/plans");
+
+type Manifest = import("@/modules/core").ModManifest;
+const texts = (en: string, pt = en): Record<string, string> => ({ en, "pt-BR": pt });
+const template = (id: string, name: string, definition: Manifest["template"]): Manifest =>
+  ({ id, kind: "template", category: "agents", plan: "customMods", minApp: "0.94.0", title: texts(name), summary: texts(name), template: definition });
+const WRITER = template("writer", "Writer", { kind: "cli", command: "writer", args: ["--model", "{model}", "{prompt}"], planArgs: ["--dry-run", "{prompt}"], edits: true, models: ["w-1"] });
+const PROXY = template("alpha-proxy", "Alpha proxy", { kind: "api", protocol: "openai", baseUrl: "http://localhost:8080/v1", keyRequired: false, models: ["a-1"] });
 
 describe("command lines of a created mod", () => {
   it("split like a shell, without expanding, and join back", () => {
@@ -34,26 +42,27 @@ describe("command lines of a created mod", () => {
   });
 });
 
-describe("created mods in the settings draft", () => {
-  it("join the draft turned on, with their first model, after the built-in mods", () => {
+describe("mods in the settings draft", () => {
+  it("a template from the catalog joins the draft turned on, with its models, after the built-in mods", () => {
     useSettings.setState({ agents: [], models: [] });
-    const writer = createMod({ ...EMPTY_MOD, name: "Writer", command: "writer", args: "--model {model} {prompt}", edits: true, planArgs: "--dry-run {prompt}", model: "w-1" });
-    const proxy = createMod({ ...EMPTY_MOD, name: "Alpha proxy", kind: "api", baseUrl: "http://localhost:8080/v1", apiKey: " sk-1 ", model: "a-1" });
+    const writer = installTemplate(WRITER, "en");
+    const proxy = installTemplate(PROXY, "pt-BR");
+    expect([writer, proxy]).toEqual(["mod-writer", "mod-alpha-proxy"]);
+    expect(installTemplate(WRITER, "en")).toBeNull();
     const { agents, models } = useSettings.getState();
     expect(agentIds(agents).slice(-2)).toEqual([proxy, writer]);
-    expect(agentLabel(proxy, agents)).toBe("Alpha proxy");
+    expect(agentLabel(proxy!, agents)).toBe("Alpha proxy");
     expect(agentLabel("mod-gone", agents)).toBe("gone");
     expect(agentLabel("claude", agents)).toBe("Claude Code");
     expect(cliAgentIds(agents)).toContain(writer);
     expect(cliAgentIds(agents)).not.toContain(proxy);
-    const options = agents.find((agent) => agent.id === writer)?.options as { args: string[]; planArgs: string[] };
-    expect(options.args).toEqual(["--model", "{model}", "{prompt}"]);
-    expect(options.planArgs).toEqual(["--dry-run", "{prompt}"]);
-    expect((agents.find((agent) => agent.id === proxy)?.options as { apiKey?: string }).apiKey).toBe("sk-1");
+    const options = agents.find((agent) => agent.id === writer)?.options as { args: string[]; planArgs: string[]; edits: boolean };
+    expect(options).toMatchObject({ args: ["--model", "{model}", "{prompt}"], planArgs: ["--dry-run", "{prompt}"], edits: true });
     expect(models.find((model) => model.agent === writer)?.capabilities).toContain("code");
     expect(models.find((model) => model.agent === proxy)?.capabilities).toEqual(["chat", "reasoning"]);
-    expect(problems({ agents, models }, writer)).toEqual({});
-    removeMod(writer);
+    expect(problems({ agents, models }, writer!)).toEqual({});
+    expect(problems({ agents, models }, proxy!)).toEqual({});
+    removeMod(writer!);
     expect(useSettings.getState().agents.map((agent) => agent.id)).toEqual([proxy]);
     expect(useSettings.getState().models.every((model) => model.agent !== writer)).toBe(true);
     removeMod("claude");
@@ -61,12 +70,26 @@ describe("created mods in the settings draft", () => {
   });
 
   it("show what the core would refuse before saving", () => {
-    useSettings.setState({ agents: [], models: [] });
-    const writer = createMod({ ...EMPTY_MOD, name: "Writer", command: "my agent", args: "{effort}", edits: true });
-    const proxy = createMod({ ...EMPTY_MOD, name: "Proxy", kind: "api", baseUrl: "", keyRequired: true });
+    const writer = "mod-writer" as const;
+    const proxy = "mod-proxy" as const;
+    useSettings.setState({
+      models: [],
+      agents: [
+        { id: writer, enabled: true, command: "my agent", timeout: 300, options: { name: "Writer", kind: "cli", args: ["{effort}"], planArgs: [], edits: true, protocol: "openai", baseUrl: "", keyRequired: false, approveMcps: false, hasKey: false } },
+        { id: proxy, enabled: true, command: "", timeout: 300, options: { name: "Proxy", kind: "api", args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "", keyRequired: true, approveMcps: false, hasKey: false } },
+      ],
+    });
     const state = useSettings.getState();
     expect(problems(state, writer)).toEqual({ command: "agent.command.hint", args: "mods.args.placeholder", planArgs: "mods.planArgs.required" });
     expect(problems(state, proxy)).toEqual({ baseUrl: "mods.baseUrl.required", apiKey: "gateway.apiKey.required" });
     useSettings.setState({ agents: [], models: [] });
+  });
+
+  it("a built-in engine out of the catalog of mods has no tab", () => {
+    useEntitlements.setState({ disabled: new Set(["cursor", "stats"]) });
+    expect(agentIds([])).not.toContain("cursor");
+    expect(agentIds([])).toContain("claude");
+    useEntitlements.setState({ disabled: new Set() });
+    expect(agentIds([])).toContain("cursor");
   });
 });

@@ -17,26 +17,43 @@ interface EntitlementsState {
   features: Set<string> | null;
   /** Ligado sem interruptor: o núcleo e o que o admin travou no plano. */
   locked: Set<string>;
+  /** O que os mods desligam (`@/modules/mods`): o recurso cujo mod quem usa
+   * desligou ou que saiu do catálogo, e o motor de LLM fora do catálogo. Vale
+   * como fora do plano, menos no travado. */
+  disabled: Set<string>;
 }
 
 const coreLocked = () => new Set<string>(CORE_FEATURES);
 
-/** O que as regras leem do estado. Sem `locked`, vale o núcleo. */
-type Rights = { features: Set<string> | null; locked?: Set<string> };
+/** O que as regras leem do estado. Sem `locked`, vale o núcleo; sem
+ * `disabled`, nenhum mod desliga nada. */
+type Rights = { features: Set<string> | null; locked?: Set<string>; disabled?: Set<string> };
 
-export const useEntitlements = create<EntitlementsState>(() => ({ plan: null, admin: false, features: null, locked: coreLocked() }));
+export const useEntitlements = create<EntitlementsState>(() => ({ plan: null, admin: false, features: null, locked: coreLocked(), disabled: new Set() }));
 
 /** Travado ligado pelo plano (ou pelo núcleo). */
 export const locks = (state: Pick<Rights, "locked">, feature: FeatureKey) => (state.locked ?? coreLocked()).has(feature);
 
-export const allows = (state: Rights, feature: FeatureKey) =>
+/** O recurso está no plano (ou nenhuma lista desceu), sem olhar os mods. */
+export const inPlan = (state: Rights, feature: FeatureKey) =>
   locks(state, feature) || state.features === null || state.features.has(feature);
 
+/** O mod desligou o recurso (e o plano não o trava). */
+export const modOff = (state: Rights, feature: FeatureKey) => !locks(state, feature) && (state.disabled?.has(feature) ?? false);
+
+export const allows = (state: Rights, feature: FeatureKey) => inPlan(state, feature) && !modOff(state, feature);
+
+/** Por que um interruptor ligado a um recurso não mexe: travado ligado, fora
+ * do plano ou desligado na aba Mods. */
+export type ToggleReason = "required" | "outside" | "mod" | null;
+
 /** Como um interruptor ligado a um recurso aparece: travado ligado, fora do
- * plano (desabilitado, com o valor de quem usa) ou livre. */
-export function toggleState(state: Rights, feature: FeatureKey, checked: boolean) {
-  if (locks(state, feature)) return { checked: true, disabled: true, reason: "required" as const };
-  if (!allows(state, feature)) return { checked, disabled: true, reason: "outside" as const };
+ * plano ou com o mod desligado (desabilitado, com o valor de quem usa) ou
+ * livre. */
+export function toggleState(state: Rights, feature: FeatureKey, checked: boolean): { checked: boolean; disabled: boolean; reason: ToggleReason } {
+  if (locks(state, feature)) return { checked: true, disabled: true, reason: "required" };
+  if (!inPlan(state, feature)) return { checked, disabled: true, reason: "outside" };
+  if (modOff(state, feature)) return { checked, disabled: true, reason: "mod" };
   return { checked, disabled: false, reason: null };
 }
 
@@ -163,7 +180,7 @@ export async function startEntitlements() {
 export function clearEntitlements() {
   if (channel) void supabase.removeChannel(channel);
   channel = null;
-  useEntitlements.setState({ plan: null, admin: false, features: null, locked: coreLocked() });
+  useEntitlements.setState({ plan: null, admin: false, features: null, locked: coreLocked(), disabled: new Set() });
   useCatalog.setState({ loaded: false, plans: [], features: [], subscription: null, busy: null });
 }
 
