@@ -663,14 +663,18 @@ impl WorkspaceStore {
     /// Troca o catálogo dos mods em cache. Falso quando esta versão não o entende.
     pub fn replace_mod_catalog(&mut self, value: &serde_json::Value) -> Result<bool> {jayv_plans::mods::replace(&self.connection,value)}
 
-    /// O catálogo dos mods em cache e quando desceu.
-    pub fn mod_catalog(&self) -> Result<Option<(Vec<jayv_plans::mods::Manifest>,String)>> {jayv_plans::mods::catalog(&self.connection)}
+    /// O que a aba Mods mostra: o catálogo, o estado do ambiente e o que vale.
+    pub fn mods_view(&self) -> Result<jayv_plans::mods::View> {jayv_plans::mods::view(&self.connection)}
 
-    /// O que quem usa ligou e desligou na aba Mods.
-    pub fn mod_states(&self) -> Result<std::collections::BTreeMap<String,bool>> {jayv_plans::mods::states(&self.connection)}
+    /// Grava o estado dos mods que a tela pediu (sincroniza com o ambiente),
+    /// rodando aqui o que instalar e desinstalar pede.
+    pub fn apply_mods(&mut self, wanted: jayv_mods::InstalledMods) -> Result<jayv_mods::resolve::Applied> {jayv_plans::mods::apply(&mut self.connection,wanted)}
 
-    /// Grava as escolhas da aba Mods (sincroniza com o ambiente).
-    pub fn save_mod_states(&mut self, states: &std::collections::BTreeMap<String,bool>) -> Result<std::collections::BTreeMap<String,bool>> {jayv_plans::mods::save_states(&self.connection,states)}
+    /// A instalação sozinha dos mods no fim da volta do sync. Nulo: nada mudou.
+    pub fn reconcile_mods(&mut self) -> Result<Option<jayv_mods::resolve::Applied>> {jayv_plans::mods::reconcile(&mut self.connection)}
+
+    /// Os agentes que pertencem a um mod instalado.
+    pub fn mod_agents(&self) -> Result<std::collections::BTreeSet<String>> {jayv_plans::mods::owned_agents(&self.connection)}
 
     pub fn average_output(&self) -> Result<u64> {crate::usage::store::average_output(&self.connection)}
 
@@ -754,7 +758,22 @@ impl WorkspaceStore {
     /// Os agentes e modelos que a tela Configuração do LLM grava.
     pub fn llm_settings(&self) -> Result<crate::llm::LlmSettings> {crate::llm::load(&self.connection)}
 
-    pub fn save_llm_settings(&mut self, settings:&crate::llm::LlmSettings) -> Result<crate::llm::LlmSettings> {crate::llm::save(&mut self.connection,settings)}
+    /// Grava os agentes e os modelos. Os agentes de um mod instalado ficam,
+    /// mesmo fora da lista que chegou (um rascunho de antes de o mod se
+    /// instalar): eles saem pelo desinstalar do mod.
+    pub fn save_llm_settings(&mut self, settings:&crate::llm::LlmSettings) -> Result<crate::llm::LlmSettings> {
+        let owned=self.mod_agents().unwrap_or_else(|error|{ eprintln!("mods: {error:#}"); Default::default() });
+        let mut settings=settings.clone();
+        if !owned.is_empty() {
+            let current=crate::llm::load(&self.connection)?;
+            let missing:Vec<_>=current.agents.iter().filter(|agent|owned.contains(agent.id.key())&&!settings.agents.iter().any(|known|known.id==agent.id)).cloned().collect();
+            for agent in missing {
+                settings.models.extend(current.models.iter().filter(|model|model.agent==agent.id).cloned());
+                settings.agents.push(agent);
+            }
+        }
+        crate::llm::save(&mut self.connection,&settings)
+    }
 
     pub fn skills(&self) -> Result<Vec<jayv_agents::skills::Skill>> {jayv_agents::skills::load(&self.connection)}
 

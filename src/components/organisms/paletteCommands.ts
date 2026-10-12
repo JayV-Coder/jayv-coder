@@ -13,9 +13,9 @@ import { clearRead, markAllRead } from "@/modules/notifications";
 import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
-import { allows, inPlan, locks, settingsTabFeature } from "@/modules/plans";
-import { FEATURE_MODS, findMod, modOn, modsSitePath, modText, presence, setModOn, templates, usable, useMods } from "@/modules/mods";
-import { agentIds, agentLabel, checkGateway, discardChanges, installTemplate, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, templateAgentId, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
+import { allows, inPlan, locks, settingsTabFeature, type FeatureKey } from "@/modules/plans";
+import { installMod, isInstalled, isOn, modFeatures, modsSitePath, modText, pointsOf, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
+import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -164,22 +164,25 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     }
     all.push({ id: "mods-site", group: settings, label: t("mods.site"), run: () => void openDashboard(modsSitePath(environment)).catch(reportError) });
   }
-  // Ligar e desligar cada recurso que é mod, e instalar os mods prontos do
-  // catálogo: abrem a aba Mods e mudam o rascunho; o Salvar grava.
+  // Instalar, ligar, desligar e desinstalar cada mod do catálogo: abrem a aba
+  // Mods e mudam o rascunho; o Salvar grava.
   const locale = useI18n.getState().locale;
   const modsState = useMods.getState();
-  for (const id of FEATURE_MODS) {
-    if (!inPlan(ctx.rights, id) || locks(ctx.rights, id) || !["unknown", "present"].includes(presence(modsState, "feature", id))) continue;
-    const on = modOn(modsState, id);
-    const manifest = findMod(modsState.catalog, "feature", id);
-    const name = manifest ? modText(manifest.title, locale) : t(`feature.${id}.title` as Key);
-    all.push({ id: `mod-toggle-${id}`, group: settings, label: t(on ? "palette.modOff" : "palette.modOn", { name }), run: () => { openSettingsTab("mods"); setModOn(id, !on); } });
-  }
-  if (can("customMods")) {
-    for (const manifest of templates(modsState.catalog)) {
-      if (!usable(manifest, modsState.appVersion) || agents.some((agent) => agent.id === templateAgentId(manifest)) || mods.filter(isCustomMod).length >= MAX_MODS) continue;
-      all.push({ id: `mod-install-${manifest.id}`, group: settings, label: t("palette.modInstall", { name: modText(manifest.title, locale) }), run: () => { openSettingsTab("mods"); installTemplate(manifest, locale); } });
+  for (const manifest of modsState.catalog ?? []) {
+    const name = modText(manifest.title, locale);
+    const id = manifest.id;
+    const features = modFeatures(manifest);
+    // O mod que só traz recursos travados pelo plano não tem o que mudar.
+    if (features.length > 0 && pointsOf(manifest).length === 1 && features.every((feature) => locks(ctx.rights, feature))) continue;
+    const reachable = (manifest.plan === null || inPlan(ctx.rights, manifest.plan as FeatureKey)) && usable(manifest, modsState.appVersion, modsState.points);
+    const open = (change: () => void) => () => { openSettingsTab("mods"); change(); };
+    if (!isInstalled(modsState, id)) {
+      if (reachable) all.push({ id: `mod-install-${id}`, group: settings, label: t("palette.modInstall", { name }), run: open(() => installMod(id)) });
+      continue;
     }
+    const on = isOn(modsState, id);
+    if (on || reachable) all.push({ id: `mod-toggle-${id}`, group: settings, label: t(on ? "palette.modOff" : "palette.modOn", { name }), run: open(() => setModEnabled(id, !on)) });
+    all.push({ id: `mod-uninstall-${id}`, group: settings, label: t("palette.modUninstall", { name }), run: open(() => uninstallMod(id)) });
   }
   if (ctx.settingsDirty) {
     all.push(

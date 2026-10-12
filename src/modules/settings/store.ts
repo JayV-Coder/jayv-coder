@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
-  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type BuiltInAgentId, type CustomAgentId, type CustomModOptions,
+  bus, commands, onCore, type AgentId, type AgentModel, type AgentOptions, type AgentProbe, type AgentSettings, type BuiltInAgentId, type CustomModOptions,
   type GatewayCheck, type KnownModel, CUSTOM_MOD_PREFIX, editsProject, isApiAgent, isCustomMod, isGateway,
-  type CoreSettings, type CoreSnapshot, type Expertise, type ModManifest, type SettingsSnapshot,
+  type CoreSettings, type CoreSnapshot, type Expertise, type SettingsSnapshot,
 } from "@/modules/core";
 import { notify, reportError } from "@/modules/feedback";
 import { setLocale, syncLanguage, t, useI18n, type Key, type Locale } from "@/modules/i18n";
 import { discardMcp, isMcpDirty, loadMcp, saveMcpChanges, useMcp } from "@/modules/mcp";
-import { discardMods, isModsDirty, loadMods, modText, restoreModDefaults, saveModChanges, useMods } from "@/modules/mods";
+import { discardMods, isModsDirty, loadMods, restoreModDefaults, saveModChanges, useMods } from "@/modules/mods";
 import { useEntitlements } from "@/modules/plans";
 import { discardSkills, isSkillsDirty, loadSkills, saveSkillChanges, useSkills } from "@/modules/skills";
 import { setThemePreference, useTheme, type ThemePreference } from "@/modules/theme";
@@ -266,33 +266,6 @@ export function addModel(agent: AgentId) {
 /** Quantos mods criados um ambiente aceita (o `MAX_MODS` do núcleo). */
 export const MAX_MODS = 20;
 
-/** O id do mod pronto instalado: `mod-<id do catálogo>`, o mesmo em toda
- * máquina e no site, para a aba Mods saber que ele já está instalado. */
-export const templateAgentId = (manifest: Pick<ModManifest, "id">): CustomAgentId => `${CUSTOM_MOD_PREFIX}${manifest.id}` as CustomAgentId;
-
-/** Instala um mod pronto do catálogo como um mod de quem usa: ligado, com a
- * definição do catálogo e os modelos que ele sugere. Como o resto da tela, só
- * vale depois do Salvar; depois disso o mod é de quem instalou e se edita no
- * site ou na aba dele. Nulo quando ele já está instalado ou não tem definição. */
-export function installTemplate(manifest: ModManifest, locale: string = useI18n.getState().locale): CustomAgentId | null {
-  const template = manifest.template;
-  const state = useSettings.getState();
-  const id = templateAgentId(manifest);
-  if (!template || state.agents.some((agent) => agent.id === id)) return null;
-  const cli = template.kind === "cli";
-  const options: CustomModOptions = {
-    name: modText(manifest.title, locale).slice(0, 40), kind: template.kind,
-    args: cli ? template.args : [], planArgs: cli ? template.planArgs ?? [] : [], edits: cli && (template.edits ?? false),
-    protocol: cli ? "openai" : template.protocol, baseUrl: cli ? "" : template.baseUrl, keyRequired: !cli && template.keyRequired,
-    approveMcps: false, hasKey: false,
-  };
-  const agent: AgentSettings = { id, enabled: true, command: cli ? template.command : "", timeout: 300, options };
-  const capabilities: AgentModel["capabilities"] = editsProject(agent) ? ["chat", "code", "reasoning", "tools"] : ["chat", "reasoning"];
-  const models: ModelDraft[] = (template.models ?? []).map((model) => ({ uid: uid(), agent: id, model, enabled: true, capabilities, contextWindow: 128000, costClass: "medium", speed: "medium" }));
-  useSettings.setState({ agents: [...state.agents, agent], models: [...state.models, ...models] });
-  return id;
-}
-
 /** Tira o mod criado do rascunho, com os modelos dele. Os do app não saem. */
 export function removeMod(id: AgentId) {
   if (!isCustomMod(id)) return;
@@ -419,7 +392,11 @@ export async function saveSettings() {
   try {
     if (isAgentsDirty(state)) apply(await commands.saveSettings(payload(state)));
     if (isCoreDirty(state) && state.core) applyCore(await commands.saveCoreSettings(state.core));
+    // Instalar e desinstalar mods cria e apaga agentes: depois de gravar, a
+    // aba dos agentes relê o que ficou.
+    const modsChanged = isModsDirty(useMods.getState());
     if (!(await saveMcpChanges()) || !(await saveSkillChanges()) || !(await saveModChanges())) return;
+    if (modsChanged) apply(await commands.getSettings());
     const prefs = changedPrefs(useSettings.getState().prefs, livePrefs());
     useSettings.setState({ prefs: {} });
     // O aviso sai antes de trocar o idioma: depois, as mensagens ainda estão chegando.
@@ -508,10 +485,13 @@ export function connectSettings() {
   });
   // A descoberta de fundo trocou os modelos: a aba aberta e sem alteração
   // pendente mostra a lista nova.
-  const models = onCore("models-updated", () => {
+  const reread = () => {
     const state = useSettings.getState();
     if (state.loaded && !isAgentsDirty(state)) void commands.getSettings().then(apply).catch(reportError);
-  });
+  };
+  const models = onCore("models-updated", reread);
+  // A instalação sozinha dos mods criou ou apagou agentes.
+  const installed = onCore("mods-changed", reread);
   // Salvar vale para o app inteiro: o idioma é dito de novo ao núcleo, e quem
   // olha o que foi salvo (a página Sistema) o relê. Com um pedido no ar, a
   // troca fica para o próximo — e a pessoa é avisada disso.
@@ -519,5 +499,5 @@ export function connectSettings() {
     syncLanguage();
     if (!now) notify(t("settings.saved.later"), true);
   });
-  return () => { stop?.(); off(); void models.then((unlisten) => unlisten()); void applied.then((unlisten) => unlisten()); };
+  return () => { stop?.(); off(); void models.then((unlisten) => unlisten()); void installed.then((unlisten) => unlisten()); void applied.then((unlisten) => unlisten()); };
 }

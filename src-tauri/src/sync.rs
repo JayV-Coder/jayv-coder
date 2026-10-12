@@ -38,8 +38,20 @@ impl Connectivity {
     pub fn watch(&self)->watch::Receiver<Link> { self.0.subscribe() }
 }
 
+/// Os mods mudaram no fim de uma volta (a instalação sozinha gravou alguma
+/// coisa): a tela relê a aba Mods e as configurações.
+#[derive(Clone)]
+pub struct ModsSignal(Arc<watch::Sender<u64>>);
+
+impl Default for ModsSignal { fn default()->Self { Self(Arc::new(watch::channel(0).0)) } }
+
+impl ModsSignal {
+    pub fn ring(&self) { self.0.send_modify(|count|*count=count.wrapping_add(1)); }
+    pub fn watch(&self)->watch::Receiver<u64> { self.0.subscribe() }
+}
+
 #[derive(Debug,Default,Clone,PartialEq,Eq)]
-pub struct Round { pub pushed:usize, pub failed:usize, pub pulled:usize }
+pub struct Round { pub pushed:usize, pub failed:usize, pub pulled:usize, pub mods_changed:bool }
 
 /// O banco, desde que ainda seja o do ambiente em que a volta começou. Trocar
 /// de ambiente no meio dela não pode subir linhas de um ambiente para o outro:
@@ -61,7 +73,25 @@ pub async fn round(store:&SharedWorkspace,backend:&dyn Backend)->Result<Round,Re
     refresh_features(store,backend).await;
     refresh_org_extensions(store,backend).await;
     refresh_mod_catalog(store,backend).await;
+    result.mods_changed=install_mods(store,&environment).await;
     Ok(result)
+}
+
+/// A instalação sozinha dos mods: depois de o estado do ambiente descer (o que
+/// outra máquina ou o site decidiu) e do catálogo novo, os mods de fábrica que
+/// o ambiente ainda não tem se instalam, ligados — a primeira volta é a do
+/// login —, e esta máquina roda o que foi instalado e desinstalado em outro
+/// lugar. O que isso grava sobe na próxima volta. Falhar não para a volta.
+async fn install_mods(store:&SharedWorkspace,environment:&Environment)->bool {
+    let Ok(mut guard)=locked(store,environment).await else { return false };
+    match guard.reconcile_mods() {
+        Ok(Some(applied))=>{
+            for (id,reason) in &applied.failed { eprintln!("mods: {id} não se instalou: {reason}"); }
+            true
+        }
+        Ok(None)=>false,
+        Err(error)=>{ eprintln!("mods: {error:#}"); false }
+    }
 }
 
 /// A política de LLM desce depois dos projetos, que já subiram com os
@@ -266,7 +296,7 @@ pub fn backoff(previous:Option<Duration>)->Duration {
 /// O laço da sincronização. Roda uma volta quando o sino toca (escrita,
 /// login, sessão renovada), a cada 60 s com conexão, e no fim do backoff sem
 /// ela. Sem usuário, ou com a sessão vencida, só o sino o acorda.
-pub async fn run<F>(store:SharedWorkspace,backend:F,connectivity:Connectivity,bell:Arc<Notify>,queue:Arc<Notify>)
+pub async fn run<F>(store:SharedWorkspace,backend:F,connectivity:Connectivity,bell:Arc<Notify>,queue:Arc<Notify>,mods:ModsSignal)
 where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
     let mut pause:Option<Duration>=None;
     loop {
@@ -281,7 +311,8 @@ where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
         match backend() {
             None=>connectivity.set(Link::SignedOut),
             Some(backend)=>match round(&store,backend.as_ref()).await {
-                Ok(_)=>{
+                Ok(done)=>{
+                    if done.mods_changed { mods.ring(); }
                     pause=None;
                     connectivity.set(Link::Online);
                     // Com rede, o atendente pode chamar o que esperava por ela.
@@ -512,18 +543,29 @@ mod tests {
     #[tokio::test] async fn the_round_brings_the_mod_catalog_and_keeps_the_last_good_one() {
         let store=shared(WorkspaceStore::in_memory().unwrap());
         let backend=FakeBackend::default();
-        let stats=json!({"id":"stats","kind":"feature","defaultOn":true,"title":{"en":"Statistics"},"summary":{"en":"Charts."}});
-        *backend.catalog.lock().unwrap()=Some(Ok(json!({"schema":1,"mods":[stats]})));
-        round(&store,&backend).await.expect("volta");
-        let (mods,_)=store.lock().await.mod_catalog().unwrap().expect("catálogo em cache");
-        assert_eq!(mods.iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["stats"]);
+        let stats=json!({"id":"stats","version":"1.0.0","preinstalled":true,"title":{"en":"Statistics"},"summary":{"en":"Charts."},"contributes":{"features":["stats"]}});
+        let ollama=json!({"id":"ollama","version":"1.0.0","preinstalled":true,"title":{"en":"Ollama"},"contributes":{"agents":[{"kind":"api","protocol":"openai","baseUrl":"http://localhost:11434/v1","keyRequired":false}]}});
+        *backend.catalog.lock().unwrap()=Some(Ok(json!({"schema":2,"mods":[stats,ollama]})));
+        let first=round(&store,&backend).await.expect("volta");
+        let view=store.lock().await.mods_view().unwrap();
+        assert_eq!(view.catalog.expect("catálogo em cache").iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["stats","ollama"]);
         assert!(store.lock().await.entitlements().unwrap().disabled().contains("mcp"),"o recurso fora do catálogo sai");
+        // A primeira volta (a do login) instala os mods de fábrica, e o que
+        // isso grava sobe na volta seguinte.
+        assert!(first.mods_changed&&view.state.is_on("stats")&&view.state.is_on("ollama"));
+        assert!(store.lock().await.llm_settings().unwrap().agents.iter().any(|agent|agent.id.key()=="mod-ollama"),"o agente do mod existe");
+        let second=round(&store,&backend).await.expect("sobe");
+        assert!(!second.mods_changed&&second.pushed>0);
+        let rows=backend.rows.lock().unwrap();
+        assert!(rows.keys().any(|(table,key)|table=="account_settings"&&key.contains("installedMods")),"o estado sobe: {:?}",rows.keys().collect::<Vec<_>>());
+        assert!(rows.keys().any(|(table,key)|table=="llm_agents"&&key.contains("mod-ollama")));
+        drop(rows);
 
         *backend.catalog.lock().unwrap()=Some(Err(RemoteError::Server(502)));
         round(&store,&backend).await.expect("a função fora do ar não derruba a volta");
         *backend.catalog.lock().unwrap()=Some(Ok(json!({"schema":99,"mods":[]})));
         round(&store,&backend).await.expect("formato novo");
-        assert_eq!(store.lock().await.mod_catalog().unwrap().expect("cache").0.len(),1,"fica o último catálogo bom");
+        assert_eq!(store.lock().await.mods_view().unwrap().catalog.expect("cache").len(),2,"fica o último catálogo bom");
     }
 
     #[tokio::test] async fn offline_the_queue_stays_whole() {

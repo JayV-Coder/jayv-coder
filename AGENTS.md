@@ -141,6 +141,30 @@ tutorial ou quando um alvo não existe. O tutorial abre sozinho na primeira
 visita a cada tela e pode ser aberto de novo pelo botão de ajuda (?) da lateral,
 pela paleta (Ctrl+K) ou em Configurações › App › Tutoriais.
 
+## Mods: o sistema é genérico
+
+Mod é do sistema, não de um assunto (regra do dono do projeto): o crate
+`jayv-mods` não sabe o que um mod faz. Um mod do catálogo
+(`JayV-Coder/jayv-coder-mods`) diz, em `contributes`, o que traz a cada **ponto
+de extensão**; cada camada implementa os pontos do assunto dela
+(`jayv_mods::ExtensionPoint`) e eles se juntam no `REGISTRY` de
+`jayv-plans::mods`. Hoje: `llmEngines` e `features` (em `jayv-plans`) e
+`agents` (`jayv-agents::mod_agents`). Um tipo novo de funcionalidade que os mods
+podem trazer é:
+
+1. um ponto novo — `targets` (os ids que ficam ligados enquanto um mod ativo
+   os traz), `built_in` (o que o app já tem) e, se ele grava alguma coisa,
+   `install`/`uninstall` (rodam em cada máquina, dentro de uma transação, e
+   precisam aceitar rodar de novo) — registrado no `REGISTRY`;
+2. quem usa o alvo pergunta ao `Entitlements` (`allows`/`disabled`), como o
+   plano;
+3. a tela ganha o rótulo do ponto (`mods.point.<chave>`) em `KNOWN_POINTS`;
+4. o ponto entra no `POINTS` do `catalog.mjs` do repositório de mods, com
+   `since` nesta versão.
+
+Os mods com `preinstalled` se instalam sozinhos, ligados, no fim da volta do
+sync (a primeira é a do login); o que a pessoa desinstala não volta.
+
 ## Mensagem de commit: detalha cada alteração
 
 A mensagem de todo commit no `main` começa por `vX.Y.Z: resumo` (a versão

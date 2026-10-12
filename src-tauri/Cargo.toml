@@ -1,6 +1,6 @@
 [package]
 name = "jayv"
-version = "0.94.0"
+version = "0.95.0"
 description = "Local-first AI orchestration desktop and CLI"
 authors = ["JayV Team"]
 edition = "2024"
@@ -67,6 +67,7 @@ jayv-cloud = { path = "crates/jayv-cloud" }
 jayv-agents = { path = "crates/jayv-agents" }
 jayv-jev = { path = "crates/jayv-jev" }
 jayv-plans = { path = "crates/jayv-plans" }
+jayv-mods = { path = "crates/jayv-mods" }
 jayv-orgs = { path = "crates/jayv-orgs" }
 jayv-code = { path = "crates/jayv-code" }
 jayv-memory = { path = "crates/jayv-memory" }

@@ -88,27 +88,34 @@ describe("paletteCommands", () => {
     useSettings.setState({ agents: [] });
   });
 
-  it("turns each feature mod on or off and installs the templates of the catalog", async () => {
+  it("installs, turns on or off and uninstalls each mod of the catalog", async () => {
     const { useMods } = await import("@/modules/mods");
     const texts = (en: string) => ({ en, "pt-BR": en });
+    const mod = (id: string, contributes: object, patch: object = {}) => ({ id, version: "1.0.0", category: "project", plan: null, minApp: "0.94.0", preinstalled: true, title: texts(id[0].toUpperCase() + id.slice(1)), summary: texts("."), contributes, ...patch });
+    const state = { mods: { stats: { enabled: false }, mcp: { enabled: true } }, removed: [] };
     useMods.setState({
-      appVersion: "0.94.0", states: { stats: false },
+      appVersion: "0.95.0", points: ["llmEngines", "features", "agents"], saved: state, draft: state,
       catalog: [
-        { id: "stats", kind: "feature", category: "project", plan: "stats", defaultOn: true, minApp: "0.94.0", title: texts("Statistics"), summary: texts("Charts.") },
-        { id: "ollama", kind: "template", category: "agents", plan: "customMods", minApp: "0.94.0", title: texts("Ollama"), summary: texts("Local."), template: { kind: "api", protocol: "openai", baseUrl: "http://localhost:11434/v1", keyRequired: false } },
-        { id: "future", kind: "template", category: "agents", plan: "customMods", minApp: "9.0.0", title: texts("Future"), summary: texts("Later."), template: { kind: "api", protocol: "openai", baseUrl: "http://localhost:1/v1", keyRequired: false } },
-      ],
+        mod("stats", { features: ["stats"] }, { plan: "stats" }),
+        mod("mcp", { features: ["mcp"] }, { plan: "mcp" }),
+        mod("ollama", { agents: [{ kind: "api", protocol: "openai", baseUrl: "http://localhost:11434/v1", keyRequired: false }] }, { plan: "customMods" }),
+        mod("future", { teleport: ["x"] }),
+      ] as never,
     });
     const found = paletteCommands(context());
-    expect(found.find((command) => command.id === "mod-toggle-stats")?.label).toBe("Turn on mod: Statistics");
-    expect(found.map((command) => command.id)).not.toContain("mod-toggle-mcp");
-    expect(found.find((command) => command.id === "mod-install-ollama")?.label).toBe("Install mod: Ollama");
+    const label = (id: string) => found.find((command) => command.id === id)?.label;
+    expect(label("mod-toggle-stats")).toBe("Turn on mod: Stats");
+    expect(label("mod-toggle-mcp")).toBe("Turn off mod: Mcp");
+    expect(label("mod-uninstall-mcp")).toBe("Uninstall mod: Mcp");
+    expect(label("mod-install-ollama")).toBe("Install mod: Ollama");
     expect(found.map((command) => command.id)).not.toContain("mod-install-future");
     const locked = ids({ rights: { features: new Set<string>(), locked: new Set<string>(["stats"]) } });
     expect(locked).not.toContain("mod-toggle-stats");
     expect(locked).not.toContain("mod-install-ollama");
-    useMods.setState({ catalog: null, states: {} });
-    expect(ids()).toContain("mod-toggle-mcp");
+    expect(locked).toContain("mod-toggle-mcp");
+    const empty = { mods: {}, removed: [] };
+    useMods.setState({ catalog: null, saved: empty, draft: empty });
+    expect(ids().some((id) => id.startsWith("mod-toggle-"))).toBe(false);
   });
 
   it("has unique ids and a label for every command", () => {

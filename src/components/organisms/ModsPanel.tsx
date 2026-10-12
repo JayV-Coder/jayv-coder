@@ -1,25 +1,34 @@
-import { DownloadIcon, ExternalLinkIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
+import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { DownloadIcon, ExternalLinkIcon, GlobeIcon, PlusIcon, SearchIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import { isApiAgent, isCustomMod, type AgentSettings, type ModManifest } from "@/modules/core";
 import { useEnvironment } from "@/modules/environments";
 import { reportError } from "@/modules/feedback";
 import { formatSince, useLocale, useT, type Key } from "@/modules/i18n";
 import {
-  FEATURE_MODS, findMod, modOn, modsSitePath, modText, presence, setModOn, templates, usable, useMods, type FeatureMod,
+  dependents, findMod, installMod, isInstalled, isOn, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modsSitePath, modText,
+  ownedAgents, pointsOf, setModEnabled, statusOf, uninstallMod, unknownPoints, usable, useMods,
 } from "@/modules/mods";
-import { allows, inPlan, locks, settingsTabFeature, useEntitlements, useFeature } from "@/modules/plans";
-import { agentLabel, installTemplate, MAX_MODS, removeMod, setSettingsTab, templateAgentId, updateAgent, useAgentIds, useSettings } from "@/modules/settings";
+import { inPlan, locks, useEntitlements, useFeature, type FeatureKey } from "@/modules/plans";
+import { agentLabel, MAX_MODS, removeMod, setSettingsTab, useAgentIds, useSettings, type SettingsTab } from "@/modules/settings";
 import { openDashboard, SITE_URL } from "@/modules/site";
 import { AgentIcon } from "@/components/atoms";
-import { ConfirmAction, SettingsSection } from "@/components/molecules";
+import { ConfirmAction, SegmentedControl, SettingsSection } from "@/components/molecules";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 
-/** Configurações › Mods. Todo mod mora no repositório `jayv-coder-mods` e
- * desce pelo catálogo: as integrações com LLM (as do app, as que a pessoa cria
- * no site e os mods prontos do catálogo) e os recursos opcionais do app, que
- * cada um liga e desliga aqui. Tudo muda o rascunho, como o resto da tela, e
- * vale no Salvar. Criar e editar a definição de um mod é no site. */
+/** O nome de um ponto de extensão na tela; o que esta tela não conhece é
+ * "outro". */
+const pointLabel = (point: string): Key => ((KNOWN_POINTS as readonly string[]).includes(point) ? `mods.point.${point}` : "mods.point.other") as Key;
+
+/** Configurações › Mods: o gerenciador de mods, como o de um jogo. Todo mod
+ * mora no repositório `jayv-coder-mods` e desce pelo catálogo; cada um traz
+ * alguma coisa a um ou mais pontos de extensão do app (motores de LLM,
+ * recursos, agentes…). Instalar, ligar, desligar e desinstalar mudam o
+ * rascunho, como o resto da tela, e valem no Salvar. Os mods que a pessoa cria
+ * (agentes de linha de comando ou de API) se criam e editam no site. */
 export function ModsPanel() {
   const t = useT();
   const locale = useLocale();
@@ -30,137 +39,206 @@ export function ModsPanel() {
   const mods = useMods();
   const environment = useEnvironment((state) => state.active);
   const canCreate = useFeature("customMods");
-  const customs = ids.filter(isCustomMod).length;
-  const full = customs >= MAX_MODS;
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<"all" | string>("all");
+  const owned = ownedAgents(mods.catalog, mods.saved);
+  const customs = ids.filter((id) => isCustomMod(id) && !owned.has(id)).length;
+  const full = ids.filter(isCustomMod).length >= MAX_MODS;
   const savedIds = new Set<string>((() => { try { return (JSON.parse(saved) as { agents: AgentSettings[] }).agents.map((agent) => agent.id); } catch { return []; } })());
   const site = (create = false) => void openDashboard(modsSitePath(environment, create)).catch(reportError);
-  const summaryOf = (manifest: ModManifest | undefined) => (manifest ? modText(manifest.summary, locale) : "");
+  const title = (id: string) => { const manifest = findMod(mods.catalog, id); return manifest ? modText(manifest.title, locale) : id; };
+  const names = (list: string[]) => list.map(title).join(", ");
 
-  const agentRow = (agent: AgentSettings) => {
-    const custom = isCustomMod(agent.id);
-    const name = agentLabel(agent.id, agents);
-    const feature = settingsTabFeature(agent.id);
-    const locked = feature !== undefined && !allows(rights, feature);
-    const manifest = custom ? undefined : findMod(mods.catalog, "llm", agent.id);
+  const needle = query.trim().toLocaleLowerCase();
+  const matches = (manifest: ModManifest) => (kind === "all" || pointsOf(manifest).includes(kind))
+    && (!needle || [modText(manifest.title, locale), modText(manifest.summary, locale), manifest.id, manifest.author ?? ""].some((text) => text.toLocaleLowerCase().includes(needle)));
+
+  /** A aba que o mod configura: a do primeiro agente dele que existe. */
+  const tabOf = (manifest: ModManifest): SettingsTab | undefined => modAgentIds(manifest).find((id) => (ids as readonly string[]).includes(id)) as SettingsTab | undefined;
+
+  const pointBadges = (manifest: ModManifest) => pointsOf(manifest).map((point) => <Badge key={point} variant="secondary">{t(pointLabel(point))}</Badge>);
+
+  /** O que o plano faz com o mod: fora dele, ou travado ligado (todo recurso
+   * que ele traz é travado e ele não traz mais nada). */
+  const planOf = (manifest: ModManifest) => {
+    const features = modFeatures(manifest);
+    const lockedOn = features.length > 0 && pointsOf(manifest).length === 1 && features.every((feature) => locks(rights, feature));
+    const outside = !lockedOn && manifest.plan !== null && !inPlan(rights, manifest.plan as FeatureKey);
+    return { lockedOn, outside };
+  };
+
+  const installedRow = (id: string) => {
+    const manifest = findMod(mods.catalog, id);
+    const name = title(id);
+    const status = statusOf(mods, id);
+    const { lockedOn, outside } = manifest ? planOf(manifest) : { lockedOn: false, outside: false };
+    const on = isOn(mods, id);
+    const changed = (mods.saved.mods[id]?.enabled ?? null) !== (mods.draft.mods[id]?.enabled ?? null);
+    const fresh = !(id in mods.saved.mods);
+    const tab = manifest ? tabOf(manifest) : undefined;
+    const needing = dependents(mods, id).map((other) => modText(other.title, locale));
+    const missing = manifest ? missingRequirements(mods, manifest) : [];
+    const newer = manifest && !usable(manifest, mods.appVersion, mods.points);
     return (
-      <li key={agent.id} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
-        <Switch checked={agent.enabled} disabled={locked} aria-label={t("mods.enabled", { name })} onCheckedChange={(enabled) => updateAgent(agent.id, { enabled })} />
-        <AgentIcon agent={agent.id} className="size-6 shrink-0" />
-        <div className="grid min-w-0 flex-1 gap-0.5">
+      <li key={id} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
+        <Switch checked={lockedOn || on} disabled={lockedOn || status === "absent"} aria-label={t("mods.enabled", { name })} onCheckedChange={(next) => setModEnabled(id, next)} />
+        <div className="grid min-w-0 flex-1 gap-1">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>
-            <Badge variant="outline">{t(isApiAgent(agent) ? "mods.kind.api" : "mods.kind.cli")}</Badge>
-            <Badge variant={custom ? "secondary" : "outline"}>{t(custom ? "mods.origin.custom" : "mods.origin.builtIn")}</Badge>
-            {custom && !savedIds.has(agent.id) && <Badge variant="warning">{t("settings.notSaved")}</Badge>}
-            {locked && <Badge variant="outline">{t("mods.locked")}</Badge>}
+            {manifest?.version && <Badge variant="outline" className="font-mono text-caption">{t("mods.version", { version: manifest.version })}</Badge>}
+            {manifest && pointBadges(manifest)}
+            {lockedOn && <Badge variant="outline">{t("mods.feature.locked")}</Badge>}
+            {outside && <Badge variant="outline">{t("mods.locked")}</Badge>}
+            {status === "absent" && <Badge variant="warning">{t("mods.feature.absent")}</Badge>}
+            {newer && <Badge variant="warning">{manifest.minApp && unknownPoints(manifest, mods.points).length === 0 ? t("mods.needsApp", { version: manifest.minApp }) : t("mods.needsNewerApp")}</Badge>}
+            {on && missing.length > 0 && <Badge variant="warning">{t("mods.requires.missing", { names: names(missing) })}</Badge>}
+            {fresh && <Badge variant="warning">{t("mods.pending.install")}</Badge>}
+            {!fresh && changed && <Badge variant="warning">{t("settings.notSaved")}</Badge>}
           </span>
-          {manifest
-            ? <span className="text-xs leading-snug text-muted-foreground">{summaryOf(manifest)}</span>
-            : <span className="truncate font-mono text-caption text-muted-foreground">{isApiAgent(agent) ? (agent.options as { baseUrl?: string }).baseUrl : agent.command}</span>}
+          {manifest && <span className="text-xs leading-snug text-muted-foreground">{modText(manifest.summary, locale)}</span>}
+          {manifest && (manifest.author || (manifest.requires ?? []).length > 0) && (
+            <span className="text-caption text-muted-foreground">
+              {[manifest.author ? t("mods.by", { author: manifest.author }) : null, (manifest.requires ?? []).length > 0 ? t("mods.requires", { names: names(manifest.requires ?? []) }) : null].filter(Boolean).join(" · ")}
+            </span>
+          )}
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setSettingsTab(agent.id)}><SettingsIcon aria-hidden="true" />{t("mods.configure")}</Button>
-        {custom && SITE_URL && savedIds.has(agent.id) && (
-          <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.editOnSite.named", { name })} title={t("mods.editOnSite.named", { name })} onClick={() => site()}>
-            <ExternalLinkIcon aria-hidden="true" />
+        {tab && <Button type="button" variant="ghost" size="sm" onClick={() => setSettingsTab(tab)}><SettingsIcon aria-hidden="true" />{t("mods.configure")}</Button>}
+        {manifest?.homepage && (
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.homepage", { name })} title={t("mods.homepage", { name })} onClick={() => void openUrl(manifest.homepage!).catch(reportError)}>
+            <GlobeIcon aria-hidden="true" />
           </Button>
         )}
-        {custom && (
-          <ConfirmAction title={t("mods.remove.title", { name })} description={t("mods.remove.description")} confirm={t("mods.remove")} onConfirm={() => removeMod(agent.id)}>
-            <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.remove.named", { name })} title={t("mods.remove.named", { name })}><Trash2Icon aria-hidden="true" /></Button>
+        {!lockedOn && (
+          <ConfirmAction
+            title={t("mods.uninstall.title", { name })}
+            description={[t("mods.uninstall.description"), needing.length > 0 ? t("mods.uninstall.dependents", { names: needing.join(", ") }) : ""].filter(Boolean).join(" ")}
+            confirm={t("mods.uninstall")}
+            onConfirm={() => uninstallMod(id)}
+          >
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.uninstall.named", { name })} title={t("mods.uninstall.named", { name })}><Trash2Icon aria-hidden="true" /></Button>
           </ConfirmAction>
         )}
       </li>
     );
   };
 
-  const templateRow = (manifest: ModManifest) => {
+  const availableRow = (manifest: ModManifest) => {
     const name = modText(manifest.title, locale);
-    const installed = agents.some((agent) => agent.id === templateAgentId(manifest));
-    const newer = !usable(manifest, mods.appVersion);
-    const why = !canCreate ? t("plans.locked") : newer ? t("mods.needsApp", { version: manifest.minApp ?? "" }) : full ? t("mods.full", { max: MAX_MODS }) : undefined;
+    const { outside } = planOf(manifest);
+    const newer = !usable(manifest, mods.appVersion, mods.points);
+    const leaving = manifest.id in mods.saved.mods;
+    const why = outside ? t("plans.locked") : newer ? t("mods.needsNewerApp") : undefined;
     return (
       <li key={manifest.id} className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border px-3 py-2.5">
-        <AgentIcon agent={templateAgentId(manifest)} className="size-6 shrink-0" />
-        <div className="grid min-w-0 flex-1 gap-0.5">
+        <div className="grid min-w-0 flex-1 gap-1">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>
-            {manifest.template && <Badge variant="outline">{t(manifest.template.kind === "api" ? "mods.kind.api" : "mods.kind.cli")}</Badge>}
-            {newer && <Badge variant="outline">{t("mods.needsApp", { version: manifest.minApp ?? "" })}</Badge>}
+            {manifest.version && <Badge variant="outline" className="font-mono text-caption">{t("mods.version", { version: manifest.version })}</Badge>}
+            {pointBadges(manifest)}
+            {outside && <Badge variant="outline">{t("mods.locked")}</Badge>}
+            {newer && <Badge variant="warning">{manifest.minApp && unknownPoints(manifest, mods.points).length === 0 ? t("mods.needsApp", { version: manifest.minApp }) : t("mods.needsNewerApp")}</Badge>}
+            {leaving && <Badge variant="warning">{t("mods.pending.uninstall")}</Badge>}
           </span>
-          <span className="text-xs leading-snug text-muted-foreground">{summaryOf(manifest)}</span>
-        </div>
-        {installed
-          ? <Badge variant="secondary">{t("mods.installed")}</Badge>
-          : (
-            <Button type="button" variant="outline" size="sm" disabled={why !== undefined} title={why} onClick={() => installTemplate(manifest, locale)}>
-              <DownloadIcon aria-hidden="true" />{t("mods.install")}
-            </Button>
+          <span className="text-xs leading-snug text-muted-foreground">{modText(manifest.summary, locale)}</span>
+          {(manifest.author || (manifest.requires ?? []).length > 0) && (
+            <span className="text-caption text-muted-foreground">
+              {[manifest.author ? t("mods.by", { author: manifest.author }) : null, (manifest.requires ?? []).length > 0 ? t("mods.requires", { names: names(manifest.requires ?? []) }) : null].filter(Boolean).join(" · ")}
+            </span>
           )}
+        </div>
+        <Button type="button" variant="outline" size="sm" disabled={why !== undefined} title={why} onClick={() => installMod(manifest.id)}>
+          <DownloadIcon aria-hidden="true" />{t("mods.install")}
+        </Button>
       </li>
     );
   };
 
-  const featureRow = (id: FeatureMod) => {
-    const manifest = findMod(mods.catalog, "feature", id);
-    const name = manifest ? modText(manifest.title, locale) : t(`feature.${id}.title` as Key);
-    const summary = manifest ? modText(manifest.summary, locale) : t(`feature.${id}.detail` as Key);
-    const where = presence(mods, "feature", id);
-    const lockedOn = locks(rights, id);
-    const outside = !inPlan(rights, id);
-    const on = modOn(mods, id);
-    const changed = (mods.saved[id] ?? null) !== (mods.states[id] ?? null);
-    const status: Key | null = lockedOn ? "mods.feature.locked" : outside ? "mods.locked" : where === "absent" ? "mods.feature.absent" : where === "newer" ? "mods.needsApp" : null;
-    const fixed = status !== null;
+  /** Um mod que a pessoa criou no site: um agente de linha de comando ou de
+   * API, com a aba dele. */
+  const ownRow = (agent: AgentSettings) => {
+    const name = agentLabel(agent.id, agents);
     return (
-      <li key={id} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
-        <Switch
-          checked={lockedOn || (on && !outside && where !== "absent" && where !== "newer")}
-          disabled={fixed}
-          aria-label={t("mods.enabled", { name })}
-          onCheckedChange={(next) => setModOn(id, next)}
-        />
+      <li key={agent.id} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
+        <AgentIcon agent={agent.id} className="size-6 shrink-0" />
         <div className="grid min-w-0 flex-1 gap-0.5">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>
-            {status && <Badge variant="outline">{t(status, { version: manifest?.minApp ?? "" })}</Badge>}
-            {changed && !fixed && <Badge variant="warning">{t("settings.notSaved")}</Badge>}
+            <Badge variant="outline">{t(isApiAgent(agent) ? "mods.kind.api" : "mods.kind.cli")}</Badge>
+            {!savedIds.has(agent.id) && <Badge variant="warning">{t("settings.notSaved")}</Badge>}
           </span>
-          <span className="text-xs leading-snug text-muted-foreground">{summary}</span>
+          <span className="truncate font-mono text-caption text-muted-foreground">{isApiAgent(agent) ? (agent.options as { baseUrl?: string }).baseUrl : agent.command}</span>
         </div>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setSettingsTab(agent.id)}><SettingsIcon aria-hidden="true" />{t("mods.configure")}</Button>
+        {SITE_URL && savedIds.has(agent.id) && (
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.editOnSite.named", { name })} title={t("mods.editOnSite.named", { name })} onClick={() => site()}>
+            <ExternalLinkIcon aria-hidden="true" />
+          </Button>
+        )}
+        <ConfirmAction title={t("mods.remove.title", { name })} description={t("mods.remove.description")} confirm={t("mods.remove")} onConfirm={() => removeMod(agent.id)}>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.remove.named", { name })} title={t("mods.remove.named", { name })}><Trash2Icon aria-hidden="true" /></Button>
+        </ConfirmAction>
       </li>
     );
   };
 
-  const shown = ids.map((id) => agents.find((agent) => agent.id === id)).filter((agent): agent is AgentSettings => agent !== undefined);
-  const ready = templates(mods.catalog);
+  // Os instalados: os do catálogo na ordem dele e, por último, os que saíram
+  // do catálogo (só se desinstalam).
+  const catalog = mods.catalog ?? [];
+  const installedIds = [
+    ...catalog.filter((manifest) => isInstalled(mods, manifest.id) && matches(manifest)).map((manifest) => manifest.id),
+    ...(mods.catalog === null ? [] : Object.keys(mods.draft.mods).filter((id) => !findMod(mods.catalog, id) && (!needle || id.includes(needle)))),
+  ];
+  const available = catalog.filter((manifest) => !isInstalled(mods, manifest.id) && matches(manifest));
+  const own = ids.filter((id) => isCustomMod(id) && !owned.has(id)).map((id) => agents.find((agent) => agent.id === id)).filter((agent): agent is AgentSettings => agent !== undefined);
+  const searching = needle.length > 0 || kind !== "all";
+  // O filtro por ponto: os que esta tela conhece e algum mod do catálogo usa.
+  const kinds = KNOWN_POINTS.filter((point) => catalog.some((manifest) => pointsOf(manifest).includes(point)));
+
   return (
     <div className="grid gap-5">
+      <SettingsSection title={t("mods.title")} description={t("mods.description")}>
+        <div data-tour="settings-mods-search" className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-48 flex-1">
+            <SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input value={query} className="pl-9" placeholder={t("mods.search")} aria-label={t("mods.search")} onChange={(event) => setQuery(event.target.value)} />
+          </div>
+          {kinds.length > 1 && (
+            <SegmentedControl
+              label={t("mods.filter")}
+              value={kind}
+              options={[{ value: "all", label: t("mods.filter.all") }, ...kinds.map((point) => ({ value: point, label: t(`mods.filter.${point}` as Key) }))]}
+              onChange={setKind}
+            />
+          )}
+        </div>
+        <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.installedTitle")}</h4>
+        {mods.catalog === null
+          ? <p className="text-sm text-muted-foreground">{t("mods.catalog.none")}</p>
+          : installedIds.length === 0
+            ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.installedEmpty")}</p>
+            : <ul className="grid gap-2">{installedIds.map(installedRow)}</ul>}
+        {mods.catalog !== null && (
+          <>
+            <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.available")}</h4>
+            {available.length === 0
+              ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.availableEmpty")}</p>
+              : <ul className="grid gap-2">{available.map(availableRow)}</ul>}
+          </>
+        )}
+      </SettingsSection>
+
       <SettingsSection
-        title={t("mods.title")}
-        description={t("mods.description")}
+        title={t("mods.yours")}
+        description={t("mods.yours.description")}
         action={SITE_URL ? (
           <Button type="button" size="sm" data-tour="settings-mods-create" disabled={!canCreate || full} title={!canCreate ? t("plans.locked") : full ? t("mods.full", { max: MAX_MODS }) : t("mods.create.hint")} onClick={() => site(true)}>
             <PlusIcon aria-hidden="true" />{t("mods.create")}<ExternalLinkIcon aria-hidden="true" className="opacity-70" />
           </Button>
         ) : undefined}
       >
-        <ul className="grid gap-2">
-          {shown.filter((agent) => !isCustomMod(agent.id)).map(agentRow)}
-        </ul>
-        <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.yours")}</h4>
         {customs === 0
           ? <p className="text-sm text-muted-foreground">{t(canCreate ? "mods.empty.site" : "mods.empty.locked")}</p>
-          : <ul className="grid gap-2">{shown.filter((agent) => isCustomMod(agent.id)).map(agentRow)}</ul>}
-        {ready.length > 0 && (
-          <>
-            <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.templates")}</h4>
-            <ul className="grid gap-2">{ready.map(templateRow)}</ul>
-          </>
-        )}
-      </SettingsSection>
-
-      <SettingsSection title={t("mods.features.title")} description={t("mods.features.description")}>
-        <ul data-tour="settings-mods-features" className="grid gap-2">{FEATURE_MODS.map(featureRow)}</ul>
+          : <ul className="grid gap-2">{own.map(ownRow)}</ul>}
       </SettingsSection>
 
       <div className="grid gap-1.5">

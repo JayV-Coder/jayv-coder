@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
-  ModsSnapshot, ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
+  InstalledMods, ModsSnapshot, ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
 
@@ -62,7 +62,7 @@ export const commands = {
   getCoreSettings: () => invoke<CoreSnapshot>("get_core_settings"),
   saveCoreSettings: (settings: CoreSettings) => invoke<CoreSnapshot>("save_core_settings", { settings }),
   getMods: () => invoke<ModsSnapshot>("get_mods"),
-  saveModStates: (states: Record<string, boolean>) => invoke<ModsSnapshot>("save_mod_states", { states }),
+  saveMods: (state: InstalledMods) => invoke<ModsSnapshot>("save_mods", { state }),
   saveExpertise: (level: Expertise) => invoke<CoreSnapshot>("save_expertise", { level }),
   saveLeanCode: (enabled: boolean) => invoke<CoreSnapshot>("save_lean_code", { enabled }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
@@ -151,6 +151,9 @@ export interface CoreEvents {
   "link-changed": { link: Link };
   "translations-updated": null;
   "models-updated": null;
+  /** A instalação sozinha dos mods gravou alguma coisa (no login, ou o que
+   * outra máquina ou o site decidiu). */
+  "mods-changed": null;
   /** `now` é falso quando um pedido no ar deixou a troca para o próximo. */
   "settings-applied": { now: boolean };
   "usage-recorded": { projectId: string | null; chatId: string | null };

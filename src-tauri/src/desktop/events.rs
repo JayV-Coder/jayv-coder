@@ -28,6 +28,9 @@ pub const LINK_EVENT:&str="link-changed";
 pub const TRANSLATIONS_EVENT:&str="translations-updated";
 /// Os modelos dos agentes foram trocados pela lista que os CLIs deram.
 pub const MODELS_EVENT:&str="models-updated";
+/// A instalação sozinha dos mods gravou alguma coisa no fim de uma volta do
+/// sync (no login, ou o que outra máquina ou o site decidiu).
+pub const MODS_EVENT:&str="mods-changed";
 /// As configurações gravadas na tela de Configurações já valem: `now` diz se o
 /// orquestrador as recebeu na hora ou se um pedido no ar as deixou para o próximo.
 pub const SETTINGS_EVENT:&str="settings-applied";

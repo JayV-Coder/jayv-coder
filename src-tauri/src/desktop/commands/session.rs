@@ -5,7 +5,7 @@
 use crate::i18n::{failure, Text};
 use crate::cloud::{remote::Remote, session::{self, fetch_jwks, validate_offline, Identity, SessionError}};
 use crate::cloud::remote::Backend;
-use crate::desktop::events::{EnvironmentEvent, LinkEvent, ENVIRONMENT_EVENT, LINK_EVENT, MODELS_EVENT, TRANSLATIONS_EVENT};
+use crate::desktop::events::{EnvironmentEvent, LinkEvent, ENVIRONMENT_EVENT, LINK_EVENT, MODELS_EVENT, MODS_EVENT, TRANSLATIONS_EVENT};
 use crate::environment::Environment;
 use crate::desktop::{Lanes, QueueBell, SharedDesktopState, SharedWorkspace, SyncBell};
 use crate::local::global::{GlobalCache, LocaleRow};
@@ -217,6 +217,16 @@ pub(crate) async fn announce_links(app:AppHandle,connectivity:Connectivity) {
     while changes.changed().await.is_ok() {
         let link=*changes.borrow_and_update();
         let _=app.emit(LINK_EVENT,LinkEvent{link});
+    }
+}
+
+/// Avisa a tela quando a instalação sozinha mudou os mods (no login, ou o que
+/// outra máquina ou o site decidiu): ela relê a aba Mods e as configurações.
+pub(crate) async fn announce_mods(app:AppHandle,signal:crate::sync::ModsSignal) {
+    let mut changes=signal.watch();
+    while changes.changed().await.is_ok() {
+        changes.borrow_and_update();
+        let _=app.emit(MODS_EVENT,());
     }
 }
 

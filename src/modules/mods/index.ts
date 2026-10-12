@@ -1,12 +1,12 @@
 import { create } from "zustand";
-import { commands, onCore, type ModManifest, type ModsSnapshot } from "@/modules/core";
+import { commands, onCore, type InstalledMod, type InstalledMods, type ModAgent, type ModManifest, type ModsSnapshot } from "@/modules/core";
 import { compareVersions } from "@/modules/changelog";
 import { reportError } from "@/modules/feedback";
 import { useEntitlements, type FeatureKey } from "@/modules/plans";
 
-/** Os recursos opcionais que viraram mods (o `FEATURE_MODS` do núcleo e o
+/** Os recursos opcionais que um mod pode ligar (o `FEATURE_MODS` do núcleo e o
  * `engines.json` do repositório de mods). O núcleo, a conta e as organizações
- * ficam fora: não são mods. */
+ * ficam fora: não são de mod nenhum. */
 export const FEATURE_MODS = [
   "stats", "gateBoard", "liveFiles", "chatSearch", "projectNotes", "secondOpinion", "planFirst", "parallelTasks",
   "answerRecall", "leanCode", "symbolIndex", "mcp", "skills", "skillsHub", "conversationFind",
@@ -16,28 +16,41 @@ export type FeatureMod = (typeof FEATURE_MODS)[number];
 
 export const isFeatureMod = (id: string): id is FeatureMod => (FEATURE_MODS as readonly string[]).includes(id);
 
+/** Os pontos de extensão que esta tela sabe mostrar. O núcleo diz quais ele
+ * aplica (`points`); um ponto que esta tela não conhece aparece como "outro". */
+export const KNOWN_POINTS = ["llmEngines", "features", "agents"] as const;
+export type KnownPoint = (typeof KNOWN_POINTS)[number];
+
+const EMPTY: InstalledMods = { mods: {}, removed: [] };
+
 /** O que a tela sabe dos mods: o catálogo que desceu do repositório
- * `jayv-coder-mods` (nulo, nenhum desceu ainda), as escolhas gravadas e as do
- * rascunho da aba Mods, que só valem no Salvar, como o resto da tela. */
+ * `jayv-coder-mods` (nulo, nenhum desceu ainda), o estado gravado do ambiente
+ * e o rascunho da aba Mods — instalar, ligar, desligar e desinstalar só valem
+ * no Salvar, como o resto da tela. */
 interface ModsState {
   loaded: boolean;
   catalog: ModManifest[] | null;
   fetchedAt: string | null;
   appVersion: string;
-  /** As escolhas gravadas. */
-  saved: Record<string, boolean>;
-  /** As escolhas do rascunho. */
-  states: Record<string, boolean>;
+  /** Os pontos de extensão que o núcleo aplica. */
+  points: string[];
+  /** Os mods que valem agora, no gravado. */
+  active: string[];
+  /** O estado gravado. */
+  saved: InstalledMods;
+  /** O rascunho. */
+  draft: InstalledMods;
   saving: boolean;
 }
 
-export const useMods = create<ModsState>(() => ({ loaded: false, catalog: null, fetchedAt: null, appVersion: "0.0.0", saved: {}, states: {}, saving: false }));
+export const useMods = create<ModsState>(() => ({
+  loaded: false, catalog: null, fetchedAt: null, appVersion: "0.0.0", points: [...KNOWN_POINTS], active: [], saved: EMPTY, draft: EMPTY, saving: false,
+}));
 
-const sorted = (states: Record<string, boolean>) => JSON.stringify(Object.keys(states).sort().map((key) => [key, states[key]]));
+/** O que importa comparar: quem está instalado e se está ligado. */
+const shape = (state: InstalledMods) => JSON.stringify(Object.keys(state.mods).sort().map((id) => [id, state.mods[id].enabled]));
 
-/** O rascunho difere do gravado. Uma escolha igual ao padrão do mod continua
- * sendo uma escolha: ela fica gravada. */
-export const isModsDirty = (state: Pick<ModsState, "saved" | "states">) => sorted(state.saved) !== sorted(state.states);
+export const isModsDirty = (state: Pick<ModsState, "saved" | "draft">) => shape(state.saved) !== shape(state.draft);
 
 /** O texto de um mod no idioma da tela: o do idioma, o da língua (`pt` para
  * `pt-BR`), o inglês ou o primeiro que houver. */
@@ -48,58 +61,137 @@ export function modText(texts: Record<string, string> | undefined, locale: strin
   return texts[locale] ?? (near ? texts[near] : undefined) ?? texts.en ?? Object.values(texts)[0] ?? "";
 }
 
-/** O mod vale nesta versão do app. */
-export const usable = (manifest: ModManifest, appVersion: string) => !manifest.minApp || compareVersions(manifest.minApp, appVersion) <= 0;
+/** O mod do catálogo com o id pedido. */
+export const findMod = (catalog: ModManifest[] | null, id: string) => catalog?.find((manifest) => manifest.id === id);
 
-/** O mod do catálogo, do tipo e com o id pedidos. */
-export const findMod = (catalog: ModManifest[] | null, kind: ModManifest["kind"], id: string) => catalog?.find((manifest) => manifest.kind === kind && manifest.id === id);
+/** Os pontos que o mod usa. */
+export const pointsOf = (manifest: ModManifest) => Object.keys(manifest.contributes ?? {});
 
-/** Os mods prontos que esta versão sabe instalar. */
-export const templates = (catalog: ModManifest[] | null) => (catalog ?? []).filter((manifest) => manifest.kind === "template" && manifest.template !== undefined);
+/** A versão do app basta, mas o mod usa um ponto que este app não aplica. */
+export const unknownPoints = (manifest: ModManifest, points: readonly string[]) => pointsOf(manifest).filter((point) => !points.includes(point));
 
-/** Onde um recurso está no catálogo: nenhum catálogo desceu (vale o app), o
- * mod saiu do catálogo, pede um app mais novo ou está lá. */
-export type CatalogPresence = "unknown" | "absent" | "newer" | "present";
+/** O mod roda nesta versão: o `minApp` cabe e o app aplica todo ponto dele. */
+export const usable = (manifest: ModManifest, appVersion: string, points: readonly string[] = KNOWN_POINTS) =>
+  (!manifest.minApp || compareVersions(manifest.minApp, appVersion) <= 0) && unknownPoints(manifest, points).length === 0;
 
-export function presence(state: Pick<ModsState, "catalog" | "appVersion">, kind: ModManifest["kind"], id: string): CatalogPresence {
-  if (state.catalog === null) return "unknown";
-  const manifest = findMod(state.catalog, kind, id);
-  if (!manifest) return "absent";
-  return usable(manifest, state.appVersion) ? "present" : "newer";
+const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+
+/** Os motores de LLM que o mod liga. */
+export const modEngines = (manifest: ModManifest) => strings(manifest.contributes?.llmEngines);
+/** Os recursos que o mod liga. */
+export const modFeatures = (manifest: ModManifest) => strings(manifest.contributes?.features).filter(isFeatureMod);
+/** Os agentes que o mod traz. */
+export const modAgents = (manifest: ModManifest): ModAgent[] => (Array.isArray(manifest.contributes?.agents) ? manifest.contributes.agents : []);
+
+/** O id do agente que a entrada `index` do mod vira: o mesmo do núcleo e do
+ * site. */
+export const modAgentId = (modId: string, index: number) => (index === 0 ? `mod-${modId}` : `mod-${modId}-${index + 1}`) as `mod-${string}`;
+
+/** Os agentes (ids) que o mod traz: os motores de LLM e os agentes dele. */
+export const modAgentIds = (manifest: ModManifest): string[] => [...modEngines(manifest), ...modAgents(manifest).map((_agent, index) => modAgentId(manifest.id, index))];
+
+/** Os agentes que pertencem aos mods instalados no estado: não se apagam
+ * pela aba deles, saem pelo desinstalar do mod. */
+export function ownedAgents(catalog: ModManifest[] | null, state: InstalledMods): Set<string> {
+  return new Set((catalog ?? []).filter((manifest) => state.mods[manifest.id]).flatMap((manifest) => modAgents(manifest).map((_agent, index) => modAgentId(manifest.id, index))));
 }
 
-/** O recurso ligado no rascunho: a escolha de quem usa ou o padrão do mod
- * (ligado, sem catálogo). */
-export function modOn(state: Pick<ModsState, "catalog" | "states">, id: string) {
-  return state.states[id] ?? findMod(state.catalog, "feature", id)?.defaultOn ?? true;
+/** Instalado no rascunho. */
+export const isInstalled = (state: Pick<ModsState, "draft">, id: string) => id in state.draft.mods;
+
+/** Ligado no rascunho. */
+export const isOn = (state: Pick<ModsState, "draft">, id: string) => state.draft.mods[id]?.enabled ?? false;
+
+/** As dependências do mod que não estão instaladas e ligadas no rascunho. */
+export function missingRequirements(state: Pick<ModsState, "draft">, manifest: ModManifest): string[] {
+  return (manifest.requires ?? []).filter((other) => !isOn(state, other));
 }
 
-function apply(snapshot: ModsSnapshot) {
-  useMods.setState({ loaded: true, catalog: snapshot.catalog, fetchedAt: snapshot.fetchedAt, appVersion: snapshot.appVersion, saved: snapshot.states, states: snapshot.states });
+/** Os mods instalados que precisam deste (desinstalar ou desligar este os
+ * para). */
+export function dependents(state: Pick<ModsState, "draft" | "catalog">, id: string): ModManifest[] {
+  return (state.catalog ?? []).filter((manifest) => isInstalled(state, manifest.id) && (manifest.requires ?? []).includes(id));
+}
+
+/** O estado do rascunho com o mod e as dependências dele instalados e
+ * ligados. */
+export function withInstalled(state: InstalledMods, catalog: ModManifest[] | null, id: string): InstalledMods {
+  const mods: Record<string, InstalledMod> = { ...state.mods };
+  const removed = new Set(state.removed);
+  const queue = [id];
+  while (queue.length > 0) {
+    const next = queue.pop()!;
+    if (!mods[next]) mods[next] = { enabled: true, version: findMod(catalog, next)?.version ?? null };
+    else if (next === id) mods[next] = { ...mods[next], enabled: true };
+    removed.delete(next);
+    for (const other of findMod(catalog, next)?.requires ?? []) if (!mods[other] && findMod(catalog, other)) queue.push(other);
+  }
+  return { mods, removed: [...removed] };
+}
+
+/** Os valores de partida: os mods de fábrica instalados e todo instalado
+ * ligado. Nada se desinstala. */
+export function defaultsOf(state: InstalledMods, catalog: ModManifest[] | null): InstalledMods {
+  let next: InstalledMods = { mods: Object.fromEntries(Object.entries(state.mods).map(([id, mod]) => [id, { ...mod, enabled: true }])), removed: [] };
+  for (const manifest of catalog ?? []) if (manifest.preinstalled) next = withInstalled(next, catalog, manifest.id);
+  return next;
+}
+
+/** Como o mod está, para o rótulo da linha: ativo, desligado, esperando um
+ * app mais novo, sem uma dependência ou fora do catálogo. */
+export type ModStatus = "active" | "off" | "needsApp" | "missing" | "absent";
+
+export function statusOf(state: Pick<ModsState, "draft" | "catalog" | "appVersion" | "points">, id: string): ModStatus {
+  const manifest = findMod(state.catalog, id);
+  if (state.catalog !== null && !manifest) return "absent";
+  if (!isOn(state, id)) return "off";
+  if (manifest && !usable(manifest, state.appVersion, state.points)) return "needsApp";
+  if (manifest && missingRequirements(state, manifest).length > 0) return "missing";
+  return "active";
+}
+
+function apply(snapshot: ModsSnapshot, keepDraft: boolean) {
+  useMods.setState((state) => ({
+    loaded: true, catalog: snapshot.catalog, fetchedAt: snapshot.fetchedAt, appVersion: snapshot.appVersion, points: snapshot.points,
+    active: snapshot.active, saved: snapshot.state, draft: keepDraft ? state.draft : snapshot.state,
+  }));
   // O que os mods desligam vale como o que o plano não tem: some do menu, da
   // paleta e das abas.
   useEntitlements.setState({ disabled: new Set(snapshot.disabled) });
 }
 
 /** Relê o que o núcleo sabe. Com mudança pendente na aba Mods, o rascunho
- * fica: só o catálogo e o que está desligado mudam. */
+ * fica: só o catálogo, o gravado e o que está desligado mudam. */
 export async function loadMods() {
   try {
     const snapshot = await commands.getMods();
-    if (isModsDirty(useMods.getState())) {
-      useMods.setState({ loaded: true, catalog: snapshot.catalog, fetchedAt: snapshot.fetchedAt, appVersion: snapshot.appVersion, saved: snapshot.states });
-      useEntitlements.setState({ disabled: new Set(snapshot.disabled) });
-    } else {
-      apply(snapshot);
-    }
+    apply(snapshot, isModsDirty(useMods.getState()));
   } catch (error) {
     console.error("mods", error);
   }
 }
 
-/** Liga ou desliga um recurso no rascunho. */
-export function setModOn(id: FeatureMod, on: boolean) {
-  useMods.setState((state) => ({ states: { ...state.states, [id]: on } }));
+/** Instala o mod no rascunho, ligado, com as dependências. */
+export function installMod(id: string) {
+  useMods.setState((state) => ({ draft: withInstalled(state.draft, state.catalog, id) }));
+}
+
+/** Tira o mod do rascunho. O núcleo, ao salvar, roda o desinstalar dele e
+ * guarda o de fábrica entre os removidos, para não voltar sozinho. */
+export function uninstallMod(id: string) {
+  useMods.setState((state) => {
+    const { [id]: _gone, ...mods } = state.draft.mods;
+    return { draft: { ...state.draft, mods } };
+  });
+}
+
+/** Liga ou desliga o mod no rascunho. Ligar puxa as dependências. */
+export function setModEnabled(id: string, enabled: boolean) {
+  useMods.setState((state) => {
+    if (enabled) return { draft: withInstalled(state.draft, state.catalog, id) };
+    const current = state.draft.mods[id];
+    return current ? { draft: { ...state.draft, mods: { ...state.draft.mods, [id]: { ...current, enabled: false } } } } : state;
+  });
 }
 
 /** Grava o rascunho. Falso quando o núcleo recusou (o erro já foi mostrado). */
@@ -108,7 +200,7 @@ export async function saveModChanges(): Promise<boolean> {
   if (!isModsDirty(state)) return true;
   useMods.setState({ saving: true });
   try {
-    apply(await commands.saveModStates(state.states));
+    apply(await commands.saveMods(state.draft), false);
     return true;
   } catch (error) {
     reportError(error);
@@ -119,36 +211,39 @@ export async function saveModChanges(): Promise<boolean> {
 }
 
 export function discardMods() {
-  useMods.setState((state) => ({ states: state.saved }));
+  useMods.setState((state) => ({ draft: state.saved }));
 }
 
-/** Os valores de partida: sem escolha nenhuma, vale o padrão de cada mod. */
 export function restoreModDefaults() {
-  useMods.setState({ states: {} });
+  useMods.setState((state) => ({ draft: defaultsOf(state.draft, state.catalog) }));
 }
 
-/** Lê ao entrar, ao trocar de ambiente (cada um tem as suas escolhas) e ao
- * voltar para a janela (o catálogo novo desce na volta do sync). */
+/** Lê ao entrar, ao trocar de ambiente (cada um tem os seus mods), ao voltar
+ * para a janela e quando a instalação sozinha mudou alguma coisa (no login, ou
+ * o que outra máquina ou o site decidiu). */
 export function connectMods() {
   const focus = () => { if (document.visibilityState === "visible") void loadMods(); };
   window.addEventListener("focus", focus);
   const changed = onCore("environment-changed", () => {
-    useMods.setState({ saved: {}, states: {} });
+    useMods.setState({ saved: EMPTY, draft: EMPTY });
     void loadMods();
   });
+  const installed = onCore("mods-changed", () => void loadMods());
   return () => {
     window.removeEventListener("focus", focus);
     void changed.then((unlisten) => unlisten());
+    void installed.then((unlisten) => unlisten());
   };
 }
 
 /** Ao sair da conta, nada fica: a próxima conta lê o dela. */
 export function clearMods() {
-  useMods.setState({ loaded: false, catalog: null, fetchedAt: null, saved: {}, states: {}, saving: false });
+  useMods.setState({ loaded: false, catalog: null, fetchedAt: null, active: [], saved: EMPTY, draft: EMPTY, saving: false });
 }
 
-/** A página de mods do painel do site, no ambiente pedido: lá a pessoa cria,
- * edita e exclui os mods dela (`create` abre o formulário de criar). */
+/** A página de mods do painel do site, no ambiente pedido: lá a pessoa
+ * instala, liga e desliga os mods do catálogo e cria, edita e exclui os dela
+ * (`create` abre o formulário de criar). */
 export function modsSitePath(environment: string, create = false) {
   const query = new URLSearchParams({ environment });
   if (create) query.set("create", "1");
