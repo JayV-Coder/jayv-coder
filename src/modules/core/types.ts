@@ -350,42 +350,74 @@ export interface CustomModOptions {
   clearKey?: boolean;
 }
 
-/** O tipo de um mod do catálogo (`JayV-Coder/jayv-coder-mods`): liga um
- * motor de LLM do app, liga um recurso opcional do app ou é um mod pronto que
- * a pessoa instala como um mod seu. */
-export type ModKind = "llm" | "feature" | "template";
-
-/** A definição de um mod pronto: a mesma de um mod criado, sem o que é da
- * máquina (a chave, a aprovação dos servidores MCP). */
-export type ModTemplate =
+/** Um agente que um mod do catálogo traz (o ponto `agents`): a definição de
+ * um mod criado, sem o que é da máquina (a chave, a aprovação dos servidores
+ * MCP). Instalado, vira o agente `mod-<id do mod>` (`-2`, `-3`… para os
+ * seguintes). */
+export type ModAgent =
   | { kind: "api"; protocol: "openai" | "anthropic"; baseUrl: string; keyRequired: boolean; models?: string[] }
   | { kind: "cli"; command: string; args: string[]; planArgs?: string[]; edits?: boolean; models?: string[] };
 
-/** Um mod como o catálogo o descreve. Os textos vêm nos dez idiomas. */
-export interface ModManifest {
-  id: string;
-  kind: ModKind;
-  category: string;
-  /** O recurso do plano que liga o mod; nulo, nenhum. */
-  plan: string | null;
-  /** Só no recurso: se ele nasce ligado. */
-  defaultOn?: boolean | null;
-  /** A versão do app a partir da qual o mod vale. */
-  minApp?: string | null;
-  docs?: string;
-  homepage?: string;
-  title: Record<string, string>;
-  summary: Record<string, string>;
-  template?: ModTemplate;
+/** O que um mod traz a cada ponto de extensão do app, pela chave do ponto. Os
+ * pontos que esta versão conhece têm tipo; um ponto novo chega como
+ * desconhecido, e o mod espera um app mais novo. */
+export interface ModContributions {
+  /** Motores de integração com LLM do app (`claude`, `codex`, …). */
+  llmEngines?: string[];
+  /** Recursos opcionais do app (`stats`, `mcp`, …). */
+  features?: string[];
+  /** Agentes de linha de comando ou de API. */
+  agents?: ModAgent[];
+  [point: string]: unknown;
 }
 
-/** O que o núcleo sabe dos mods: o catálogo em cache (nulo, nenhum desceu), as
- * escolhas de quem usa e o que fica desligado no fim. */
+/** Um mod como o catálogo (`JayV-Coder/jayv-coder-mods`) o descreve, no
+ * formato genérico: um pacote com nome, versão e autor, que traz alguma coisa
+ * a um ou mais pontos de extensão do app. Os textos vêm nos dez idiomas. */
+export interface ModManifest {
+  id: string;
+  version?: string | null;
+  category: string;
+  /** O recurso do plano que o mod pede; nulo, nenhum. */
+  plan: string | null;
+  /** A versão do app a partir da qual o mod vale. */
+  minApp?: string | null;
+  /** Instalado, e ligado, no login de quem ainda não o tem. */
+  preinstalled?: boolean;
+  /** Os mods de que ele precisa instalados e ligados. */
+  requires?: string[];
+  author?: string | null;
+  docs?: string | null;
+  homepage?: string | null;
+  title: Record<string, string>;
+  summary: Record<string, string>;
+  contributes: ModContributions;
+}
+
+/** Um mod instalado num ambiente. */
+export interface InstalledMod {
+  enabled: boolean;
+  version?: string | null;
+  installedAt?: string | null;
+}
+
+/** O que o ambiente fez com os mods: os instalados e os que vêm de fábrica e
+ * a pessoa desinstalou (não voltam sozinhos). Sincroniza com o ambiente. */
+export interface InstalledMods {
+  mods: Record<string, InstalledMod>;
+  removed: string[];
+}
+
+/** O que o núcleo sabe dos mods: o catálogo em cache (nulo, nenhum desceu), o
+ * estado do ambiente, os mods que valem, o que fica desligado no fim e os
+ * pontos de extensão que esta versão aplica. */
 export interface ModsSnapshot {
   catalog: ModManifest[] | null;
   fetchedAt: string | null;
-  states: Record<string, boolean>;
+  state: InstalledMods;
+  active: string[];
   disabled: string[];
+  points: string[];
   appVersion: string;
 }
 

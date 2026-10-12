@@ -15,6 +15,7 @@ jayv-store = { path = "../jayv-store" }
 jayv-agents = { path = "../jayv-agents" }
 jayv-jev = { path = "../jayv-jev" }
 jayv-plans = { path = "../jayv-plans" }
+jayv-mods = { path = "../jayv-mods" }
 jayv-orgs = { path = "../jayv-orgs" }
 jayv-code = { path = "../jayv-code" }
 jayv-memory = { path = "../jayv-memory" }

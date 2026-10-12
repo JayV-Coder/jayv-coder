@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "jayv"
-version = "0.94.0"
+version = "0.95.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2154,6 +2154,7 @@ dependencies = [
  "jayv-jev",
  "jayv-live",
  "jayv-memory",
+ "jayv-mods",
  "jayv-orchestration",
  "jayv-orgs",
  "jayv-plans",
@@ -2192,6 +2193,7 @@ dependencies = [
  "chrono",
  "dirs",
  "jayv-base",
+ "jayv-mods",
  "libc",
  "regex",
  "reqwest 0.12.28",
@@ -2314,6 +2316,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jayv-mods"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "jayv-orchestration"
 version = "0.1.0"
 dependencies = [
@@ -2359,6 +2372,7 @@ dependencies = [
  "jayv-base",
  "jayv-cloud",
  "jayv-jev",
+ "jayv-mods",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2393,6 +2407,7 @@ dependencies = [
  "jayv-code",
  "jayv-jev",
  "jayv-memory",
+ "jayv-mods",
  "jayv-orgs",
  "jayv-plans",
  "jayv-store",

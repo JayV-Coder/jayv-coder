@@ -1,12 +1,13 @@
-//! Os mods: o catálogo que desceu do repositório `jayv-coder-mods`, o que quem
-//! usa ligou e desligou na aba Mods e o que fica desligado no fim (o que a tela
-//! esconde, como faz com o que o plano não tem).
+//! Os mods: o catálogo que desceu do repositório `jayv-coder-mods`, o que o
+//! ambiente instalou e ligou e o que fica desligado no fim (o que a tela
+//! esconde, como faz com o que o plano não tem). A aba Mods instala, liga,
+//! desliga e desinstala pelo `save_mods`; a instalação sozinha dos mods de
+//! fábrica roda no fim de cada volta do sync (`sync::round`).
 
 use crate::desktop::SharedWorkspace;
 use crate::i18n::{failure, Text};
-use jayv_plans::mods::Manifest;
+use jayv_mods::{InstalledMods, Manifest};
 use serde::Serialize;
-use std::collections::BTreeMap;
 use tauri::State;
 
 #[derive(Debug,Serialize)]
@@ -16,18 +17,26 @@ pub struct ModsSnapshot {
     pub catalog:Option<Vec<Manifest>>,
     /// Quando o catálogo desceu.
     pub fetched_at:Option<String>,
-    /// O que quem usa escolheu (só os recursos que viraram mods).
-    pub states:BTreeMap<String,bool>,
-    /// Os recursos e motores de LLM que os mods desligam agora.
+    /// O estado do ambiente: o gravado mais o que vem de fábrica.
+    pub state:InstalledMods,
+    /// Os mods que valem agora (instalados, ligados, com as dependências e
+    /// que rodam nesta versão).
+    pub active:Vec<String>,
+    /// Os recursos, motores e agentes que os mods desligam agora.
     pub disabled:Vec<String>,
+    /// Os pontos de extensão que esta versão sabe aplicar.
+    pub points:Vec<&'static str>,
     pub app_version:&'static str,
 }
 
 fn snapshot(workspace:&crate::workspace::WorkspaceStore)->anyhow::Result<ModsSnapshot> {
-    let cached=workspace.mod_catalog()?;
+    let view=workspace.mods_view()?;
+    // O que a tela esconde é o que o núcleo usa: o mesmo `Entitlements`.
     let disabled=workspace.entitlements()?.disabled().iter().cloned().collect();
-    let (catalog,fetched_at)=match cached { Some((mods,at))=>(Some(mods),Some(at)), None=>(None,None) };
-    Ok(ModsSnapshot{catalog,fetched_at,states:workspace.mod_states()?,disabled,app_version:env!("CARGO_PKG_VERSION")})
+    Ok(ModsSnapshot{
+        catalog:view.catalog,fetched_at:view.fetched_at,state:view.state,active:view.active.into_iter().collect(),disabled,
+        points:jayv_plans::mods::REGISTRY.keys(),app_version:env!("CARGO_PKG_VERSION"),
+    })
 }
 
 #[tauri::command]
@@ -36,11 +45,13 @@ pub(crate) async fn get_mods(workspace:State<'_,SharedWorkspace>)->Result<ModsSn
     snapshot(&workspace).map_err(failure)
 }
 
-/// Grava o que quem usa ligou e desligou. O atendente relê o plano e os mods no
-/// começo de cada pedido: o próximo já vale com a escolha nova.
+/// Grava o estado que a aba Mods pediu: o que entrou se instala (com as
+/// dependências), o que saiu se desinstala, e cada um fica ligado ou não. O
+/// atendente relê o plano, os mods e os agentes no começo de cada pedido: o
+/// próximo já vale com o estado novo.
 #[tauri::command]
-pub(crate) async fn save_mod_states(workspace:State<'_,SharedWorkspace>,states:BTreeMap<String,bool>)->Result<ModsSnapshot,Text>{crate::desktop::require_session()?;
+pub(crate) async fn save_mods(workspace:State<'_,SharedWorkspace>,state:InstalledMods)->Result<ModsSnapshot,Text>{crate::desktop::require_session()?;
     let mut workspace=workspace.lock().await;
-    workspace.save_mod_states(&states).map_err(failure)?;
+    workspace.apply_mods(state).map_err(failure)?;
     snapshot(&workspace).map_err(failure)
 }

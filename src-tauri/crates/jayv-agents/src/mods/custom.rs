@@ -139,7 +139,7 @@ fn checked_args(args:&[String],name:&str)->Result<Vec<String>> {
 }
 
 impl CustomOptions {
-    fn checked(mut self)->Result<Self> {
+    pub(crate) fn checked(mut self)->Result<Self> {
         self.name=self.name.trim().to_string();
         if self.name.is_empty()||self.name.chars().count()>MAX_NAME||self.name.chars().any(char::is_control) { bail!(Text::new("mods.nameInvalid").with("max",MAX_NAME as u32)); }
         let name=self.name.clone();

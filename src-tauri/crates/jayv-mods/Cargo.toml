@@ -1,0 +1,18 @@
+# O sistema de mods, sem assunto: o catálogo que desce do repositório
+# `jayv-coder-mods`, o que cada ambiente instalou e ligou e os pontos de
+# extensão pelos quais um mod acrescenta algo ao app. Não conhece LLM, plano
+# nem tela: quem aplica cada ponto é a camada dona dele. Depende só de
+# bibliotecas.
+[package]
+name = "jayv-mods"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true

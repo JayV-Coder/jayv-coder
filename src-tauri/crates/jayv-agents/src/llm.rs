@@ -527,7 +527,7 @@ static SECRETS:std::sync::LazyLock<std::sync::RwLock<HashMap<AgentId,String>>>=s
 /// A chave guardada do mod, se houver.
 pub fn secret(agent:AgentId)->Option<String> { SECRETS.read().ok()?.get(&agent).cloned().filter(|key|!key.trim().is_empty()) }
 
-fn remember_secrets(connection:&Connection)->Result<()> {
+pub(crate) fn remember_secrets(connection:&Connection)->Result<()> {
     let mut statement=connection.prepare("SELECT agent,secret FROM llm_secrets")?;
     let rows=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let found:HashMap<AgentId,String>=rows.into_iter().filter_map(|(agent,secret)|Some((AgentId::parse(&agent).ok()?,secret))).collect();

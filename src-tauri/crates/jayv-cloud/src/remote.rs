@@ -185,9 +185,10 @@ impl Remote {
     }
 
     /// O catálogo é público: vai só com a chave do projeto, sem o token de
-    /// quem está logado.
-    pub fn mod_catalog_request(&self)->reqwest::Result<Request> {
-        self.http.request(Method::GET,format!("{}/functions/v1/mods/catalog",self.base)).header("apikey",&self.key).bearer_auth(&self.key).build()
+    /// quem está logado. `route` é `catalog/v2` (o formato genérico) ou
+    /// `catalog` (o antigo, da função de antes dele).
+    pub fn mod_catalog_request(&self,route:&str)->reqwest::Result<Request> {
+        self.http.request(Method::GET,format!("{}/functions/v1/mods/{route}",self.base)).header("apikey",&self.key).bearer_auth(&self.key).build()
     }
 
     async fn send(&self,request:reqwest::Result<Request>)->Result<String,RemoteError> {
@@ -282,8 +283,14 @@ impl Backend for Remote {
         self.get(self.org_extensions_request()).await.map(Some)
     }
 
+    /// O catálogo genérico; sem ele — a função de antes dele, que não conhece
+    /// a rota, ou o repositório ainda sem o arquivo —, o antigo, que o núcleo
+    /// também lê. Sem rede, nem tenta o segundo.
     async fn mod_catalog(&self)->Result<Option<Value>,RemoteError> {
-        self.get(self.mod_catalog_request()).await.map(Some)
+        match self.get(self.mod_catalog_request("catalog/v2")).await {
+            Err(RemoteError::Rejected{..}|RemoteError::Server(_))=>self.get(self.mod_catalog_request("catalog")).await.map(Some),
+            other=>other.map(Some),
+        }
     }
 }
 
@@ -430,8 +437,8 @@ mod tests {
     }
 
     #[test] fn the_mod_catalog_comes_from_the_public_function() {
-        let request=remote().mod_catalog_request().unwrap();
-        assert_eq!((request.method(),request.url().path()),(&Method::GET,"/functions/v1/mods/catalog"));
+        let request=remote().mod_catalog_request("catalog/v2").unwrap();
+        assert_eq!((request.method(),request.url().path()),(&Method::GET,"/functions/v1/mods/catalog/v2"));
         assert_ne!(request.headers()["Authorization"],"Bearer jwt","o catálogo é público: o token de quem usa não vai");
     }
 

@@ -13,6 +13,7 @@ jayv-base = { path = "../jayv-base" }
 jayv-cloud = { path = "../jayv-cloud" }
 jayv-agents = { path = "../jayv-agents" }
 jayv-jev = { path = "../jayv-jev" }
+jayv-mods = { path = "../jayv-mods" }
 anyhow.workspace = true
 chrono.workspace = true
 rusqlite.workspace = true

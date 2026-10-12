@@ -14,8 +14,8 @@
 //! antigo ou com um cache ilegível, ele continua travado. Sem cache, o resto
 //! vale como antes — quem já usava um recurso não o perde por estar offline.
 //!
-//! Os mods (`crate::mods`) apertam por cima do plano: o recurso cujo mod está
-//! desligado, ou fora do catálogo, vale como fora do plano. O travado continua
+//! Os mods (`crate::mods`) apertam por cima do plano: o recurso, o motor ou o
+//! agente que nenhum mod ativo traz vale como fora do plano. O travado continua
 //! ligado — quem trava é o plano, e o mod não destrava nem desliga o núcleo.
 
 use crate::core_settings::CoreSettings;
@@ -80,9 +80,6 @@ pub struct Entitlements { known:Option<BTreeSet<String>>, locked:BTreeSet<String
 impl Default for Entitlements {
     fn default()->Self { Self{known:None,locked:core(),defaults:BTreeMap::new(),limits:PlanLimits::default(),disabled:BTreeSet::new()} }
 }
-
-/// Os motores de LLM do app, que o catálogo de mods liga.
-fn builtin_agents()->Vec<&'static str> { AgentId::ALL.iter().map(|agent|agent.key()).collect() }
 
 fn core()->BTreeSet<String> { CORE.iter().map(|key|key.to_string()).collect() }
 
@@ -196,7 +193,7 @@ struct Extra { locked:Vec<String>, defaults:BTreeMap<String,bool>, limits:PlanLi
 /// A coluna nova do cache, no banco que já existia.
 pub fn ensure(connection:&Connection)->Result<()> {
     connection.execute_batch(SCHEMA)?;
-    connection.execute_batch(crate::mods::CACHE)?;
+    crate::mods::ensure(connection)?;
     let present:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('plan_features') WHERE name='extra')",[],|row|row.get(0))?;
     if !present { connection.execute("ALTER TABLE plan_features ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'",[])?; }
     Ok(())
@@ -216,7 +213,7 @@ pub fn replace(connection:&Connection,remote:&RemoteFeatures)->Result<()> {
 pub fn load(connection:&Connection)->Result<Entitlements> {
     let raw:Option<(String,String)>=connection.query_row("SELECT features,extra FROM plan_features WHERE id=1",[],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
     // Os mods que não se leem não desligam nada: vale o plano, como antes deles.
-    let disabled=crate::mods::disabled_in(connection,&builtin_agents()).unwrap_or_else(|error|{ eprintln!("mods: {error:#}"); BTreeSet::new() });
+    let disabled=crate::mods::disabled_in(connection).unwrap_or_else(|error|{ eprintln!("mods: {error:#}"); BTreeSet::new() });
     Ok(match raw {
         None=>Entitlements::default(),
         Some((features,extra))=>{
@@ -266,14 +263,17 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
     /// plano trava continua ligado, e o motor de LLM fora do catálogo sai do
     /// roteamento.
     #[test] fn mods_tighten_on_top_of_the_plan() {
-        let connection=database();
+        let mut connection=database();
         connection.execute_batch("CREATE TABLE account_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);").expect("conta");
+        crate::llm::ensure(&connection).expect("agentes");
         replace(&connection,&RemoteFeatures{locked:vec![PLAN_FIRST.into()],..remote(&[SECOND_OPINION,"stats",MCP])}).expect("plano");
-        let mut mods:Vec<serde_json::Value>=crate::mods::FEATURE_MODS.iter().filter(|id|**id!=MCP)
-            .map(|id|serde_json::json!({"id":id,"kind":"feature","defaultOn":true,"title":{},"summary":{}})).collect();
-        mods.push(serde_json::json!({"id":"claude","kind":"llm","title":{},"summary":{}}));
-        assert!(crate::mods::replace(&connection,&serde_json::json!({"schema":1,"mods":mods})).expect("catálogo"));
-        crate::mods::save_states(&connection,&BTreeMap::from([(SECOND_OPINION.to_string(),false),(PLAN_FIRST.to_string(),false)])).expect("escolhas");
+        let generic=|id:&str,point:&str|serde_json::json!({"id":id,"preinstalled":true,"contributes":{point:[id]}});
+        let mut mods:Vec<serde_json::Value>=crate::mods::FEATURE_MODS.iter().filter(|id|**id!=MCP).map(|id|generic(id,"features")).collect();
+        mods.push(generic("claude","llmEngines"));
+        assert!(crate::mods::replace(&connection,&serde_json::json!({"schema":2,"mods":mods})).expect("catálogo"));
+        let mut wanted=crate::mods::view(&connection).expect("lê").state;
+        for id in [SECOND_OPINION,PLAN_FIRST] { wanted.mods.get_mut(id).expect("mod").enabled=false; }
+        crate::mods::apply(&mut connection,wanted).expect("escolhas");
         let entitlements=load(&connection).expect("lê");
         assert!(!entitlements.allows(SECOND_OPINION),"desligado na aba Mods");
         assert!(entitlements.allows(PLAN_FIRST),"travado pelo plano: o mod não desliga");
