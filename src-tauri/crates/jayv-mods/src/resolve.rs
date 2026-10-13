@@ -25,7 +25,21 @@ pub fn effective(stored:Option<&InstalledMods>,catalog:&[Manifest],legacy:&BTree
         if state.mods.contains_key(&manifest.id)||state.removed.contains(&manifest.id) { continue; }
         state.mods.insert(manifest.id.clone(),Installed::on(manifest.version.clone()));
     }
-    with_requirements(state,catalog).cleaned()
+    with_requirements(with_required(state,catalog),catalog).cleaned()
+}
+
+/// O estado com os mods essenciais do catálogo instalados e ligados, seja o
+/// que for que se gravou (o app de antes, outra máquina, um estado antigo):
+/// ninguém os desliga nem os desinstala.
+pub fn with_required(mut state:InstalledMods,catalog:&[Manifest])->InstalledMods {
+    for manifest in catalog.iter().filter(|manifest|manifest.required) {
+        state.removed.remove(&manifest.id);
+        match state.mods.get_mut(&manifest.id) {
+            Some(installed)=>installed.enabled=true,
+            None=>{ state.mods.insert(manifest.id.clone(),Installed::on(manifest.version.clone())); }
+        }
+    }
+    state
 }
 
 /// O estado com as dependências de cada mod instalado também instaladas (e
@@ -130,7 +144,7 @@ pub struct Applied { pub state:InstalledMods, pub failed:Vec<(String,String)> }
 /// instalado e desligado e o resto segue.
 pub fn apply(connection:&mut Connection,registry:&Registry,catalog:&[Manifest],before:&InstalledMods,after:InstalledMods,version:Option<&str>,strict:bool)->Result<Applied> {
     let by_id=by_id(catalog);
-    let mut state=with_requirements(after.cleaned(),catalog);
+    let mut state=with_requirements(with_required(after.cleaned(),catalog),catalog);
     let now=chrono::Utc::now().to_rfc3339();
     for id in before.mods.keys().filter(|id|!state.mods.contains_key(*id)) {
         if by_id.get(id.as_str()).is_some_and(|manifest|manifest.preinstalled) { state.removed.insert(id.clone()); }
@@ -164,14 +178,17 @@ pub fn apply(connection:&mut Connection,registry:&Registry,catalog:&[Manifest],b
                 savepoint.rollback()?;
                 eprintln!("mods: instalar {}: {error:#}",manifest.id);
                 failed.push((manifest.id.clone(),format!("{error:#}")));
-                if let Some(installed)=state.mods.get_mut(&manifest.id) { installed.enabled=false; }
+                // O essencial continua ligado: a próxima volta tenta de novo.
+                if !manifest.required { if let Some(installed)=state.mods.get_mut(&manifest.id) { installed.enabled=false; } }
             }
         }
     }
     let state=state.cleaned();
     let left:Vec<Manifest>=state::ledger(&transaction)?.into_values().collect();
     let off=disabled(Some(catalog),&left,&state,version,registry);
-    state::write(&transaction,&state,Some(&legacy_states(registry,&off)))?;
+    // Gravar de novo o mesmo estado só faria subir a linha outra vez.
+    let legacy=legacy_states(registry,&off);
+    if state::stored(&transaction)?.as_ref()!=Some(&state)||state::legacy(&transaction)?!=legacy { state::write(&transaction,&state,Some(&legacy))?; }
     transaction.commit()?;
     Ok(Applied{state,failed})
 }
@@ -227,6 +244,22 @@ pub fn reconcile(connection:&mut Connection,registry:&Registry,version:Option<&s
         let later=effective(Some(&decided),&all,&BTreeMap::from([("mcp".to_string(),false)]));
         assert_eq!(later.mods.keys().collect::<Vec<_>>(),["mcp"]);
         assert!(later.is_on("mcp"),"a chave antiga só vale antes de gravar");
+    }
+
+    /// O essencial fica instalado e ligado, mesmo que o estado gravado diga
+    /// outra coisa (o app de antes deixava desligar).
+    #[test] fn required_mods_stay_installed_and_on() {
+        let mut all=catalog();
+        for manifest in all.iter_mut() { manifest.required=true; }
+        let mut optional=manifest("pack",json!({"things":["a"]}));
+        optional.preinstalled=false;
+        all.push(optional);
+        let stored=InstalledMods{mods:BTreeMap::from([("stats".to_string(),on(false)),("pack".to_string(),on(false))]),removed:BTreeSet::from(["mcp".to_string()])};
+        let state=effective(Some(&stored),&all,&BTreeMap::new());
+        assert!(state.is_on("stats")&&state.is_on("mcp")&&state.removed.is_empty(),"desligado e desinstalado voltam");
+        assert!(!state.is_on("pack"),"o que não é essencial fica como a pessoa deixou");
+        assert!(effective(None,&all,&BTreeMap::from([("stats".to_string(),false)])).is_on("stats"),"a escolha do app 0.94 não desliga o essencial");
+        assert!(disabled(Some(&all),&[],&state,None,&REGISTRY).iter().all(|id|id=="a"),"nada do essencial sai");
     }
 
     #[test] fn installing_brings_the_requirements() {
@@ -344,6 +377,17 @@ pub fn reconcile(connection:&mut Connection,registry:&Registry,version:Option<&s
         assert_eq!(log().last().map(String::as_str),Some("-good"));
         assert!(reconcile(&mut connection,&POINTS,Some("9.0.0")).expect("de novo").is_none());
         assert!(!state::ledger(&connection).expect("lê").contains_key("good"));
+        // Pela tela, desligar ou desinstalar um essencial não pega.
+        let mut essential=mods.clone(); essential[0].required=true;
+        let before=state::stored(&connection).expect("lê").expect("estado");
+        let mut off=before.clone(); off.mods.insert("good".into(),on(false));
+        assert!(apply(&mut connection,&POINTS,&essential,&before,off,Some("9.0.0"),true).expect("grava").state.is_on("good"),"o essencial que tinha saído volta, instalado");
+        let mut gone=state::stored(&connection).expect("lê").expect("estado"); gone.mods.remove("good");
+        let kept=apply(&mut connection,&POINTS,&essential,&before,gone,Some("9.0.0"),true).expect("grava").state;
+        assert!(kept.is_on("good")&&!kept.removed.contains("good"));
+        let before=state::stored(&connection).expect("lê").expect("estado");
+        let mut forget=before.clone(); forget.mods.remove("good"); forget.removed.insert("good".into());
+        apply(&mut connection,&POINTS,&mods,&before,forget,Some("9.0.0"),true).expect("volta ao opcional");
         // Pela tela, a falha volta como erro e nada se grava.
         let before=state::stored(&connection).expect("lê").expect("estado");
         let mut retry=before.clone(); retry.mods.remove("bad");
@@ -353,6 +397,6 @@ pub fn reconcile(connection:&mut Connection,registry:&Registry,version:Option<&s
         let mut again=before.clone(); again.mods.insert("bad".into(),on(true));
         assert!(apply(&mut connection,&POINTS,&mods,&before,again,Some("9.0.0"),true).is_err());
         assert_eq!(state::stored(&connection).expect("lê").expect("estado"),before);
-        assert_eq!(written(&connection),["good","later"]);
+        assert_eq!(written(&connection),["good","good","later"],"o essencial desinstalado antes voltou a se instalar");
     }
 }

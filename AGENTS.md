@@ -165,6 +165,12 @@ podem trazer é:
 Os mods com `preinstalled` se instalam sozinhos, ligados, no fim da volta do
 sync (a primeira é a do login); o que a pessoa desinstala não volta.
 
+Os mods com `required` são essenciais: o núcleo os mantém instalados e ligados
+seja qual for o estado gravado (`resolve::with_required`), e a tela e o site não
+oferecem desligar nem desinstalar. Regra do dono: os recursos do app são
+essenciais; os motores de LLM e os agentes (Ollama, LM Studio) se desligam e
+desinstalam.
+
 ## Mensagem de commit: detalha cada alteração
 
 A mensagem de todo commit no `main` começa por `vX.Y.Z: resumo` (a versão

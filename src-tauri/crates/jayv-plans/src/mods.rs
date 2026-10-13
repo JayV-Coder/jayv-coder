@@ -148,7 +148,8 @@ pub fn owned_agents(connection:&Connection)->Result<BTreeSet<String>> {
     /// motor e os dois mods de agentes, todos de fábrica.
     fn today()->Vec<Value> {
         let mut mods:Vec<Value>=engines().iter().map(|id|generic(id,json!({"llmEngines":[id]}),true)).collect();
-        mods.extend(FEATURE_MODS.iter().map(|id|generic(id,json!({"features":[id]}),true)));
+        // Os recursos são essenciais; os motores e os agentes, não.
+        mods.extend(FEATURE_MODS.iter().map(|id|{ let mut feature=generic(id,json!({"features":[id]}),true); feature["required"]=json!(true); feature }));
         mods.push(generic("ollama",json!({"agents":[{"kind":"api","protocol":"openai","baseUrl":"http://localhost:11434/v1","keyRequired":false,"models":[]}]}),true));
         mods.push(generic("lm-studio",json!({"agents":[{"kind":"api","protocol":"openai","baseUrl":"http://localhost:1234/v1","keyRequired":false,"models":[]}]}),true));
         mods
@@ -176,27 +177,34 @@ pub fn owned_agents(connection:&Connection)->Result<BTreeSet<String>> {
         assert!(disabled_in(&connection).expect("lê").is_empty(),"tudo ligado");
         assert!(reconcile(&mut connection).expect("de novo").is_none());
         assert_eq!(owned_agents(&connection).expect("lê"),BTreeSet::from(["mod-lm-studio".to_string(),"mod-ollama".to_string()]));
-        // Desligar pela tela: o recurso e o agente saem.
+        // Pela tela: o recurso essencial não desliga nem sai; o motor e o
+        // agente, sim.
         let mut wanted=view(&connection).expect("lê").state;
         wanted.mods.get_mut("stats").expect("stats").enabled=false;
+        wanted.mods.remove("mcp");
+        wanted.mods.get_mut("codex").expect("codex").enabled=false;
         wanted.mods.remove("ollama");
         apply(&mut connection,wanted).expect("grava");
         let off=disabled_in(&connection).expect("lê");
-        assert!(off.contains("stats")&&!off.contains("mcp"));
+        assert_eq!(off,BTreeSet::from(["codex".to_string(),"mod-ollama".to_string()]),"só o motor e o agente saem");
         assert!(!crate::llm::load(&connection).expect("lê").agents.iter().any(|agent|agent.id.key()=="mod-ollama"),"desinstalar apaga o agente");
-        assert!(view(&connection).expect("lê").state.removed.contains("ollama"));
+        let state=view(&connection).expect("lê").state;
+        assert!(state.removed.contains("ollama")&&!state.removed.contains("mcp")&&state.is_on("stats")&&state.is_on("mcp"));
         // O app 0.94 de outra máquina lê a chave antiga.
-        assert_eq!(state::legacy(&connection).expect("lê").get("stats"),Some(&false));
+        assert_eq!(state::legacy(&connection).expect("lê").get("codex"),Some(&false));
+        assert_eq!(state::legacy(&connection).expect("lê").get("stats"),Some(&true));
     }
 
-    /// Quem já usava o app 0.94 e desligou um recurso não o vê voltar.
-    #[test] fn the_choices_of_the_old_app_carry_over() {
+    /// O motor que a pessoa desligou no app 0.94 continua desligado; o
+    /// recurso, que agora é essencial, volta a ligar.
+    #[test] fn the_choices_of_the_old_app_carry_over_except_for_essentials() {
         let mut connection=database();
-        connection.execute("INSERT INTO account_settings VALUES('mods','{\"leanCode\":false}','now')",[]).expect("escolha antiga");
+        connection.execute("INSERT INTO account_settings VALUES('mods','{\"leanCode\":false,\"cursor\":false}','now')",[]).expect("escolha antiga");
         assert!(disabled_in(&connection).expect("lê").contains("leanCode"),"sem catálogo, vale a escolha");
         assert!(replace(&connection,&json!({"schema":2,"mods":today()})).expect("catálogo"));
         let applied=reconcile(&mut connection).expect("aplica").expect("instalou");
-        assert!(!applied.state.is_on("leanCode")&&applied.state.mods.contains_key("leanCode"));
-        assert!(disabled_in(&connection).expect("lê").contains("leanCode"));
+        assert!(applied.state.is_on("leanCode"),"o essencial liga");
+        assert!(!applied.state.is_on("cursor")&&applied.state.mods.contains_key("cursor"),"o motor fica desligado");
+        assert_eq!(disabled_in(&connection).expect("lê"),BTreeSet::from(["cursor".to_string()]));
     }
 }

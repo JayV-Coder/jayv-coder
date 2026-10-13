@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }), Toaster: () => null }));
 
 const {
-  defaultsOf, dependents, installMod, isModsDirty, modAgentIds, missingRequirements, ownedAgents, restoreModDefaults, setModEnabled, statusOf, uninstallMod,
+  defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, missingRequirements, ownedAgents, restoreModDefaults, setModEnabled, statusOf, uninstallMod,
   unknownPoints, usable, useMods, withInstalled,
 } = await import("./index");
 
@@ -28,6 +28,20 @@ const state = (mods: Record<string, boolean>, removed: string[] = []): State => 
 const on = (value: State) => Object.fromEntries(Object.entries(value.mods).map(([id, item]) => [id, item.enabled]));
 
 describe("the generic mod manager", () => {
+  it("never turns off or uninstalls an essential mod", () => {
+    const essential = mod("skills", { features: ["skills"] }, { preinstalled: true, required: true });
+    const catalog = [...CATALOG, essential];
+    const saved = state({ skills: true, stats: true });
+    useMods.setState({ catalog, saved, draft: saved });
+    expect(isRequired(catalog, "skills")).toBe(true);
+    expect(isRequired(catalog, "stats")).toBe(false);
+    setModEnabled("skills", false);
+    uninstallMod("skills");
+    setModEnabled("stats", false);
+    expect(on(useMods.getState().draft)).toEqual({ skills: true, stats: false });
+    useMods.setState({ catalog: CATALOG, saved: state({}), draft: state({}) });
+  });
+
   it("knows when a mod runs on this app", () => {
     expect(usable(STATS, "0.95.0", POINTS)).toBe(true);
     expect(usable(STATS, "0.94.9", POINTS)).toBe(false);

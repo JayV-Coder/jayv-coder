@@ -43,6 +43,9 @@ pub struct Manifest {
     /// Instalado, e ligado, no login de quem ainda não o tem; quem o
     /// desinstalou não o recebe de volta.
     #[serde(default)] pub preinstalled:bool,
+    /// Essencial: o app precisa dele. Fica sempre instalado e ligado; ninguém
+    /// o desliga nem o desinstala (o plano continua mandando no que ele traz).
+    #[serde(default,skip_serializing_if="std::ops::Not::not")] pub required:bool,
     /// Os mods de que ele precisa instalados e ligados.
     #[serde(default,skip_serializing_if="Vec::is_empty")] pub requires:Vec<String>,
     #[serde(default,skip_serializing_if="Option::is_none")] pub author:Option<String>,
@@ -98,7 +101,7 @@ impl Manifest {
             _=>return None,
         };
         Some(Self{
-            id:legacy.id,version:None,category:legacy.category,plan:legacy.plan,min_app:legacy.min_app,preinstalled,requires:vec![],author:None,
+            id:legacy.id,version:None,category:legacy.category,plan:legacy.plan,min_app:legacy.min_app,preinstalled,required:false,requires:vec![],author:None,
             docs:legacy.docs,homepage:legacy.homepage,title:legacy.title,summary:legacy.summary,contributes:BTreeMap::from([(point.to_string(),contribution)]),
         })
     }
@@ -176,7 +179,9 @@ pub fn cached(connection:&Connection)->Result<Option<(Vec<Manifest>,String)>> {
     fn generic(id:&str,contributes:Value)->Value { json!({"id":id,"version":"1.0.0","category":"project","plan":null,"minApp":"0.95.0","preinstalled":true,"title":{"en":id},"summary":{"en":id},"contributes":contributes}) }
 
     #[test] fn both_formats_are_read_and_the_old_one_becomes_generic() {
-        let new=parse(&json!({"schema":2,"mods":[generic("stats",json!({"features":["stats"]})),generic("pack",json!({"features":["stats","mcp"],"agents":[{"kind":"api"}]}))]})).expect("v2");
+        let mut essential=generic("stats",json!({"features":["stats"]})); essential["required"]=json!(true);
+        let new=parse(&json!({"schema":2,"mods":[essential,generic("pack",json!({"features":["stats","mcp"],"agents":[{"kind":"api"}]}))]})).expect("v2");
+        assert!(new[0].required&&!new[1].required,"o essencial vem dito no manifesto");
         assert_eq!(new.iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["stats","pack"]);
         assert_eq!(new[1].contributes.len(),2,"um mod traz vários pontos");
         let old=parse(&json!({"schema":1,"mods":[
