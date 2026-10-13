@@ -14,7 +14,7 @@ import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
 import { allows, inPlan, locks, settingsTabFeature, type FeatureKey } from "@/modules/plans";
-import { installMod, isInstalled, isOn, modFeatures, modsSitePath, modText, pointsOf, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
+import { installMod, isInstalled, isOn, isRequired, modFeatures, modsSitePath, modText, pointsOf, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
 import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
@@ -172,7 +172,9 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     const name = modText(manifest.title, locale);
     const id = manifest.id;
     const features = modFeatures(manifest);
-    // O mod que só traz recursos travados pelo plano não tem o que mudar.
+    // O essencial e o mod que só traz recursos travados pelo plano não têm o
+    // que mudar.
+    if (isRequired(modsState.catalog, id)) continue;
     if (features.length > 0 && pointsOf(manifest).length === 1 && features.every((feature) => locks(ctx.rights, feature))) continue;
     const reachable = (manifest.plan === null || inPlan(ctx.rights, manifest.plan as FeatureKey)) && usable(manifest, modsState.appVersion, modsState.points);
     const open = (change: () => void) => () => { openSettingsTab("mods"); change(); };

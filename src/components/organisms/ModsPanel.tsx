@@ -6,7 +6,7 @@ import { useEnvironment } from "@/modules/environments";
 import { reportError } from "@/modules/feedback";
 import { formatSince, useLocale, useT, type Key } from "@/modules/i18n";
 import {
-  dependents, findMod, installMod, isInstalled, isOn, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modsSitePath, modText,
+  dependents, findMod, installMod, isInstalled, isOn, isRequired, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modsSitePath, modText,
   ownedAgents, pointsOf, setModEnabled, statusOf, uninstallMod, unknownPoints, usable, useMods,
 } from "@/modules/mods";
 import { inPlan, locks, useEntitlements, useFeature, type FeatureKey } from "@/modules/plans";
@@ -79,14 +79,24 @@ export function ModsPanel() {
     const needing = dependents(mods, id).map((other) => modText(other.title, locale));
     const missing = manifest ? missingRequirements(mods, manifest) : [];
     const newer = manifest && !usable(manifest, mods.appVersion, mods.points);
+    // O essencial não se desliga nem se desinstala; o plano ainda manda no que
+    // ele traz.
+    const required = isRequired(mods.catalog, id);
     return (
       <li key={id} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
-        <Switch checked={lockedOn || on} disabled={lockedOn || status === "absent"} aria-label={t("mods.enabled", { name })} onCheckedChange={(next) => setModEnabled(id, next)} />
+        <Switch
+          checked={lockedOn || required || on}
+          disabled={lockedOn || required || status === "absent"}
+          title={required ? t("mods.required.hint") : undefined}
+          aria-label={t("mods.enabled", { name })}
+          onCheckedChange={(next) => setModEnabled(id, next)}
+        />
         <div className="grid min-w-0 flex-1 gap-1">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>
             {manifest?.version && <Badge variant="outline" className="font-mono text-caption">{t("mods.version", { version: manifest.version })}</Badge>}
             {manifest && pointBadges(manifest)}
+            {required && <Badge variant="outline" title={t("mods.required.hint")}>{t("mods.required")}</Badge>}
             {lockedOn && <Badge variant="outline">{t("mods.feature.locked")}</Badge>}
             {outside && <Badge variant="outline">{t("mods.locked")}</Badge>}
             {status === "absent" && <Badge variant="warning">{t("mods.feature.absent")}</Badge>}
@@ -108,7 +118,7 @@ export function ModsPanel() {
             <GlobeIcon aria-hidden="true" />
           </Button>
         )}
-        {!lockedOn && (
+        {!lockedOn && !required && (
           <ConfirmAction
             title={t("mods.uninstall.title", { name })}
             description={[t("mods.uninstall.description"), needing.length > 0 ? t("mods.uninstall.dependents", { names: needing.join(", ") }) : ""].filter(Boolean).join(" ")}

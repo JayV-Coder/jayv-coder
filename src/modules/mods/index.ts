@@ -96,6 +96,9 @@ export function ownedAgents(catalog: ModManifest[] | null, state: InstalledMods)
   return new Set((catalog ?? []).filter((manifest) => state.mods[manifest.id]).flatMap((manifest) => modAgents(manifest).map((_agent, index) => modAgentId(manifest.id, index))));
 }
 
+/** Essencial: o app precisa dele, e ele não se desliga nem se desinstala. */
+export const isRequired = (catalog: ModManifest[] | null, id: string) => findMod(catalog, id)?.required === true;
+
 /** Instalado no rascunho. */
 export const isInstalled = (state: Pick<ModsState, "draft">, id: string) => id in state.draft.mods;
 
@@ -180,6 +183,7 @@ export function installMod(id: string) {
  * guarda o de fábrica entre os removidos, para não voltar sozinho. */
 export function uninstallMod(id: string) {
   useMods.setState((state) => {
+    if (isRequired(state.catalog, id)) return state;
     const { [id]: _gone, ...mods } = state.draft.mods;
     return { draft: { ...state.draft, mods } };
   });
@@ -189,6 +193,7 @@ export function uninstallMod(id: string) {
 export function setModEnabled(id: string, enabled: boolean) {
   useMods.setState((state) => {
     if (enabled) return { draft: withInstalled(state.draft, state.catalog, id) };
+    if (isRequired(state.catalog, id)) return state;
     const current = state.draft.mods[id];
     return current ? { draft: { ...state.draft, mods: { ...state.draft.mods, [id]: { ...current, enabled: false } } } } : state;
   });

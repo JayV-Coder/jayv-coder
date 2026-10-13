@@ -100,6 +100,7 @@ describe("paletteCommands", () => {
         mod("mcp", { features: ["mcp"] }, { plan: "mcp" }),
         mod("ollama", { agents: [{ kind: "api", protocol: "openai", baseUrl: "http://localhost:11434/v1", keyRequired: false }] }, { plan: "customMods" }),
         mod("future", { teleport: ["x"] }),
+        mod("skills", { features: ["skills"] }, { plan: "skills", required: true }),
       ] as never,
     });
     const found = paletteCommands(context());
@@ -109,6 +110,7 @@ describe("paletteCommands", () => {
     expect(label("mod-uninstall-mcp")).toBe("Uninstall mod: Mcp");
     expect(label("mod-install-ollama")).toBe("Install mod: Ollama");
     expect(found.map((command) => command.id)).not.toContain("mod-install-future");
+    for (const id of ["mod-install-skills", "mod-toggle-skills", "mod-uninstall-skills"]) expect(found.map((command) => command.id), "o essencial não muda").not.toContain(id);
     const locked = ids({ rights: { features: new Set<string>(), locked: new Set<string>(["stats"]) } });
     expect(locked).not.toContain("mod-toggle-stats");
     expect(locked).not.toContain("mod-install-ollama");
