@@ -1,6 +1,6 @@
 {
   "id": "llmMods",
-  "category": "agents",
+  "category": "mods",
   "since": "0.93.0",
   "plan": "customMods",
   "commands": [],

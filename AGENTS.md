@@ -143,6 +143,10 @@ pela paleta (Ctrl+K) ou em Configurações › App › Tutoriais.
 
 ## Mods: o sistema é genérico
 
+Na documentação, as páginas de mods (`llmMods`, `modCatalog`) ficam na categoria
+`mods`, não em `agents`: mod não é assunto de agente. Página nova sobre mods usa
+essa categoria.
+
 Mod é do sistema, não de um assunto (regra do dono do projeto): o crate
 `jayv-mods` não sabe o que um mod faz. Um mod do catálogo
 (`JayV-Coder/jayv-coder-mods`) diz, em `contributes`, o que traz a cada **ponto
