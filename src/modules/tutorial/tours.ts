@@ -92,6 +92,12 @@ export const TOURS: Tour[] = [
     ],
   },
   {
+    id: "plans", view: "plans",
+    steps: [
+      { feature: "plans", target: "nav-plans" },
+    ],
+  },
+  {
     id: "profile", view: "profile",
     steps: [
       { feature: "profilePhoto" },

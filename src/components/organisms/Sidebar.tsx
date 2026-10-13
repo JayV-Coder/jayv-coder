@@ -117,7 +117,7 @@ export function Sidebar() {
           <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
           {can.stats && <NavItem data-tour="nav-stats" active={view === "stats"} mark={<ChartColumnIcon />} shortcut="stats" onClick={() => openStats({ kind: "global" })}>{t("nav.stats")}</NavItem>}
           <NavItem active={view === "status"} mark={<ActivityIcon />} shortcut="system" onClick={() => navigate("status")}>{t("nav.system")}</NavItem>
-          <NavItem active={view === "plans"} mark={<CreditCardIcon />} onClick={() => navigate("plans")}>{t("nav.plans")}</NavItem>
+          <NavItem data-tour="nav-plans" active={view === "plans"} mark={<CreditCardIcon />} onClick={() => navigate("plans")}>{t("nav.plans")}</NavItem>
         </nav>
       ) : (
         <div className="flex min-h-0 flex-col">
