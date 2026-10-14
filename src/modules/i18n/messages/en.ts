@@ -1743,6 +1743,8 @@ export const en = {
   "whatsNew.item.modelsOffHint.detail": "An agent that is on with every model off shows a notice in its Models list, and the request failure names those agents and says to turn on a model. Load from the CLI also works with unsaved changes now: it merges the list into your draft instead of staying disabled.",
   "whatsNew.item.policyBlameFix.title": "The organization is no longer blamed when no agent is on",
   "whatsNew.item.policyBlameFix.detail": "A request in an organization project only says the organization's LLM policy left no allowed agent or model when the policy really switched one off. Otherwise it now says what is missing (no agent or model turned on in Settings).",
+  "whatsNew.item.chatPermissionsCommandsOn.title": "Commands covered by an always-on permission show as ticked",
+  "whatsNew.item.chatPermissionsCommandsOn.detail": "When the organization keeps Run commands, Git or Network always on, the specific-commands list ticks and locks the commands that permission covers, labelled \"Always on by <organization>\".",
   "whatsNew.item.chatPermissionsOn.title": "Chat permissions the organization keeps always on",
   "whatsNew.item.chatPermissionsOn.detail": "In the site's Permissions tab, each chat permission (run commands, Git, network) can now be Free, Always on or Blocked, and the box sits on the same screen as the blocked commands. In the app, an always-on one comes switched on and locked in every chat of the organization's project; a blocked one stays disabled.",
   "docs.commandPermissions.title": "Command permissions of the organization",
