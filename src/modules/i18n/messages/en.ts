@@ -1330,7 +1330,7 @@ export const en = {
   "guidance.noFittingModel": "no configured model fits this request",
   "guidance.unknownProvider": "the selected model points to the provider `{provider}`, which does not exist",
   "guidance.policyBlocked": "the LLM policy of @{org} leaves no allowed agent or model for it",
-  "guidance.policyFix": "Turn on, in Settings, an agent and a model that @{org} allows, or ask one of its owners or maintainers to allow the ones you use.",
+  "guidance.policyFix": "Open Settings in the app, turn on an agent and one of its models, picking from what @{org} allows. The organization's owners and maintainers set that on the JayV site, in the organization's Agents and models tab, and can allow the ones you use.",
   "notifications.title": "Notifications",
   "notifications.unread": { one: "{count} unread", other: "{count} unread" },
   "notifications.allRead": "All caught up",
