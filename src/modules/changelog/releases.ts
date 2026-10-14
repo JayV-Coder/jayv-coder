@@ -32,6 +32,12 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    version: "0.101.2", date: "2026-10-14",
+    items: [
+      { kind: "fix", id: "modelsOffHint" },
+    ],
+  },
+  {
     version: "0.101.1", date: "2026-10-14",
     items: [
       { kind: "fix", id: "policyBlameFix" },

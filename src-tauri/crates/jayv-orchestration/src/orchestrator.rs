@@ -911,7 +911,11 @@ impl Orchestrator {
         } else if self.config.models.is_empty() {
             Text::new("guidance.noModels")
         } else if !self.config.models.values().any(|model|model.enabled) {
-            Text::new("guidance.noActiveModel")
+            // Agente ligado sem nenhum modelo ligado: a tela mostra o agente
+            // como ligado, então a orientação o nomeia e manda ligar o modelo.
+            let mut on:Vec<&str>=self.config.providers.iter().filter(|(_,provider)|provider.enabled).map(|(name,_)|name.as_str()).collect();
+            on.sort_unstable();
+            if on.is_empty() { Text::new("guidance.noActiveModel") } else { Text::new("guidance.agentNoModel").with("agents",on.join(", ")) }
         } else if self.providers.is_empty() {
             Text::new("guidance.noAgent")
         } else if selection.provider=="jev" {
@@ -921,7 +925,7 @@ impl Orchestrator {
         } else {
             return None;
         };
-        let fix=match problem.key.as_str() { "guidance.policyBlocked"=>Text::new("guidance.policyFix").with("org",self.policy_scope.as_deref().unwrap_or_default()), _=>Text::new("guidance.fix") };
+        let fix=match problem.key.as_str() { "guidance.agentNoModel"=>Text::new("guidance.agentNoModelFix"), "guidance.policyBlocked"=>Text::new("guidance.policyFix").with("org",self.policy_scope.as_deref().unwrap_or_default()), _=>Text::new("guidance.fix") };
         Some(i18n::notice(&[Text::new("guidance.failed").with("problem",problem),fix]))
     }
 
@@ -2552,5 +2556,25 @@ mod tests {
         assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.policyFix"]);
         assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.policyBlocked").with("org","acme"))));
         assert!(crate::i18n::for_model(&response).contains("@acme"));
+    }
+
+    /// O agente está ligado, mas nenhum modelo dele: a orientação nomeia o
+    /// agente e manda ligar um modelo, em vez de dizer só "nenhum modelo".
+    #[tokio::test]
+    async fn an_agent_on_with_every_model_off_is_named_in_the_guidance() {
+        let root=tempfile::tempdir().expect("temporary repository");
+        let mut orchestrator=Orchestrator::new(root.path().join("missing-config.yaml"),root.path().to_path_buf()).expect("orchestrator");
+        let settings=crate::llm::LlmSettings{
+            agents:vec![crate::llm::AgentSettings{id:crate::llm::AgentId::Claude,enabled:true,command:"claude".into(),timeout:300,options:serde_json::Value::Null}],
+            models:vec![crate::llm::AgentModel{agent:crate::llm::AgentId::Claude,model:"sonnet".into(),enabled:false,capabilities:vec!["chat".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000}],
+        };
+        orchestrator.use_llm(&settings);
+
+        let result=orchestrator.process("Explique este projeto",Some("test"),&Pulse::silent()).await;
+
+        let response=result.result.expect("orientação").response;
+        let lines=crate::i18n::read_notice(&response).expect("aviso");
+        assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.agentNoModelFix"]);
+        assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.agentNoModel").with("agents","claude"))));
     }
 }
