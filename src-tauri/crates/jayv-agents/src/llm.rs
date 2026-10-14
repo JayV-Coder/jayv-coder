@@ -407,6 +407,20 @@ impl Grants {
         }
     }
 
+    /// O que sobra do liberado depois das permissões do chat que a organização
+    /// desliga (`shell`, `git`, `network`): a permissão desligada não vale, e
+    /// os comandos que ela cobre saem da lista (`shell` cobre todos).
+    pub fn without_kinds(&self,kinds:&[String])->Self {
+        if kinds.is_empty() { return self.clone(); }
+        let has=|kind:&str|kinds.iter().any(|known|known==kind);
+        Self{
+            shell:self.shell&&!has("shell"),
+            git:self.git&&!has("git"),
+            network:self.network&&!has("network"),
+            commands:self.commands.iter().filter(|command|blocking_kinds(kinds,command).is_empty()).cloned().collect(),
+        }
+    }
+
     /// Algum comando aprovado mexe no git. No Codex é o `.git` aberto.
     pub fn needs_git(&self)->bool { self.git||self.commands.iter().any(|command|program(command)=="git") }
 
@@ -432,6 +446,25 @@ pub fn command_blocked(blocked:&[String],command:&str)->bool {
         let mine=rule.split_whitespace().collect::<Vec<_>>();
         !mine.is_empty()&&mine.len()<=words.len()&&mine.iter().zip(&words).all(|(left,right)|left==right)
     })
+}
+
+/// As permissões do chat desligadas pela organização que cobrem o comando:
+/// `shell` cobre qualquer um, `git` os do git e `network` os que acessam a rede.
+pub fn blocking_kinds(kinds:&[String],command:&str)->Vec<String> {
+    kinds.iter().filter(|kind|match kind.as_str() {
+        "shell"=>true,
+        "git"=>program(command)=="git",
+        "network"=>reaches_network(command),
+        _=>false,
+    }).cloned().collect()
+}
+
+/// O comando fala com a rede. No git só contam os subcomandos que falam com o
+/// remoto: `git add` e `git commit` ficam na máquina.
+fn reaches_network(command:&str)->bool {
+    let words=command.split_whitespace().collect::<Vec<_>>();
+    if words.first().copied()==Some("git") { return words.get(1).is_some_and(|word|matches!(*word,"fetch"|"pull"|"push"|"clone"|"ls-remote"|"submodule")); }
+    fetches(command)
 }
 
 fn program(command:&str)->&str { command.split_whitespace().next().unwrap_or_default() }

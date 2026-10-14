@@ -41,6 +41,11 @@ pub struct LlmPolicy {
     /// Quem bloqueia cada regra (`git push` → `["acme"]`), para a tela dizer
     /// "Bloqueado por acme".
     pub command_sources:BTreeMap<String,Vec<String>>,
+    /// As permissões do seletor do chat (`shell`, `git`, `network`) que a
+    /// organização desliga: nenhuma pessoa as liga nos projetos dela.
+    pub blocked_grants:Vec<String>,
+    /// Quem desliga cada permissão (`git` → `["acme"]`).
+    pub grant_sources:BTreeMap<String,Vec<String>>,
     pub deny:Vec<String>,
     pub local_only:Vec<String>,
     pub safe_agents:bool,
@@ -72,7 +77,9 @@ impl LlmPolicy {
     pub fn allows_agent(&self,agent:&str)->bool { self.agents.as_ref().is_none_or(|agents|agents.iter().any(|allowed|allowed==agent)) }
 
     /// A política bloqueia este comando (começa por uma regra bloqueada).
-    pub fn blocks_command(&self,command:&str)->bool { crate::llm::command_blocked(&self.blocked_commands,command) }
+    pub fn blocks_command(&self,command:&str)->bool {
+        crate::llm::command_blocked(&self.blocked_commands,command)||!crate::llm::blocking_kinds(&self.blocked_grants,command).is_empty()
+    }
 
     /// As organizações que bloqueiam o comando, ou, sem a origem da regra, as
     /// do projeto (`fallback`).
@@ -81,12 +88,16 @@ impl LlmPolicy {
         for (rule,sources) in &self.command_sources {
             if crate::llm::command_blocked(std::slice::from_ref(rule),command) { for org in sources { if !orgs.contains(org) { orgs.push(org.clone()); } } }
         }
+        for kind in crate::llm::blocking_kinds(&self.blocked_grants,command) {
+            for org in self.grant_sources.get(&kind).into_iter().flatten() { if !orgs.contains(org) { orgs.push(org.clone()); } }
+        }
         if orgs.is_empty() { orgs.push(fallback.to_string()); }
         orgs
     }
 
-    /// O que o desenvolvedor liberou, sem os comandos bloqueados.
-    pub fn restrict_grants(&self,grants:&crate::llm::Grants)->crate::llm::Grants { grants.without_blocked(&self.blocked_commands) }
+    /// O que o desenvolvedor liberou, sem os comandos bloqueados e sem as
+    /// permissões do chat que a organização desligou.
+    pub fn restrict_grants(&self,grants:&crate::llm::Grants)->crate::llm::Grants { grants.without_blocked(&self.blocked_commands).without_kinds(&self.blocked_grants) }
 
     /// Os agentes e modelos de quem usa, com o que a política proíbe desligado.
     pub fn restrict_llm(&self,settings:&LlmSettings)->LlmSettings {
@@ -247,6 +258,21 @@ impl LlmPolicy {
         assert_eq!((granted.shell,granted.git,granted.network),(false,false,true),"tudo ou o Git inteiro não vale com comando bloqueado");
         assert_eq!(granted.commands,["git add"]);
         assert_eq!(policy(json!({"blocked_commands":["npm publish"]})).restrict_grants(&asked).git,true,"outra ferramenta bloqueada não mexe no Git");
+        assert_eq!(LlmPolicy::default().restrict_grants(&asked),asked);
+    }
+
+    #[test] fn a_chat_permission_the_organization_switches_off_is_never_granted() {
+        let off=policy(json!({"blocked_grants":["git","network"],"grant_sources":{"git":["acme"],"network":["acme","outra"]}}));
+        let asked=crate::llm::Grants{shell:true,git:true,network:true,commands:vec!["git add".into(),"npm test".into(),"npm install".into(),"git push".into(),"curl".into()]};
+        let granted=off.restrict_grants(&asked);
+        assert_eq!((granted.shell,granted.git,granted.network),(true,false,false),"só as desligadas caem");
+        assert_eq!(granted.commands,["npm test"],"git e rede saem; o que não fala com a rede fica");
+        assert!(off.blocks_command("git commit -m x")&&off.blocks_command("npm install left-pad")&&!off.blocks_command("make"));
+        assert_eq!(off.blocking_orgs("git push","fallback"),["acme","outra"],"git push é git e fala com a rede");
+        assert_eq!(off.blocking_orgs("git add .","fallback"),["acme"],"git add não fala com a rede");
+        let no_shell=policy(json!({"blocked_grants":["shell"]})).restrict_grants(&asked);
+        assert_eq!((no_shell.shell,no_shell.git,no_shell.network,no_shell.commands.len()),(false,true,true,0),"rodar comandos desligado tira todos os comandos");
+        assert_eq!(policy(json!({"blocked_grants":["shell"]})).blocking_orgs("ls","padrao"),["padrao"],"sem origem, a organização do projeto");
         assert_eq!(LlmPolicy::default().restrict_grants(&asked),asked);
     }
 

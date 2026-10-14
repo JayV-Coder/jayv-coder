@@ -237,6 +237,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
         all.push(
           { id: `org-site-mcp-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteMcp", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "mcp")).catch(reportError) },
           { id: `org-site-permissions-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSitePermissions", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
+          { id: `org-site-chat-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteChat", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "chat")).catch(reportError) },
           { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
         );
       }

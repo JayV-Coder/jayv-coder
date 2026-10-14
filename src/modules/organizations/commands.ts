@@ -68,3 +68,46 @@ export function blockedCommandsOf(policy: unknown, orgSlug: string): BlockedComm
   }
   return found;
 }
+
+/** As permissões do chat (`shell`, `git`, `network`) que as organizações
+ * desligam em um projeto, cada uma com as organizações que a desligam. Vêm
+ * do servidor em `blocked_grants` e `grant_sources`, cadastradas na aba Chat
+ * do site. */
+export type BlockedGrants = Record<string, string[]>;
+
+export const GRANT_KINDS = ["shell", "git", "network"] as const;
+export type GrantKind = (typeof GRANT_KINDS)[number];
+
+export function blockedGrantsOf(policy: unknown, orgSlug: string): BlockedGrants {
+  const found: BlockedGrants = {};
+  const row = (policy ?? {}) as { blocked_grants?: unknown; grant_sources?: unknown };
+  const sources = row.grant_sources && typeof row.grant_sources === "object" ? row.grant_sources as Record<string, unknown> : {};
+  const listed = Array.isArray(row.blocked_grants) ? row.blocked_grants.map(String) : Object.keys(sources);
+  const slugs = orgSlug.split(", ").filter(Boolean);
+  for (const kind of listed) {
+    if (!(GRANT_KINDS as readonly string[]).includes(kind)) continue;
+    const from = Array.isArray(sources[kind]) ? (sources[kind] as unknown[]).map(String) : slugs;
+    found[kind] = from.length > 0 ? from : slugs;
+  }
+  return found;
+}
+
+const NETWORK_WORDS = ["install", "i", "add", "ci", "fetch", "pull", "push", "clone", "update", "upgrade", "download", "sync"];
+const GIT_REMOTE_WORDS = ["fetch", "pull", "push", "clone", "ls-remote", "submodule"];
+
+/** As organizações cuja permissão do chat desligada cobre a regra do
+ * catálogo: "rodar comandos" cobre todas, "Git" as do git e "rede" as que
+ * acessam a rede (instalar, baixar, falar com o remoto). O mesmo recorte do
+ * núcleo (`blocking_kinds`). */
+export function grantBlockersOf(blocked: BlockedGrants, rule: string): string[] {
+  const [program = "", sub = ""] = words(rule);
+  const network = program === "git"
+    ? GIT_REMOTE_WORDS.includes(sub)
+    : ["curl", "wget", "gh"].includes(program) || words(rule).slice(1, 3).some((word) => NETWORK_WORDS.includes(word));
+  const orgs: string[] = [];
+  for (const [kind, found] of Object.entries(blocked)) {
+    const covers = kind === "shell" || (kind === "git" && program === "git") || (kind === "network" && network);
+    if (covers) for (const org of found) if (!orgs.includes(org)) orgs.push(org);
+  }
+  return orgs;
+}
