@@ -41,6 +41,7 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
   const allBlockers = orgsOf(Object.keys(blocked));
   const locked = (kind: (typeof KINDS)[number]) => [...new Set([...(kinds[kind] ?? []), ...(kind === "shell" ? allBlockers : kind === "git" ? gitBlockers : [])])];
   const isOn = (kind: (typeof KINDS)[number]) => grants[kind] || (enabled[kind] !== undefined && locked(kind).length === 0);
+  const kept: BlockedGrants = Object.fromEntries(KINDS.filter((kind) => enabled[kind] !== undefined && locked(kind).length === 0).map((kind) => [kind, enabled[kind]]));
   const active = KINDS.filter(isOn).length + grants.commands.length;
   useEffect(() => { void loadGrants(chat.id); }, [chat.id]);
   useIntentHandler("commandPermissions", () => { setOpen(true); load(true); });
@@ -99,7 +100,7 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
           <p className="text-xs leading-snug text-muted-foreground">{anyBlocked ? t("grants.commands.blockedHint") : t("grants.commands.hint")}</p>
           <div className="grid gap-1">
             {COMMAND_CATALOG.map(({ tool, subcommands }) => (
-              <CommandGroup key={tool} tool={tool} subcommands={subcommands} selected={grants.commands} blocked={blocked} kinds={kinds} onToggle={toggleCommand} />
+              <CommandGroup key={tool} tool={tool} subcommands={subcommands} selected={grants.commands} blocked={blocked} kinds={kinds} kept={kept} onToggle={toggleCommand} />
             ))}
           </div>
         </div>
@@ -127,21 +128,26 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
 }
 
 /** Um programa do catálogo: ele inteiro e cada subcomando, para liberar um a um. */
-function CommandGroup({ tool, subcommands, selected, blocked, kinds, onToggle }: {
-  tool: string; subcommands: string[]; selected: string[]; blocked: Record<string, string[]>; kinds: BlockedGrants; onToggle: (rule: string, on: boolean) => void;
+function CommandGroup({ tool, subcommands, selected, blocked, kinds, kept, onToggle }: {
+  tool: string; subcommands: string[]; selected: string[]; blocked: Record<string, string[]>; kinds: BlockedGrants; kept: BlockedGrants; onToggle: (rule: string, on: boolean) => void;
 }) {
   const t = useT();
   const rows = [tool, ...subcommands.map((sub) => `${tool} ${sub}`)];
-  const count = rows.filter((rule) => selected.includes(rule)).length;
-  const row = (rule: string) => {
+  const stateOf = (rule: string) => {
     const byRule = rule === tool ? conflictsWith(blocked, rule) : blockersOf(blocked, rule);
     const orgs = [...new Set([...byRule, ...grantBlockersOf(kinds, rule)])];
+    return { orgs, keepers: orgs.length === 0 ? grantBlockersOf(kept, rule) : [] };
+  };
+  const count = rows.filter((rule) => { const { orgs, keepers } = stateOf(rule); return orgs.length === 0 && (keepers.length > 0 || selected.includes(rule)); }).length;
+  const row = (rule: string) => {
+    const { orgs, keepers } = stateOf(rule);
     const label = rule === tool ? (subcommands.length > 0 ? t("grants.command.all", { tool }) : tool) : rule.slice(tool.length + 1);
     return (
       <label key={rule} htmlFor={`grant-cmd-${rule}`} className={cn("flex items-center gap-2 rounded-md px-1.5 py-1 text-xs", orgs.length > 0 && "opacity-55")}>
-        <Checkbox id={`grant-cmd-${rule}`} checked={orgs.length === 0 && selected.includes(rule)} disabled={orgs.length > 0} onCheckedChange={(on) => onToggle(rule, on === true)} />
+        <Checkbox id={`grant-cmd-${rule}`} checked={orgs.length === 0 && (keepers.length > 0 || selected.includes(rule))} disabled={orgs.length > 0 || keepers.length > 0} onCheckedChange={(on) => onToggle(rule, on === true)} />
         <code className="min-w-0 truncate font-mono">{label}</code>
         {orgs.length > 0 && <span className="ms-auto flex-none text-caption text-muted-foreground">{t("grants.blockedBy", { orgs: orgs.join(", ") })}</span>}
+        {keepers.length > 0 && <span className="ms-auto flex-none text-caption text-muted-foreground">{t("grants.enabledBy", { orgs: keepers.join(", ") })}</span>}
       </label>
     );
   };

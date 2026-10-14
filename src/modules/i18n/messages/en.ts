@@ -1738,6 +1738,8 @@ export const en = {
   "whatsNew.item.chatPermissions.detail": "Owners and maintainers choose in the site's new Chat tab which chat permissions (run commands, write to Git, use the network) people may switch on in the organization's projects. In the app, a blocked permission shows disabled in Permissions as \"Blocked by <organization>\" and the agent is never given it.",
   "whatsNew.item.policyBlameFix.title": "The organization is no longer blamed when no agent is on",
   "whatsNew.item.policyBlameFix.detail": "A request in an organization project only says the organization's LLM policy left no allowed agent or model when the policy really switched one off. Otherwise it now says what is missing (no agent or model turned on in Settings).",
+  "whatsNew.item.chatPermissionsCommandsOn.title": "Commands covered by an always-on permission show as ticked",
+  "whatsNew.item.chatPermissionsCommandsOn.detail": "When the organization keeps Run commands, Git or Network always on, the specific-commands list ticks and locks the commands that permission covers, labelled \"Always on by <organization>\".",
   "whatsNew.item.chatPermissionsOn.title": "Chat permissions the organization keeps always on",
   "whatsNew.item.chatPermissionsOn.detail": "In the site's Permissions tab, each chat permission (run commands, Git, network) can now be Free, Always on or Blocked, and the box sits on the same screen as the blocked commands. In the app, an always-on one comes switched on and locked in every chat of the organization's project; a blocked one stays disabled.",
   "docs.commandPermissions.title": "Command permissions of the organization",
