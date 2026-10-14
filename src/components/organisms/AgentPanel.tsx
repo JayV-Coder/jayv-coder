@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Trash2Icon } from "lucide-react";
 import { isApiAgent, isCustomMod, type AgentSettings, type CustomModOptions } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { AGENT_LABELS, addModel, agentLabel, checkAgent, isAgentsDirty, refreshModels, removeMod, setSettingsTab, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
+import { AGENT_LABELS, addModel, agentLabel, checkAgent, refreshModels, removeMod, setSettingsTab, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
 import { AgentIcon, EmptyText } from "@/components/atoms";
 import { AgentProbeLine, ConfirmAction, FormField, OptionSelect, PAGE_SIZES, Pager, SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,6 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
   const probe = useSettings((state) => state.probes[agent.id] ?? null);
   const [min, max] = useSettings((state) => state.timeoutRange);
   const refreshing = useSettings((state) => state.refreshing);
-  const dirty = useSettings(isAgentsDirty);
   // Catálogos grandes travam a tela se todas as linhas forem montadas de uma vez.
   const [pageSize, setPageSize] = useState(10);
   const [wanted, setPage] = useState(0);
@@ -116,8 +115,8 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
             <Button
               variant="outline"
               size="sm"
-              disabled={refreshing !== null || dirty || !lists}
-              title={!lists ? t("mods.refresh.none") : dirty ? t("model.refresh.dirty") : t("model.refresh.hint")}
+              disabled={refreshing !== null || !lists}
+              title={!lists ? t("mods.refresh.none") : t("model.refresh.hint")}
               onClick={() => void refreshModels(agent.id)}
             >
               {refreshing === agent.id ? t("model.refresh.running") : t("model.refresh")}
@@ -127,6 +126,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         )}
       >
         {problems.models && <p role="alert" className="text-xs text-destructive">{t(problems.models)}</p>}
+        {agent.enabled && models.length > 0 && !models.some((model) => model.enabled) && <p role="status" className="text-xs text-amber-600 dark:text-amber-400">{t("model.noneOn")}</p>}
         {brokenPage !== page && (
           <p role="alert" className="text-xs text-destructive">
             {t("model.problemElsewhere")}{" "}
