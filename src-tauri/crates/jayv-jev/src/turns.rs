@@ -637,6 +637,19 @@ pub fn pending_plan(connection:&Connection,turn_id:&str)->Result<Option<String>>
     Ok(Some(said).filter(|text|!text.trim().is_empty()))
 }
 
+/// Se o plano que este chat espera foi feito no automático para um pedido que
+/// queria implementar (`plan_for_build`): quem responde às perguntas dele, ou
+/// o próprio plano sem pergunta, segue para o desenvolvimento.
+pub fn plan_for_build(connection:&Connection,turn_id:&str)->Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM turn_events v WHERE v.kind='plan_for_build' AND v.turn_id=(
+           SELECT previous.id FROM turns current JOIN turns previous ON previous.chat_id=current.chat_id AND previous.ordinal<current.ordinal
+           WHERE current.id=?1 AND EXISTS(SELECT 1 FROM turn_events r WHERE r.turn_id=previous.id AND r.kind='route')
+           ORDER BY previous.ordinal DESC LIMIT 1))",
+        [turn_id],|row|row.get(0),
+    )?)
+}
+
 /// Se `turn_id` responde à confirmação que a portaria fez no lugar do agente.
 pub fn answers_gate(connection:&Connection,turn_id:&str)->Result<bool> {
     Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM questions WHERE answered_by=?1 AND source=?2)",params![turn_id,crate::gatekeeper::GATE_SOURCE],|row|row.get(0))?)

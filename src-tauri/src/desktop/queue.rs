@@ -62,9 +62,9 @@ pub(crate) async fn serve_the_queue(app:AppHandle,lanes:Lanes,workspace:SharedWo
                 if index==busy.len() { busy.push(false); }
                 busy[index]=true;
                 let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
-                let (app,workspace,forget,cancels,task)=(app.clone(),workspace.clone(),forget.clone(),cancels.clone(),turn.clone());
+                let (app,workspace,forget,cancels,task,rung)=(app.clone(),workspace.clone(),forget.clone(),cancels.clone(),turn.clone(),bell.clone());
                 let handle=running.spawn(async move {
-                    serve(&app,&desk,&workspace,&forget,&cancels,&task,&prompt).await;
+                    serve(&app,&desk,&workspace,&forget,&cancels,&rung,&task,&prompt).await;
                     let _=app.emit(TURN_EVENT,TurnEvent{chat_id:task.chat_id.clone(),turn_id:task.id.clone()});
                 });
                 flying.insert(handle.id(),(index,turn));
@@ -108,7 +108,7 @@ fn serves(link:Link)->bool { matches!(link,Link::Online|Link::Offline) }
 ///
 /// O pedido parado ("Parar", teto de minutos) termina com o aviso da parada;
 /// o que o agente já tinha dito entra antes dele, como a tela o mostrou.
-async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,cancels:&Cancels,turn:&Turn,prompt:&str) {
+async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,cancels:&Cancels,bell:&QueueBell,turn:&Turn,prompt:&str) {
     let stop=cancels.open(&turn.id);
     let (pulse,beats)=Pulse::channel_with(stop.clone());
     let narrator=tauri::async_runtime::spawn(narrate(app.clone(),workspace.clone(),turn.clone(),beats));
@@ -116,7 +116,7 @@ async fn serve(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspac
     // turno, deste chat e deste projeto.
     let project_id=workspace.lock().await.chat_project(&turn.chat_id).unwrap_or(None);
     let scope=usage::Scope{project_id,chat_id:Some(turn.chat_id.clone()),turn_id:Some(turn.id.clone())};
-    usage::within(scope,crate::guard::within(attend(app,desk,workspace,forget,turn,prompt,&pulse))).await;
+    usage::within(scope,crate::guard::within(attend(app,desk,workspace,forget,bell,turn,prompt,&pulse))).await;
     drop(pulse);
     let said=narrator.await.unwrap_or_default();
     cancels.close(&turn.id);
@@ -212,7 +212,7 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
 /// Atende um pedido do começo ao fim. O texto vem do banco, não da tela, e o
 /// turno sai daqui sempre fechado — respondido, barrado ou falho. Um turno que
 /// saísse em aberto travaria a fila inteira atrás dele.
-async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,turn:&Turn,prompt:&str,pulse:&Pulse) {
+async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,bell:&QueueBell,turn:&Turn,prompt:&str,pulse:&Pulse) {
     let chat_id=turn.chat_id.as_str();
     // O que está gravado pode ser um aviso para a tela (a resposta a uma
     // pergunta); a portaria e o modelo o leem em inglês.
@@ -352,10 +352,16 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // plano inteiro, mesmo que o app tenha sido reaberto depois do plano.
     let waiting_plan=workspace.lock().await.pending_plan(&turn.id).ok().flatten();
     state.orchestrator.pending_plan=None;
-    if let Some(plan_text)=waiting_plan.filter(|_|choice.is_none()&&paired.is_none()&&crate::orchestrator::goes_ahead(prompt)) {
+    // No automático, o plano feito para um pedido de implementar é a primeira
+    // metade do trabalho: quem responde às perguntas dele quer o build, e o
+    // Jev faz a troca em vez de planejar de novo.
+    let auto_chat=workspace.lock().await.work_mode(chat_id).map_or(true,|mode|mode==crate::orchestrator::MODE_AUTO);
+    let answers_plan=auto_chat&&paired.is_some()&&choice.is_none()&&workspace.lock().await.plan_for_build(&turn.id).unwrap_or(false);
+    if let Some(plan_text)=waiting_plan.filter(|_|choice.is_none()&&((paired.is_none()&&crate::orchestrator::goes_ahead(prompt))||answers_plan)) {
         if entry.verdict!=EntryVerdict::Pass { usage::mark(usage::JevMark::count(format!("entry_plan_followed:{}",entry.verdict.as_str()),1)); }
         entry=entry.inherit(EntryVerdict::Pass);
         state.orchestrator.pending_plan=Some(plan_text);
+        state.orchestrator.plan_answered=answers_plan;
     }
     {
         let mut workspace=workspace.lock().await;
@@ -454,6 +460,8 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         let saved=match state.orchestrator.memory.agent_session(chat_id) { Some(kept)=>workspace.keep_agent_session(chat_id,kept), None=>workspace.forget_agent_session(chat_id) };
         if let Err(error)=saved { eprintln!("sessão do agente: não consegui guardar ({error:#})"); }
     }
+    let planned_for_build=std::mem::take(&mut state.orchestrator.planned_for_build)&&result.result.is_some()&&result.validation;
+    if planned_for_build { let _=workspace.lock().await.record_beat(&turn.id,"plan_for_build",&serde_json::json!({})); }
     // O Jev tirou o chat do planejamento: o chat fica em build até o
     // desenvolvedor desfazer ou escolher outro modo.
     if state.orchestrator.mode_switch.take().is_some() {
@@ -494,10 +502,14 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // da fila não espera por ela.
     if let Some(review)=review { review_in_background(app.clone(),workspace.clone(),turn.clone(),review); }
     // A ida ao Jev para achar a pergunta não segura o próximo da fila.
+    // O plano do automático sem pergunta aberta segue sozinho para o build; o
+    // que já nasceu dessa continuação não encadeia outra.
+    let continue_to_build=planned_for_build&&stored!=approval_line();
     if result.result.is_some() {
-        let (app,workspace,turn)=(app.clone(),workspace.clone(),turn.clone());
+        let (app,workspace,turn,bell)=(app.clone(),workspace.clone(),turn.clone(),bell.clone());
         tauri::async_runtime::spawn(async move {
-            if permissions.is_empty() { enable_question(&app,&workspace,&turn,&assistant).await; } else { ask_permission(&app,&workspace,&turn,&permissions).await; }
+            if !permissions.is_empty() { ask_permission(&app,&workspace,&turn,&permissions).await; }
+            else if !enable_question(&app,&workspace,&turn,&assistant).await && continue_to_build { approve_plan(&app,&workspace,&bell,&turn).await; }
         });
     }
     if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
@@ -517,15 +529,29 @@ fn grants_pick_build(has_grants:bool,pinned:Option<&str>)->bool {
 ///
 /// Roda fora do cadeado do orquestrador de propósito — é uma ida à rede, e a
 /// fila não pode ficar parada atrás dela.
-async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,answer:&str) {
-    let Some(question)=asking::classify(answer).await else {return};
+/// A linha que o Jev escreve no chat ao levar sozinho um plano para o build.
+fn approval_line()->String { i18n::notice(&[Text::new("plan.autoApproved")]) }
+
+/// O plano ficou sem pergunta aberta: o Jev o aprova pelo desenvolvedor e o
+/// pedido entra na fila como qualquer outro, passando pela portaria.
+async fn approve_plan(app:&AppHandle,workspace:&SharedWorkspace,bell:&QueueBell,turn:&Turn) {
+    let queued=workspace.lock().await.enqueue_prompt(&turn.chat_id,&approval_line(),None);
+    match queued {
+        Ok(_)=>{ let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:turn.chat_id.clone()}); bell.notify_one(); }
+        Err(error)=>eprintln!("modo: não consegui levar o plano ao desenvolvimento ({error:#})"),
+    }
+}
+
+/// Devolve se a resposta ficou com uma pergunta aberta para o desenvolvedor.
+async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,answer:&str)->bool {
+    let Some(question)=asking::classify(answer).await else {return false};
     let recorded={
         let mut workspace=workspace.lock().await;
         workspace.ask_question(&turn.id,question.kind.as_str(),&question.prompt,&question.options,&question.source)
     };
     match recorded {
-        Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});}
-        Err(error)=>eprintln!("pergunta: não consegui habilitar a interação do turno `{}` ({error})",turn.id),
+        Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});true}
+        Err(error)=>{eprintln!("pergunta: não consegui habilitar a interação do turno `{}` ({error})",turn.id);true}
     }
 }
 

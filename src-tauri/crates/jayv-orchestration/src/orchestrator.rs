@@ -109,6 +109,13 @@ pub struct Orchestrator {
     /// O plano que o chat espera, lido do banco quando a memória do app não o
     /// tem (o app foi reaberto) — o pedido seguinte o executa.
     pub pending_plan: Option<String>,
+    /// O pedido responde à pergunta que o plano do automático fez: quem
+    /// responde quer o build, não outro plano. `process` o consome uma vez.
+    pub plan_answered: bool,
+    /// O último `process` planejou no automático um pedido que queria
+    /// implementar: o plano é só a primeira metade, e quem chamou continua
+    /// no build quando o plano não deixou pergunta aberta.
+    pub planned_for_build: bool,
     /// O nível da conta: quanto o Jev confia no pedido e até onde ele constrói.
     pub expertise: crate::expertise::Expertise,
     /// A organização cuja política de LLM vale para o pedido em atendimento
@@ -179,7 +186,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -314,6 +321,8 @@ impl Orchestrator {
         let normalized=user_input.trim().to_string();
         let pinned=self.pending_work_mode.take().unwrap_or_else(||MODE_AUTO.into());
         self.mode_switch=None;
+        self.planned_for_build=false;
+        let answered=std::mem::take(&mut self.plan_answered);
         if normalized.starts_with("/why") {
             self.pending_routing=None;
             self.pending_context.clear();
@@ -344,8 +353,9 @@ impl Orchestrator {
         // Há um plano deste chat esperando: quem o aprova quer o build, mesmo
         // que o pedido não pareça código ou passe do teto do nível.
         if let Some(plan)=self.pending_plan.take() { held(&self.shared.plans).entry(session_id.to_string()).or_insert(plan); }
-        let approved=held(&self.shared.plans).contains_key(session_id)&&(wants_build||(gate_passed&&!destructive(&signals)&&goes_ahead(&normalized)));
+        let approved=held(&self.shared.plans).contains_key(session_id)&&(wants_build||(gate_passed&&!destructive(&signals)&&(answered||goes_ahead(&normalized))));
         let (mode,switched)=resolve_mode(&pinned,select_mode(&intent.intent,&complexity,&signals,gate_passed,self.expertise),wants_build,stuck,approved);
+        self.planned_for_build=pinned==MODE_AUTO&&mode==MODE_PLAN&&(wants_build||answered);
         if pinned==MODE_AUTO&&mode==MODE_PLAN&&wants_build { held(&self.shared.stuck_in_plan).insert(session_id.to_string()); } else { held(&self.shared.stuck_in_plan).remove(session_id); }
         self.mode_switch=switched.clone();
         pulse.beat(Beat::Read{intent:intent.intent.clone(),complexity:complexity.clone(),source:signals.source.clone()});
@@ -2143,6 +2153,38 @@ mod tests {
         let second=orchestrator.process("pode implementar",Some("chat"),&Pulse::silent()).await;
         assert_eq!(second.result.as_ref().map(|answer|answer.response.trim()),Some("ran-build"));
         assert_eq!(orchestrator.mode_switch,Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_ASKED.into()}),"o plano do chat estava esperando: o pedido o aprova");
+    }
+
+    /// No automático, o plano de um pedido de implementar é a primeira metade:
+    /// o Jev avisa quem chamou (`planned_for_build`) e, respondidas as
+    /// perguntas do plano, a resposta vai ao build mesmo sem parecer código.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_auto_plan_for_a_build_request_continues_to_build_after_its_answers() {
+        use crate::expertise::Expertise::Starter;
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),"cat >/dev/null; echo ran-build".into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo ran-plan".into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"cli".into(),model:"modelo".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let (providers,models)=(HashMap::from([("cli".to_string(),agent)]),HashMap::from([("cli/modelo".to_string(),model)]));
+        orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+        orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+        orchestrator.config.providers=providers;
+        orchestrator.config.models=models;
+        orchestrator.expertise=Starter;
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"medium",0.9)));
+        let plan=orchestrator.process("implemente o cache do roteador",Some("chat"),&Pulse::silent()).await;
+        assert_eq!((plan.model_selection.mode.as_str(),orchestrator.planned_for_build),(MODE_PLAN,true),"o plano do automático é o começo do build");
+        // A resposta às perguntas do plano não é um pedido de código.
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("general",0.93,"simple",0.9)));
+        orchestrator.plan_answered=true;
+        let build=orchestrator.process("Answer to the question «Which site first?»: SICAF",Some("chat"),&Pulse::silent()).await;
+        assert_eq!((build.model_selection.mode.as_str(),orchestrator.planned_for_build),(MODE_BUILD,false));
+        assert_eq!(orchestrator.mode_switch,Some(ModeSwitch{from:MODE_AUTO.into(),reason:SWITCH_ASKED.into()}));
+        // Um plano de análise não vira build.
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("analysis",0.93,"medium",0.9)));
+        let analysis=orchestrator.process("analise o cache do roteador",Some("analysis"),&Pulse::silent()).await;
+        assert_eq!((analysis.model_selection.mode.as_str(),orchestrator.planned_for_build),(MODE_PLAN,false));
     }
 
     /// O agente explora o repositório sozinho: recebe o mapa, não os arquivos,

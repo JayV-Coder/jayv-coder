@@ -731,6 +731,8 @@ impl WorkspaceStore {
 
     /// O plano à espera de execução neste chat (`turns::pending_plan`).
     pub fn pending_plan(&self, turn_id:&str) -> Result<Option<String>> {turns::pending_plan(&self.connection,turn_id)}
+    /// Se o plano à espera foi feito no automático para um pedido de implementar.
+    pub fn plan_for_build(&self, turn_id:&str) -> Result<bool> {turns::plan_for_build(&self.connection,turn_id)}
     pub fn previous_answer(&self, turn_id:&str) -> Result<Option<(crate::gatekeeper::EntryVerdict,chrono::DateTime<Utc>)>> {turns::previous_answer(&self.connection,turn_id)}
 
     pub fn answers_gate(&self, turn_id:&str) -> Result<bool> {turns::answers_gate(&self.connection,turn_id)}
@@ -1508,6 +1510,31 @@ mod tests {
         store.set_turn_status(&follow.id,TurnStatus::Answered).expect("respondido");
         let after=store.open_turn(&chat.id).expect("depois");
         assert!(store.pending_plan(&after.id).expect("leitura").is_none(),"o build encerrou o plano");
+    }
+
+    /// O plano do automático para um pedido de implementar fica marcado no
+    /// turno; o turno que vem depois sabe que o plano é a primeira metade, e
+    /// um build em seguida o encerra.
+    #[test]
+    fn a_plan_made_for_a_build_request_is_marked_on_its_turn() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let route=|mode:&str|serde_json::json!({"kind":"route","provider":"claude","model":"sonnet","reason":"x","mode":mode,"agent":null});
+        let analysis=store.open_turn(&chat.id).expect("análise");
+        store.record_beat(&analysis.id,"route",&route("plan")).expect("route");
+        store.set_turn_status(&analysis.id,TurnStatus::Answered).expect("respondido");
+        let after_analysis=store.open_turn(&chat.id).expect("depois da análise");
+        assert!(!store.plan_for_build(&after_analysis.id).expect("leitura"),"plano sem marca não segue sozinho");
+        store.record_beat(&after_analysis.id,"route",&route("plan")).expect("route");
+        store.record_beat(&after_analysis.id,"plan_for_build",&serde_json::json!({})).expect("marca");
+        store.set_turn_status(&after_analysis.id,TurnStatus::Answered).expect("respondido");
+        let answer=store.open_turn(&chat.id).expect("resposta");
+        assert!(store.plan_for_build(&answer.id).expect("leitura"));
+        store.record_beat(&answer.id,"route",&route("build")).expect("route");
+        let after_build=store.open_turn(&chat.id).expect("depois do build");
+        assert!(!store.plan_for_build(&after_build.id).expect("leitura"),"o build encerrou a corrente");
     }
 
     /// "Pode implementar" logo depois de uma resposta é continuação: o pedido
