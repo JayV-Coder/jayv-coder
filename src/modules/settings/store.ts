@@ -208,9 +208,9 @@ export async function loadSettings() {
 /** Lê de novo a lista do `/model` do agente. O núcleo grava na hora, então
  * só roda sem alteração pendente: aplicar o retrato novo a descartaria. */
 export async function refreshModels(agent: AgentId) {
-  if (isAgentsDirty(useSettings.getState())) return;
   useSettings.setState({ refreshing: agent });
   try {
+    if (isAgentsDirty(useSettings.getState())) return await mergeListing(agent);
     const { snapshot, listed } = await commands.refreshModels(agent);
     apply(snapshot);
     const name = agentLabel(agent);
@@ -221,6 +221,30 @@ export async function refreshModels(agent: AgentId) {
   } finally {
     useSettings.setState({ refreshing: null });
   }
+}
+
+/** Com alterações pendentes, a lista do CLI entra no rascunho em vez de
+ * substituí-lo: o que já está na aba guarda o que a pessoa mexeu, o que o CLI
+ * lista de novo nasce desligado e o que ele deixou de oferecer sai (o mesmo
+ * que o núcleo faz ao gravar). Nada é gravado; o Salvar grava. */
+async function mergeListing(agent: AgentId) {
+  const found = await commands.listModels(agent);
+  const name = agentLabel(agent);
+  if (!found) { notify(t("model.refresh.silent", { agent: name }), true); return; }
+  useSettings.setState((state) => {
+    const mine = new Map(state.models.filter((model) => model.agent === agent).map((model) => [model.model, model]));
+    const merged: ModelDraft[] = found.map((known) => mine.get(known.id) ?? {
+      uid: uid(), agent, enabled: false, model: known.id, capabilities: known.capabilities, contextWindow: known.contextWindow, costClass: known.costClass, speed: known.speed,
+    });
+    const ids = new Set(found.map((known) => known.id));
+    const agents = state.agents.map((entry) => {
+      if (entry.id !== "claude" || agent !== "claude") return entry;
+      const options = (entry as AgentSettings<"claude">).options;
+      return options.fallbackModel && !ids.has(options.fallbackModel) ? { ...entry, options: { ...options, fallbackModel: "" } } : entry;
+    });
+    return { agents, catalog: { ...state.catalog, [agent]: found }, models: [...state.models.filter((model) => model.agent !== agent), ...merged] };
+  });
+  notify(t("model.refresh.done", { count: found.length, agent: name }));
 }
 
 export function updateAgent(id: AgentId, patch: Partial<Omit<AgentSettings, "id" | "options">>) {

@@ -80,6 +80,16 @@ pub(crate) async fn refresh_models(desk:State<'_,SharedDesktopState>,workspace:S
     Ok(ModelsRefresh{snapshot:snapshot(saved),listed:silent.is_empty()})
 }
 
+/// A lista de modelos que o CLI do agente oferece agora, sem gravar nada: com
+/// alterações pendentes na tela, é ela quem junta a lista ao rascunho. `None`
+/// quando o agente não respondeu.
+#[tauri::command]
+pub(crate) async fn list_models(workspace:State<'_,SharedWorkspace>,agent:AgentId)->Result<Option<Vec<KnownModel>>,Text>{crate::desktop::require_session()?;
+    let current={ workspace.lock().await.llm_settings().map_err(failure)? };
+    let Some(found)=current.agents.iter().find(|entry|entry.id==agent) else { return Ok(None) };
+    Ok(llm::discover_agent(found).await)
+}
+
 #[tauri::command]
 pub(crate) async fn get_settings(workspace:State<'_,SharedWorkspace>)->Result<SettingsSnapshot,Text>{
     let workspace=workspace.lock().await;

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, KnownModel, LlmSettings, ModelsRefresh, NoteDraft, Project,
   InstalledMods, ModsSnapshot, ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -69,6 +69,7 @@ export const commands = {
   checkAgent: (command: string, agent: AgentId | null = null) => invoke<AgentProbe>("check_agent", { command, agent }),
   checkGateway: (agent: AgentId) => invoke<GatewayCheck>("check_gateway", { agent }),
   refreshModels: (agent: AgentId) => invoke<ModelsRefresh>("refresh_models", { agent }),
+  listModels: (agent: AgentId) => invoke<KnownModel[] | null>("list_models", { agent }),
   setSession: (token: string) => invoke<SessionView>("set_session", { token }),
   currentEnvironment: () => invoke<string>("current_environment"),
   /** Troca o banco aberto pelo de outro ambiente: `personal` ou o id de uma organização. */
