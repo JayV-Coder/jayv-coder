@@ -95,6 +95,7 @@ fn english(text:&Text)->String {
     let param=|name:&str|text.param(name);
     match text.key.as_str() {
         "ask.answer"=>format!("Answer to the question «{}»: {}",param("question"),param("answer")),
+        "plan.autoApproved"=>"The plan is approved: carry out the plan and start building now.".into(),
         "ask.yes"=>"YES".into(),
         "ask.no"=>"NO".into(),
         "grant.once"=>format!("The developer approved, for this request only: {}. Run it now and carry on with the task.",param("commands")),
