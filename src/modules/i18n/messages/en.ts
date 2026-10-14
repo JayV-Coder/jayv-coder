@@ -2207,6 +2207,8 @@ export const en = {
   "whatsNew.item.plansStripe.title": "Free, Pro and Enterprise plans in Stripe",
   "whatsNew.item.plansStripe.detail": "Plans are created on the site (Administration › Plans) and sent to Stripe on their own as products, with the recurring price for the paid ones. A plan only goes on sale once it has been sent. The Plans page now has its page in the Documentation and its tutorial.",
   "whatsNew.item.modsDocs.title": "Mods have their own section in the Documentation",
+  "whatsNew.item.featuresEditable.title": "The admin can turn any feature on or off, core ones included",
+  "whatsNew.item.featuresEditable.detail": "The core features (gates, secret and sensitive-file protection, agent sessions, context cache and adaptive routing) are no longer locked: in Administration you turn them off for everyone or take them out of a plan, and the app follows the plan's list.",
   "whatsNew.item.plansCurrencies.title": "Plan prices in several currencies and by country",
   "whatsNew.item.plansCurrencies.detail": "A paid plan can have prices in dollar, euro, pound, real and more, each with the countries it applies to. On the site (Administration \u203a Plans) you add the currencies and the plan goes to Stripe with all of them; in Plans, the page opens in the currency of your country and you can switch it, and the payment is charged in the one you pick.",
   "whatsNew.item.modsDocs.detail": "The mod pages left “Agents and models” and moved to the Mods section: the mod system is generic and not limited to agents.",

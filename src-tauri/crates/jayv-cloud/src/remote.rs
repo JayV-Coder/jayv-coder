@@ -32,6 +32,9 @@ pub struct RemotePolicy { pub project_id:String, pub org_slug:String, pub policy
 pub struct RemoteFeatures {
     pub plan:Option<String>,
     pub features:Vec<String>,
+    /// `true`: a lista e os travados são exatamente os do plano, sem somar o
+    /// núcleo (o admin pode tirar qualquer recurso). Servidor antigo não manda.
+    pub managed:bool,
     /// O que está ligado sem interruptor: o núcleo e o que o admin travou.
     pub locked:Vec<String>,
     /// O valor de partida dos recursos opcionais do plano.
