@@ -78,6 +78,8 @@ export interface Plan {
   priceCents: number | null;
   currency: string | null;
   billingInterval: "month" | "year" | null;
+  /** Preços em outras moedas (o Stripe cobra na que a pessoa escolhe). */
+  extraPrices: { currency: string; priceCents: number }[];
   features: string[];
 }
 
@@ -109,6 +111,7 @@ function failure(error: { message?: string }) {
 type PlanRow = {
   key: string; name: string; description: string; position: number; active: boolean; is_default: boolean;
   stripe_price_id: string | null; price_cents: number | null; currency: string | null; billing_interval: "month" | "year" | null;
+  extra_prices?: { currency: string; price_cents: number }[] | null;
 };
 
 let channel: RealtimeChannel | null = null;
@@ -134,7 +137,7 @@ export async function loadEntitlements() {
 /** Planos, catálogo e a assinatura de quem usa. */
 export async function loadCatalog() {
   const [plans, links, features, subscription] = await Promise.all([
-    supabase.from("plans").select("key, name, description, position, active, is_default, stripe_price_id, price_cents, currency, billing_interval").order("position").order("key"),
+    supabase.from("plans").select("key, name, description, position, active, is_default, stripe_price_id, price_cents, currency, billing_interval, extra_prices").order("position").order("key"),
     supabase.from("plan_features").select("plan_key, feature_key"),
     supabase.from("features").select("key, enabled, position").order("position").order("key"),
     supabase.from("subscriptions").select("plan_key, status, current_period_end, cancel_at_period_end").maybeSingle(),
@@ -147,6 +150,7 @@ export async function loadCatalog() {
     plans: (plans.data as PlanRow[]).map((row) => ({
       key: row.key, name: row.name, description: row.description, position: row.position, active: row.active, isDefault: row.is_default,
       stripePriceId: row.stripe_price_id, priceCents: row.price_cents, currency: row.currency, billingInterval: row.billing_interval,
+      extraPrices: (row.extra_prices ?? []).map((item) => ({ currency: item.currency, priceCents: item.price_cents })),
       features: included(row.key),
     })),
     // Só as chaves que esta versão conhece: um recurso de uma versão mais nova
@@ -209,10 +213,11 @@ async function billing(body: Record<string, string>) {
 
 /** Abre a página de pagamento do plano no navegador (ou o portal, para quem
  * já assina). */
-export async function subscribe(plan: string) {
+export async function subscribe(plan: string, currency?: string | null) {
   useCatalog.setState({ busy: plan });
   try {
-    await billing({ action: "checkout", plan });
+    // A moeda escolhida na página; sem escolha, o servidor usa a do país.
+    await billing({ action: "checkout", plan, ...(currency ? { currency } : {}), ...(regionOf(navigator.language) ? { country: regionOf(navigator.language)! } : {}) });
   } catch (error) {
     reportError(error);
   } finally {
@@ -229,6 +234,37 @@ export async function manageSubscription() {
   } finally {
     useCatalog.setState({ busy: null });
   }
+}
+
+/** A região do idioma do sistema (`pt-BR` → `BR`), ou nada (`en`). */
+export function regionOf(language: string | undefined): string | null {
+  const region = language?.split("-").find((part, index) => index > 0 && /^[A-Za-z]{2}$/.test(part));
+  return region ? region.toUpperCase() : null;
+}
+
+/** As moedas em que algum plano é vendido, a padrão de cada plano primeiro. */
+export function currenciesOf(plans: Pick<Plan, "currency" | "priceCents" | "extraPrices" | "isDefault">[]): string[] {
+  const codes = plans.filter((plan) => !plan.isDefault && plan.priceCents !== null && plan.currency)
+    .flatMap((plan) => [plan.currency!, ...plan.extraPrices.map((item) => item.currency)]);
+  return [...new Set(codes)];
+}
+
+/** A moeda com que a página abre: a do país do sistema (`country_currency`, a
+ * mesma lista do servidor) se algum plano a vende; senão, a primeira. */
+export async function defaultCurrency(plans: Parameters<typeof currenciesOf>[0]): Promise<string | null> {
+  const offered = currenciesOf(plans);
+  const region = regionOf(typeof navigator === "undefined" ? undefined : navigator.language);
+  if (region && offered.length > 1) {
+    const { data } = await supabase.rpc("country_currency", { country: region });
+    if (typeof data === "string" && offered.includes(data)) return data;
+  }
+  return offered[0] ?? null;
+}
+
+/** O preço do plano na moeda escolhida; plano que não a vende fica no preço padrão. */
+export function priceIn<T extends Pick<Plan, "priceCents" | "currency" | "extraPrices">>(plan: T, currency: string | null) {
+  const extra = currency ? plan.extraPrices.find((item) => item.currency === currency) : undefined;
+  return extra ? { priceCents: extra.priceCents, currency: extra.currency } : { priceCents: plan.priceCents, currency: plan.currency };
 }
 
 /** O preço como a tela mostra: `R$ 49,00 / mês`, ou nada no plano gratuito. */

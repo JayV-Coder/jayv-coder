@@ -1,8 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { CheckIcon, MinusIcon } from "lucide-react";
 import { reportError } from "@/modules/feedback";
 import { useLocale, useT, type Key } from "@/modules/i18n";
-import { formatPrice, loadCatalog, manageSubscription, subscribe, useCatalog, useEntitlements } from "@/modules/plans";
+import { currenciesOf, defaultCurrency, formatPrice, loadCatalog, manageSubscription, priceIn, subscribe, useCatalog, useEntitlements } from "@/modules/plans";
 import { LoadingNote } from "@/components/atoms";
 import { PageHeading } from "@/components/molecules";
 import { ScrollPage } from "@/components/templates";
@@ -19,12 +19,20 @@ export function PlansPage() {
   const { loaded, plans, features, subscription, busy } = useCatalog();
   const current = useEntitlements((state) => state.plan);
 
+  // null: ainda não escolhida; a página abre na moeda do país.
+  const [chosen, setChosen] = useState<string | null>(null);
+
   useEffect(() => { loadCatalog().catch(reportError); }, []);
+  useEffect(() => {
+    if (loaded && chosen === null) defaultCurrency(plans).then(setChosen).catch(() => undefined);
+  }, [loaded, chosen, plans]);
   if (!loaded) return <LoadingNote>{t("plans.loading")}</LoadingNote>;
 
   const shown = plans.filter((plan) => plan.active || plan.key === current);
   const enabled = features.filter((feature) => feature.enabled);
   const day = (iso: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(iso));
+  const currencies = currenciesOf(plans);
+  const currency = chosen && currencies.includes(chosen) ? chosen : null;
   const paying = subscription !== null && ["active", "trialing", "past_due"].includes(subscription.status);
 
   return (
@@ -40,9 +48,21 @@ export function PlansPage() {
         </p>
       )}
 
+      {currencies.length > 1 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("plans.currency")}>
+          <span className="font-mono text-caption text-muted-foreground">{t("plans.currency")}</span>
+          {currencies.map((code) => (
+            <Button key={code} size="sm" variant={code === (currency ?? currencies[0]) ? "default" : "outline"} aria-pressed={code === (currency ?? currencies[0])} onClick={() => setChosen(code)}>
+              {code.toUpperCase()}
+            </Button>
+          ))}
+        </div>
+      )}
+
       <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
         {shown.map((plan) => {
-          const price = formatPrice(plan, locale);
+          const shownPrice = priceIn(plan, currency);
+          const price = formatPrice(shownPrice, locale);
           const mine = plan.key === current;
           return (
             <Card key={plan.key} className={cn("gap-4 px-5 py-5", mine && "border-primary")}>
@@ -70,7 +90,7 @@ export function PlansPage() {
                 })}
               </ul>
               {!mine && plan.stripePriceId && (
-                <Button className="mt-auto" disabled={busy !== null} onClick={() => void (paying ? manageSubscription() : subscribe(plan.key))}>
+                <Button className="mt-auto" disabled={busy !== null} onClick={() => void (paying ? manageSubscription() : subscribe(plan.key, shownPrice.currency))}>
                   {t(paying ? "plans.change" : "plans.subscribe")}
                 </Button>
               )}

@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@/modules/i18n", () => ({ t: (key: string) => key }));
 vi.mock("@/modules/feedback", () => ({ notify: vi.fn(), reportError: vi.fn() }));
 
-const { allows, formatPrice, locks, toggleState } = await import("./index");
+const { allows, currenciesOf, formatPrice, locks, priceIn, regionOf, toggleState } = await import("./index");
 
 describe("recursos do plano", () => {
   it("sem lista lida, vale tudo", () => {
@@ -30,5 +30,24 @@ describe("recursos do plano", () => {
   it("o preço sai na moeda e no idioma da tela", () => {
     expect(formatPrice({ priceCents: 4900, currency: "brl" }, "pt-BR")).toBe("R$ 49,00");
     expect(formatPrice({ priceCents: null, currency: "brl" }, "pt-BR")).toBeNull();
+  });
+});
+
+describe("preço em várias moedas", () => {
+  const pro = { isDefault: false, priceCents: 4900, currency: "brl", extraPrices: [{ currency: "usd", priceCents: 990 }, { currency: "eur", priceCents: 900 }] };
+  const free = { isDefault: true, priceCents: null, currency: null, extraPrices: [] };
+  it("lista as moedas que algum plano vende, a padrão primeiro", () => {
+    expect(currenciesOf([free, pro])).toEqual(["brl", "usd", "eur"]);
+    expect(currenciesOf([free])).toEqual([]);
+  });
+  it("mostra o preço na moeda escolhida, ou no padrão se o plano não a vende", () => {
+    expect(priceIn(pro, "usd")).toEqual({ priceCents: 990, currency: "usd" });
+    expect(priceIn(pro, "gbp")).toEqual({ priceCents: 4900, currency: "brl" });
+    expect(priceIn(pro, null)).toEqual({ priceCents: 4900, currency: "brl" });
+  });
+  it("lê a região do idioma do sistema", () => {
+    expect(regionOf("pt-BR")).toBe("BR");
+    expect(regionOf("zh-Hans-CN")).toBe("CN");
+    expect(regionOf("en")).toBeNull();
   });
 });
