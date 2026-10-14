@@ -407,6 +407,13 @@ impl Grants {
         }
     }
 
+    /// O liberado mais as permissões do chat que a organização deixa sempre
+    /// ligadas (`shell`, `git`, `network`).
+    pub fn with_kinds(&self,kinds:&[String])->Self {
+        let has=|kind:&str|kinds.iter().any(|known|known==kind);
+        Self{shell:self.shell||has("shell"),git:self.git||has("git"),network:self.network||has("network"),commands:self.commands.clone()}
+    }
+
     /// O que sobra do liberado depois das permissões do chat que a organização
     /// desliga (`shell`, `git`, `network`): a permissão desligada não vale, e
     /// os comandos que ela cobre saem da lista (`shell` cobre todos).

@@ -78,11 +78,11 @@ export type BlockedGrants = Record<string, string[]>;
 export const GRANT_KINDS = ["shell", "git", "network"] as const;
 export type GrantKind = (typeof GRANT_KINDS)[number];
 
-export function blockedGrantsOf(policy: unknown, orgSlug: string): BlockedGrants {
+function grantKindsOf(policy: unknown, orgSlug: string, listKey: string, sourcesKey: string): BlockedGrants {
   const found: BlockedGrants = {};
-  const row = (policy ?? {}) as { blocked_grants?: unknown; grant_sources?: unknown };
-  const sources = row.grant_sources && typeof row.grant_sources === "object" ? row.grant_sources as Record<string, unknown> : {};
-  const listed = Array.isArray(row.blocked_grants) ? row.blocked_grants.map(String) : Object.keys(sources);
+  const row = (policy ?? {}) as Record<string, unknown>;
+  const sources = row[sourcesKey] && typeof row[sourcesKey] === "object" ? row[sourcesKey] as Record<string, unknown> : {};
+  const listed = Array.isArray(row[listKey]) ? (row[listKey] as unknown[]).map(String) : Object.keys(sources);
   const slugs = orgSlug.split(", ").filter(Boolean);
   for (const kind of listed) {
     if (!(GRANT_KINDS as readonly string[]).includes(kind)) continue;
@@ -91,6 +91,12 @@ export function blockedGrantsOf(policy: unknown, orgSlug: string): BlockedGrants
   }
   return found;
 }
+
+export const blockedGrantsOf = (policy: unknown, orgSlug: string): BlockedGrants => grantKindsOf(policy, orgSlug, "blocked_grants", "grant_sources");
+
+/** As permissões do chat que as organizações deixam sempre ligadas
+ * (`enabled_grants` e `grant_defaults`), cada uma com as organizações que a ligam. */
+export const enabledGrantsOf = (policy: unknown, orgSlug: string): BlockedGrants => grantKindsOf(policy, orgSlug, "enabled_grants", "grant_defaults");
 
 const NETWORK_WORDS = ["install", "i", "add", "ci", "fetch", "pull", "push", "clone", "update", "upgrade", "download", "sync"];
 const GIT_REMOTE_WORDS = ["fetch", "pull", "push", "clone", "ls-remote", "submodule"];
