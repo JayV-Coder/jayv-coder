@@ -638,6 +638,9 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
         None=>(grants.clone(),vec![]),
     };
     let llm=llm.with_grants(&grants).with_mcp(&servers);
+    // Só vale dizer que a política barrou o pedido se ela de fato desligou
+    // algum agente ou modelo de quem usa.
+    let policy_cuts=policy.as_ref().is_some_and(|project|project.policy.cuts(&llm));
     let (llm,core)=match &policy {
         Some(project)=>(project.policy.restrict_llm(&llm),project.policy.restrict_core(&core)),
         None=>(llm,core),
@@ -650,7 +653,7 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     state.orchestrator.use_llm(&llm);
     state.orchestrator.use_skills(skills);
     state.orchestrator.blocked_commands=blocked;
-    state.orchestrator.policy_scope=policy.map(|project|project.org_slug);
+    state.orchestrator.policy_scope=policy.filter(|_|policy_cuts).map(|project|project.org_slug);
     plan
 }
 

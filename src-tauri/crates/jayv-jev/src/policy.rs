@@ -121,6 +121,13 @@ impl LlmPolicy {
         LlmSettings{agents,models}.without_commands(&self.blocked_commands)
     }
 
+    /// Se a política desliga algum agente ou modelo que quem usa tinha ligado.
+    pub fn cuts(&self,settings:&LlmSettings)->bool {
+        let narrowed=self.restrict_llm(settings);
+        let enabled=|settings:&LlmSettings|(settings.agents.iter().filter(|agent|agent.enabled).count(),settings.models.iter().filter(|model|model.enabled).count());
+        enabled(settings)!=enabled(&narrowed)
+    }
+
     /// As configurações do Jev de quem usa, sem nada mais frouxo que a
     /// política.
     pub fn restrict_core(&self,settings:&CoreSettings)->CoreSettings {
@@ -196,6 +203,13 @@ impl LlmPolicy {
         assert!(!enabled(AgentId::Cursor),"a política não liga o que quem usa desligou");
         let on=restricted.models.iter().filter(|model|model.enabled).map(crate::llm::model_key).collect::<Vec<_>>();
         assert_eq!(on,["claude/sonnet","cursor/auto"],"o3 já estava desligado e opus é bloqueado");
+    }
+
+    #[test] fn only_a_policy_that_switches_something_off_cuts() {
+        assert!(!LlmPolicy::default().cuts(&settings()),"sem lista nem bloqueio, nada é desligado");
+        assert!(!policy(json!({"blocked_mechanisms":["claude/mcp"]})).cuts(&settings()),"mecanismo não tira agente nem modelo");
+        assert!(policy(json!({"agents":["claude"]})).cuts(&settings()));
+        assert!(policy(json!({"blocked_models":["claude/sonnet"]})).cuts(&settings()));
     }
 
     #[test] fn without_a_list_every_agent_is_allowed() {
