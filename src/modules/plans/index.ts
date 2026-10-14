@@ -15,7 +15,7 @@ interface EntitlementsState {
   plan: string | null;
   admin: boolean;
   features: Set<string> | null;
-  /** Ligado sem interruptor: o núcleo e o que o admin travou no plano. */
+  /** Ligado sem interruptor: o que o admin travou no plano (e, sem lista do servidor, o núcleo). */
   locked: Set<string>;
   /** O que os mods desligam (`@/modules/mods`): o recurso cujo mod quem usa
    * desligou ou que saiu do catálogo, e o motor de LLM fora do catálogo. Vale
@@ -125,12 +125,15 @@ export async function loadEntitlements() {
     return;
   }
   // `locked` chega a partir da v0.60.0 do servidor; sem ele, o núcleo vale.
-  const answer = data as { plan: string | null; admin: boolean; features: string[]; locked?: string[] };
+  const answer = data as { plan: string | null; admin: boolean; features: string[]; locked?: string[]; managed?: boolean };
+  // `managed`: o servidor manda a lista exata do plano, e o admin pode ter
+  // tirado até o núcleo. Servidor antigo: o núcleo é somado aqui.
+  const core = answer.managed ? [] : CORE_FEATURES;
   useEntitlements.setState({
     plan: answer.plan,
     admin: answer.admin,
-    features: new Set([...answer.features, ...CORE_FEATURES]),
-    locked: new Set([...CORE_FEATURES, ...(answer.locked ?? [])]),
+    features: new Set([...answer.features, ...(answer.locked ?? []), ...core]),
+    locked: new Set([...core, ...(answer.locked ?? [])]),
   });
 }
 

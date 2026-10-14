@@ -88,6 +88,12 @@ impl Entitlements {
 
     /// O que o servidor devolveu, com o núcleo garantido.
     pub fn from_remote(remote:&RemoteFeatures)->Self {
+        // Servidor novo: o plano manda sozinho, o núcleo só vale se estiver nele.
+        if remote.managed {
+            let locked:BTreeSet<String>=remote.locked.iter().cloned().collect();
+            let known:BTreeSet<String>=remote.features.iter().chain(remote.locked.iter()).cloned().collect();
+            return Self{known:Some(known),locked,defaults:remote.defaults.clone(),limits:remote.limits.clone(),disabled:BTreeSet::new()};
+        }
         let mut entitlements=Self::of(&remote.features);
         entitlements.locked.extend(remote.locked.iter().cloned());
         if let Some(known)=&mut entitlements.known { known.extend(remote.locked.iter().cloned()); }
@@ -188,7 +194,7 @@ impl Entitlements {
 /// O que o servidor devolveu além da lista, guardado ao lado dela.
 #[derive(Debug,Clone,Default,serde::Serialize,serde::Deserialize)]
 #[serde(default)]
-struct Extra { locked:Vec<String>, defaults:BTreeMap<String,bool>, limits:PlanLimits }
+struct Extra { locked:Vec<String>, defaults:BTreeMap<String,bool>, limits:PlanLimits, managed:bool }
 
 /// A coluna nova do cache, no banco que já existia.
 pub fn ensure(connection:&Connection)->Result<()> {
@@ -200,7 +206,7 @@ pub fn ensure(connection:&Connection)->Result<()> {
 }
 
 pub fn replace(connection:&Connection,remote:&RemoteFeatures)->Result<()> {
-    let extra=Extra{locked:remote.locked.clone(),defaults:remote.defaults.clone(),limits:remote.limits.clone()};
+    let extra=Extra{locked:remote.locked.clone(),defaults:remote.defaults.clone(),limits:remote.limits.clone(),managed:remote.managed};
     connection.execute(
         "INSERT OR REPLACE INTO plan_features(id,plan,features,fetched_at,extra) VALUES(1,?1,?2,?3,?4)",
         params![remote.plan,serde_json::to_string(&remote.features)?,chrono::Utc::now().to_rfc3339(),serde_json::to_string(&extra)?],
@@ -218,7 +224,7 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         None=>Entitlements::default(),
         Some((features,extra))=>{
             let extra=serde_json::from_str::<Extra>(&extra).unwrap_or_default();
-            Entitlements::from_remote(&RemoteFeatures{plan:None,features:serde_json::from_str::<Vec<String>>(&features).unwrap_or_default(),locked:extra.locked,defaults:extra.defaults,limits:extra.limits})
+            Entitlements::from_remote(&RemoteFeatures{plan:None,features:serde_json::from_str::<Vec<String>>(&features).unwrap_or_default(),managed:extra.managed,locked:extra.locked,defaults:extra.defaults,limits:extra.limits})
         }
     }.with_disabled(disabled))
 }
@@ -348,6 +354,21 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         assert_eq!(enforced.privacy.deny.iter().filter(|pattern|*pattern==".env").count(),1,"sem repetir");
         assert!(enforced.privacy.deny.contains(&"*.sqlite".to_string()),"o que quem usa acrescentou fica");
         assert_eq!(enforced.cache_ttl,7_200,"acima do mínimo, vale o de quem usa");
+    }
+
+    /// Servidor novo (`managed`): o admin tira até o núcleo de um plano, e a
+    /// lista vale sozinha; sem `managed`, o núcleo segue somado.
+    #[test] fn a_managed_plan_may_drop_the_core() {
+        let managed=Entitlements::from_remote(&RemoteFeatures{managed:true,locked:vec![ENTRY_GATE.into()],..remote(&["stats"])});
+        assert!(managed.locks(ENTRY_GATE)&&managed.allows(ENTRY_GATE));
+        assert!(!managed.allows(SECRET_REDACTION)&&!managed.locks(SECRET_REDACTION),"o admin tirou do plano");
+        assert!(!managed.apply_core(&everything_off()).privacy.redact_secrets);
+        assert!(!managed.apply_core(&everything_on()).adaptive_routing,"fora do plano, desligado");
+        let old=Entitlements::from_remote(&remote(&["stats"]));
+        assert!(old.locks(SECRET_REDACTION),"sem managed, o núcleo é somado");
+        let connection=database();
+        replace(&connection,&RemoteFeatures{managed:true,..remote(&["stats"])}).expect("grava");
+        assert!(!load(&connection).expect("lê").allows(SECRET_REDACTION),"o cache guarda o managed");
     }
 
     /// O admin trava um opcional ligado num plano: ele liga mesmo que quem
