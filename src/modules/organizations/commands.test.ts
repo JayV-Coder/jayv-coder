@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockersOf, blockedCommandsOf, blockedGrantsOf, conflictsWith, grantBlockersOf } from "./commands";
+import { blockersOf, blockedCommandsOf, blockedGrantsOf, conflictsWith, enabledGrantsOf, grantBlockersOf } from "./commands";
 
 const blocked = { "git push": ["acme"], docker: ["acme", "outra"] };
 
@@ -32,6 +32,11 @@ describe("chat permissions switched off by the organization", () => {
     expect(blockedGrantsOf({ blocked_grants: ["docker", "shell"] }, "acme")).toEqual({ shell: ["acme"] });
     expect(blockedGrantsOf({ agents: null }, "acme")).toEqual({});
     expect(blockedGrantsOf(null, "")).toEqual({});
+  });
+
+  it("reads the permissions the organization keeps always on", () => {
+    expect(enabledGrantsOf({ enabled_grants: ["shell", "docker"], grant_defaults: { shell: ["acme"] } }, "acme, outra")).toEqual({ shell: ["acme"] });
+    expect(enabledGrantsOf({ blocked_grants: ["git"] }, "acme")).toEqual({});
   });
 
   it("covers the commands each permission lets through", () => {

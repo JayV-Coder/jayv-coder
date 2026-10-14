@@ -34,12 +34,14 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
   const [open, setOpen] = useState(false);
   const blocked = useOrganizations((state) => state.blockedCommands[chat.projectId]) ?? NONE;
   const kinds = useOrganizations((state) => state.blockedGrants[chat.projectId]) ?? NO_KINDS;
+  const enabled = useOrganizations((state) => state.enabledGrants[chat.projectId]) ?? NO_KINDS;
   const anyBlocked = Object.keys(blocked).length > 0 || Object.keys(kinds).length > 0;
   const orgsOf = (rules: string[]) => [...new Set(rules.flatMap((rule) => blockersOf(blocked, rule)))];
   const gitBlockers = orgsOf(Object.keys(blocked).filter((rule) => rule.split(" ")[0] === "git"));
   const allBlockers = orgsOf(Object.keys(blocked));
   const locked = (kind: (typeof KINDS)[number]) => [...new Set([...(kinds[kind] ?? []), ...(kind === "shell" ? allBlockers : kind === "git" ? gitBlockers : [])])];
-  const active = KINDS.filter((kind) => grants[kind]).length + grants.commands.length;
+  const isOn = (kind: (typeof KINDS)[number]) => grants[kind] || (enabled[kind] !== undefined && locked(kind).length === 0);
+  const active = KINDS.filter(isOn).length + grants.commands.length;
   useEffect(() => { void loadGrants(chat.id); }, [chat.id]);
   useIntentHandler("commandPermissions", () => { setOpen(true); load(true); });
 
@@ -78,14 +80,15 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
         </div>
         {KINDS.map((kind) => {
           const orgs = locked(kind);
+          const keptOn = orgs.length === 0 ? enabled[kind] : undefined;
           return (
             <ToggleRow
               key={kind}
               id={`grant-${kind}`}
               label={t(`grants.${kind}`)}
-              hint={orgs.length > 0 ? t("grants.blockedBy", { orgs: orgs.join(", ") }) : t(`grants.${kind}.hint`)}
-              checked={grants[kind] && orgs.length === 0}
-              disabled={orgs.length > 0}
+              hint={orgs.length > 0 ? t("grants.blockedBy", { orgs: orgs.join(", ") }) : keptOn ? t("grants.enabledBy", { orgs: keptOn.join(", ") }) : t(`grants.${kind}.hint`)}
+              checked={(grants[kind] || keptOn !== undefined) && orgs.length === 0}
+              disabled={orgs.length > 0 || keptOn !== undefined}
               onChange={(on) => toggle(kind, on)}
               className="px-3 py-2"
             />

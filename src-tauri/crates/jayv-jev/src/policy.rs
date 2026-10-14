@@ -46,6 +46,11 @@ pub struct LlmPolicy {
     pub blocked_grants:Vec<String>,
     /// Quem desliga cada permissão (`git` → `["acme"]`).
     pub grant_sources:BTreeMap<String,Vec<String>>,
+    /// As permissões do chat que a organização deixa sempre ligadas nos
+    /// projetos dela; a desligada (`blocked_grants`) vence a ligada.
+    pub enabled_grants:Vec<String>,
+    /// Quem liga cada permissão (`git` → `["acme"]`).
+    pub grant_defaults:BTreeMap<String,Vec<String>>,
     pub deny:Vec<String>,
     pub local_only:Vec<String>,
     pub safe_agents:bool,
@@ -95,9 +100,10 @@ impl LlmPolicy {
         orgs
     }
 
-    /// O que o desenvolvedor liberou, sem os comandos bloqueados e sem as
-    /// permissões do chat que a organização desligou.
-    pub fn restrict_grants(&self,grants:&crate::llm::Grants)->crate::llm::Grants { grants.without_blocked(&self.blocked_commands).without_kinds(&self.blocked_grants) }
+    /// O que o desenvolvedor liberou mais o que a organização deixa sempre
+    /// ligado, sem os comandos bloqueados e sem as permissões do chat que ela
+    /// desligou (a desligada vence a ligada).
+    pub fn restrict_grants(&self,grants:&crate::llm::Grants)->crate::llm::Grants { grants.with_kinds(&self.enabled_grants).without_blocked(&self.blocked_commands).without_kinds(&self.blocked_grants) }
 
     /// Os agentes e modelos de quem usa, com o que a política proíbe desligado.
     pub fn restrict_llm(&self,settings:&LlmSettings)->LlmSettings {
@@ -274,6 +280,18 @@ impl LlmPolicy {
         assert_eq!((no_shell.shell,no_shell.git,no_shell.network,no_shell.commands.len()),(false,true,true,0),"rodar comandos desligado tira todos os comandos");
         assert_eq!(policy(json!({"blocked_grants":["shell"]})).blocking_orgs("ls","padrao"),["padrao"],"sem origem, a organização do projeto");
         assert_eq!(LlmPolicy::default().restrict_grants(&asked),asked);
+    }
+
+    #[test] fn a_chat_permission_the_organization_keeps_on_is_always_granted_unless_blocked() {
+        let on=policy(json!({"enabled_grants":["git","network"],"grant_defaults":{"git":["acme"]}}));
+        let none=crate::llm::Grants::default();
+        let granted=on.restrict_grants(&none);
+        assert_eq!((granted.shell,granted.git,granted.network),(false,true,true),"sem a pessoa ligar nada, as sempre ligadas valem");
+        let both=policy(json!({"enabled_grants":["git","network"],"blocked_grants":["network"]})).restrict_grants(&none);
+        assert_eq!((both.git,both.network),(true,false),"a bloqueada vence a ligada");
+        let shell_on=policy(json!({"enabled_grants":["shell"],"blocked_commands":["git push"]})).restrict_grants(&none);
+        assert!(!shell_on.shell,"rodar comandos ligado não vale com comando bloqueado");
+        assert_eq!(LlmPolicy::default().restrict_grants(&none),none);
     }
 
     #[test] fn the_core_settings_only_get_stricter() {
