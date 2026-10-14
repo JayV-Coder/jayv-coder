@@ -48,6 +48,7 @@ export const TOURS: Tour[] = [
       { feature: "projectNotes" },
       { feature: "orgChat", target: "general-chats" },
       { feature: "commandPermissions", target: "composer-grants" },
+      { feature: "chatPermissions", target: "composer-grants" },
     ],
   },
   {

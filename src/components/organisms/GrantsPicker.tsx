@@ -5,7 +5,7 @@ import { useIntentHandler } from "@/modules/commands";
 import { grantsOf, hasGrants, loadGrants, setGrants, useConversation } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
-import { blockersOf, COMMAND_CATALOG, conflictsWith, useOrganizations } from "@/modules/organizations";
+import { blockersOf, COMMAND_CATALOG, conflictsWith, grantBlockersOf, useOrganizations, type BlockedGrants } from "@/modules/organizations";
 import { ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 const KINDS = ["shell", "git", "network"] as const;
 const NONE: Record<string, string[]> = {};
+const NO_KINDS: BlockedGrants = {};
 
 /** As permissões do chat, ao lado do modo: rodar comandos, mexer no Git e
  * usar a rede, ligadas para todas as mensagens do chat até serem desligadas. Sem nada ligado,
@@ -23,18 +24,21 @@ const NONE: Record<string, string[]> = {};
  *
  * Num projeto de organização, o que ela bloqueia (`Permissões` no site) fica
  * desativado com "Bloqueado por <organização>": nem "rodar comandos" nem "o
- * Git inteiro" valem com comando bloqueado, e cada comando se libera um a um. */
+ * Git inteiro" valem com comando bloqueado, e cada comando se libera um a um.
+ * As três permissões também se desligam por inteiro na aba Chat do site: a
+ * desligada fica desativada e leva junto os comandos que ela cobre. */
 export function GrantsPicker({ chat }: { chat: Chat }) {
   const t = useT();
   const grants = grantsOf(chat.id, useConversation((state) => state.grants));
   const [always, setAlways] = useState<string[] | null>(null);
   const [open, setOpen] = useState(false);
   const blocked = useOrganizations((state) => state.blockedCommands[chat.projectId]) ?? NONE;
-  const anyBlocked = Object.keys(blocked).length > 0;
+  const kinds = useOrganizations((state) => state.blockedGrants[chat.projectId]) ?? NO_KINDS;
+  const anyBlocked = Object.keys(blocked).length > 0 || Object.keys(kinds).length > 0;
   const orgsOf = (rules: string[]) => [...new Set(rules.flatMap((rule) => blockersOf(blocked, rule)))];
   const gitBlockers = orgsOf(Object.keys(blocked).filter((rule) => rule.split(" ")[0] === "git"));
   const allBlockers = orgsOf(Object.keys(blocked));
-  const locked = (kind: (typeof KINDS)[number]) => (kind === "shell" ? allBlockers : kind === "git" ? gitBlockers : []);
+  const locked = (kind: (typeof KINDS)[number]) => [...new Set([...(kinds[kind] ?? []), ...(kind === "shell" ? allBlockers : kind === "git" ? gitBlockers : [])])];
   const active = KINDS.filter((kind) => grants[kind]).length + grants.commands.length;
   useEffect(() => { void loadGrants(chat.id); }, [chat.id]);
   useIntentHandler("commandPermissions", () => { setOpen(true); load(true); });
@@ -92,7 +96,7 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
           <p className="text-xs leading-snug text-muted-foreground">{anyBlocked ? t("grants.commands.blockedHint") : t("grants.commands.hint")}</p>
           <div className="grid gap-1">
             {COMMAND_CATALOG.map(({ tool, subcommands }) => (
-              <CommandGroup key={tool} tool={tool} subcommands={subcommands} selected={grants.commands} blocked={blocked} onToggle={toggleCommand} />
+              <CommandGroup key={tool} tool={tool} subcommands={subcommands} selected={grants.commands} blocked={blocked} kinds={kinds} onToggle={toggleCommand} />
             ))}
           </div>
         </div>
@@ -120,14 +124,15 @@ export function GrantsPicker({ chat }: { chat: Chat }) {
 }
 
 /** Um programa do catálogo: ele inteiro e cada subcomando, para liberar um a um. */
-function CommandGroup({ tool, subcommands, selected, blocked, onToggle }: {
-  tool: string; subcommands: string[]; selected: string[]; blocked: Record<string, string[]>; onToggle: (rule: string, on: boolean) => void;
+function CommandGroup({ tool, subcommands, selected, blocked, kinds, onToggle }: {
+  tool: string; subcommands: string[]; selected: string[]; blocked: Record<string, string[]>; kinds: BlockedGrants; onToggle: (rule: string, on: boolean) => void;
 }) {
   const t = useT();
   const rows = [tool, ...subcommands.map((sub) => `${tool} ${sub}`)];
   const count = rows.filter((rule) => selected.includes(rule)).length;
   const row = (rule: string) => {
-    const orgs = rule === tool ? conflictsWith(blocked, rule) : blockersOf(blocked, rule);
+    const byRule = rule === tool ? conflictsWith(blocked, rule) : blockersOf(blocked, rule);
+    const orgs = [...new Set([...byRule, ...grantBlockersOf(kinds, rule)])];
     const label = rule === tool ? (subcommands.length > 0 ? t("grants.command.all", { tool }) : tool) : rule.slice(tool.length + 1);
     return (
       <label key={rule} htmlFor={`grant-cmd-${rule}`} className={cn("flex items-center gap-2 rounded-md px-1.5 py-1 text-xs", orgs.length > 0 && "opacity-55")}>
