@@ -1,0 +1,10 @@
+{
+  "id": "limitResume",
+  "category": "agents",
+  "since": "0.102.0",
+  "plan": null,
+  "commands": [],
+  "title": "Resume after the usage limit",
+  "summary": "When an agent reaches its usage limit and no other agent can take the request, JayV keeps the request and sends it again by itself when the agent says the limit comes back.",
+  "usage": "It is on by default (Settings › Jev › Resume requests when an agent's usage limit comes back). When every agent that could answer has run out of its limit, the request stays in the chat as failed with a note: which agent stopped and the time JayV will resume it, in your local time, with a one-minute margin. If an agent does not say when its limit comes back, JayV tries again in 30 minutes and the note says the time is a guess. Click Resume now to send it before that, or Don't wait to cancel the automatic resume; the request stays failed and Resend works as always (both are also in Ctrl+K). The wait survives closing the app: when it opens again after the time, the request is sent. If another enabled agent is free, the existing fallback moves the request to it right away and nothing waits. A request that still hits the limit after three automatic resumes stops waiting."
+}

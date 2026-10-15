@@ -53,6 +53,10 @@ pub enum Beat {
     /// `empty` (não mudou nada), `conflict` (não encaixou; o patch ficou
     /// guardado em `patch`) ou `failed` (o agente falhou).
     Subtask{index:usize,title:String,provider:String,outcome:String,#[serde(skip_serializing_if="Option::is_none")] patch:Option<String>},
+    /// O agente esgotou o limite de uso e o pedido espera o limite voltar:
+    /// quem parou, quando o JayV tenta de novo (RFC 3339) e se esse instante é
+    /// um palpite (`estimated`: o agente não disse quando volta).
+    LimitWait{provider:String,resumes_at:String,estimated:bool},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -64,7 +68,7 @@ impl Beat {
     pub fn kind(&self)->&'static str {
         match self {
             Self::Gate{..}=>"gate", Self::Read{..}=>"read", Self::Context{..}=>"context",
-            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Skill{..}=>"skill", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
+            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::LimitWait{..}=>"limit_wait", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Skill{..}=>"skill", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
             Self::Chunk{..}=>"chunk", Self::Done{..}=>"done", Self::Failed{..}=>"failed",
         }
     }

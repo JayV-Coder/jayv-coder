@@ -52,6 +52,7 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
           <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} {...gated("planFirst", core.planFirst, t("jev.planFirst.hint"))} onChange={(planFirst) => updateCore({ planFirst })} />
           <ToggleRow id="jev-parallel" label={t("jev.parallel")} {...gated("parallelTasks", core.parallelTasks, t("jev.parallel.hint"))} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
           <ToggleRow id="jev-keep-session" label={t("jev.keepSession")} {...gated("agentSessions", core.keepSessionModel, t("jev.keepSession.hint"))} onChange={(keepSessionModel) => updateCore({ keepSessionModel })} />
+          <ToggleRow id="jev-resume-limit" label={t("jev.resumeLimit")} hint={t("jev.resumeLimit.hint")} checked={core.resumeAfterLimit} onChange={(resumeAfterLimit) => updateCore({ resumeAfterLimit })} />
           <ToggleRow id="jev-resume-modes" label={t("jev.resumeModes")} hint={t("jev.resumeModes.hint")} checked={core.resumeAcrossModes} onChange={(resumeAcrossModes) => updateCore({ resumeAcrossModes })} />
           <AgentOrderField order={core.agentOrder} />
           <FormField label={t("jev.ceiling")} htmlFor="jev-ceiling" hint={t("jev.ceiling.hint")}>

@@ -66,6 +66,19 @@ pub fn over_limit(agent:&str)->Option<(String,f64)> {
         .filter_map(|(window,(used,_))|used.filter(|used|*used>=QUOTA_STOP_PERCENT).map(|used|(window.clone(),used))).max_by(|left,right|left.1.total_cmp(&right.1))
 }
 
+/// Quando a janela que esgotou o plano do agente volta, na última leitura.
+pub fn reset_of(agent:&str)->Option<chrono::DateTime<chrono::Utc>> {
+    let latest=LATEST.lock().ok()?;
+    latest.get(agent)?.iter().filter(|(window,_)|BLOCKING_WINDOWS.contains(&window.as_str())||window.starts_with("week"))
+        .filter(|(_,(used,_))|used.is_some_and(|used|used>=QUOTA_STOP_PERCENT))
+        .filter_map(|(_,(_,resets))|resets.as_deref().and_then(|at|chrono::DateTime::parse_from_rfc3339(at).ok()))
+        .map(|at|at.with_timezone(&chrono::Utc)).max()
+}
+
+/// Esquece a leitura guardada do agente: passada a espera pelo limite, a
+/// leitura velha não pode barrar o pedido que acabou de ser retomado.
+pub fn forget_quota(agent:&str) { if let Ok(mut latest)=LATEST.lock() { latest.remove(agent); } }
+
 /// A recusa de abrir um agente cujo plano está no limite. A leitura guardada
 /// pode ter ficado velha (a janela reiniciou), então ela é refeita antes de
 /// recusar; sem leitura nova, vale o que o agente disse por último só se a

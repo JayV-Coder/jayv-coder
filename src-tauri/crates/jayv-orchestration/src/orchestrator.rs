@@ -163,6 +163,10 @@ pub struct Orchestrator {
     /// (`ReviewRequest`): quem atende a fila a leva e a roda fora do
     /// cadeado, e o pedido seguinte não espera a segunda opinião.
     pub pending_review: Option<ReviewRequest>,
+    /// Os agentes que pararam no limite de uso durante o último pedido. Só
+    /// ficam se o pedido terminou em falha: quem atende o lê para esperar o
+    /// limite voltar e retomar.
+    pub limit_hits: Vec<jayv_agents::limits::LimitHit>,
     /// As skills que o desenvolvedor instalou e deixou ligadas: o Jev escolhe
     /// no máximo uma por pedido. Quem atende a fila as renova a cada pedido.
     skills: Vec<jayv_agents::skills::Skill>,
@@ -186,7 +190,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, skills:vec![] })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, limit_hits:vec![], skills:vec![] })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -321,6 +325,7 @@ impl Orchestrator {
         let normalized=user_input.trim().to_string();
         let pinned=self.pending_work_mode.take().unwrap_or_else(||MODE_AUTO.into());
         self.mode_switch=None;
+        self.limit_hits.clear();
         self.planned_for_build=false;
         let answered=std::mem::take(&mut self.plan_answered);
         if normalized.starts_with("/why") {
@@ -422,6 +427,7 @@ impl Orchestrator {
                 self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await
             }
         };
+        if let Err(error)=&execution { self.note_limit(error,&selection.provider); }
         // Plano B: o agente que nem conseguiu começar (não instalado, sem
         // login, sem cota) passa a vez ao próximo da lista que é de outro
         // agente. Quem já trabalhou um pouco e falhou não passa: o próximo
@@ -437,7 +443,10 @@ impl Orchestrator {
             pulse.beat(Beat::Route{provider:selection.provider.clone(),model:selection.model_name.clone(),reason:selection.reason.clone(),mode:selection.mode.clone(),agent:selection.agent.clone(),switched:switched.clone()});
             attempt=Instant::now();
             execution=self.execute(brief.as_deref().unwrap_or(&normalized),&extras,&handoff,effort,&context,&selection,session_id,pulse).await;
+            if let Err(error)=&execution { self.note_limit(error,&selection.provider); }
         }
+        // Um agente que respondeu desfez a falha dos outros: não há o que esperar.
+        if execution.is_ok() { self.limit_hits.clear(); }
         if let (Some(watch),Ok((response,_,_)))=(watch,&execution) {
             if usable_response(response) {
                 self.pending_review=self.review(&normalized,&complexity,&context,&selection,session_id,watch,pulse).await;
@@ -463,6 +472,14 @@ impl Orchestrator {
         self.shared.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now(), chat:Some(session_id.to_string()) });
         self.last_decision=Some(decision.clone());
         ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy, model_selection:selection, result, validation:valid, decision, routing:signals, error }
+    }
+
+    /// Guarda o agente que parou no limite de uso, com a hora em que ele volta
+    /// se o erro a disse. O último aviso de cada agente vale.
+    fn note_limit(&mut self,error:&anyhow::Error,provider:&str) {
+        let Some(hit)=jayv_agents::limits::from_error(error,provider,Utc::now(),*chrono::Local::now().offset()) else { return };
+        self.limit_hits.retain(|known|known.agent!=hit.agent);
+        self.limit_hits.push(hit);
     }
 
     async fn decide_routing(&mut self,input:&str,session_id:&str)->(IntentAnalysis,String,RoutingSignals) {
@@ -1766,6 +1783,42 @@ mod tests {
         orchestrator.pending_work_mode=Some(MODE_BUILD.into());
         orchestrator.process("rename the variable in router.rs",Some("chat"),&Pulse::silent()).await;
         assert!(!read("sent-1").contains("SKILL-BODY-MARK"),"pedido sem skill parecida não leva skill");
+    }
+
+    /// O limite de uso esgotado fica anotado com a hora em que volta quando
+    /// nenhum outro agente atende; com outro agente livre, o plano B assume e
+    /// não há o que esperar.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_spent_usage_limit_is_noted_only_when_no_other_agent_answers() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        let mut orchestrator=orchestrator(&dir);
+        let script=|body:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),format!("cat >/dev/null; {body}")],plan_args:vec!["-c".into(),format!("cat >/dev/null; {body}")],..Default::default()};
+        let model=|provider:&str,cost:&str|crate::config::ModelConfig{enabled:true,provider:provider.into(),model:format!("{provider}-model"),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:cost.into(),speed:"medium".into(),context_window:200_000};
+        let resets=(Utc::now()+chrono::Duration::hours(2)).timestamp();
+        let limited=format!("echo '{{\"type\":\"result\",\"is_error\":true,\"result\":\"Claude AI usage limit reached|{resets}\"}}'; exit 1");
+        let use_agents=|orchestrator:&mut Orchestrator,second:Option<crate::config::ProviderConfig>|{
+            let mut providers=HashMap::from([("first".to_string(),script(&limited))]);
+            let mut models=HashMap::from([("first/m".to_string(),model("first","low"))]);
+            if let Some(second)=second { providers.insert("second".into(),second); models.insert("second/m".into(),model("second","medium")); }
+            orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+            orchestrator.planners=build_planners(&providers,&orchestrator.workdir);
+            orchestrator.config.providers=providers;
+            orchestrator.config.models=models;
+            orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"simple",0.9)));
+        };
+
+        use_agents(&mut orchestrator,None);
+        let alone=orchestrator.process("adicione um teste ao roteador",Some("alone"),&Pulse::silent()).await;
+        assert!(alone.error.is_some());
+        assert_eq!(orchestrator.limit_hits.len(),1,"{:?}",orchestrator.limit_hits);
+        assert_eq!(orchestrator.limit_hits[0].agent,"first");
+        assert_eq!(orchestrator.limit_hits[0].resets_at,chrono::DateTime::from_timestamp(resets,0));
+
+        use_agents(&mut orchestrator,Some(script("echo do segundo")));
+        let spare=orchestrator.process("adicione um teste ao roteador",Some("spare"),&Pulse::silent()).await;
+        assert_eq!(spare.result.as_ref().map(|answer|answer.response.trim()),Some("do segundo"));
+        assert!(orchestrator.limit_hits.is_empty(),"o plano B atendeu: nada a esperar");
     }
 
     /// O agente escolhido que não consegue começar passa a vez ao próximo de

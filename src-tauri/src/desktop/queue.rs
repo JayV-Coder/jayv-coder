@@ -214,6 +214,9 @@ async fn narrate(app:AppHandle,workspace:SharedWorkspace,turn:Turn,mut beats:mps
 /// saísse em aberto travaria a fila inteira atrás dele.
 async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspace,forget:&SharedForget,bell:&QueueBell,turn:&Turn,prompt:&str,pulse:&Pulse) {
     let chat_id=turn.chat_id.as_str();
+    // O pedido voltou ao ar (sozinho ou por "reenviar"): a espera pelo limite
+    // acabou, e só a conta de tentativas fica.
+    let _=workspace.lock().await.settle_limit_wait(&turn.id);
     // O que está gravado pode ser um aviso para a tela (a resposta a uma
     // pergunta); a portaria e o modelo o leem em inglês.
     let stored=prompt;
@@ -497,7 +500,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     if exits.iter().any(|exit|exit.verdict==ExitVerdict::Held) { state.orchestrator.mark_last_failed(chat_id); }
     if !exits.is_empty(){let _=app.emit(EXIT_EVENT,ExitEvent{checks:exits});}
     let review=state.orchestrator.pending_review.take().filter(|_|result.result.is_some());
+    let limit_hits=std::mem::take(&mut state.orchestrator.limit_hits);
+    let resume_after_limit=state.orchestrator.config.jev.resume_after_limit;
     drop(state);
+    if result.result.is_some() { let _=workspace.lock().await.cancel_limit_wait(&turn.id); }
+    else if resume_after_limit&&pulse.stop().reason().is_none()&&!limit_hits.is_empty() { wait_for_limit(app,workspace,turn,&limit_hits).await; }
     // A segunda opinião chega depois da resposta, no mesmo turno: o próximo
     // da fila não espera por ela.
     if let Some(review)=review { review_in_background(app.clone(),workspace.clone(),turn.clone(),review); }
@@ -513,6 +520,66 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         });
     }
     if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
+}
+
+/// Quanto o JayV espera além da hora que o agente deu: o relógio do agente e o
+/// do computador não batem ao segundo.
+const LIMIT_MARGIN:chrono::Duration=chrono::Duration::seconds(60);
+/// Quando o agente não diz quando o limite volta, a próxima tentativa é daqui a
+/// este tanto (a tela avisa que a hora é um palpite).
+const LIMIT_GUESS:chrono::Duration=chrono::Duration::minutes(30);
+/// Com que frequência o relógio das esperas olha o banco. Olhar o banco, e não
+/// dormir até a hora, faz a espera valer depois de o computador suspender ou o
+/// aplicativo fechar e abrir.
+const LIMIT_POLL:std::time::Duration=std::time::Duration::from_secs(15);
+
+/// O pedido falhou porque o limite de uso dos agentes acabou: ele fica falho e
+/// escrito, e o JayV o reenvia quando o limite voltar. Vale a hora mais cedo
+/// entre os agentes que pararam — qualquer um que volte já atende —, e sem
+/// hora nenhuma a espera é um palpite.
+async fn wait_for_limit(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,hits:&[jayv_agents::limits::LimitHit]) {
+    let now=chrono::Utc::now();
+    let earliest=hits.iter().filter_map(|hit|hit.resets_at.map(|at|(at,hit.agent.clone()))).min();
+    let estimated=earliest.is_none();
+    let (resume_at,provider)=match earliest { Some((at,agent))=>(at+LIMIT_MARGIN,agent), None=>(now+LIMIT_GUESS,hits[0].agent.clone()) };
+    let mut workspace=workspace.lock().await;
+    // O limite que volta a bater logo depois de retomado não vira laço.
+    if workspace.limit_wait_attempts(&turn.id).unwrap_or(0)>=crate::turns::MAX_LIMIT_RESUMES { return; }
+    if let Err(error)=workspace.schedule_limit_wait(&turn.id,&provider,resume_at,estimated) { eprintln!("limite: não consegui agendar a retomada de `{}` ({error:#})",turn.id); return; }
+    let beat=Beat::LimitWait{provider,resumes_at:resume_at.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),estimated};
+    let _=workspace.record_beat(&turn.id,beat.kind(),&beat.detail());
+    drop(workspace);
+    let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});
+}
+
+/// O relógio das esperas pelo limite: reenvia o pedido cuja hora chegou.
+pub(crate) async fn serve_limit_waits(app:AppHandle,workspace:SharedWorkspace,bell:QueueBell) {
+    loop {
+        tokio::time::sleep(LIMIT_POLL).await;
+        let due=workspace.lock().await.due_limit_waits(chrono::Utc::now()).unwrap_or_else(|error|{eprintln!("limite: não consegui ler as esperas ({error:#})"); vec![]});
+        for (turn_id,chat_id,provider) in due {
+            let queued={
+                let mut workspace=workspace.lock().await;
+                // Só o pedido que segue falho volta: quem o reenviou à mão, ou
+                // o apagou, já resolveu a espera.
+                let failed=workspace.turn(&turn_id).ok().flatten().is_some_and(|turn|turn.status==TurnStatus::Failed);
+                let _=workspace.settle_limit_wait(&turn_id);
+                if failed { workspace.enqueue_prompt(&chat_id,"",Some(&turn_id)).map(|_|()) } else { Ok(()) }.map(|()|failed)
+            };
+            match queued {
+                Ok(true)=>{
+                    // A leitura velha do limite não pode barrar o agente que
+                    // acabou de voltar: a trava lê de novo ao abrir.
+                    jayv_agents::guard::forget_quota(&provider);
+                    let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:chat_id.clone()});
+                    let _=app.emit(TURN_EVENT,TurnEvent{chat_id,turn_id});
+                    bell.notify_one();
+                }
+                Ok(false)=>{ let _=app.emit(TURN_EVENT,TurnEvent{chat_id,turn_id}); }
+                Err(error)=>eprintln!("limite: não consegui retomar `{turn_id}` ({error:#})"),
+            }
+        }
+    }
 }
 
 /// No automático, quem deu permissão na conversa quer que o agente execute:

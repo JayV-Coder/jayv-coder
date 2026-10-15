@@ -27,6 +27,7 @@
     "adaptiveRouting",
     "agentSessions",
     "consumptionGuard",
+    "limitResume",
     "mcp",
     "skills",
     "skillsHub",

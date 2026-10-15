@@ -60,6 +60,9 @@ pub struct CoreSettings {
     #[serde(default)] pub resume_across_modes:bool,
     /// O teto total de um pedido, em minutos (30 por padrão).
     #[serde(default="crate::config::default_turn_ceiling")] pub turn_ceiling_minutes:u64,
+    /// O pedido parado pelo limite de uso do agente é retomado quando o limite
+    /// volta (ligado por padrão).
+    #[serde(default="keep_by_default")] pub resume_after_limit:bool,
 }
 
 fn keep_by_default()->bool { true }
@@ -82,6 +85,7 @@ impl CoreSettings {
             keep_session_model:config.jev.keep_session_model,
             resume_across_modes:config.jev.resume_across_modes,
             turn_ceiling_minutes:config.jev.turn_ceiling_minutes,
+            resume_after_limit:config.jev.resume_after_limit,
         }
     }
 
@@ -105,6 +109,7 @@ impl CoreSettings {
         config.jev.keep_session_model=self.keep_session_model;
         config.jev.resume_across_modes=self.resume_across_modes;
         config.jev.turn_ceiling_minutes=self.turn_ceiling_minutes;
+        config.jev.resume_after_limit=self.resume_after_limit;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,

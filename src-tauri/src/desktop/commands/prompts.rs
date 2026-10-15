@@ -168,6 +168,18 @@ pub(crate) async fn dismiss_question(app:AppHandle,workspace:State<'_,SharedWork
     Ok(())
 }
 
+/// O pedido que espera o limite do agente voltar deixa de esperar: continua
+/// falho, e "Reenviar" o devolve ao ar quando a pessoa quiser.
+#[tauri::command]
+pub(crate) async fn cancel_limit_wait(app:AppHandle,workspace:State<'_,SharedWorkspace>,turn_id:String)->Result<(),Text>{crate::desktop::require_session()?;
+    let mut store=workspace.lock().await;
+    let Some(turn)=store.turn(&turn_id).map_err(failure)? else { return Ok(()) };
+    store.cancel_limit_wait(&turn_id).map_err(failure)?;
+    drop(store);
+    let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id,turn_id});
+    Ok(())
+}
+
 /// Para um pedido. O que espera na fila sai dela como falho, com o motivo no
 /// chat e o reenvio no balão; o que está no ar recebe o sinal, e o agente cai
 /// junto com tudo o que abriu. O pedido já fechado não muda.
