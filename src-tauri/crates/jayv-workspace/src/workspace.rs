@@ -218,6 +218,7 @@ impl WorkspaceStore {
         connection.execute_batch(crate::mcp::SCHEMA)?;
         crate::mcp::seed_defaults(&connection)?;
         connection.execute_batch(jayv_agents::skills::SCHEMA)?;
+        connection.execute_batch(jayv_agents::mod_skills::SCHEMA)?;
         connection.execute_batch(jayv_agents::org_extensions::SCHEMA)?;
         ensure_message_turns(&connection)?;
         ensure_chat_named(&connection)?;
@@ -787,6 +788,10 @@ impl WorkspaceStore {
     }
 
     pub fn skills(&self) -> Result<Vec<jayv_agents::skills::Skill>> {jayv_agents::skills::load(&self.connection)}
+
+    /// As skills que os mods instalados trouxeram (`mod_skills`), com os
+    /// servidores MCP de cada uma.
+    pub fn mod_skills(&self) -> Result<Vec<jayv_agents::skills::Skill>> {jayv_agents::mod_skills::load(&self.connection)}
 
     pub fn install_skill_folder(&mut self, root:&Path, source:&Path) -> Result<Vec<jayv_agents::skills::Skill>> {std::fs::create_dir_all(root)?; jayv_agents::skills::install_folder(&self.connection,root,source)}
 

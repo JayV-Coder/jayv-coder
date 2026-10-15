@@ -75,6 +75,10 @@ pub trait LlmMod: Send + Sync {
     /// Com os servidores MCP do pedido, se o "Aprovar servidores MCP" está
     /// ligado. `None`: nada muda.
     fn with_mcp(&self,options:&Value,servers:Vec<McpServer>)->Option<Value>;
+    /// Com mais servidores MCP, somados aos que já vão (os da skill que o Jev
+    /// escolheu para o pedido), se o "Aprovar servidores MCP" está ligado. O
+    /// servidor com o nome de um que já vai fica de fora. `None`: nada muda.
+    fn with_more_mcp(&self,options:&Value,servers:&[McpServer])->Option<Value>;
     /// Com o que foi liberado para um pedido só. `None`: nada muda.
     fn with_grants(&self,options:&Value,grants:&Grants)->Option<Value>;
     /// Sem poder rodar os comandos bloqueados. `None`: nada muda.
@@ -192,6 +196,16 @@ impl<T:TypedMod> LlmMod for T {
         let (approve,mine)=self.mcp(&mut options);
         if !*approve { return None; }
         *mine=servers;
+        Some(value(options))
+    }
+
+    fn with_more_mcp(&self,options:&Value,servers:&[McpServer])->Option<Value> {
+        let mut options=parse::<T::Options>(options).unwrap_or_default();
+        let (approve,mine)=self.mcp(&mut options);
+        if !*approve { return None; }
+        let fresh:Vec<McpServer>=servers.iter().filter(|server|!mine.iter().any(|known|known.name==server.name)).cloned().collect();
+        if fresh.is_empty() { return None; }
+        mine.extend(fresh);
         Some(value(options))
     }
 

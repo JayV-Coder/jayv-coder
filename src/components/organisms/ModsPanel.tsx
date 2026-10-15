@@ -1,17 +1,17 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { DownloadIcon, ExternalLinkIcon, GlobeIcon, PlusIcon, SearchIcon, SettingsIcon, Trash2Icon } from "lucide-react";
+import { BookOpenIcon, DownloadIcon, ExternalLinkIcon, GlobeIcon, PlusIcon, SearchIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import { isApiAgent, isCustomMod, type AgentSettings, type ModManifest } from "@/modules/core";
 import { useEnvironment } from "@/modules/environments";
 import { reportError } from "@/modules/feedback";
 import { formatSince, useLocale, useT, type Key } from "@/modules/i18n";
 import {
-  dependents, findMod, installMod, isInstalled, isOn, isRequired, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modsSitePath, modText,
+  dependents, findMod, installMod, isInstalled, isOn, isRequired, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modPagePath, modsSitePath, modText,
   ownedAgents, pointsOf, setModEnabled, statusOf, uninstallMod, unknownPoints, usable, useMods,
 } from "@/modules/mods";
 import { inPlan, locks, useEntitlements, useFeature, type FeatureKey } from "@/modules/plans";
 import { agentLabel, MAX_MODS, removeMod, setSettingsTab, useAgentIds, useSettings, type SettingsTab } from "@/modules/settings";
-import { openDashboard, SITE_URL } from "@/modules/site";
+import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { AgentIcon } from "@/components/atoms";
 import { ConfirmAction, SegmentedControl, SettingsSection } from "@/components/molecules";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +55,13 @@ export function ModsPanel() {
 
   /** A aba que o mod configura: a do primeiro agente dele que existe. */
   const tabOf = (manifest: ModManifest): SettingsTab | undefined => modAgentIds(manifest).find((id) => (ids as readonly string[]).includes(id)) as SettingsTab | undefined;
+
+  /** A página do mod no site: o que ele faz, como habilitar e como usar. */
+  const pageButton = (manifest: ModManifest, name: string) => SITE_URL && (
+    <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.page.named", { name })} title={t("mods.page.named", { name })} onClick={() => void openSite(modPagePath(locale, manifest.id)).catch(reportError)}>
+      <BookOpenIcon aria-hidden="true" />
+    </Button>
+  );
 
   const pointBadges = (manifest: ModManifest) => pointsOf(manifest).map((point) => <Badge key={point} variant="secondary">{t(pointLabel(point))}</Badge>);
 
@@ -113,6 +120,7 @@ export function ModsPanel() {
           )}
         </div>
         {tab && <Button type="button" variant="ghost" size="sm" onClick={() => setSettingsTab(tab)}><SettingsIcon aria-hidden="true" />{t("mods.configure")}</Button>}
+        {manifest && pageButton(manifest, name)}
         {manifest?.homepage && (
           <Button type="button" variant="ghost" size="icon-sm" aria-label={t("mods.homepage", { name })} title={t("mods.homepage", { name })} onClick={() => void openUrl(manifest.homepage!).catch(reportError)}>
             <GlobeIcon aria-hidden="true" />
@@ -156,6 +164,7 @@ export function ModsPanel() {
             </span>
           )}
         </div>
+        {pageButton(manifest, name)}
         <Button type="button" variant="outline" size="sm" disabled={why !== undefined} title={why} onClick={() => installMod(manifest.id)}>
           <DownloadIcon aria-hidden="true" />{t("mods.install")}
         </Button>

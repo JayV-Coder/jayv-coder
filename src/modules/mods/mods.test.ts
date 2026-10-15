@@ -6,8 +6,8 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }), Toaster: () => null }));
 
 const {
-  defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, missingRequirements, ownedAgents, restoreModDefaults, setModEnabled, statusOf, uninstallMod,
-  unknownPoints, usable, useMods, withInstalled,
+  defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, modPagePath, modSkills, missingRequirements, ownedAgents, restoreModDefaults, setModEnabled, statusOf,
+  uninstallMod, unknownPoints, usable, useMods, withInstalled,
 } = await import("./index");
 
 type Manifest = import("@/modules/core").ModManifest;
@@ -40,6 +40,16 @@ describe("the generic mod manager", () => {
     setModEnabled("stats", false);
     expect(on(useMods.getState().draft)).toEqual({ skills: true, stats: false });
     useMods.setState({ catalog: CATALOG, saved: state({}), draft: state({}) });
+  });
+
+  it("opens the page of each mod on the site, in the language of the screen", () => {
+    expect(modPagePath("pt-BR", "rea")).toBe("/pt-BR/mods/rea");
+    expect(modPagePath("en")).toBe("/en/mods");
+    const rea = mod("rea", { skills: [{ name: "reverse-engineering", description: "Inspect programs.", instructions: "Use the tools.", mcpServers: [{ name: "rea", command: "npx" }] }] });
+    expect(modSkills(rea).map((skill) => skill.name)).toEqual(["reverse-engineering"]);
+    expect(modSkills(STATS)).toEqual([]);
+    expect(usable(rea, "0.103.0", [...POINTS, "skills"])).toBe(true);
+    expect(unknownPoints(rea, POINTS)).toEqual(["skills"]);
   });
 
   it("knows when a mod runs on this app", () => {

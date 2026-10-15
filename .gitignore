@@ -9,3 +9,4 @@ src-tauri/gen/
 /.superpowers/
 /supabase/.temp/
 /supabase/.branches/
+/tools/mod-shots/.cache/

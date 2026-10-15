@@ -170,6 +170,11 @@ pub struct Orchestrator {
     /// As skills que o desenvolvedor instalou e deixou ligadas: o Jev escolhe
     /// no máximo uma por pedido. Quem atende a fila as renova a cada pedido.
     skills: Vec<jayv_agents::skills::Skill>,
+    /// As configurações dos agentes como vieram de fora (`use_llm`), sem os
+    /// servidores MCP da skill de um pedido; e se os agentes montados agora
+    /// levam esses servidores.
+    llm_base: Option<crate::llm::LlmSettings>,
+    skill_mcp: bool,
 }
 
 impl Orchestrator {
@@ -190,7 +195,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, limit_hits:vec![], skills:vec![] })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, limit_hits:vec![], skills:vec![], llm_base:None, skill_mcp:false })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -234,6 +239,26 @@ impl Orchestrator {
     /// dele (`llm::guarding`): por isso a privacidade entra antes, no
     /// `use_core`.
     pub fn use_llm(&mut self,settings:&crate::llm::LlmSettings) {
+        self.llm_base=Some(settings.clone());
+        self.skill_mcp=false;
+        self.build_llm(settings);
+    }
+
+    /// Os servidores MCP da skill que o Jev escolheu para este pedido, somados
+    /// aos configurados, nos agentes que aceitam servidores; sem skill com
+    /// servidor, os agentes voltam ao que `use_llm` deu. Os de outro pedido
+    /// nunca ficam: cada pedido decide de novo.
+    fn use_skill_mcp(&mut self,servers:&[crate::mcp::McpServer]) {
+        let Some(base)=self.llm_base.clone() else { return };
+        if servers.is_empty()&&!self.skill_mcp { return; }
+        let settings=base.with_more_mcp(servers);
+        self.skill_mcp=!servers.is_empty();
+        // O Cursor lê os servidores do arquivo dele, não da linha de comando.
+        settings.sync_mcp_files();
+        self.build_llm(&settings);
+    }
+
+    fn build_llm(&mut self,settings:&crate::llm::LlmSettings) {
         let print={
             use std::hash::{Hash, Hasher};
             let mut hasher=std::collections::hash_map::DefaultHasher::new();
@@ -352,7 +377,9 @@ impl Orchestrator {
         let skills=self.skills.clone();
         let with_jev=self.routes_with_jev();
         let ((intent,complexity,signals),skill_index)=tokio::join!(self.decide_routing(&normalized,session_id),crate::skill_choice::choose(&normalized,&candidates,with_jev));
-        let skill_note=skill_index.and_then(|index|skills.get(index)).and_then(|skill|skill_note(skill).map(|note|(skill.name.clone(),note)));
+        let picked=skill_index.and_then(|index|skills.get(index));
+        self.use_skill_mcp(picked.map_or(&[][..],|skill|skill.mcp.as_slice()));
+        let skill_note=picked.and_then(|skill|skill_note(skill).map(|note|(skill.name.clone(),note)));
         let wants_build=asks_to_build(&intent.intent,&signals,gate_passed,self.expertise);
         let stuck=held(&self.shared.stuck_in_plan).contains(session_id);
         // Há um plano deste chat esperando: quem o aprova quer o build, mesmo
@@ -1176,7 +1203,13 @@ fn skill_note(skill:&jayv_agents::skills::Skill)->Option<String> {
     let body=jayv_agents::skills::read_body(skill).map_err(|error|eprintln!("skills: {} ilegível ({error:#})",skill.name)).ok()?;
     // A skill da organização vem só com as instruções: não há pasta a ler.
     let files=if skill.inline.is_some() { String::new() } else { format!(" Any other file it mentions is in `{}`; read it from there when you need it.",skill.path) };
-    Some(format!("Jev picked the skill `{name}` for this request: {description}\nFollow its instructions below.{files}\n<skill name=\"{name}\">\n{body}\n</skill>",name=skill.name,description=skill.description))
+    // Os servidores da skill vão junto só neste pedido, e só aos agentes com
+    // os servidores MCP aprovados: o modelo sabe que podem faltar.
+    let servers=if skill.mcp.is_empty() { String::new() } else {
+        let names=skill.mcp.iter().map(|server|format!("`{}`",server.name)).collect::<Vec<_>>().join(", ");
+        format!(" It brings the MCP server {names}, connected for this request when your MCP servers are approved; if its tools are not available to you, follow what the instructions say to do without them.")
+    };
+    Some(format!("Jev picked the skill `{name}` for this request: {description}\nFollow its instructions below.{files}{servers}\n<skill name=\"{name}\">\n{body}\n</skill>",name=skill.name,description=skill.description))
 }
 
 /// O que volta do modelo raramente é só o título: vem entre aspas, com marca
@@ -1760,7 +1793,7 @@ mod tests {
         let (calls,data)=(tempfile::tempdir().expect("chamadas"),tempfile::tempdir().expect("dados"));
         std::fs::create_dir_all(data.path().join("release-notes")).expect("pasta");
         std::fs::write(data.path().join("release-notes/SKILL.md"),"---\nname: release-notes\ndescription: Write release notes from merged pull requests.\n---\nSKILL-BODY-MARK: list each merged change.").expect("skill");
-        let skill=jayv_agents::skills::Skill{name:"release-notes".into(),description:"Write release notes from merged pull requests.".into(),path:data.path().join("release-notes").to_string_lossy().into(),enabled:true,installed_at:String::new(),origin:None,inline:None};
+        let skill=jayv_agents::skills::Skill{name:"release-notes".into(),description:"Write release notes from merged pull requests.".into(),path:data.path().join("release-notes").to_string_lossy().into(),enabled:true,installed_at:String::new(),..Default::default()};
         let mut orchestrator=orchestrator(&dir);
         let build=format!(r#"cat > "{dir}/sent-$(ls {dir} | wc -l)"; echo pronto"#,dir=calls.path().display());
         let agent=crate::config::ProviderConfig{kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build,"agent".into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo plano".into()],..Default::default()};
@@ -1783,6 +1816,23 @@ mod tests {
         orchestrator.pending_work_mode=Some(MODE_BUILD.into());
         orchestrator.process("rename the variable in router.rs",Some("chat"),&Pulse::silent()).await;
         assert!(!read("sent-1").contains("SKILL-BODY-MARK"),"pedido sem skill parecida não leva skill");
+    }
+
+    /// Os servidores MCP da skill escolhida chegam aos agentes que aceitam
+    /// servidores só no pedido dela; o pedido seguinte volta ao configurado.
+    #[test]
+    fn the_servers_of_the_picked_skill_reach_the_agents_only_for_that_request() {
+        let dir=repository(&[("router.rs",filler("route_request",50))]);
+        let mut orchestrator=orchestrator(&dir);
+        let agent=crate::llm::AgentSettings{id:crate::llm::AgentId::Codex,enabled:true,command:"codex".into(),timeout:300,options:serde_json::json!({"approveMcps":true})};
+        orchestrator.use_llm(&crate::llm::LlmSettings{agents:vec![agent],models:vec![]});
+        let carries=|orchestrator:&Orchestrator|orchestrator.config.providers.get("codex").is_some_and(|provider|provider.args.iter().any(|arg|arg.starts_with("mcp_servers.rea.command")));
+        assert!(!carries(&orchestrator));
+        let servers=vec![crate::mcp::McpServer{name:"rea".into(),command:"npx".into(),args:vec!["-y".into(),"rea-agents".into(),"--mcp".into()],..Default::default()}];
+        orchestrator.use_skill_mcp(&servers);
+        assert!(carries(&orchestrator),"a skill escolhida leva o servidor dela");
+        orchestrator.use_skill_mcp(&[]);
+        assert!(!carries(&orchestrator),"o pedido sem a skill volta ao configurado");
     }
 
     /// O limite de uso esgotado fica anotado com a hora em que volta quando

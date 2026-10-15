@@ -379,7 +379,18 @@ export interface ModContributions {
   features?: string[];
   /** Agentes de linha de comando ou de API. */
   agents?: ModAgent[];
+  /** Skills que o Jev escolhe pelo pedido, com os servidores MCP delas. */
+  skills?: ModSkill[];
   [point: string]: unknown;
+}
+
+/** Uma skill que um mod traz: o Jev a escolhe pelo pedido, como as que a
+ * pessoa instala, e os servidores MCP dela só vão no pedido em que ela vale. */
+export interface ModSkill {
+  name: string;
+  description: string;
+  instructions: string;
+  mcpServers?: { name: string; command?: string; args?: string[]; url?: string; transport?: string }[];
 }
 
 /** Um mod como o catálogo (`JayV-Coder/jayv-coder-mods`) o descreve, no

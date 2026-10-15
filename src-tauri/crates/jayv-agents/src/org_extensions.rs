@@ -84,7 +84,7 @@ pub fn for_chat(connection:&Connection,chat_id:&str)->Result<(Vec<McpServer>,Vec
             if let Ok(server)=serde_json::from_str::<McpServer>(&payload) { if server_names.insert(server.name.clone()) { servers.push(server); } }
         } else if let Ok(skill)=serde_json::from_str::<SkillPayload>(&payload) {
             if skill_names.insert(skill.name.clone()) {
-                skills.push(Skill{name:skill.name,description:skill.description,path:String::new(),enabled:true,installed_at:String::new(),origin:Some(org),inline:Some(skill.body)});
+                skills.push(Skill{name:skill.name,description:skill.description,path:String::new(),enabled:true,installed_at:String::new(),origin:Some(org),inline:Some(skill.body),..Default::default()});
             }
         }
     }

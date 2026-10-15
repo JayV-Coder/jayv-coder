@@ -708,6 +708,12 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
         let plan=workspace.entitlements().unwrap_or_default();
         let servers=workspace.mcp_servers().unwrap_or_else(|error|{eprintln!("mcp: servidores ilegíveis ({error:#})"); vec![]});
         let skills=workspace.skills().unwrap_or_else(|error|{eprintln!("skills: ilegíveis ({error:#})"); vec![]});
+        // As skills dos mods instalados entram na escolha do Jev, menos as do
+        // mod desligado; os servidores MCP delas só com o MCP no plano.
+        let from_mods=workspace.mod_skills().unwrap_or_else(|error|{eprintln!("skills dos mods: ilegíveis ({error:#})"); vec![]}).into_iter()
+            .filter(|skill|!plan.disabled().contains(&jayv_agents::mod_skills::target(&skill.name)))
+            .map(|mut skill|{ skill.mcp=plan.mcp_servers(std::mem::take(&mut skill.mcp)); skill }).collect();
+        let skills=jayv_agents::mod_skills::merge(skills,from_mods);
         // O que a organização do projeto dá vale por cima do que a pessoa tem.
         let (org_servers,org_skills)=workspace.chat_org_extensions(chat_id).unwrap_or_else(|error|{eprintln!("MCP e skills da organização: ilegíveis ({error:#})"); (vec![],vec![])});
         let servers=jayv_agents::org_extensions::merge_servers(servers,org_servers);

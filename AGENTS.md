@@ -152,9 +152,10 @@ Mod é do sistema, não de um assunto (regra do dono do projeto): o crate
 (`JayV-Coder/jayv-coder-mods`) diz, em `contributes`, o que traz a cada **ponto
 de extensão**; cada camada implementa os pontos do assunto dela
 (`jayv_mods::ExtensionPoint`) e eles se juntam no `REGISTRY` de
-`jayv-plans::mods`. Hoje: `llmEngines` e `features` (em `jayv-plans`) e
-`agents` (`jayv-agents::mod_agents`). Um tipo novo de funcionalidade que os mods
-podem trazer é:
+`jayv-plans::mods`. Hoje: `llmEngines` e `features` (em `jayv-plans`),
+`agents` (`jayv-agents::mod_agents`) e `skills` (`jayv-agents::mod_skills`: o
+Jev escolhe a skill pelo pedido, e os servidores MCP dela só vão ao agente
+naquele pedido). Um tipo novo de funcionalidade que os mods podem trazer é:
 
 1. um ponto novo — `targets` (os ids que ficam ligados enquanto um mod ativo
    os traz), `built_in` (o que o app já tem) e, se ele grava alguma coisa,
@@ -168,6 +169,14 @@ podem trazer é:
 
 Os mods com `preinstalled` se instalam sozinhos, ligados, no fim da volta do
 sync (a primeira é a do login); o que a pessoa desinstala não volta.
+
+Todo mod tem a sua página no site (`/mods/<id>`, com busca e categorias em
+`/mods`): o texto e os prints moram com o mod no repositório de mods
+(`page.json` e `media/`). Os prints saem da tela de verdade deste app, com
+dados de exemplo, pelo estúdio de `tools/mod-shots` (`node
+tools/mod-shots/shoot.mjs --only <id>`, nos dez idiomas): a tela que muda de
+um jeito que aparece num print pede rodar o estúdio de novo para os mods
+dela. O botão de livro de cada mod na aba Mods e o Ctrl+K abrem a página.
 
 Os mods com `required` são essenciais: o núcleo os mantém instalados e ligados
 seja qual for o estado gravado (`resolve::with_required`), e a tela e o site não

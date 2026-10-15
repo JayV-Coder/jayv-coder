@@ -192,6 +192,13 @@ impl LlmSettings {
         Self{agents:self.agents.iter().map(|agent|agent.with_mcp(servers)).collect(),models:self.models.clone()}
     }
 
+    /// Todos os agentes com mais servidores MCP, somados aos configurados:
+    /// os da skill que o Jev escolheu, só para aquele pedido.
+    pub fn with_more_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
+        if servers.is_empty() { return self.clone(); }
+        Self{agents:self.agents.iter().map(|agent|agent.with_more_mcp(servers)).collect(),models:self.models.clone()}
+    }
+
     /// O agente deste id, se está nas configurações.
     pub fn agent(&self,id:AgentId)->Option<&AgentSettings> { self.agents.iter().find(|agent|agent.id==id) }
 
@@ -335,6 +342,14 @@ impl AgentSettings {
         let mine=servers.iter().filter(|server|server.serves(self.id)).cloned().collect::<Vec<_>>();
         if mine.is_empty() { return self.clone(); }
         match self.module().with_mcp(&self.options,mine) { Some(options)=>Self{options,..self.clone()}, None=>self.clone() }
+    }
+
+    /// O mesmo agente com mais servidores MCP, somados aos que ele já recebe,
+    /// se o "Aprovar servidores MCP" dele está ligado.
+    pub fn with_more_mcp(&self,servers:&[crate::mcp::McpServer])->Self {
+        let mine=servers.iter().filter(|server|server.serves(self.id)).cloned().collect::<Vec<_>>();
+        if mine.is_empty() { return self.clone(); }
+        match self.module().with_more_mcp(&self.options,&mine) { Some(options)=>Self{options,..self.clone()}, None=>self.clone() }
     }
 
     /// O mesmo agente com o que o desenvolvedor liberou para um pedido só
@@ -1351,6 +1366,24 @@ mod tests {
             };
             assert!(carried,"{id:?} ligado recebe os servidores");
         }
+    }
+
+    /// Os servidores da skill que o Jev escolheu somam aos configurados, com o
+    /// mesmo "Aprovar servidores MCP": desligado, nada chega; o servidor com o
+    /// nome de um que já vai não entra de novo.
+    #[test] fn the_servers_of_a_skill_add_to_the_configured_ones_with_the_same_toggle() {
+        let skill=crate::mcp::parse(r#"{"mcpServers":{"rea":{"command":"npx","args":["-y","rea-agents","--mcp"]},"github":{"command":"other"}}}"#);
+        for id in AgentId::ALL {
+            let names_of=|agent:&AgentSettings|->Vec<String> { agent.options.get("mcp").and_then(Value::as_array).map(|list|list.iter().filter_map(|server|server.get("name").and_then(Value::as_str).map(str::to_string)).collect()).unwrap_or_default() };
+            let off=settings(vec![agent(id,json!({"approveMcps":false}))]).with_mcp(&two_servers()).with_more_mcp(&skill);
+            assert!(names_of(&off.agents[0]).is_empty(),"{id:?} desligado não leva servidor");
+            let on=settings(vec![agent(id,json!({"approveMcps":true}))]).with_mcp(&two_servers()).with_more_mcp(&skill);
+            let names=names_of(&on.agents[0]);
+            assert_eq!(names.len(),3,"{id:?}: os dois configurados e o da skill");
+            assert!(names.contains(&"rea".to_string()),"{id:?}");
+        }
+        let only=settings(vec![agent(AgentId::Codex,json!({"approveMcps":true}))]).with_more_mcp(&skill);
+        assert!(only.agents[0].args().iter().any(|arg|arg.starts_with("mcp_servers.rea.command")),"sem configurados, só os da skill");
     }
 
     #[test] fn the_toggle_defaults_off_for_every_agent() {
