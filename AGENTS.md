@@ -168,7 +168,14 @@ naquele pedido). Um tipo novo de funcionalidade que os mods podem trazer é:
    `since` nesta versão.
 
 Os mods com `preinstalled` se instalam sozinhos, ligados, no fim da volta do
-sync (a primeira é a do login); o que a pessoa desinstala não volta.
+sync (a primeira é a do login); o que a pessoa desinstala não volta. Regra do
+dono: além dos essenciais, só Claude Code, Codex e Ollama vêm instalados — o
+catálogo antigo, que não diz, segue a mesma lista (`LEGACY_PREINSTALLED`).
+
+Todo mod traz o seu ícone (o SVG que o catálogo leva em `icon`). A tela o
+mostra sempre por `ModIcon`, como imagem ou máscara, nunca como marcação
+dentro da página; o agente que um mod trouxe (`mod-<id>`) usa o ícone do mod
+(`AgentIcon`).
 
 Todo mod tem a sua página no site (`/mods/<id>`, com busca e categorias em
 `/mods`): o texto e os prints moram com o mod no repositório de mods

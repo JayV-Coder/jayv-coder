@@ -8,7 +8,7 @@ use crate::repo_keys;
 use anyhow::Result;
 use serde::Serialize;
 use std::{fs, path::{Path, PathBuf}, process::Stdio};
-use tokio::{process::Command, time::{timeout, Duration}};
+use tokio::time::{timeout, Duration};
 
 /// Um clone achado na pasta: onde ele está e as chaves dos remotes dele
 /// (vazia num repositório sem remote dos três provedores).
@@ -78,8 +78,8 @@ fn reason(stderr:&str)->String {
 enum Attempt{Done,Denied(String),Failed(String)}
 
 async fn attempt(url:&str,target:&Path)->Result<Attempt> {
-    let mut process=Command::new("git");
-    crate::providers::quiet(&mut process)
+    let mut process=crate::git::command();
+    process
         .args(["clone","--quiet","--"]).arg(url).arg(target)
         // Ninguém vai responder a um prompt no terminal: sem credencial, falha.
         .env("GIT_TERMINAL_PROMPT","0")
@@ -194,9 +194,15 @@ pub fn nested(folder:&Path)->Vec<String> {
 pub struct RepositoryState{
     pub path:String,
     /// O caminho dentro da pasta (`backend/worker`); vazio quando a pasta é o
-    /// próprio repositório.
+    /// próprio repositório ou está dentro dele (`enclosing`).
     pub relative:String,
+    /// A chave do primeiro remote (`origin` primeiro) e as de todos: a
+    /// organização pode ter cadastrado qualquer um deles.
     pub key:Option<String>,
+    pub keys:Vec<String>,
+    /// A pasta do chat está dentro deste repositório (uma subpasta de um
+    /// monorepo), em vez de o repositório estar dentro dela.
+    pub enclosing:bool,
     /// Nulo com o HEAD solto (`detached`) ou num repositório sem commit.
     pub branch:Option<String>,
     /// O branch remoto que ele segue, quando segue algum.
@@ -208,6 +214,11 @@ pub struct RepositoryState{
     /// Falso quando o `git` não respondeu: sem git instalado, pasta corrompida
     /// ou que demorou demais.
     pub readable:bool,
+    /// Por que o git não respondeu: `noGit` (não há git neste computador),
+    /// `unsafe` (o git não confia na pasta, de outro dono: `safe.directory`),
+    /// `timeout` ou `failed`; e a mensagem do git, quando ele disse alguma.
+    pub problem:Option<String>,
+    pub error:Option<String>,
 }
 
 /// Quanto o `git status` de um repositório pode demorar: um repositório
@@ -233,30 +244,54 @@ pub fn parse_status(output:&str,state:&mut RepositoryState) {
 }
 
 async fn status_of(mut state:RepositoryState)->RepositoryState {
-    let mut process=Command::new("git");
-    crate::providers::quiet(&mut process)
+    let mut process=crate::git::command();
+    process
         .args(["status","--porcelain=v2","--branch"]).current_dir(&state.path)
         // Só lê: não trava o índice enquanto o agente está escrevendo nele.
         .env("GIT_OPTIONAL_LOCKS","0").env("GIT_TERMINAL_PROMPT","0")
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
-    let Ok(child)=process.spawn() else {return state};
-    if let Ok(Ok(output))=timeout(STATUS_LIMIT,child.wait_with_output()).await {
-        if output.status.success() {
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let child=match process.spawn() {
+        Ok(child)=>child,
+        Err(error)=>{
+            state.problem=Some(if error.kind()==std::io::ErrorKind::NotFound {"noGit"} else {"failed"}.into());
+            state.error=Some(error.to_string());
+            return state;
+        }
+    };
+    match timeout(STATUS_LIMIT,child.wait_with_output()).await {
+        Ok(Ok(output)) if output.status.success()=>{
             parse_status(&String::from_utf8_lossy(&output.stdout),&mut state);
             state.readable=true;
         }
+        Ok(Ok(output))=>{
+            let stderr=String::from_utf8_lossy(&output.stderr);
+            state.problem=Some(match crate::git::problem_of(&stderr) {crate::git::Problem::Unsafe=>"unsafe",_=>"failed"}.into());
+            state.error=crate::git::reason(&stderr);
+        }
+        Ok(Err(error))=>{state.problem=Some("failed".into());state.error=Some(error.to_string());}
+        Err(_)=>state.problem=Some("timeout".into()),
     }
     state
+}
+
+/// O repositório em volta da pasta, quando ela mesma não é um nem tem um
+/// dentro: a subpasta de um monorepo aberta como projeto. Sobe pelas pastas
+/// mães até achar um `.git` (pasta, ou arquivo de worktree e submódulo).
+pub fn enclosing(folder:&Path)->Option<(PathBuf,Vec<String>)> {
+    folder.ancestors().skip(1).find(|dir|dir.join(".git").exists()).map(|dir|(dir.to_path_buf(),repo_keys::of_folder(&dir.to_string_lossy())))
 }
 
 /// Os repositórios dentro de `folder` (a própria pasta, as filhas e as
 /// netas), cada um com o branch e o status, consultados ao mesmo tempo.
 pub async fn states(folder:PathBuf)->Vec<RepositoryState> {
     let base=folder.clone();
-    let found=tokio::task::spawn_blocking(move ||repositories(&base)).await.unwrap_or_default();
+    let (found,outer)=tokio::task::spawn_blocking(move ||{
+        let found=repositories(&base);
+        if found.is_empty() {(enclosing(&base).into_iter().collect(),true)} else {(found,false)}
+    }).await.unwrap_or_default();
     let tasks:Vec<_>=found.into_iter().map(|(dir,keys)|{
-        let relative=dir.strip_prefix(&folder).unwrap_or(&dir).to_string_lossy().replace('\\',"/");
-        let state=RepositoryState{path:dir.display().to_string(),relative,key:keys.into_iter().next(),..Default::default()};
+        let relative=if outer {String::new()} else {dir.strip_prefix(&folder).unwrap_or(&dir).to_string_lossy().replace('\\',"/")};
+        let state=RepositoryState{path:dir.display().to_string(),relative,key:keys.first().cloned(),keys,enclosing:outer,..Default::default()};
         tokio::spawn(status_of(state))
     }).collect();
     let mut states=Vec::with_capacity(tasks.len());
@@ -409,5 +444,35 @@ mod tests {
         assert_eq!(states.len(),1);
         let state=&states[0];
         assert_eq!((state.relative.as_str(),state.key.as_deref(),state.changed,state.readable),("api",Some("github.com/acme/api"),1,true));
+        assert_eq!((state.problem.as_deref(),state.enclosing),(None,false));
+    }
+
+    /// A pasta do chat dentro de um repositório (a subpasta de um monorepo)
+    /// mostra o repositório em volta, com todas as chaves dos remotes.
+    #[tokio::test] async fn a_folder_inside_a_repository_shows_that_repository() {
+        let root=tempfile::tempdir().unwrap();
+        let git=|args:&[&str]|assert!(std::process::Command::new("git").args(args).current_dir(root.path()).output().unwrap().status.success());
+        git(&["init","--quiet","-b","main"]);
+        git(&["remote","add","origin","https://github.com/acme/mono"]);
+        git(&["remote","add","upstream","https://github.com/other/mono"]);
+        let inner=root.path().join("apps/web");
+        fs::create_dir_all(&inner).unwrap();
+        let states=states(inner).await;
+        assert_eq!(states.len(),1);
+        assert!(states[0].enclosing&&states[0].relative.is_empty()&&states[0].readable);
+        assert_eq!(states[0].keys,["github.com/acme/mono","github.com/other/mono"]);
+    }
+
+    /// O git que recusa a pasta diz por quê, em vez de só "não respondeu".
+    #[tokio::test] async fn a_broken_repository_says_what_git_said() {
+        let root=tempfile::tempdir().unwrap();
+        let broken=root.path().join("broken");
+        fs::create_dir_all(broken.join(".git")).unwrap();
+        fs::write(broken.join(".git/config"),"[core]\n\trepositoryformatversion = 99\n").unwrap();
+        let states=states(root.path().to_path_buf()).await;
+        assert_eq!(states.len(),1);
+        assert!(!states[0].readable);
+        assert_eq!(states[0].problem.as_deref(),Some("failed"));
+        assert!(states[0].error.as_deref().is_some_and(|error|!error.is_empty()),"{:?}",states[0].error);
     }
 }

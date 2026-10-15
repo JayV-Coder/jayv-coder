@@ -26,10 +26,16 @@ interface LiveState {
   editor: string | null;
   /** Os editores com linha de comando deste computador; nulo antes de olhar. */
   editors: string[] | null;
+  /** A aba do painel de código: os arquivos que o pedido mexe ou os
+   * repositórios da pasta do chat. */
+  tab: LiveTab;
 }
+
+export type LiveTab = "files" | "repos";
 
 const FOLLOW_KEY = "jayv.live.follow";
 const EDITOR_KEY = "jayv.live.editor";
+const TAB_KEY = "jayv.live.tab";
 
 function read(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -45,7 +51,14 @@ function write(key: string, value: string | null) {
 
 export const useLive = create<LiveState>(() => ({
   chats: {}, panel: {}, selected: {}, follow: read(FOLLOW_KEY) !== "0", editor: read(EDITOR_KEY), editors: null,
+  tab: read(TAB_KEY) === "repos" ? "repos" : "files",
 }));
+
+/** Troca a aba do painel de código; a escolha fica lembrada neste aparelho. */
+export function setLiveTab(tab: LiveTab) {
+  useLive.setState({ tab });
+  write(TAB_KEY, tab);
+}
 
 /** Lê a lista do chat no núcleo: ao abrir o chat, ou ao voltar a ele. */
 export async function loadLive(chatId: string) {
@@ -134,6 +147,8 @@ export function connectLive() {
       return {
         chats: { ...state.chats, [chatId]: { ...current, turnId, files } },
         panel: chatId in state.panel ? state.panel : { ...state.panel, [chatId]: true },
+        // O painel que abre sozinho abre nos arquivos, que é o que mudou.
+        tab: chatId in state.panel ? state.tab : "files",
         selected: state.follow || !state.selected[chatId] ? { ...state.selected, [chatId]: file.path } : state.selected,
       };
     });

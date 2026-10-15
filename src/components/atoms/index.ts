@@ -7,6 +7,7 @@ export { PulseDot } from "./PulseDot";
 export { EmptyText } from "./EmptyText";
 export * from "./icons";
 export { AgentIcon } from "./AgentIcon";
+export { ModIcon } from "./ModIcon";
 export { LoadingNote } from "./LoadingNote";
 export { Flag } from "./Flag";
 export { UserAvatar } from "./UserAvatar";

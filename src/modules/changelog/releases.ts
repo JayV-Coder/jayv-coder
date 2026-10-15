@@ -26,6 +26,16 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.104.0", date: "2026-10-15",
+    items: [
+      { kind: "feature", id: "codePanel" },
+      { kind: "feature", id: "chatsMenu" },
+      { kind: "feature", id: "modIcons" },
+      { kind: "feature", id: "modDefaults" },
+      { kind: "fix", id: "whatsNewAfterUpdate" },
+    ],
+  },
+  {
     version: "0.103.0", date: "2026-10-15",
     items: [
       { kind: "feature", id: "reaSkill" },

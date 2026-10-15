@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { ArrowDownIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import type { Chat } from "@/modules/core";
 import { beatLines, liveOf, pendingWord, useConversation } from "@/modules/conversation";
@@ -47,11 +47,11 @@ function rememberedWidth(): number {
 }
 
 /** O painel à esquerda do chat, junto ao menu lateral: o andamento do JayV,
- * com cada etapa do Jev e da portaria numa linha só dela, e, embaixo, o que
- * mais acompanha o chat (os repositórios da organização, em `children`).
- * Assim o balão do chat fica só com a resposta. Recolhido, vira uma faixa
- * fina que ainda mostra se há pedido em andamento. */
-export function ProgressPanel({ chat, children }: { chat: Chat | null; children?: ReactNode }) {
+ * com cada etapa do Jev e da portaria numa linha só dela. Assim o balão do
+ * chat fica só com a resposta. Recolhido, vira uma faixa fina que ainda mostra
+ * se há pedido em andamento. Os repositórios da pasta moram no painel de
+ * código, à direita. */
+export function ProgressPanel({ chat }: { chat: Chat | null }) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   // Acompanha o fim da lista enquanto a pessoa não rolar para cima.
@@ -190,7 +190,6 @@ export function ProgressPanel({ chat, children }: { chat: Chat | null; children?
         </Button>
       )}
       </div>
-      {children}
       <div
         role="separator"
         aria-orientation="vertical"

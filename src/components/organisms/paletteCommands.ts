@@ -96,7 +96,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
         if (mode === (chat.workMode ?? "auto")) continue;
         all.push({ id: `mode-${mode}`, group, label: t("palette.mode", { name: t(`mode.${mode}`) }), hint: t(`mode.${mode}.hint`), run: () => void setWorkMode(chat.id, mode) });
       }
-      if (can("liveFiles") && project.rootPath.trim()) {
+      if (project.rootPath.trim()) {
         all.push({
           id: "live", group, label: t("palette.live"),
           run: () => { openChat(chat.id); setLivePanel(chat.id, useLive.getState().panel[chat.id] !== true); },

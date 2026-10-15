@@ -4,7 +4,7 @@
 // página; o que é código (arquivos, funções) fica igual em todos.
 import type {
   Activity, AgentModel, AgentSettings, Chat, CoreSnapshot, EntryCheck, ExitCheck, GateFeed, KnownModel, McpServer, ModManifest, ModsSnapshot,
-  Project, ProjectMemory, SearchHit, SettingsSnapshot, Skill, SkillHit, SystemStatus, TurnView, UsageReport,
+  Project, ProjectMemory, RepositoryState, SearchHit, SettingsSnapshot, Skill, SkillHit, SystemStatus, TurnView, UsageReport,
 } from "@/modules/core";
 import { version } from "../../../package.json";
 
@@ -97,10 +97,27 @@ export function coreSnapshot(): CoreSnapshot {
   };
 }
 
-export function modsSnapshot(catalog: ModManifest[] | null): ModsSnapshot {
-  const mods = Object.fromEntries((catalog ?? []).map((mod) => [mod.id, { enabled: true, version: mod.version ?? null, installedAt: "2026-10-12T20:00:00Z" }]));
+/** Os mods instalados: todos do catálogo, menos o que o print pede fora
+ * (`uninstalled`, o mod que não vem instalado, para o print `enable` mostrá-lo
+ * em Disponíveis no catálogo, com o botão Instalar). */
+export function modsSnapshot(catalog: ModManifest[] | null, uninstalled: string | null = null): ModsSnapshot {
+  const mods = Object.fromEntries((catalog ?? []).filter((mod) => mod.id !== uninstalled).map((mod) => [mod.id, { enabled: true, version: mod.version ?? null, installedAt: "2026-10-12T20:00:00Z" }]));
   return { catalog, fetchedAt: at(4), state: { mods, removed: [] }, active: Object.keys(mods), disabled: [], points: ["llmEngines", "features", "agents", "skills"], appVersion: APP_VERSION };
 }
+
+/** O `git status` da pasta do projeto, na aba Repositórios do painel Código:
+ * o repositório do projeto num branch à frente do remoto, com mudanças, e um
+ * pacote dentro dele, limpo. */
+export const REPOSITORY_STATES: RepositoryState[] = [
+  {
+    path: PROJECT.rootPath, relative: "", key: "github.com/acme/invoice-service", keys: ["github.com/acme/invoice-service"], enclosing: false,
+    branch: "feature/invoice-totals", upstream: "origin/feature/invoice-totals", ahead: 2, behind: 0, changed: 3, readable: true, problem: null, error: null,
+  },
+  {
+    path: `${PROJECT.rootPath}/packages/pdf-render`, relative: "packages/pdf-render", key: "github.com/acme/pdf-render", keys: ["github.com/acme/pdf-render"], enclosing: false,
+    branch: "main", upstream: "origin/main", ahead: 0, behind: 0, changed: 0, readable: true, problem: null, error: null,
+  },
+];
 
 export const MCP_SERVERS: McpServer[] = [
   { name: "sequential-thinking", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-sequential-thinking"], env: {}, url: "", headers: {}, enabled: true, agents: [] },

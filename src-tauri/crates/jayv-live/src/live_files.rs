@@ -82,10 +82,11 @@ fn fingerprint(path:&Path,stamp:Stamp)->Option<u64> {
 
 fn now_ms()->i64 {SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed|elapsed.as_millis() as i64).unwrap_or(0)}
 
+/// O git do sistema (achado mesmo fora do `PATH` curto de um app aberto pelo
+/// menu), lendo sem travar o índice e sem janela de console no Windows.
 fn git(dir:&Path)->Command {
-    let mut command=Command::new("git");
+    let mut command=crate::git::std_command();
     command.current_dir(dir).env("GIT_OPTIONAL_LOCKS","0").env("GIT_TERMINAL_PROMPT","0").stdin(Stdio::null()).stderr(Stdio::null());
-    #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x0800_0000); }
     command
 }
 

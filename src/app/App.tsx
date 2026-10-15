@@ -12,7 +12,7 @@ import { clearProfile, loadProfile, useProfile } from "@/modules/profile";
 import { clearNotifications, connectNotifications, loadNotifications } from "@/modules/notifications";
 import { clearOrganizations, connectOrganizationDashboard, loadOrganizations } from "@/modules/organizations";
 import { connectSettings } from "@/modules/settings";
-import { connectUpdates, useUpdate } from "@/modules/updates";
+import { connectUpdates, updateInFront, useUpdate } from "@/modules/updates";
 import { connectTutorial } from "@/modules/tutorial";
 import { connectLive } from "@/modules/live";
 import { clearMods, connectMods, loadMods } from "@/modules/mods";
@@ -44,8 +44,7 @@ const PAGES: Record<View, () => React.JSX.Element> = {
 /** O tutorial da primeira visita espera: a conta ainda não abriu, a atualização
  * ou as novidades estão na frente. */
 function tutorialBlocked() {
-  const update = useUpdate.getState();
-  return useAuth.getState().status !== "signedIn" || update.launching || update.open || useChangelog.getState().open;
+  return useAuth.getState().status !== "signedIn" || updateInFront(useUpdate.getState()) || useChangelog.getState().open;
 }
 
 /** Liga os módulos uma vez: cada um passa a ouvir o núcleo e o barramento por

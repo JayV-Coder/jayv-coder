@@ -6,4 +6,5 @@ pub mod live_files;
 // As camadas de baixo com os nomes de sempre dentro deste crate.
 use jayv_base::firewall;
 use jayv_orgs::checkout;
+use jayv_orgs::git;
 #[cfg(test)] use jayv_base::config;

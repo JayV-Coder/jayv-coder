@@ -51,11 +51,23 @@ pub struct Manifest {
     #[serde(default,skip_serializing_if="Option::is_none")] pub author:Option<String>,
     #[serde(default,skip_serializing_if="Option::is_none")] pub docs:Option<String>,
     #[serde(default,skip_serializing_if="Option::is_none")] pub homepage:Option<String>,
+    /// O ícone do mod: o SVG que o catálogo traz, mostrado como imagem pela
+    /// tela (nunca dentro da página). Nulo sem ícone ou com um que não é SVG.
+    #[serde(default,skip_serializing_if="Option::is_none")] pub icon:Option<String>,
     #[serde(default)] pub title:BTreeMap<String,String>,
     #[serde(default)] pub summary:BTreeMap<String,String>,
     /// O que o mod traz para cada ponto de extensão, pela chave do ponto.
     #[serde(default)] pub contributes:BTreeMap<String,Value>,
 }
+
+/// O tamanho máximo do SVG de um ícone (o validador do repositório de mods
+/// aceita até 16 kB).
+pub const ICON_MAX:usize=16_000;
+
+/// Os motores que vêm instalados de fábrica, para o catálogo antigo, que não
+/// diz: os mesmos que o genérico marca `preinstalled` (regra do dono: dos
+/// mods que não são essenciais, só Claude Code, Codex e Ollama).
+const LEGACY_PREINSTALLED:[&str;2]=["claude","codex"];
 
 /// O id de um mod: o nome da pasta no repositório.
 pub fn valid_id(id:&str)->bool {
@@ -85,24 +97,27 @@ impl Manifest {
     /// Um mod do formato genérico, ou do antigo convertido. Nulo: não se lê,
     /// ou não traz nada a ponto nenhum.
     pub fn read(value:&Value)->Option<Self> {
-        let manifest=if value.get("contributes").is_some() { serde_json::from_value::<Manifest>(value.clone()).ok()? } else { Self::from_legacy(value)? };
+        let mut manifest=if value.get("contributes").is_some() { serde_json::from_value::<Manifest>(value.clone()).ok()? } else { Self::from_legacy(value)? };
+        manifest.icon=manifest.icon.filter(|svg|svg.len()<=ICON_MAX&&svg.starts_with("<svg")&&svg.ends_with("</svg>"));
         (valid_id(&manifest.id)&&!manifest.contributes.is_empty()).then_some(manifest)
     }
 
     /// O mod do formato antigo como um mod genérico: o motor de LLM, o recurso
-    /// ou o agente do mod pronto. Os motores e os recursos ligados de fábrica se
-    /// instalam sozinhos, como no app antigo.
+    /// ou o agente do mod pronto. Os recursos ligados de fábrica se instalam
+    /// sozinhos, como no app antigo; dos motores, só os que o catálogo
+    /// genérico também traz de fábrica (`LEGACY_PREINSTALLED`): o formato
+    /// antigo não sabe dizer quais são.
     fn from_legacy(value:&Value)->Option<Self> {
         let legacy:Legacy=serde_json::from_value(value.clone()).ok()?;
         let (point,contribution,preinstalled)=match legacy.kind.as_str() {
-            "llm"=>("llmEngines",json!([legacy.id]),true),
+            "llm"=>("llmEngines",json!([legacy.id]),LEGACY_PREINSTALLED.contains(&legacy.id.as_str())),
             "feature"=>("features",json!([legacy.id]),legacy.default_on.unwrap_or(true)),
             "template"=>("agents",json!([legacy.template?]),false),
             _=>return None,
         };
         Some(Self{
             id:legacy.id,version:None,category:legacy.category,plan:legacy.plan,min_app:legacy.min_app,preinstalled,required:false,requires:vec![],author:None,
-            docs:legacy.docs,homepage:legacy.homepage,title:legacy.title,summary:legacy.summary,contributes:BTreeMap::from([(point.to_string(),contribution)]),
+            docs:legacy.docs,homepage:legacy.homepage,icon:None,title:legacy.title,summary:legacy.summary,contributes:BTreeMap::from([(point.to_string(),contribution)]),
         })
     }
 }
@@ -186,14 +201,31 @@ pub fn cached(connection:&Connection)->Result<Option<(Vec<Manifest>,String)>> {
         assert_eq!(new[1].contributes.len(),2,"um mod traz vários pontos");
         let old=parse(&json!({"schema":1,"mods":[
             {"id":"claude","kind":"llm","minApp":"0.94.0","title":{"en":"Claude"}},
+            {"id":"copilot","kind":"llm"},
             {"id":"stats","kind":"feature","defaultOn":false},
             {"id":"ollama","kind":"template","template":{"kind":"api","baseUrl":"http://localhost:11434/v1"}},
             {"id":"x","kind":"plugin"}
         ]})).expect("v1");
-        assert_eq!(old.iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["claude","stats","ollama"],"o tipo desconhecido e o id curto saem");
+        assert_eq!(old.iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["claude","copilot","stats","ollama"],"o tipo desconhecido e o id curto saem");
         assert_eq!(old[0].contributes["llmEngines"],json!(["claude"]));
-        assert!(old[0].preinstalled&&!old[1].preinstalled&&!old[2].preinstalled);
-        assert_eq!(old[2].contributes["agents"][0]["baseUrl"],"http://localhost:11434/v1");
+        assert!(old[0].preinstalled&&!old[1].preinstalled&&!old[2].preinstalled&&!old[3].preinstalled,"dos motores, só os de fábrica do catálogo genérico");
+        assert_eq!(old[3].contributes["agents"][0]["baseUrl"],"http://localhost:11434/v1");
+    }
+
+    /// O ícone chega como o SVG do catálogo; o que não é SVG, ou passa do
+    /// tamanho, fica de fora sem derrubar o mod.
+    #[test] fn the_icon_is_kept_only_when_it_is_an_svg() {
+        let mut with_icon=generic("stats",json!({"features":["stats"]}));
+        with_icon["icon"]=json!(r#"<svg viewBox="0 0 24 24"><path d="M0 0"/></svg>"#);
+        let mut broken=generic("mcp",json!({"features":["mcp"]}));
+        broken["icon"]=json!("icon.svg");
+        let mut huge=generic("skills",json!({"features":["skills"]}));
+        huge["icon"]=json!(format!("<svg>{}</svg>","x".repeat(ICON_MAX)));
+        let read=parse(&json!({"schema":2,"mods":[with_icon,broken,huge]})).expect("lê");
+        assert!(read[0].icon.as_deref().is_some_and(|svg|svg.starts_with("<svg")));
+        assert!(read[1].icon.is_none()&&read[2].icon.is_none());
+        assert_eq!(read.len(),3,"o mod continua");
+        assert!(serde_json::to_value(&read[0]).expect("json")["icon"].is_string(),"a tela recebe o ícone");
     }
 
     #[test] fn an_unknown_schema_or_a_mixed_catalog_is_not_read() {

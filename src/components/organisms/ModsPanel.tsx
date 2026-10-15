@@ -12,7 +12,7 @@ import {
 import { inPlan, locks, useEntitlements, useFeature, type FeatureKey } from "@/modules/plans";
 import { agentLabel, MAX_MODS, removeMod, setSettingsTab, useAgentIds, useSettings, type SettingsTab } from "@/modules/settings";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
-import { AgentIcon } from "@/components/atoms";
+import { AgentIcon, ModIcon } from "@/components/atoms";
 import { ConfirmAction, SegmentedControl, SettingsSection } from "@/components/molecules";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,6 +98,7 @@ export function ModsPanel() {
           aria-label={t("mods.enabled", { name })}
           onCheckedChange={(next) => setModEnabled(id, next)}
         />
+        <ModIcon icon={manifest?.icon} className="size-6 text-foreground" />
         <div className="grid min-w-0 flex-1 gap-1">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>
@@ -148,6 +149,7 @@ export function ModsPanel() {
     const why = outside ? t("plans.locked") : newer ? t("mods.needsNewerApp") : undefined;
     return (
       <li key={manifest.id} className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border px-3 py-2.5">
+        <ModIcon icon={manifest.icon} className="size-6 text-foreground" />
         <div className="grid min-w-0 flex-1 gap-1">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>

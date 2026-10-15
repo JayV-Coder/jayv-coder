@@ -2,7 +2,7 @@
 // que a tela chama devolve os dados de exemplo. O que muda alguma coisa
 // (salvar, apagar) só devolve o estado de antes — o estúdio não grava nada.
 import {
-  APP_VERSION, chats, coreSnapshot, gateFeed, LIVE_FILE, LIVE_FILES, MCP_SERVERS, modsSnapshot, PROJECTS, projectMemory, searchHits, settingsSnapshot,
+  APP_VERSION, chats, coreSnapshot, gateFeed, LIVE_FILE, LIVE_FILES, MCP_SERVERS, modsSnapshot, PROJECTS, projectMemory, REPOSITORY_STATES, searchHits, settingsSnapshot,
   SKILL_HITS, SKILLS, systemStatus, usageReport, USER, type StudioData,
 } from "./fixtures";
 
@@ -11,6 +11,16 @@ declare global {
 }
 
 const data = () => window.__studioData;
+/** O mod que o print quer fora dos instalados (`?uninstalled=<id>`). */
+const uninstalled = new URLSearchParams(location.search).get("uninstalled");
+/** As configurações sem o agente do mod que está fora (o motor `copilot` ou o
+ * agente `mod-lm-studio`): a aba dele some, como no app. */
+const settings = () => {
+  const snapshot = settingsSnapshot();
+  if (!uninstalled) return snapshot;
+  const gone = (id: string) => id === uninstalled || id === `mod-${uninstalled}`;
+  return { ...snapshot, settings: { ...snapshot.settings, agents: snapshot.settings.agents.filter((agent) => !gone(agent.id)), models: snapshot.settings.models.filter((model) => !gone(model.agent)) } };
+};
 const say = (key: string) => data().samples[key] ?? key;
 let cachedChats: ReturnType<typeof chats> | null = null;
 const allChats = () => (cachedChats ??= chats(say));
@@ -20,14 +30,14 @@ const NO_GRANTS = { shell: false, git: false, network: false, commands: [] };
 const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   get_workspace: () => ({ projects: PROJECTS, chats: allChats() }),
   get_chat: ({ chatId }) => allChats().find((chat) => chat.id === chatId) ?? null,
-  get_settings: () => settingsSnapshot(),
-  save_settings: () => settingsSnapshot(),
+  get_settings: () => settings(),
+  save_settings: () => settings(),
   get_core_settings: () => coreSnapshot(),
   save_core_settings: () => coreSnapshot(),
   save_expertise: () => coreSnapshot(),
   save_lean_code: () => coreSnapshot(),
-  get_mods: () => modsSnapshot(data().catalog?.mods ?? null),
-  save_mods: () => modsSnapshot(data().catalog?.mods ?? null),
+  get_mods: () => modsSnapshot(data().catalog?.mods ?? null, uninstalled),
+  save_mods: () => modsSnapshot(data().catalog?.mods ?? null, uninstalled),
   get_mcp_servers: () => MCP_SERVERS,
   save_mcp_servers: () => MCP_SERVERS,
   check_mcp_servers: () => MCP_SERVERS,
@@ -48,7 +58,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     : { turnId: null, running: false, files: [], folder: null, mode: null, looks: 0 }),
   live_file: ({ path }) => (path === LIVE_FILE.path ? LIVE_FILE : { ...LIVE_FILE, path, before: "", after: "" }),
   editors: () => ["code"],
-  repository_states: () => [],
+  repository_states: ({ folder }) => (folder === PROJECTS[0].rootPath ? REPOSITORY_STATES : []),
   folder_repo_keys: () => [],
   system_status: () => systemStatus(),
   usage_report: ({ query }) => usageReport(allChats(), (query as { scope?: { kind: string } } | undefined)?.scope),
@@ -65,7 +75,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   get_translations: ({ locale }) => (locale === data().locale ? data().translations : {}),
   check_agent: ({ command }) => ({ path: `/usr/local/bin/${String(command || "agent")}`, version: "2.4.1", loggedIn: true }),
   check_gateway: () => ({ models: 312, error: null }),
-  refresh_models: () => ({ snapshot: settingsSnapshot(), listed: true }),
+  refresh_models: () => ({ snapshot: settings(), listed: true }),
   app_version: () => APP_VERSION,
 };
 

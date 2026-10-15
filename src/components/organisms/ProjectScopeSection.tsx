@@ -14,7 +14,7 @@ import { ProjectCard } from "./ProjectCard";
 /** Um bloco da lista de projetos: os pessoais ou os de uma organização, com o
  * cabeçalho dizendo de quem são. No ambiente de uma organização o cabeçalho
  * fica no alto da página (`heading` desligado), com o chat dela, e os chats
- * gerais moram na coluna ao lado da lateral (`GeneralChatsColumn`): aqui só
+ * gerais moram no item "Chats" do menu lateral (`GeneralChatsMenu`): aqui só
  * os projetos de cada repositório. */
 export function ProjectScopeSection({ group, layout, heading = true }: { group: ScopeGroup<Project>; layout: Layout; heading?: boolean }) {
   const t = useT();
@@ -25,7 +25,7 @@ export function ProjectScopeSection({ group, layout, heading = true }: { group: 
   const deletable = useEnvironment((state) => state.active === PERSONAL) && personal;
   const Icon = personal ? UserIcon : Building2Icon;
   // O projeto geral (todos os repositórios juntos) não entra: os chats dele
-  // ficam na coluna dos chats gerais.
+  // ficam no item "Chats" do menu lateral.
   const { repositories } = splitGeneral(group.projects);
   const count = repositories.length;
   return (

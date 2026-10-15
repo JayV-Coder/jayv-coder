@@ -3,7 +3,7 @@ import { useFeature } from "@/modules/plans";
 import { useT } from "@/modules/i18n";
 import { useNavigation } from "@/modules/navigation";
 import { chatTitle, findChat, findProject, useWorkspace } from "@/modules/workspace";
-import { EraserIcon, FileDiffIcon } from "lucide-react";
+import { EraserIcon, FolderGit2Icon } from "lucide-react";
 import { setLivePanel, useLive } from "@/modules/live";
 import { ConfirmAction } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -34,12 +34,14 @@ export function AppHeader() {
       </nav>
       {view === "chat" && chat && (
         <div className="flex flex-none items-center gap-1">
-        {liveAllowed && project?.rootPath.trim() && (
+        {/* O painel de código: os arquivos do pedido (com o recurso no plano)
+            e os repositórios da pasta do chat. */}
+        {project?.rootPath.trim() && (
           <Button data-tour="header-live" variant={liveOpen ? "secondary" : "ghost"} size="sm" aria-pressed={liveOpen} className="text-muted-foreground" title={t("live.toggle.hint")}
             onClick={() => setLivePanel(chat.id, !liveOpen)}>
-            <FileDiffIcon aria-hidden="true" />
+            <FolderGit2Icon aria-hidden="true" />
             {t("live.toggle")}
-            {changed > 0 && <span className="tabular-nums text-foreground">{changed}</span>}
+            {liveAllowed && changed > 0 && <span className="tabular-nums text-foreground">{changed}</span>}
           </Button>
         )}
         {/* Limpar apaga o histórico inteiro e não se desfaz: pede confirmação. */}

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { RepositoryState } from "@/modules/core";
 import { emptyPolicy, type StoredPolicy } from "./policy";
-import { chatRepositories, repositoryLabel } from "./repositories";
+import { chatRepositories, repositoryLabel, safeDirectoryCommand } from "./repositories";
 
 const state = (relative: string, key: string | null, changed = 0): RepositoryState => ({
-  path: `/code/acme/${relative}`, relative, key, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, changed, readable: true,
+  path: `/code/acme/${relative}`, relative, key, keys: key ? [key] : [], enclosing: false, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, changed,
+  readable: true, problem: null, error: null,
 });
 const repo = (id: string, repoKey: string) => ({
   id, provider: "github" as const, path: repoKey.split("/").slice(1).join("/"), repoKey, defaultBranch: null, private: null, description: null, webUrl: null,
@@ -29,6 +30,17 @@ describe("chatRepositories", () => {
   it("says there is no policy when neither the organization nor the repository has one", () => {
     const [item] = chatRepositories([state("api", "github.com/acme/api")], [repo("r1", "github.com/acme/api")], []);
     expect(item.policy).toBe("none");
+  });
+
+  it("finds the registered repository by any remote of the clone", () => {
+    const fork = { ...state("api", "github.com/me/api"), keys: ["github.com/me/api", "github.com/acme/api"] };
+    const items = chatRepositories([fork], [repo("r1", "github.com/acme/api")], []);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "github.com/acme/api", repository: { id: "r1" } });
+  });
+
+  it("tells how to make git trust a folder of another owner", () => {
+    expect(safeDirectoryCommand("D:\\code\\acme api")).toBe('git config --global --add safe.directory "D:/code/acme api"');
   });
 
   it("works offline, with only what git says", () => {
