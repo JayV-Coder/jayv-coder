@@ -28,6 +28,7 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
       const provider = String(d.provider ?? "");
       return t("beat.fallback", { agent: agentLabel(provider), error: shownText(String(d.error ?? "")) });
     }
+    case "limit_wait": return t(d.estimated ? "beat.limitWait.estimated" : "beat.limitWait", { agent: agentLabel(d.provider), time: limitTime(String(d.resumesAt ?? "")) });
     case "review": {
       const provider = String(d.provider ?? "");
       return t("beat.review", { agent: agentLabel(provider), model: String(d.model ?? ""), count: Number(d.files ?? 0) });
@@ -91,6 +92,15 @@ export function agentLine(line: string): string | null {
   // O Cursor manda a ferramenta como chave: `readToolCall`, `writeToolCall`.
   const tool = detail.replace(/ToolCall$/, "");
   return tool ? t("beat.agent.tool", { tool }) : t("beat.agent.working");
+}
+
+/** A hora em que o JayV retoma o pedido, no relógio de quem lê: só a hora no
+ * mesmo dia, com o dia quando é outro. */
+export function limitTime(iso: string, now = new Date()) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const time = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return at.toDateString() === now.toDateString() ? time : `${at.toLocaleDateString(undefined, { day: "2-digit", month: "short" })} ${time}`;
 }
 
 const MODE_WORDS: Record<RouteMode, Key> = { plan: "route.mode.plan", build: "route.mode.build" };

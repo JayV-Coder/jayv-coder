@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, ListChecksIcon, RotateCcwIcon, Undo2Icon, XIcon } from "lucide-react";
 import type { TurnView } from "@/modules/core";
-import { answerLines, messageLight, routeHint, routeLabel, shownText, type MessageLight } from "@/modules/conversation";
+import { answerLines, limitTime, messageLight, routeHint, routeLabel, shownText, type MessageLight } from "@/modules/conversation";
+import { agentLabel } from "@/modules/settings";
 import { ChevronIcon } from "@/components/atoms";
 import { formatClock, useT } from "@/modules/i18n";
 import { Markdown } from "@/components/molecules";
@@ -46,7 +47,7 @@ function Verdict({ light }: { light: MessageLight }) {
  * o veredito, e a saída embaixo. A cor que a portaria deu pinta a margem do
  * bloco (no `Timeline`) e, quando não é verde, a borda do pedido e o veredito
  * escrito. */
-export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onCancel, onOpenFile, onUndoMode, children }: {
+export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onCancelWait, onCancel, onOpenFile, onUndoMode, children }: {
   role: "user" | "assistant";
   content: string;
   turn: TurnView | null;
@@ -58,6 +59,8 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
    * de novo — como o mesmo pedido, para não virar dois no histórico.
    * Quem foi barrado não recebe este botão: a portaria recusou de propósito. */
   onRetry?: () => void;
+  /** Deixa de esperar o limite do agente voltar; o pedido segue falho. */
+  onCancelWait?: () => void;
   /** Tira da fila o pedido que ainda espera a vez. */
   onCancel?: () => void;
   /** Abre um arquivo que a resposta citou. */
@@ -148,12 +151,22 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
           </Button>
         )}
         {turn?.status === "failed" && onRetry && (
-          <div className="flex items-center gap-2.5">
-            <small className="text-caption text-muted-foreground">{t("chat.retry.note")}</small>
-            <Button variant="outline" size="xs" title={t("chat.retry.title")} onClick={onRetry}>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <small className="text-caption text-muted-foreground">
+              {turn.limitWait
+                ? t(turn.limitWait.estimated ? "chat.limitWait.estimated" : "chat.limitWait", { agent: agentLabel(turn.limitWait.provider), time: limitTime(turn.limitWait.resumesAt) })
+                : t("chat.retry.note")}
+            </small>
+            <Button variant="outline" size="xs" title={turn.limitWait ? t("chat.limitWait.resumeNow.title") : t("chat.retry.title")} onClick={onRetry}>
               <RotateCcwIcon aria-hidden="true" />
-              {t("chat.retry")}
+              {turn.limitWait ? t("chat.limitWait.resumeNow") : t("chat.retry")}
             </Button>
+            {turn.limitWait && onCancelWait && (
+              <Button variant="ghost" size="xs" className="text-muted-foreground" title={t("chat.limitWait.cancel.title")} onClick={onCancelWait}>
+                <XIcon aria-hidden="true" />
+                {t("chat.limitWait.cancel")}
+              </Button>
+            )}
           </div>
         )}
       </article>

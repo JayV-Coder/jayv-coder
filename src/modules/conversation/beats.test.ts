@@ -6,9 +6,24 @@ vi.hoisted(() => {
   globalThis.localStorage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => void stored.set(key, value) } as Storage;
 });
 
-const { agentLine, beatLine, messageLight } = await import("./beats");
+const { agentLine, beatLine, limitTime, messageLight } = await import("./beats");
 
 describe("beatLine", () => {
+  it("says when the request resumes after the usage limit, and when that hour is a guess", () => {
+    const at = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const sure = beatLine("limit_wait", { provider: "claude", resumesAt: at, estimated: false });
+    expect(sure).toContain("usage limit");
+    expect(sure).toContain(limitTime(at));
+    expect(beatLine("limit_wait", { provider: "codex", resumesAt: at, estimated: true })).toContain("did not say");
+  });
+
+  it("shows only the hour for today and the day for another date", () => {
+    const now = new Date(2026, 9, 14, 12, 0);
+    expect(limitTime(new Date(2026, 9, 14, 15, 30).toISOString(), now)).not.toMatch(/Oct|14\//);
+    expect(limitTime(new Date(2026, 9, 16, 9, 0).toISOString(), now).length).toBeGreaterThan(limitTime(new Date(2026, 9, 14, 9, 0).toISOString(), now).length);
+    expect(limitTime("not a date")).toBe("");
+  });
+
   it("says the intent and the complexity read by Jev as words, not identifiers", () => {
     const line = beatLine("read", { intent: "refactor", complexity: "medium", source: "jev" });
     expect(line).toContain("Refactor");

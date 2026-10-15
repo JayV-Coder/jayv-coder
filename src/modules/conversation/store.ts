@@ -187,6 +187,17 @@ export async function cancelTurn(turnId: string, chatId: string) {
   }
 }
 
+/** Deixa de esperar o limite do agente voltar: o pedido segue falho, com o
+ * reenvio no balão. */
+export async function cancelLimitWait(turnId: string, chatId: string) {
+  try {
+    await commands.cancelLimitWait(turnId);
+    bus.emit("prompt:sent", { chatId });
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 export async function clearChat(chatId: string) {
   try {
     await commands.clearChat(chatId);

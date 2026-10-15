@@ -50,6 +50,17 @@ export interface TurnView {
   activity: Activity[];
   /** Quem atendeu: o agente (CLI), o modelo, o modo e o papel que o Jev deu. */
   route: TurnRoute | null;
+  /** O pedido parou no limite de uso do agente e o JayV o reenvia sozinho na
+   * hora indicada. */
+  limitWait: LimitWait | null;
+}
+
+export interface LimitWait {
+  provider: string;
+  /** RFC 3339. */
+  resumesAt: string;
+  /** O agente não disse quando o limite volta: a hora é um palpite. */
+  estimated: boolean;
 }
 
 /** O que sustenta a resposta de um turno, lido sob demanda. As portarias são
@@ -522,6 +533,7 @@ export interface CoreSettings {
   keepSessionModel: boolean;
   /** A sessão do agente atravessa a troca entre planejamento e build. */
   resumeAcrossModes: boolean;
+  resumeAfterLimit: boolean;
   /** O teto total de um pedido, em minutos: passou, o pedido para e os
    * agentes abertos caem junto. */
   turnCeilingMinutes: number;

@@ -3,7 +3,7 @@ import { isApiAgent, isCustomMod, isGateway, WORK_MODES } from "@/modules/core";
 import { signOut } from "@/modules/auth";
 import { showChanges } from "@/modules/changelog";
 import { featureActions, requestIntent, type Shortcut } from "@/modules/commands";
-import { cancelTurn, openChatFind } from "@/modules/conversation";
+import { cancelLimitWait, cancelTurn, openChatFind, sendPrompt } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { setLocale, useI18n, type Key, type LocaleOption } from "@/modules/i18n";
 import { environmentOptions, organizationOf, switchEnvironment, useEnvironment } from "@/modules/environments";
@@ -106,6 +106,13 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       all.push({ id: "grants", group, label: t("palette.commandPermissions"), run: () => { openChat(chat.id); requestIntent("commandPermissions"); } });
       const flying = openTurns(chat).find((turn) => turn.status === "flying");
       if (flying) all.push({ id: "stop", group, label: t("palette.stop"), run: () => void cancelTurn(flying.id, chat.id) });
+      // O pedido que espera o limite do agente voltar: retomar já ou deixar de esperar.
+      const waiting = chat.turns.find((turn) => turn.status === "failed" && turn.limitWait);
+      if (waiting) {
+        const said = chat.messages.find((message) => message.turnId === waiting.id && message.role === "user");
+        if (said) all.push({ id: "resume-now", group, label: t("palette.resumeNow"), run: () => void sendPrompt(said.content, chat.id, waiting.id) });
+        all.push({ id: "cancel-limit-wait", group, label: t("palette.cancelLimitWait"), run: () => void cancelLimitWait(waiting.id, chat.id) });
+      }
     }
     for (const recent of recentChats(chatsOf(data, project.id), ctx.activeChatId)) {
       all.push({ id: `chat-${recent.id}`, group: "palette.group.chats", label: chatTitle(recent), run: () => openChat(recent.id) });

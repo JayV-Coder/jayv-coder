@@ -43,6 +43,7 @@ export const commands = {
   forgetAllowedCommand: (chatId: string, command: string) => invoke<string[]>("forget_allowed_command", { chatId, command }),
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
   cancelTurn: (turnId: string) => invoke<void>("cancel_turn", { turnId }),
+  cancelLimitWait: (turnId: string) => invoke<void>("cancel_limit_wait", { turnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
   scopedGateFeed: (projectIds: string[], chatId: string | null) => invoke<GateFeed>("scoped_gate_feed", { projectIds, chatId }),
   turnEvidence: (turnId: string) => invoke<TurnEvidence>("turn_evidence", { turnId }),

@@ -45,8 +45,11 @@ pub struct JevConfig {
     /// agente e a revisão juntos. Passou, o pedido para e os agentes abertos
     /// caem. O prazo de silêncio do provedor continua valendo por linha.
     #[serde(default = "default_turn_ceiling")] pub turn_ceiling_minutes: u64,
+    /// O pedido que parou porque o agente esgotou o limite de uso é retomado
+    /// sozinho quando o limite volta (ver `limits`).
+    #[serde(default = "yes")] pub resume_after_limit: bool,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false, turn_ceiling_minutes:default_turn_ceiling() } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false, turn_ceiling_minutes:default_turn_ceiling(), resume_after_limit:true } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {

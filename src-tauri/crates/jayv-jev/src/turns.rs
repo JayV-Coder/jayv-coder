@@ -107,7 +107,15 @@ pub const SCHEMA:&str=
        answered_by TEXT REFERENCES turns(id) ON DELETE SET NULL,
        settled_at TEXT
      );
-     CREATE INDEX IF NOT EXISTS questions_status ON questions(status);";
+     CREATE INDEX IF NOT EXISTS questions_status ON questions(status);
+     CREATE TABLE IF NOT EXISTS limit_waits (
+       turn_id TEXT PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
+       provider TEXT NOT NULL,
+       resume_at TEXT NOT NULL,
+       estimated INTEGER NOT NULL DEFAULT 0,
+       attempts INTEGER NOT NULL DEFAULT 1,
+       waiting INTEGER NOT NULL DEFAULT 1
+     );";
 
 /// Quantos itens de cada portão a tela recebe. O placar não usa esta janela:
 /// ele conta no banco, então continua certo depois que os antigos saem de
@@ -302,6 +310,59 @@ pub struct TurnView {
     pub activity:Vec<Activity>,
     /// Quem atendeu o pedido, como o Jev decidiu: o último `route` da narração.
     pub route:Option<TurnRoute>,
+    /// O pedido parou porque o agente esgotou o limite de uso e o JayV o
+    /// retoma sozinho na hora indicada. Vazio fora dessa espera.
+    pub limit_wait:Option<LimitWait>,
+}
+
+/// A espera de um pedido pelo limite de uso do agente.
+#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct LimitWait {
+    pub provider:String,
+    pub resumes_at:DateTime<Utc>,
+    /// O agente não disse quando o limite volta: a hora é um palpite.
+    pub estimated:bool,
+}
+
+/// Quantas vezes seguidas o JayV retoma um pedido que volta a bater no limite.
+/// Passado isso, o pedido fica falho e a pessoa decide.
+pub const MAX_LIMIT_RESUMES:u32=3;
+
+/// Põe o pedido para esperar o limite voltar. Devolve a quantidade de esperas
+/// que ele já teve, contando esta.
+pub fn schedule_limit_wait(connection:&Connection,turn_id:&str,provider:&str,resume_at:DateTime<Utc>,estimated:bool)->Result<u32> {
+    let attempts=limit_wait_attempts(connection,turn_id)?+1;
+    connection.execute(
+        "INSERT INTO limit_waits(turn_id,provider,resume_at,estimated,attempts,waiting) VALUES(?1,?2,?3,?4,?5,1)
+         ON CONFLICT(turn_id) DO UPDATE SET provider=?2,resume_at=?3,estimated=?4,attempts=?5,waiting=1",
+        params![turn_id,provider,resume_at.to_rfc3339(),estimated,attempts])?;
+    Ok(attempts)
+}
+
+/// Quantas esperas o pedido já teve.
+pub fn limit_wait_attempts(connection:&Connection,turn_id:&str)->Result<u32> {
+    Ok(connection.query_row("SELECT attempts FROM limit_waits WHERE turn_id=?1",[turn_id],|row|row.get(0)).optional()?.unwrap_or(0))
+}
+
+/// Os pedidos cuja espera acabou: o turno, o chat e o agente que parou.
+pub fn due_limit_waits(connection:&Connection,now:DateTime<Utc>)->Result<Vec<(String,String,String)>> {
+    let mut statement=connection.prepare("SELECT w.turn_id,t.chat_id,w.provider,w.resume_at FROM limit_waits w JOIN turns t ON t.id=w.turn_id WHERE w.waiting=1")?;
+    let rows=statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().filter(|(_,_,_,at)|parse_time(at).map_or(true,|at|at<=now)).map(|(turn,chat,provider,_)|(turn,chat,provider)).collect())
+}
+
+/// A espera acabou (o pedido voltou ao ar): o registro fica só para contar as
+/// tentativas.
+pub fn settle_limit_wait(connection:&Connection,turn_id:&str)->Result<()> {
+    connection.execute("UPDATE limit_waits SET waiting=0 WHERE turn_id=?1",[turn_id])?;
+    Ok(())
+}
+
+/// Tira a espera e a conta de tentativas do pedido.
+pub fn cancel_limit_wait(connection:&Connection,turn_id:&str)->Result<()> {
+    connection.execute("DELETE FROM limit_waits WHERE turn_id=?1",[turn_id])?;
+    Ok(())
 }
 
 /// O agente (CLI), o modelo, o modo e o papel de um turno, para o balão.
@@ -343,8 +404,15 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
         row.get::<_,Option<String>>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,Option<String>>(6)?,
         row.get::<_,Option<String>>(7)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut waits:std::collections::HashMap<String,LimitWait>=std::collections::HashMap::new();
+    {
+        let mut statement=connection.prepare("SELECT w.turn_id,w.provider,w.resume_at,w.estimated FROM limit_waits w JOIN turns t ON t.id=w.turn_id WHERE w.waiting=1 AND t.chat_id=?1")?;
+        let found=statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,bool>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for (turn,provider,at,estimated) in found { if let Ok(resumes_at)=parse_time(&at) { waits.insert(turn,LimitWait{provider,resumes_at,estimated}); } }
+    }
     rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial,route)|{
         let status=TurnStatus::read(&status);
+        let limit_wait=waits.remove(&id).filter(|_|status==TurnStatus::Failed);
         let activity=if status.is_open(){activity(connection,&id)?}else{vec![]};
         Ok(TurnView{
             id,code:turn_code(&chat_code,ordinal),status,
@@ -354,6 +422,7 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
             partial:partial.filter(|text|!text.is_empty()),activity,
             // Um detalhe ilegível só tira a linha do balão, não o chat.
             route:route.and_then(|detail|serde_json::from_str::<TurnRoute>(&detail).ok()).filter(|route|!route.provider.is_empty()),
+            limit_wait,
         })
     }).collect()
 }
@@ -799,6 +868,49 @@ mod tests {
         assert_eq!(status_of(&connection,&answered.id),TurnStatus::Answered,"quem já tinha resposta não é tocado");
         assert_eq!(status_of(&connection,&waiting.id),TurnStatus::Queued,"o que nunca começou continua na fila");
         assert!(reopen_turn(&connection,&flying.id).is_ok(),"o falho se reenvia");
+    }
+
+    #[test]
+    fn a_request_waiting_for_the_usage_limit_is_due_only_after_its_hour() {
+        let connection=bench("XY4T9B");
+        let turn=open_turn(&connection,"chat-1").expect("turno");
+        set_status(&connection,&turn.id,TurnStatus::Failed).expect("estado");
+        let now=Utc::now();
+        let attempts=schedule_limit_wait(&connection,&turn.id,"claude",now+chrono::Duration::minutes(10),false).expect("agendar");
+
+        assert_eq!(attempts,1);
+        assert!(due_limit_waits(&connection,now).expect("vencidas").is_empty(),"ainda não chegou a hora");
+        let view=views_for_chat(&connection,"chat-1").expect("turnos").remove(0);
+        assert_eq!(view.limit_wait.as_ref().map(|wait|(wait.provider.as_str(),wait.estimated)),Some(("claude",false)));
+        let due=due_limit_waits(&connection,now+chrono::Duration::minutes(11)).expect("vencidas");
+        assert_eq!(due,vec![(turn.id.clone(),"chat-1".to_string(),"claude".to_string())]);
+
+        settle_limit_wait(&connection,&turn.id).expect("encerrar");
+        assert!(due_limit_waits(&connection,now+chrono::Duration::hours(1)).expect("vencidas").is_empty(),"cada espera dispara uma vez");
+        assert!(views_for_chat(&connection,"chat-1").expect("turnos")[0].limit_wait.is_none(),"a tela só mostra a espera em curso");
+    }
+
+    #[test]
+    fn the_resumes_of_a_request_are_counted_until_the_wait_is_cancelled() {
+        let connection=bench("XY4T9B");
+        let turn=open_turn(&connection,"chat-1").expect("turno");
+        let at=Utc::now();
+        for expected in 1..=MAX_LIMIT_RESUMES {
+            assert_eq!(schedule_limit_wait(&connection,&turn.id,"codex",at,true).expect("agendar"),expected);
+            settle_limit_wait(&connection,&turn.id).expect("encerrar");
+        }
+        assert_eq!(limit_wait_attempts(&connection,&turn.id).expect("tentativas"),MAX_LIMIT_RESUMES);
+        cancel_limit_wait(&connection,&turn.id).expect("cancelar");
+        assert_eq!(limit_wait_attempts(&connection,&turn.id).expect("tentativas"),0);
+    }
+
+    #[test]
+    fn a_wait_shows_only_on_a_failed_request() {
+        let connection=bench("XY4T9B");
+        let turn=open_turn(&connection,"chat-1").expect("turno");
+        schedule_limit_wait(&connection,&turn.id,"claude",Utc::now(),false).expect("agendar");
+        set_status(&connection,&turn.id,TurnStatus::Queued).expect("estado");
+        assert!(views_for_chat(&connection,"chat-1").expect("turnos")[0].limit_wait.is_none(),"reenviado à mão, a espera não aparece mais");
     }
 
     #[test]

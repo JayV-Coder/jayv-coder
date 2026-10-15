@@ -43,6 +43,7 @@ export const TOURS: Tour[] = [
       { feature: "chatSearch" },
       { feature: "conversationFind" },
       { feature: "consumptionGuard" },
+      { feature: "limitResume" },
       { feature: "answerRecall" },
       { feature: "liveFiles", target: "header-live" },
       { feature: "projectNotes" },

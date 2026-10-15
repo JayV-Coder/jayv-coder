@@ -3,6 +3,7 @@
 
 pub mod agents;
 pub mod guard;
+pub mod limits;
 pub mod llm;
 pub mod mcp;
 pub mod mcp_client;

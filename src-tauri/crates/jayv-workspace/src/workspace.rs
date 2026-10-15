@@ -437,6 +437,15 @@ impl WorkspaceStore {
         }
     }
 
+    /// Põe o pedido falho para esperar o limite do agente voltar; devolve
+    /// quantas esperas ele já teve, contando esta.
+    pub fn schedule_limit_wait(&mut self, turn_id:&str, provider:&str, resume_at:chrono::DateTime<Utc>, estimated:bool) -> Result<u32> {turns::schedule_limit_wait(&self.connection,turn_id,provider,resume_at,estimated)}
+    pub fn limit_wait_attempts(&self, turn_id:&str) -> Result<u32> {turns::limit_wait_attempts(&self.connection,turn_id)}
+    /// Os pedidos cuja espera pelo limite já acabou (turno, chat e agente).
+    pub fn due_limit_waits(&self, now:chrono::DateTime<Utc>) -> Result<Vec<(String,String,String)>> {turns::due_limit_waits(&self.connection,now)}
+    pub fn settle_limit_wait(&mut self, turn_id:&str) -> Result<()> {turns::settle_limit_wait(&self.connection,turn_id)}
+    pub fn cancel_limit_wait(&mut self, turn_id:&str) -> Result<()> {turns::cancel_limit_wait(&self.connection,turn_id)}
+
     /// Se há pedido no ar agora.
     pub fn turn_in_flight(&self) -> Result<bool> {turns::is_flying(&self.connection)}
 

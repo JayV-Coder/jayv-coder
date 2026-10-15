@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import type { Aspect, Chat, Message, Project, TurnView } from "@/modules/core";
-import { cancelTurn, messageLight, sendPrompt, useConversation } from "@/modules/conversation";
+import { cancelLimitWait, cancelTurn, messageLight, sendPrompt, useConversation } from "@/modules/conversation";
 import { useLocale, useT } from "@/modules/i18n";
 import { formatCost, formatDuration, formatTokens, useUsage } from "@/modules/usage";
 import { openFile, openTurns, setWorkMode } from "@/modules/workspace";
@@ -144,6 +144,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
                         turn={turn}
                         meta={message.role === "assistant" && message.turnId ? meta(message.turnId) : undefined}
                         onRetry={turn ? () => retry(turn.id) : undefined}
+                        onCancelWait={chat && turn?.limitWait ? () => void cancelLimitWait(turn.id, chat.id) : undefined}
                         onCancel={chat && turn ? () => void cancelTurn(turn.id, chat.id) : undefined}
                         onUndoMode={chat && turn && turn.id === undoable && turn.route?.switched ? () => void setWorkMode(chat.id, turn.route?.switched?.from ?? "auto") : undefined}
                         onOpenFile={project?.rootPath ? (path) => void openFile(chat.id, path) : undefined}
