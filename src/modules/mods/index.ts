@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { commands, onCore, type InstalledMod, type InstalledMods, type ModAgent, type ModManifest, type ModsSnapshot } from "@/modules/core";
+import { commands, onCore, type InstalledMod, type InstalledMods, type ModAgent, type ModManifest, type ModSkill, type ModsSnapshot } from "@/modules/core";
 import { compareVersions } from "@/modules/changelog";
 import { reportError } from "@/modules/feedback";
 import { useEntitlements, type FeatureKey } from "@/modules/plans";
@@ -18,7 +18,7 @@ export const isFeatureMod = (id: string): id is FeatureMod => (FEATURE_MODS as r
 
 /** Os pontos de extensão que esta tela sabe mostrar. O núcleo diz quais ele
  * aplica (`points`); um ponto que esta tela não conhece aparece como "outro". */
-export const KNOWN_POINTS = ["llmEngines", "features", "agents"] as const;
+export const KNOWN_POINTS = ["llmEngines", "features", "agents", "skills"] as const;
 export type KnownPoint = (typeof KNOWN_POINTS)[number];
 
 const EMPTY: InstalledMods = { mods: {}, removed: [] };
@@ -82,6 +82,9 @@ export const modEngines = (manifest: ModManifest) => strings(manifest.contribute
 export const modFeatures = (manifest: ModManifest) => strings(manifest.contributes?.features).filter(isFeatureMod);
 /** Os agentes que o mod traz. */
 export const modAgents = (manifest: ModManifest): ModAgent[] => (Array.isArray(manifest.contributes?.agents) ? manifest.contributes.agents : []);
+
+/** As skills que o mod traz. */
+export const modSkills = (manifest: ModManifest): ModSkill[] => (Array.isArray(manifest.contributes?.skills) ? manifest.contributes.skills : []);
 
 /** O id do agente que a entrada `index` do mod vira: o mesmo do núcleo e do
  * site. */
@@ -245,6 +248,10 @@ export function connectMods() {
 export function clearMods() {
   useMods.setState({ loaded: false, catalog: null, fetchedAt: null, active: [], saved: EMPTY, draft: EMPTY, saving: false });
 }
+
+/** A página pública do mod no site, no idioma da tela: o que ele faz, como
+ * habilitar e como usar, com prints. Sem `id`, o catálogo com a busca. */
+export const modPagePath = (locale: string, id?: string) => `/${locale}/mods${id ? `/${encodeURIComponent(id)}` : ""}`;
 
 /** A página de mods do painel do site, no ambiente pedido: lá a pessoa
  * instala, liga e desliga os mods do catálogo e cria, edita e exclui os dela

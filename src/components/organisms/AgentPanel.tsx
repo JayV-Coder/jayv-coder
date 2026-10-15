@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Trash2Icon } from "lucide-react";
 import { isApiAgent, isCustomMod, type AgentSettings, type CustomModOptions } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
+import { ownedAgents, useMods } from "@/modules/mods";
 import { AGENT_LABELS, addModel, agentLabel, checkAgent, refreshModels, removeMod, setSettingsTab, updateAgent, useSettings, type ModelDraft } from "@/modules/settings";
 import { AgentIcon, EmptyText } from "@/components/atoms";
 import { AgentProbeLine, ConfirmAction, FormField, OptionSelect, PAGE_SIZES, Pager, SettingsSection } from "@/components/molecules";
@@ -28,6 +29,9 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
   const t = useT();
   const gateway = isApiAgent(agent);
   const custom = isCustomMod(agent.id);
+  // O agente que um mod do catálogo trouxe (Ollama, LM Studio…) não se apaga
+  // aqui: sai quando o mod é desinstalado, na aba Mods.
+  const owned = useMods((state) => ownedAgents(state.catalog, state.saved).has(agent.id));
   const options = agent.options as Partial<CustomModOptions>;
   const name = useSettings((state) => agentLabel(agent.id, state.agents));
   // O mod criado de linha de comando não sabe listar modelos: eles são os que
@@ -56,9 +60,9 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         <AgentIcon agent={agent.id} className="size-11 shrink-0" />
         <div className="min-w-0 flex-1">
           <h3 className="text-xl font-semibold break-words">{name}</h3>
-          <p className="text-sm text-muted-foreground">{custom ? t(gateway ? "mods.tagline.api" : "mods.tagline.cli") : t(`agent.${agent.id}.tagline` as Key)}</p>
+          <p className="text-sm text-muted-foreground">{custom ? t(owned ? (gateway ? "mods.tagline.catalog.api" : "mods.tagline.catalog.cli") : (gateway ? "mods.tagline.api" : "mods.tagline.cli")) : t(`agent.${agent.id}.tagline` as Key)}</p>
         </div>
-        {custom && (
+        {custom && !owned && (
           <ConfirmAction title={t("mods.remove.title", { name })} description={t("mods.remove.description")} confirm={t("mods.remove")} onConfirm={() => { removeMod(agent.id); setSettingsTab("mods"); }}>
             <Button type="button" variant="outline" size="sm"><Trash2Icon aria-hidden="true" />{t("mods.remove")}</Button>
           </ConfirmAction>

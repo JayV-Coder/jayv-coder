@@ -14,7 +14,7 @@ import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
 import { allows, inPlan, locks, settingsTabFeature, type FeatureKey } from "@/modules/plans";
-import { installMod, isInstalled, isOn, isRequired, modFeatures, modsSitePath, modText, pointsOf, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
+import { installMod, isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
 import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
@@ -179,6 +179,8 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     const name = modText(manifest.title, locale);
     const id = manifest.id;
     const features = modFeatures(manifest);
+    // A página do mod no site vale para todo mod, o essencial também.
+    if (SITE_URL) all.push({ id: `mod-page-${id}`, group: "palette.group.help", label: t("palette.modPage", { name }), run: () => void openSite(modPagePath(locale, id)).catch(reportError) });
     // O essencial e o mod que só traz recursos travados pelo plano não têm o
     // que mudar.
     if (isRequired(modsState.catalog, id)) continue;
@@ -305,6 +307,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     all.push(
       { id: "site-docs", group: help, label: t("palette.docs"), run: () => void openSite("/docs").catch(reportError) },
       { id: "site-releases", group: help, label: t("palette.releases"), run: () => void openSite("/releases").catch(reportError) },
+      { id: "site-mods", group: help, label: t("palette.modsCatalog"), run: () => void openSite(modPagePath(useI18n.getState().locale)).catch(reportError) },
       { id: "site-dashboard", group: help, label: t("org.site.manage"), run: () => void openDashboard().catch(reportError) },
       { id: "site-account", group: help, label: t("palette.siteAccount"), run: () => void openDashboard("/account").catch(reportError) },
     );

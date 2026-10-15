@@ -4,8 +4,9 @@
 //! O sistema em si (`jayv-mods`) não sabe o que um mod faz: cada camada dá os
 //! pontos do assunto dela. Aqui moram os dois que o plano governa — os motores
 //! de LLM do app (`llmEngines`) e os recursos opcionais (`features`) — e o
-//! registro junta o de agentes (`jayv_agents::mod_agents`). Um tipo novo de
-//! funcionalidade que os mods podem trazer é um ponto novo nesta lista.
+//! registro junta o de agentes (`jayv_agents::mod_agents`) e o de skills
+//! (`jayv_agents::mod_skills`). Um tipo novo de funcionalidade que os mods
+//! podem trazer é um ponto novo nesta lista.
 //!
 //! O que os mods desligam (`disabled_in`) entra no `Entitlements` como o que o
 //! plano não tem: o recurso, o motor ou o agente que nenhum mod ativo traz.
@@ -63,7 +64,7 @@ impl ExtensionPoint for Features {
 }
 
 /// Os pontos de extensão desta versão do app.
-pub static REGISTRY:Registry=Registry::new(&[&LLM_ENGINES,&FEATURES,&jayv_agents::mod_agents::AGENTS]);
+pub static REGISTRY:Registry=Registry::new(&[&LLM_ENGINES,&FEATURES,&jayv_agents::mod_agents::AGENTS,&jayv_agents::mod_skills::SKILLS]);
 
 /// As tabelas locais: o cache do catálogo e o registro do que esta máquina
 /// instalou.
@@ -160,7 +161,7 @@ pub fn owned_agents(connection:&Connection)->Result<BTreeSet<String>> {
         assert_eq!(REGISTRY.targets(&manifest),Some(BTreeSet::from(["claude".to_string(),"mcp".to_string(),"stats".to_string()])));
         let newer=Manifest::read(&generic("newer",json!({"features":["teleport"]}),false)).expect("mod");
         assert!(REGISTRY.targets(&newer).is_none(),"o recurso que este app não tem espera o app novo");
-        assert_eq!(REGISTRY.keys(),["llmEngines","features","agents"]);
+        assert_eq!(REGISTRY.keys(),["llmEngines","features","agents","skills"]);
     }
 
     /// No login, os mods de hoje se instalam todos, ligados: os agentes do
@@ -193,6 +194,28 @@ pub fn owned_agents(connection:&Connection)->Result<BTreeSet<String>> {
         // O app 0.94 de outra máquina lê a chave antiga.
         assert_eq!(state::legacy(&connection).expect("lê").get("codex"),Some(&false));
         assert_eq!(state::legacy(&connection).expect("lê").get("stats"),Some(&true));
+    }
+
+    /// O mod de skill grava a skill no login; desligado, ela sai da escolha
+    /// do Jev pelo alvo `skill:<nome>`; desinstalado, sai do banco.
+    #[test] fn a_skill_mod_installs_its_skill_and_turning_it_off_takes_it_out_of_the_choice() {
+        let mut connection=database();
+        let skill=json!({"skills":[{"name":"reverse-engineering","description":"Inspect a compiled program.","instructions":"Use the tools.","mcpServers":[{"name":"rea","command":"npx","args":["-y","rea-agents","--mcp"]}]}]});
+        let mut mods=today();
+        mods.push(generic("rea",skill,true));
+        assert!(replace(&connection,&json!({"schema":2,"mods":mods})).expect("catálogo"));
+        let applied=reconcile(&mut connection).expect("aplica").expect("instalou");
+        assert!(applied.failed.is_empty()&&applied.state.is_on("rea"),"{:?}",applied.failed);
+        let loaded=jayv_agents::mod_skills::load(&connection).expect("lê");
+        assert_eq!((loaded.len(),loaded[0].owner.as_deref(),loaded[0].mcp.len()),(1,Some("rea"),1));
+        let mut wanted=view(&connection).expect("lê").state;
+        wanted.mods.get_mut("rea").expect("rea").enabled=false;
+        apply(&mut connection,wanted).expect("desliga");
+        assert!(disabled_in(&connection).expect("lê").contains(&jayv_agents::mod_skills::target("reverse-engineering")));
+        let mut wanted=view(&connection).expect("lê").state;
+        wanted.mods.remove("rea");
+        apply(&mut connection,wanted).expect("desinstala");
+        assert!(jayv_agents::mod_skills::load(&connection).expect("lê").is_empty());
     }
 
     /// O motor que a pessoa desligou no app 0.94 continua desligado; o

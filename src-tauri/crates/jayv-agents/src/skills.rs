@@ -34,7 +34,7 @@ pub const BODY_MAX_CHARS:usize=16_000;
 const SKIPPED:[&str;3]=[".git","node_modules","target"];
 
 /// Uma skill instalada. `path` é a pasta dela dentro da pasta de dados do app.
-#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[derive(Debug,Clone,Default,PartialEq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct Skill {
     pub name:String,
@@ -48,6 +48,14 @@ pub struct Skill {
     pub origin:Option<String>,
     #[serde(skip)]
     pub inline:Option<String>,
+    /// O mod do catálogo que trouxe a skill (`mod_skills`); nulo na que a
+    /// pessoa instalou e na da organização.
+    #[serde(skip)]
+    pub owner:Option<String>,
+    /// Os servidores MCP que a skill traz: chegam ao agente só no pedido em
+    /// que o Jev a escolhe.
+    #[serde(skip)]
+    pub mcp:Vec<crate::mcp::McpServer>,
 }
 
 /// O que o `SKILL.md` diz: o nome, a descrição e as instruções.
@@ -113,7 +121,7 @@ pub fn read_body(skill:&Skill)->Result<String> {
 /// As skills instaladas, em ordem de nome.
 pub fn load(connection:&Connection)->Result<Vec<Skill>> {
     let mut statement=connection.prepare("SELECT name,description,path,enabled,installed_at FROM skills ORDER BY name")?;
-    let rows=statement.query_map([],|row|Ok(Skill{name:row.get(0)?,description:row.get(1)?,path:row.get(2)?,enabled:row.get::<_,i64>(3)?!=0,installed_at:row.get(4)?,origin:None,inline:None}))?;
+    let rows=statement.query_map([],|row|Ok(Skill{name:row.get(0)?,description:row.get(1)?,path:row.get(2)?,enabled:row.get::<_,i64>(3)?!=0,installed_at:row.get(4)?,..Default::default()}))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -122,7 +130,7 @@ fn record(connection:&Connection,document:&Document,path:&Path)->Result<Skill> {
     let installed_at=chrono::Utc::now().to_rfc3339();
     connection.execute("INSERT INTO skills(name,description,path,enabled,installed_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(name) DO UPDATE SET description=?2,path=?3,installed_at=?5",
         params![document.name,document.description,path.to_string_lossy(),enabled as i64,installed_at])?;
-    Ok(Skill{name:document.name.clone(),description:document.description.clone(),path:path.to_string_lossy().into(),enabled,installed_at,origin:None,inline:None})
+    Ok(Skill{name:document.name.clone(),description:document.description.clone(),path:path.to_string_lossy().into(),enabled,installed_at,..Default::default()})
 }
 
 /// Copia a pasta da skill para `target`, sem seguir links e sem as pastas de

@@ -111,6 +111,10 @@ describe("paletteCommands", () => {
     expect(label("mod-install-ollama")).toBe("Install mod: Ollama");
     expect(found.map((command) => command.id)).not.toContain("mod-install-future");
     for (const id of ["mod-install-skills", "mod-toggle-skills", "mod-uninstall-skills"]) expect(found.map((command) => command.id), "o essencial não muda").not.toContain(id);
+    // Todo mod do catálogo tem a página dele no site, o essencial também.
+    expect(label("mod-page-skills")).toBe("Mod page on the site: Skills");
+    expect(label("mod-page-ollama")).toBe("Mod page on the site: Ollama");
+    expect(label("site-mods")).toBe("Mod catalog on the site");
     const locked = ids({ rights: { features: new Set<string>(), locked: new Set<string>(["stats"]) } });
     expect(locked).not.toContain("mod-toggle-stats");
     expect(locked).not.toContain("mod-install-ollama");
