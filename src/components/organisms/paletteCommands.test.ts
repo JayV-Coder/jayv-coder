@@ -79,7 +79,8 @@ describe("paletteCommands", () => {
     const options = { name: "Local", kind: "api", args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "http://localhost:8080/v1", keyRequired: false, approveMcps: false, hasKey: false };
     useSettings.setState({ agents: [{ id: "mod-local", enabled: true, command: "", timeout: 300, options }] as never });
     const found = paletteCommands(context());
-    for (const id of ["settings-mods", "mods-create", "mods-site", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(found.map((command) => command.id)).toContain(id);
+    for (const id of ["settings-mods", "mods-create", "mods-site", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local", "mods-tab-installed", "mods-tab-essentials"]) expect(found.map((command) => command.id)).toContain(id);
+    expect(found.find((command) => command.id === "mods-tab-essentials")?.label).toBe("Settings › Mods › Essentials");
     expect(found.find((command) => command.id === "settings-mod-local")?.label).toBe("Settings › Local");
     const locked = ids({ rights: { features: new Set<string>(["mcp"]), locked: new Set<string>() } });
     for (const id of ["mods-create", "settings-mod-local", "mcp-approve-mod-local", "gateway-check-mod-local"]) expect(locked).not.toContain(id);

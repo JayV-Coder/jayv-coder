@@ -124,6 +124,8 @@ fn english(text:&Text)->String {
         "guidance.agentNoModel"=>format!("none of the models of the agents that are on ({}) is turned on",param("agents")),
         "guidance.agentNoModelFix"=>"Open Settings, open the tab of one of those agents and turn on at least one model in its Models list (models start off).".into(),
         "guidance.noAgent"=>"no agent is on".into(),
+        "guidance.noAgentMod"=>"no agent mod is installed and turned on".into(),
+        "guidance.noAgentModFix"=>"Open Settings › Mods, install (or turn on) the mod of the agent you use — Claude Code, Codex, Ollama and the others are in the catalog — and save.".into(),
         "guidance.noFittingModel"=>"no configured model fits this request".into(),
         "guidance.policyBlocked"=>format!("the LLM policy of @{} leaves no allowed agent or model for it",param("org")),
         "guidance.policyFix"=>format!("Open Settings in the app, turn on an agent and one of its models, picking from what @{} allows. The organization's owners and maintainers set that on the JayV site, in the organization's Agents and models tab, and can allow the ones you use.",param("org")),

@@ -14,7 +14,7 @@ import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
 import { allows, inPlan, locks, settingsTabFeature, type FeatureKey } from "@/modules/plans";
-import { installMod, isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
+import { installMod, isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setInstalledTab, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
 import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
@@ -171,6 +171,13 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     }
     all.push({ id: "mods-site", group: settings, label: t("mods.site"), run: () => void openDashboard(modsSitePath(environment)).catch(reportError) });
   }
+  // As duas abas da lista de instalados: os mods que a pessoa instalou e os
+  // essenciais.
+  const modsTab = `${t("nav.settings")}${SEP}${t("settings.tab.mods")}${SEP}`;
+  all.push(
+    { id: "mods-tab-installed", group: settings, label: `${modsTab}${t("mods.installedTitle")}`, run: () => { openSettingsTab("mods"); setInstalledTab("installed"); } },
+    { id: "mods-tab-essentials", group: settings, label: `${modsTab}${t("mods.tab.essentials")}`, run: () => { openSettingsTab("mods"); setInstalledTab("essentials"); } },
+  );
   // Instalar, ligar, desligar e desinstalar cada mod do catálogo: abrem a aba
   // Mods e mudam o rascunho; o Salvar grava.
   const locale = useI18n.getState().locale;

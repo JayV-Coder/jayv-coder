@@ -7,7 +7,7 @@ import { reportError } from "@/modules/feedback";
 import { formatSince, useLocale, useT, type Key } from "@/modules/i18n";
 import {
   dependents, findMod, installMod, isInstalled, isOn, isRequired, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modPagePath, modsSitePath, modText,
-  ownedAgents, pointsOf, setModEnabled, statusOf, uninstallMod, unknownPoints, usable, useMods,
+  ownedAgents, pointsOf, setInstalledTab, setModEnabled, splitInstalled, statusOf, uninstallMod, unknownPoints, usable, useMods, type InstalledTab,
 } from "@/modules/mods";
 import { inPlan, locks, useEntitlements, useFeature, type FeatureKey } from "@/modules/plans";
 import { agentLabel, MAX_MODS, removeMod, setSettingsTab, useAgentIds, useSettings, type SettingsTab } from "@/modules/settings";
@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** O nome de um ponto de extensão na tela; o que esta tela não conhece é
  * "outro". */
@@ -74,7 +75,7 @@ export function ModsPanel() {
     return { lockedOn, outside };
   };
 
-  const installedRow = (id: string) => {
+  const installedRow = (id: string, inEssentials = false) => {
     const manifest = findMod(mods.catalog, id);
     const name = title(id);
     const status = statusOf(mods, id);
@@ -104,7 +105,7 @@ export function ModsPanel() {
             <span className="truncate">{name}</span>
             {manifest?.version && <Badge variant="outline" className="font-mono text-caption">{t("mods.version", { version: manifest.version })}</Badge>}
             {manifest && pointBadges(manifest)}
-            {required && <Badge variant="outline" title={t("mods.required.hint")}>{t("mods.required")}</Badge>}
+            {required && !inEssentials && <Badge variant="outline" title={t("mods.required.hint")}>{t("mods.required")}</Badge>}
             {lockedOn && <Badge variant="outline">{t("mods.feature.locked")}</Badge>}
             {outside && <Badge variant="outline">{t("mods.locked")}</Badge>}
             {status === "absent" && <Badge variant="warning">{t("mods.feature.absent")}</Badge>}
@@ -209,6 +210,9 @@ export function ModsPanel() {
     ...catalog.filter((manifest) => isInstalled(mods, manifest.id) && matches(manifest)).map((manifest) => manifest.id),
     ...(mods.catalog === null ? [] : Object.keys(mods.draft.mods).filter((id) => !findMod(mods.catalog, id) && (!needle || id.includes(needle)))),
   ];
+  // Os essenciais têm a aba deles: a lista de Instalados fica com o que a
+  // pessoa escolheu instalar.
+  const tabs = splitInstalled(installedIds, mods.catalog);
   const available = catalog.filter((manifest) => !isInstalled(mods, manifest.id) && matches(manifest));
   const own = ids.filter((id) => isCustomMod(id) && !owned.has(id)).map((id) => agents.find((agent) => agent.id === id)).filter((agent): agent is AgentSettings => agent !== undefined);
   const searching = needle.length > 0 || kind !== "all";
@@ -232,12 +236,36 @@ export function ModsPanel() {
             />
           )}
         </div>
-        <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.installedTitle")}</h4>
         {mods.catalog === null
-          ? <p className="text-sm text-muted-foreground">{t("mods.catalog.none")}</p>
-          : installedIds.length === 0
-            ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.installedEmpty")}</p>
-            : <ul className="grid gap-2">{installedIds.map(installedRow)}</ul>}
+          ? (
+            <>
+              <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.installedTitle")}</h4>
+              <p className="text-sm text-muted-foreground">{t("mods.catalog.none")}</p>
+            </>
+          )
+          : (
+            <Tabs value={mods.installedTab} onValueChange={(value) => setInstalledTab(value as InstalledTab)} className="gap-3">
+              <TabsList data-tour="settings-mods-tabs" aria-label={t("mods.installedTitle")}>
+                <TabsTrigger value="installed" data-tour="settings-mods-tab-installed">
+                  {t("mods.installedTitle")}<span className="text-caption text-muted-foreground tabular-nums">{tabs.installed.length}</span>
+                </TabsTrigger>
+                <TabsTrigger value="essentials" data-tour="settings-mods-tab-essentials">
+                  {t("mods.tab.essentials")}<span className="text-caption text-muted-foreground tabular-nums">{tabs.essentials.length}</span>
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="installed" className="grid gap-2">
+                {tabs.installed.length === 0
+                  ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.installedEmpty")}</p>
+                  : <ul className="grid gap-2">{tabs.installed.map((id) => installedRow(id))}</ul>}
+              </TabsContent>
+              <TabsContent value="essentials" className="grid gap-2">
+                <p className="text-xs leading-snug text-muted-foreground">{t("mods.essentials.description")}</p>
+                {tabs.essentials.length === 0
+                  ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.essentials.empty")}</p>
+                  : <ul className="grid gap-2">{tabs.essentials.map((id) => installedRow(id, true))}</ul>}
+              </TabsContent>
+            </Tabs>
+          )}
         {mods.catalog !== null && (
           <>
             <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.available")}</h4>

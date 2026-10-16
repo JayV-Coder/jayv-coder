@@ -200,10 +200,12 @@ const SCENES = {
 /** O print `enable`: a aba Mods, filtrada pelo nome do mod, com a linha dele
  * em destaque (a busca também acha outros mods com a mesma palavra). O mod que
  * não vem instalado aparece em Disponíveis no catálogo, com o botão Instalar
- * (`uninstalled` no endereço). */
+ * (`uninstalled` no endereço); o essencial, na aba Essenciais da lista de
+ * instalados. */
 async function enable(page, catalog, id, locale) {
   const title = titleOf(catalog, id, locale);
   await studio(page, "settings", "mods");
+  if (catalog.mods.find((mod) => mod.id === id)?.required) await page.locator('[data-tour="settings-mods-tab-essentials"]').click();
   await page.locator('[data-tour="settings-mods-search"] input').fill(title);
   await page.waitForTimeout(400);
   await page.locator('[data-tour="settings-mods-search"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
@@ -245,23 +247,35 @@ async function main() {
         const optional = !manifest?.preinstalled && !manifest?.required;
         const scenes = { enable: (page) => enable(page, catalog, id, locale), ...(SCENES[id] ?? {}) };
         for (const [name, scene] of Object.entries(scenes)) {
-          const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, timezoneId: "UTC", locale: locale === "en" ? "en-US" : locale });
-          const page = await context.newPage();
-          const errors = [];
-          page.on("pageerror", (error) => errors.push(error.message));
-          await page.clock.setFixedTime(new Date("2026-10-13T14:30:00Z"));
-          const outside = name === "enable" && optional ? `&uninstalled=${encodeURIComponent(id)}` : "";
-          await page.goto(`http://127.0.0.1:${PORT}/tools/mod-shots/index.html?locale=${encodeURIComponent(locale)}&theme=${THEME}${outside}`, { waitUntil: "networkidle" });
-          await page.waitForFunction(() => window.__studio, null, { timeout: 30_000 });
-          await studio(page, "ready");
-          await scene(page);
-          await page.waitForTimeout(300);
-          const out = join(MODS, "mods", id, "media", `${name}.${locale}.webp`);
-          mkdirSync(dirname(out), { recursive: true });
-          writeFileSync(out, await webp(page, await page.screenshot()));
-          count++;
-          if (errors.length) console.error(`! ${id}/${name}.${locale}: ${errors.join(" | ")}`);
-          await context.close();
+          // Uma recarga do vite no meio da cena (dependência otimizada de
+          // novo, por exemplo) derruba o contexto da página: a cena roda de
+          // novo, numa página nova, antes de desistir do estúdio inteiro.
+          for (let attempt = 1; ; attempt++) {
+            const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, timezoneId: "UTC", locale: locale === "en" ? "en-US" : locale });
+            try {
+              const page = await context.newPage();
+              const errors = [];
+              page.on("pageerror", (error) => errors.push(error.message));
+              await page.clock.setFixedTime(new Date("2026-10-13T14:30:00Z"));
+              const outside = name === "enable" && optional ? `&uninstalled=${encodeURIComponent(id)}` : "";
+              await page.goto(`http://127.0.0.1:${PORT}/tools/mod-shots/index.html?locale=${encodeURIComponent(locale)}&theme=${THEME}${outside}`, { waitUntil: "networkidle" });
+              await page.waitForFunction(() => window.__studio, null, { timeout: 30_000 });
+              await studio(page, "ready");
+              await scene(page);
+              await page.waitForTimeout(300);
+              const out = join(MODS, "mods", id, "media", `${name}.${locale}.webp`);
+              mkdirSync(dirname(out), { recursive: true });
+              writeFileSync(out, await webp(page, await page.screenshot()));
+              count++;
+              if (errors.length) console.error(`! ${id}/${name}.${locale}: ${errors.join(" | ")}`);
+              break;
+            } catch (error) {
+              if (attempt >= 3) throw error;
+              console.error(`~ ${id}/${name}.${locale}: attempt ${attempt} failed (${String(error?.message ?? error).split("\n")[0]})`);
+            } finally {
+              await context.close();
+            }
+          }
         }
       }
       console.log(`${locale}: done`);
