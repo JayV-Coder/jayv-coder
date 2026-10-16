@@ -1360,19 +1360,78 @@ pub fn resolve_mode(pinned:&str,chosen:&'static str,wants_build:bool,stuck_befor
 /// implemente", "pode seguir", "siga com o desenvolvimento"). Mensagens curtas
 /// de sim também valem: só são lidas quando há um plano esperando. As pistas
 /// cobrem os idiomas do app; as curtas só valem como palavra inteira.
+///
+/// Recusar ou criticar não é aprovar: a pista dentro de uma oração negada
+/// ("não aprovo", "don't implement", "не продолжай", "不要继续") não conta, e a
+/// mensagem que pede outro plano ou mudança nele ("refaça", "change the
+/// plan") não aprova nada — o Jev a lê como pedido novo. Na dúvida, não é
+/// aprovação: aprovar por engano leva ao build o plano que a pessoa recusou.
 pub fn approves_plan(request:&str)->bool {
-    let text=request.to_lowercase();
+    let text=plain_text(request);
+    if asks_for_another_plan(&text) { return false; }
+    let clauses=clauses(&text);
+    // Um "não" sozinho na frente ("não, faz diferente") recusa a mensagem inteira.
+    if clauses.first().is_some_and(|clause|REFUSALS.contains(&clause.trim())) { return false; }
     const PHRASES:[&str;14]=["pode seguir","pode fazer","pode executar","seguir com","segue o","go ahead","go on","do it","vai em frente","manda ver","carry out","start building","mach weiter","fang an"];
-    if PHRASES.iter().any(|cue|text.contains(cue)) { return true; }
     // Raízes de palavra: valem no começo de uma palavra ("implemente",
     // "desenvolva"), não no meio ("consiga").
     const STEMS:[&str;32]=["aprov","approv","implement","siga","execut","execute","desenvolv","prossig","continu","comece","começ","inicie","iniciar","proceed","adelante","procede","empieza","hazlo","vas-y","commence","fais-le","lance","продолж","приступ","начина","реализ","делай","進め","続け","実装","実行","始め"];
     const SCRIPTS:[&str;11]=["继续","开始","实现","执行","好的","जारी","शुरू","लागू","تابع","ابدأ","نفذ"];
-    let words:Vec<&str>=text.split(|c:char|!c.is_alphanumeric()&&c!='-').filter(|word|!word.is_empty()).collect();
-    if words.iter().any(|word|STEMS.iter().any(|stem|word.starts_with(stem))) { return true; }
-    if SCRIPTS.iter().any(|cue|text.contains(cue)) { return true; }
+    let cued=clauses.iter().filter(|clause|!negated(clause)).any(|clause|{
+        let words=words_of(clause);
+        PHRASES.iter().any(|cue|clause.contains(cue))
+            // O "no" do espanhol nega o verbo logo depois dele ("no sigas");
+            // o do português é "em o" e nunca vem antes de um verbo destes.
+            || words.iter().enumerate().any(|(at,word)|STEMS.iter().any(|stem|word.starts_with(stem))&&(at==0||words[at-1]!="no"))
+            || SCRIPTS.iter().any(|cue|clause.contains(cue))
+    });
+    if cued { return true; }
     const YES:[&str;15]=["sim","ok","yes","isso","bora","vamos","faça","faz","si","oui","ja","go","build","dale","vai"];
-    words.len()<=5&&words.iter().any(|word|YES.contains(word))
+    let words=words_of(&text);
+    words.len()<=5&&!clauses.iter().any(|clause|negated(clause))&&words.iter().any(|word|YES.contains(word))
+}
+/// O texto como as pistas o leem: minúsculo e sem apóstrofo ("don't" vira
+/// "dont", uma palavra só).
+fn plain_text(request:&str)->String { request.to_lowercase().replace(['\'','’'],"") }
+fn words_of(text:&str)->Vec<&str> { text.split(|c:char|!c.is_alphanumeric()&&c!='-').filter(|word|!word.is_empty()).collect() }
+/// As orações da mensagem: a pontuação e o "mas" separam o que é recusado do
+/// que é pedido ("não precisa de mais plano, pode implementar").
+fn clauses(text:&str)->Vec<String> {
+    const BUT:[&str;11]=["mas","porém","porem","but","however","pero","sino","mais","aber","sondern","но"];
+    let mut clauses=vec![String::new()];
+    for piece in text.split_inclusive(|c:char|matches!(c,','|';'|'.'|'!'|'?'|':'|'\n'|'，'|'。'|'！'|'？'|'；'|'、'|'،'|'؛')) {
+        for word in piece.split_whitespace() {
+            if BUT.contains(&word) { clauses.push(String::new()); continue; }
+            let current=clauses.last_mut().expect("a primeira oração");
+            if !current.is_empty() { current.push(' '); }
+            current.push_str(word.trim_end_matches(|c:char|!c.is_alphanumeric()));
+        }
+        clauses.push(String::new());
+    }
+    clauses.into_iter().filter(|clause|!clause.trim().is_empty()).collect()
+}
+/// Respostas de recusa que ocupam a oração inteira.
+const REFUSALS:[&str;10]=["não","nao","no","nope","nah","non","nein","нет","لا","不"];
+/// Se a oração nega o que diz: uma palavra de negação em qualquer ponto dela
+/// ou, nas línguas sem espaço entre as palavras, a marca da negação.
+fn negated(clause:&str)->bool {
+    const NEGATIONS:[&str;25]=["não","nao","nem","nunca","jamais","not","dont","doesnt","didnt","wont","cant","cannot","shouldnt","never","nope","nah","pas","nicht","kein","keine","nein","не","нет","لا","لن"];
+    const MARKS:[&str;13]=["不","别","別","没","沒","未","勿","ない","ません","ずに","るな","नहीं","मत"];
+    words_of(clause).iter().any(|word|NEGATIONS.contains(word))||MARKS.iter().any(|mark|clause.contains(mark))||REFUSALS.contains(&clause.trim())
+}
+/// A mensagem recusa o plano ou pede outro: refazer, reescrever, revisar,
+/// "está errado". Nem o "pode implementar" junto vale como aprovação.
+fn asks_for_another_plan(text:&str)->bool {
+    const REDO:[&str;24]=["refa","refaz","reescrev","revis","outro plano","novo plano","errad","ruim","wrong","redo","rewrite","revise","another plan","new plan","otro plan","nuevo plan","autre plan","nouveau plan","anderen plan","neuen plan","другой план","новый план","换个","重新"];
+    REDO.iter().any(|cue|text.contains(cue))
+}
+/// A mensagem pede mudança no plano ("mude", "change the plan"). Com um verbo
+/// de executar ("pode implementar, mas troque o nome") é aprovação com ajuste,
+/// e o ajuste vai junto ao agente; sem ele, falar do plano para mudá-lo não
+/// manda executar o plano como está.
+fn changes_the_plan(text:&str)->bool {
+    const CHANGES:[&str;14]=["mude","mudar","altere","alterar","troque","trocar","change","modify","different","instead","cambia","modifi","änder","измени"];
+    CHANGES.iter().any(|cue|text.contains(cue))
 }
 /// Quantas palavras no máximo tem a mensagem que segue um plano pendente e
 /// ainda é lida como "execute-o".
@@ -1383,13 +1442,23 @@ const PLAN_FOLLOWUP_WORDS:usize=40;
 /// quer outro plano. Pergunta continua sendo pergunta.
 pub fn goes_ahead(request:&str)->bool {
     if approves_plan(request) { return true; }
-    let text=request.trim().to_lowercase();
+    let text=plain_text(request.trim());
     let words=text.split_whitespace().count();
     if words==0||words>PLAN_FOLLOWUP_WORDS||text.contains(['?','？','؟']) { return false; }
+    // Falar do plano para recusá-lo ou mudá-lo não manda executá-lo.
+    if asks_for_another_plan(&text)||changes_the_plan(&text) { return false; }
     // "o plano", "that plan": o plano que já existe, não "faça um plano".
     const THE_PLAN:[&str;22]=["o plano","do plano","pelo plano","no plano","esse plano","este plano","plano que","plano acima","plano anterior","planejado","planeado","chega de plano","the plan","that plan","this plan","your plan","el plan","ese plan","le plan","ce plan","der plan","den plan"];
     const ANY_PLAN:[&str;8]=["план","計画","プラン","计划","方案","योजना","خطة","plan que"];
-    THE_PLAN.iter().chain(ANY_PLAN.iter()).any(|word|text.contains(word))
+    // Vale a oração que fala do plano sem negá-lo: "não gostei do plano" não
+    // manda executar; "chega de discutir, use o plano" manda.
+    clauses(&text).iter().any(|clause|THE_PLAN.iter().chain(ANY_PLAN.iter()).any(|word|clause.contains(word))&&!negated(clause)&&!leads_with_no(clause))
+}
+/// O "no" que abre a oração e nega o verbo seguinte ("no sigas con el plan",
+/// "no, not that plan"). "No plano", "no more" e "no más" não negam nada.
+fn leads_with_no(clause:&str)->bool {
+    let words=words_of(clause);
+    words.first()==Some(&"no")&&!matches!(words.get(1).copied(),Some("plano"|"more"|"más"|"mas"))
 }
 /// As notas do roteamento mais a do modo. Em build o agente executa, então a
 /// nota de "devolva os comandos para o desenvolvedor" não vale.
@@ -2232,6 +2301,27 @@ mod tests {
             assert!(!goes_ahead(said),"{said}");
         }
         assert_eq!((work_mode("plan"),work_mode("build"),work_mode("auto"),work_mode("x")),(Some(MODE_PLAN),Some(MODE_BUILD),Some(MODE_AUTO),None));
+    }
+
+    /// Recusar ou criticar o plano não é aprová-lo: "não aprovo", "o plano
+    /// está errado, refaça" e "don't implement it yet" levavam o chat ao
+    /// build com o plano recusado. A negação noutra oração da mesma frase
+    /// não desfaz a aprovação ("não precisa de mais plano, pode implementar").
+    #[test]
+    fn refusing_or_criticizing_the_plan_does_not_approve_it() {
+        for said in [
+            "não aprovo esse plano","não implemente ainda","nao siga com isso","não, faz diferente","não quero seguir com isso",
+            "não gostei do plano","o plano está errado, refaça considerando o cache","esse plano não serve","revise o plano antes",
+            "don't implement it yet","do not proceed","no, do it differently","change the plan to use a queue","never mind, not this plan",
+            "no sigas con el plan","no implementes nada","ne continue pas","nicht weitermachen","не продолжай","不要继续","実装しないで",
+        ] {
+            assert!(!goes_ahead(said),"{said}");
+        }
+        for said in ["não precisa de mais plano, pode implementar","Aprovado, pode implementar","ok","sim, pode seguir","pode seguir com o plano","go ahead, no tests needed",
+            "no more planning, just use the plan","chega de discutir, use o plano","use o plano, não mexa no banco","No plano que fizemos, siga a etapa 2",
+            "pode implementar, mas troque o nome da tabela","just implement it instead"] {
+            assert!(goes_ahead(said),"{said}");
+        }
     }
 
     #[cfg(unix)]

@@ -6,5 +6,5 @@
   "commands": [],
   "title": "Requests in parallel",
   "summary": "When your plan allows more than one request at a time, chats from different projects run at the same time, each with its own agents and index.",
-  "usage": "Nothing to turn on: send requests in chats of different projects and they no longer wait for each other. Requests in the same project still run one at a time, so two agents never write to the same folder."
+  "usage": "Nothing to turn on: send requests in chats of different projects and they no longer wait for each other. Requests in the same project still run one at a time, so two agents never write to the same folder. The same goes for a project whose folder is inside another one's, like an organization's general chat and the projects of its repositories."
 }

@@ -143,7 +143,13 @@ export function Composer({ chat }: { chat: Chat | null }) {
             disabled={stopping === flying.id}
             aria-label={stopping === flying.id ? t("pending.stopping") : t("pending.stop")}
             title={t("pending.stop.title")}
-            onClick={() => { setStopping(flying.id); void cancelTurn(flying.id, chat.id); }}
+            onClick={() => {
+              const id = flying.id;
+              setStopping(id);
+              // Recusado (sessão vencida, por exemplo), o botão não fica preso
+              // em "Parando…": dá para pedir de novo.
+              void cancelTurn(id, chat.id).then((stopped) => { if (!stopped) setStopping((current) => (current === id ? null : current)); });
+            }}
           >
             <SquareIcon aria-hidden="true" className="fill-current" />
           </Button>

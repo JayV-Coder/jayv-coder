@@ -177,13 +177,16 @@ export async function dismissQuestion(question: Question, chatId: string) {
 }
 
 /** Para o pedido: o que está no ar cai junto com o agente; o que espera na
- * fila sai dela. Os dois ficam no chat como falhos, com o reenvio. */
-export async function cancelTurn(turnId: string, chatId: string) {
+ * fila sai dela. Os dois ficam no chat como falhos, com o reenvio. Devolve
+ * se o núcleo aceitou: recusado, o botão de parar volta a valer. */
+export async function cancelTurn(turnId: string, chatId: string): Promise<boolean> {
   try {
     await commands.cancelTurn(turnId);
     bus.emit("prompt:sent", { chatId });
+    return true;
   } catch (error) {
     reportError(error);
+    return false;
   }
 }
 

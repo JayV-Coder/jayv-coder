@@ -208,15 +208,36 @@ pub fn next_queued(connection:&Connection)->Result<Option<Turn>> {
 /// também esperam — dois agentes escrevendo na mesma pasta ao mesmo tempo
 /// pisariam um no outro, e a portaria de saída não saberia de quem é cada
 /// mudança. Os de outros projetos não esperam.
+///
+/// A pasta conta como o projeto: o chat geral de uma organização trabalha na
+/// pasta dela, e cada repositório dela é um projeto numa subpasta. Os dois
+/// não correm juntos — eram dois agentes escrevendo no mesmo repositório.
 pub fn next_queued_free(connection:&Connection)->Result<Option<Turn>> {
-    connection.query_row(
-        "SELECT t.id,t.chat_id,c.code,t.ordinal,t.status,t.created_at FROM turns t JOIN chats c ON c.id=t.chat_id
-         WHERE t.status=?1 AND t.local=1
-           AND NOT EXISTS (SELECT 1 FROM turns f JOIN chats fc ON fc.id=f.chat_id
-                           WHERE (f.chat_id=t.chat_id OR fc.project_id=c.project_id) AND f.status=?2 AND f.local=1)
-         ORDER BY t.created_at,t.ordinal LIMIT 1",
-        [TurnStatus::Queued.as_str(),TurnStatus::Flying.as_str()],read_turn,
-    ).optional()?.transpose()
+    let busy:Vec<(String,String,String)>={
+        let mut statement=connection.prepare(
+            "SELECT f.chat_id,fc.project_id,COALESCE(p.root_path,'') FROM turns f JOIN chats fc ON fc.id=f.chat_id LEFT JOIN projects p ON p.id=fc.project_id
+             WHERE f.status=?1 AND f.local=1")?;
+        statement.query_map([TurnStatus::Flying.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    let mut statement=connection.prepare(
+        "SELECT t.id,t.chat_id,c.code,t.ordinal,t.status,t.created_at,c.project_id,COALESCE(p.root_path,'') FROM turns t JOIN chats c ON c.id=t.chat_id LEFT JOIN projects p ON p.id=c.project_id
+         WHERE t.status=?1 AND t.local=1 ORDER BY t.created_at,t.ordinal")?;
+    let mut rows=statement.query([TurnStatus::Queued.as_str()])?;
+    while let Some(row)=rows.next()? {
+        let (chat,project,root)=(row.get::<_,String>(1)?,row.get::<_,String>(6)?,row.get::<_,String>(7)?);
+        let taken=busy.iter().any(|(busy_chat,busy_project,busy_root)|*busy_chat==chat||*busy_project==project||folders_overlap(busy_root,&root));
+        if !taken { return read_turn(row)?.map(Some); }
+    }
+    Ok(None)
+}
+
+/// Se uma pasta está dentro da outra (ou é a mesma). Projeto sem pasta não
+/// divide pasta com ninguém.
+pub fn folders_overlap(left:&str,right:&str)->bool {
+    let key=|path:&str|->String { let path=path.trim().replace('\\',"/"); let path=path.trim_end_matches('/'); if cfg!(windows) {path.to_lowercase()} else {path.to_string()} };
+    let (left,right)=(key(left),key(right));
+    if left.is_empty()||right.is_empty() { return false; }
+    left==right||right.starts_with(&format!("{left}/"))||left.starts_with(&format!("{right}/"))
 }
 
 /// Quantos pedidos desta máquina estão no ar.
@@ -717,6 +738,35 @@ pub fn plan_for_build(connection:&Connection,turn_id:&str)->Result<bool> {
            ORDER BY previous.ordinal DESC LIMIT 1))",
         [turn_id],|row|row.get(0),
     )?)
+}
+
+/// Se a conversa já seguiu depois deste turno: o chat tem um pedido mais novo
+/// que ele (mandado enquanto este era atendido, ou depois). A pergunta que a
+/// resposta dele levantaria chega tarde — travaria a caixa por cima da
+/// conversa de agora —, e o plano dele não vai sozinho ao desenvolvimento por
+/// cima do que a pessoa mandou depois.
+pub fn has_later_turn(connection:&Connection,turn_id:&str)->Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM turns current JOIN turns later ON later.chat_id=current.chat_id AND later.ordinal>current.ordinal WHERE current.id=?1)",
+        [turn_id],|row|row.get(0),
+    )?)
+}
+
+/// Se o pedido do turno saiu do chat: o chat foi limpo (ou apagado) depois de
+/// o pedido entrar na fila. O que o atendimento dele ainda devolver não tem
+/// mais conversa onde entrar.
+pub fn request_gone(connection:&Connection,turn_id:&str)->Result<bool> {
+    Ok(!connection.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE turn_id=?1 AND role='user')",[turn_id],|row|row.get::<_,bool>(0))?)
+}
+
+/// Os turnos no ar destes chats: os que limpar ou apagar o chat tem de parar.
+pub fn flying_in(connection:&Connection,chat_ids:&[String])->Result<Vec<String>> {
+    let mut statement=connection.prepare("SELECT id FROM turns WHERE chat_id=?1 AND status=?2 AND local=1")?;
+    let mut found=Vec::new();
+    for chat_id in chat_ids {
+        found.extend(statement.query_map(params![chat_id,TurnStatus::Flying.as_str()],|row|row.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    Ok(found)
 }
 
 /// Se `turn_id` responde à confirmação que a portaria fez no lugar do agente.
