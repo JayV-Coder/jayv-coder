@@ -54,6 +54,11 @@ export const useUpdate = create<UpdateState>(() => ({
   checkedAt: null, launching: false, installOnLaunch: savedInstallOnLaunch(),
 }));
 
+/** A atualização está na frente de quem usa: a tela de abertura que procura
+ * versão nova ou a janela de atualização aberta. As outras janelas que abrem
+ * sozinhas (as novidades, o tutorial) esperam ela sair, em vez de cobri-la. */
+export const updateInFront = (state: Pick<UpdateState, "launching" | "open">) => state.launching || state.open;
+
 /** Quanto a consulta de abertura espera antes de seguir sem ela: sem rede o
  * app não fica parado numa tela de espera. */
 export const LAUNCH_TIMEOUT_MS = 10_000;

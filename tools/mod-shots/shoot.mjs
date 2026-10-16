@@ -120,9 +120,16 @@ const SCENES = {
   liveFiles: {
     live: async (page) => {
       await studio(page, "chat", "c-live");
-      // O painel de andamento recolhido deixa a conversa e o Ao vivo lado a lado.
+      // O painel de andamento recolhido deixa a conversa e o painel Código lado a lado.
       await page.locator('aside button[aria-expanded="true"]').first().click();
       await studio(page, "live", "c-live", "src/api/invoices.rs");
+    },
+    repos: async (page) => {
+      await studio(page, "chat", "c-live");
+      await page.locator('aside button[aria-expanded="true"]').first().click();
+      await studio(page, "live", "c-live");
+      await page.locator('[data-tour="live-repos"]').click();
+      await page.waitForTimeout(600);
     },
   },
   chatSearch: {
@@ -191,7 +198,9 @@ const SCENES = {
 };
 
 /** O print `enable`: a aba Mods, filtrada pelo nome do mod, com a linha dele
- * em destaque (a busca também acha outros mods com a mesma palavra). */
+ * em destaque (a busca também acha outros mods com a mesma palavra). O mod que
+ * não vem instalado aparece em Disponíveis no catálogo, com o botão Instalar
+ * (`uninstalled` no endereço). */
 async function enable(page, catalog, id, locale) {
   const title = titleOf(catalog, id, locale);
   await studio(page, "settings", "mods");
@@ -232,6 +241,8 @@ async function main() {
   try {
     for (const locale of locales) {
       for (const id of ids) {
+        const manifest = catalog.mods.find((mod) => mod.id === id);
+        const optional = !manifest?.preinstalled && !manifest?.required;
         const scenes = { enable: (page) => enable(page, catalog, id, locale), ...(SCENES[id] ?? {}) };
         for (const [name, scene] of Object.entries(scenes)) {
           const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, timezoneId: "UTC", locale: locale === "en" ? "en-US" : locale });
@@ -239,7 +250,8 @@ async function main() {
           const errors = [];
           page.on("pageerror", (error) => errors.push(error.message));
           await page.clock.setFixedTime(new Date("2026-10-13T14:30:00Z"));
-          await page.goto(`http://127.0.0.1:${PORT}/tools/mod-shots/index.html?locale=${encodeURIComponent(locale)}&theme=${THEME}`, { waitUntil: "networkidle" });
+          const outside = name === "enable" && optional ? `&uninstalled=${encodeURIComponent(id)}` : "";
+          await page.goto(`http://127.0.0.1:${PORT}/tools/mod-shots/index.html?locale=${encodeURIComponent(locale)}&theme=${THEME}${outside}`, { waitUntil: "networkidle" });
           await page.waitForFunction(() => window.__studio, null, { timeout: 30_000 });
           await studio(page, "ready");
           await scene(page);

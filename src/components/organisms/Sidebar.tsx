@@ -11,7 +11,7 @@ import { ChatRow, NavItem, OrganizationPlate, ProjectPlate } from "@/components/
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/modules/auth";
 import { useProfile } from "@/modules/profile";
-import { isGeneralProject, openOrganization, ORGANIZATION_TABS, useOrganizations, type OrganizationTab } from "@/modules/organizations";
+import { openOrganization, ORGANIZATION_TABS, useOrganizations, type OrganizationTab } from "@/modules/organizations";
 import { useEnvironmentOrganization } from "@/modules/environments";
 import { reportError } from "@/modules/feedback";
 import { openStats } from "@/modules/usage";
@@ -19,7 +19,7 @@ import { allows, useEntitlements } from "@/modules/plans";
 import { cn } from "@/lib/utils";
 import { displayName } from "./ProfileCard";
 import { EnvironmentSwitch } from "./EnvironmentSwitch";
-import { useGeneralChatsColumn } from "./GeneralChatsColumn";
+import { GeneralChatsMenu, useGeneralChats } from "./GeneralChatsMenu";
 import { NotificationBell } from "./NotificationBell";
 
 /** O ícone de cada aba da organização no menu, os mesmos da página dela. */
@@ -59,10 +59,7 @@ export function Sidebar() {
   // grade de chats nenhuma linha fica marcada.
   const openId = view === "chat" ? activeChatId : null;
   const chats = project ? recentChats(chatsOf(data, project.id), openId) : [];
-  // Os chats do projeto geral da organização já estão na coluna dos chats
-  // gerais, ao lado: a lateral não os repete.
-  const generalColumn = useGeneralChatsColumn();
-  const listChats = !(project && generalColumn && isGeneralProject(project));
+  const generalChats = useGeneralChats();
 
   return (
     <aside className="flex h-full flex-col overflow-hidden border-e border-sidebar-border bg-sidebar px-3 pt-4 pb-3 text-sidebar-foreground">
@@ -101,6 +98,8 @@ export function Sidebar() {
             {/* Os projetos são a tela de projetos do ambiente, que já só tem os
                 da organização; as outras abas abrem a página dela. */}
             <NavItem active={view === "projects"} mark={<FolderKanbanIcon />} shortcut="projects" onClick={() => navigate("projects")}>{t("nav.projects")}</NavItem>
+            {/* Os chats gerais da organização: o item abre e fecha a lista. */}
+            {generalChats && <GeneralChatsMenu />}
             {ORGANIZATION_TABS.filter(({ feature }) => !feature || allows(entitlements, feature)).map(({ tab, label }) => {
               const Icon = TAB_ICONS[tab];
               return (
@@ -142,7 +141,7 @@ export function Sidebar() {
             {t("nav.gate")}
           </NavItem>}
           {can.stats && <NavItem active={view === "stats"} mark={<ChartColumnIcon />} onClick={() => openStats({ kind: "project", id: project.id })}>{t("nav.stats")}</NavItem>}
-          {listChats && <>
+          <>
             <div className="flex items-center justify-between ps-2.5 pe-1 pt-5 pb-1.5 font-mono text-caption font-medium tracking-wider text-sidebar-muted uppercase">
               {t("nav.recentChats")}
               <button type="button" title={t("common.newChat")} aria-label={t("common.newChat")} onClick={() => void createChat(project.id)} className="grid size-6 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"><PlusIcon aria-hidden="true" className="size-4" /></button>
@@ -154,7 +153,7 @@ export function Sidebar() {
                   <ChatRow key={chat.id} chat={chat} open={chat.id === openId} onOpen={() => openChat(chat.id)} onDelete={() => void deleteChat(chat.id)} />
                 ))}
             </div>
-          </>}
+          </>
         </div>
       )}
 

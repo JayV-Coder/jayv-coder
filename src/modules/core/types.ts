@@ -414,6 +414,9 @@ export interface ModManifest {
   author?: string | null;
   docs?: string | null;
   homepage?: string | null;
+  /** O ícone do mod: o SVG que o catálogo traz, mostrado como imagem
+   * (`ModIcon`). Nulo no mod sem ícone. */
+  icon?: string | null;
   title: Record<string, string>;
   summary: Record<string, string>;
   contributes: ModContributions;

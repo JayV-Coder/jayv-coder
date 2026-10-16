@@ -93,6 +93,12 @@ export const modAgentId = (modId: string, index: number) => (index === 0 ? `mod-
 /** Os agentes (ids) que o mod traz: os motores de LLM e os agentes dele. */
 export const modAgentIds = (manifest: ModManifest): string[] => [...modEngines(manifest), ...modAgents(manifest).map((_agent, index) => modAgentId(manifest.id, index))];
 
+/** O mod do catálogo que traz o agente (`mod-<id>`, `mod-<id>-2`…), para a
+ * aba e o ícone dele; nulo no agente que a pessoa criou. */
+export function modOfAgent(catalog: ModManifest[] | null, agentId: string): ModManifest | null {
+  return (catalog ?? []).find((manifest) => modAgents(manifest).some((_agent, index) => modAgentId(manifest.id, index) === agentId)) ?? null;
+}
+
 /** Os agentes que pertencem aos mods instalados no estado: não se apagam
  * pela aba deles, saem pelo desinstalar do mod. */
 export function ownedAgents(catalog: ModManifest[] | null, state: InstalledMods): Set<string> {

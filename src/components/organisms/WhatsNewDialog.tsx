@@ -1,7 +1,7 @@
 import { SparklesIcon, WrenchIcon } from "lucide-react";
 import { closeChanges, showAllChanges, useChangelog, type ChangeKind, type Release } from "@/modules/changelog";
 import { useLocale, useT, type Key } from "@/modules/i18n";
-import { installUpdate } from "@/modules/updates";
+import { installUpdate, updateInFront, useUpdate } from "@/modules/updates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -62,6 +62,9 @@ function ReleaseNotes({ release, installed }: { release: Release; installed: boo
 export function WhatsNewDialog() {
   const t = useT();
   const { open, current, previous, releases, all, upcoming } = useChangelog();
+  // A atualização vem primeiro: com a procura ou a janela dela na frente, as
+  // novidades esperam (seguem abertas por baixo) e aparecem quando ela sai.
+  const waiting = useUpdate(updateInFront);
   if (!current) return null;
   const description = upcoming
     ? t("whatsNew.description.upcoming", { version: upcoming })
@@ -69,7 +72,7 @@ export function WhatsNewDialog() {
     ? t("whatsNew.description.updated", { previous, version: current })
     : all ? t("whatsNew.description") : t("whatsNew.description.installed", { version: current });
   return (
-    <Dialog open={open} onOpenChange={(wanted) => { if (!wanted) closeChanges(); }}>
+    <Dialog open={open && !waiting} onOpenChange={(wanted) => { if (!wanted) closeChanges(); }}>
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle className="text-xl">{t("whatsNew.title", { version: upcoming ?? current })}</DialogTitle>

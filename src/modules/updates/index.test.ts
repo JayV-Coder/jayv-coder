@@ -4,7 +4,7 @@ const check = vi.fn();
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: () => check() }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 
-const { checkForUpdate, closeUpdate, dismissUpdate, installUpdate, useUpdate } = await import("./index");
+const { checkForUpdate, closeUpdate, dismissUpdate, installUpdate, updateInFront, useUpdate } = await import("./index");
 
 const release = (version: string) => ({
   currentVersion: "1.0.0", version, body: "notes", date: null,
@@ -142,5 +142,18 @@ describe("updateAtLaunch", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("updateInFront", () => {
+  it("the launch check and the update window stay in front of the other windows", async () => {
+    expect(updateInFront({ launching: true, open: false })).toBe(true);
+    expect(updateInFront({ launching: false, open: true })).toBe(true);
+    expect(updateInFront({ launching: false, open: false })).toBe(false);
+    check.mockReset();
+    useUpdate.setState({ phase: "idle", open: false, next: null, dismissed: null });
+    check.mockReturnValue(new Promise(() => undefined));
+    void checkForUpdate(true);
+    expect(updateInFront(useUpdate.getState()), "procurando atualização: as novidades esperam").toBe(true);
   });
 });

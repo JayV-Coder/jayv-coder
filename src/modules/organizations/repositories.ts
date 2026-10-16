@@ -22,16 +22,22 @@ function sourceOf(repository: Repository | null, policies: StoredPolicy[]): Poli
   return policies.some((policy) => policy.repositoryId === null) ? "organization" : "none";
 }
 
+/** As chaves dos remotes de um clone: todas, quando o núcleo as manda (o
+ * app antigo só mandava a primeira). */
+const keysOf = (state: RepositoryState) => (state.keys?.length ? state.keys : state.key ? [state.key] : []);
+
 /** Junta o que o git diz da pasta com o que a organização cadastrou: primeiro
  * os clones da pasta, na ordem do caminho; depois os repositórios da
- * organização que ficaram de fora. */
+ * organização que ficaram de fora. Um clone é do repositório cadastrado por
+ * qualquer um dos remotes dele (`origin`, `upstream`…). */
 export function chatRepositories(states: RepositoryState[], repositories: Repository[], policies: StoredPolicy[]): ChatRepository[] {
   const byKey = new Map(repositories.map((repository) => [repository.repoKey, repository]));
   const seen = new Set<string>();
   const inside = states.map((state) => {
-    const repository = state.key ? byKey.get(state.key) ?? null : null;
-    if (state.key) seen.add(state.key);
-    return { key: state.key ?? (state.relative || state.path), state, repository, policy: sourceOf(repository, policies) };
+    const keys = keysOf(state);
+    const repository = keys.map((key) => byKey.get(key)).find((found) => found !== undefined) ?? null;
+    for (const key of keys) seen.add(key);
+    return { key: repository?.repoKey ?? state.key ?? (state.relative || state.path), state, repository, policy: sourceOf(repository, policies) };
   });
   const outside = repositories
     .filter((repository) => !seen.has(repository.repoKey))
@@ -43,4 +49,11 @@ export function chatRepositories(states: RepositoryState[], repositories: Reposi
  * chave, para a pasta que é ela mesma o repositório e o que está fora. */
 export function repositoryLabel(item: ChatRepository): string {
   return item.state?.relative || item.repository?.path || item.key;
+}
+
+/** O comando que faz o git confiar numa pasta de outro dono (o git recusa
+ * repositório de outro usuário: `dubious ownership`). Com `/`, que o git
+ * aceita em todo sistema, e entre aspas, por causa dos espaços. */
+export function safeDirectoryCommand(path: string): string {
+  return `git config --global --add safe.directory "${path.replace(/\\/g, "/")}"`;
 }

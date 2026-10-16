@@ -1,37 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import { CrosshairIcon, ExternalLinkIcon, XIcon } from "lucide-react";
-import type { Chat, LiveChange, LiveFile } from "@/modules/core";
+import type { Chat, LiveChange, LiveFile, Project } from "@/modules/core";
 import { reportError } from "@/modules/feedback";
 import { useT, type Key } from "@/modules/i18n";
 import {
-  chooseLiveEditor, diffCounts, editorName, hunks, lineDiff, liveFile, loadEditors, openLiveInEditor, selectLiveFile, setLiveFollow, setLivePanel, useLive,
-  type DiffLine,
+  chooseLiveEditor, diffCounts, editorName, hunks, lineDiff, liveFile, loadEditors, openLiveInEditor, selectLiveFile, setLiveFollow, setLivePanel, setLiveTab, useLive,
+  type DiffLine, type LiveTab,
 } from "@/modules/live";
 import { openTurns } from "@/modules/workspace";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { RepositoriesView } from "./RepositoriesView";
 
 const GLYPH: Record<LiveChange["kind"], string> = { created: "+", modified: "~", removed: "−" };
 const KIND: Record<LiveChange["kind"], Key> = { created: "live.kind.created", modified: "live.kind.modified", removed: "live.kind.removed" };
 
-/** O que o agente está mexendo, ao lado da conversa: a lista de arquivos que o
- * pedido mudou (o mais recente no topo) e o diff do escolhido, contra como ele
- * estava quando o pedido começou. O diff se refaz a cada gravação. Seguindo o
- * agente, o arquivo que acabou de mudar passa a ser o mostrado; com um editor
- * escolhido, ele também abre lá. */
-export function LivePanel({ chat }: { chat: Chat }) {
+/** O painel de código, ao lado da conversa, com duas abas. Arquivos: o que o
+ * agente está mexendo — a lista de arquivos que o pedido mudou (o mais recente
+ * no topo) e o diff do escolhido, contra como ele estava quando o pedido
+ * começou; o diff se refaz a cada gravação, e seguindo o agente o arquivo que
+ * acabou de mudar passa a ser o mostrado (com um editor escolhido, ele também
+ * abre lá). Repositórios: o `git status` de cada repositório da pasta do chat
+ * (`RepositoriesView`). Sem o recurso dos arquivos no plano, só a aba dos
+ * repositórios. */
+export function LivePanel({ chat, project, files: filesAllowed }: { chat: Chat; project: Project; files: boolean }) {
   const t = useT();
-  const files = useLive((state) => state.chats[chat.id]?.files ?? []);
-  const selected = useLive((state) => state.selected[chat.id] ?? null);
-  const follow = useLive((state) => state.follow);
-  const editor = useLive((state) => state.editor);
-  const editors = useLive((state) => state.editors);
-  const folder = useLive((state) => state.chats[chat.id]?.folder ?? null);
-  const mode = useLive((state) => state.chats[chat.id]?.mode ?? null);
+  const chosen = useLive((state) => state.tab);
+  const tab: LiveTab = filesAllowed ? chosen : "repos";
+  const changed = useLive((state) => state.chats[chat.id]?.files.length ?? 0);
   const running = openTurns(chat).length > 0;
-  const current = files.find((file) => file.path === selected) ?? files[0] ?? null;
-
-  useEffect(() => { void loadEditors(); }, []);
+  const follow = useLive((state) => state.follow);
 
   return (
     <aside aria-label={t("live.title")} className="flex min-h-0 w-[min(38%,520px)] min-w-[280px] flex-none flex-col border-s border-border bg-card font-mono text-small">
@@ -43,13 +41,62 @@ export function LivePanel({ chat }: { chat: Chat }) {
           {t(running ? "live.running" : "live.idle")}
         </span>
         <span className="ms-auto" />
-        <Button size="icon-xs" variant={follow ? "secondary" : "ghost"} aria-pressed={follow} title={t("live.follow")} aria-label={t("live.follow")} onClick={() => setLiveFollow(!follow)}>
-          <CrosshairIcon aria-hidden="true" />
-        </Button>
+        {tab === "files" && (
+          <Button size="icon-xs" variant={follow ? "secondary" : "ghost"} aria-pressed={follow} title={t("live.follow")} aria-label={t("live.follow")} onClick={() => setLiveFollow(!follow)}>
+            <CrosshairIcon aria-hidden="true" />
+          </Button>
+        )}
         <Button size="icon-xs" variant="ghost" title={t("live.close")} aria-label={t("live.close")} onClick={() => setLivePanel(chat.id, false)}>
           <XIcon aria-hidden="true" />
         </Button>
       </header>
+      <div role="tablist" aria-label={t("live.title")} className="flex flex-none border-b border-border px-1.5">
+        {filesAllowed && <PanelTab id="files" current={tab} label={t("live.tab.files")} count={changed} />}
+        <PanelTab id="repos" current={tab} label={t("live.tab.repos")} />
+      </div>
+      {tab === "files" ? <FilesView chat={chat} /> : <RepositoriesView project={project} chat={chat} />}
+    </aside>
+  );
+}
+
+/** Uma aba do painel de código. */
+function PanelTab({ id, current, label, count }: { id: LiveTab; current: LiveTab; label: string; count?: number }) {
+  const active = id === current;
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      data-tour={id === "repos" ? "live-repos" : undefined}
+      onClick={() => setLiveTab(id)}
+      className={cn(
+        "-mb-px flex items-center gap-1.5 border-b-2 px-2 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {label}
+      {count !== undefined && count > 0 && <span className="tabular-nums text-caption text-faint">{count}</span>}
+    </button>
+  );
+}
+
+/** A aba Arquivos: a pasta olhada, o editor que acompanha, a lista do que o
+ * pedido mudou e o diff do escolhido. */
+function FilesView({ chat }: { chat: Chat }) {
+  const t = useT();
+  const files = useLive((state) => state.chats[chat.id]?.files ?? []);
+  const selected = useLive((state) => state.selected[chat.id] ?? null);
+  const editor = useLive((state) => state.editor);
+  const editors = useLive((state) => state.editors);
+  const folder = useLive((state) => state.chats[chat.id]?.folder ?? null);
+  const mode = useLive((state) => state.chats[chat.id]?.mode ?? null);
+  const running = openTurns(chat).length > 0;
+  const current = files.find((file) => file.path === selected) ?? files[0] ?? null;
+
+  useEffect(() => { void loadEditors(); }, []);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
       <p className="flex-none truncate border-b border-border px-3 py-1 text-caption text-faint" title={folder ?? undefined}>
         {folder && mode ? t(mode === "git" ? "live.watching.git" : "live.watching.folder", { folder }) : t(running ? "live.notWatching" : "live.notWatched")}
       </p>
@@ -95,7 +142,7 @@ export function LivePanel({ chat }: { chat: Chat }) {
           {current && <FileDiff chatId={chat.id} change={current} editor={editor ?? editors?.[0] ?? null} />}
         </>
       )}
-    </aside>
+    </div>
   );
 }
 

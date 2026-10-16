@@ -99,8 +99,17 @@ export interface FolderScan { clones: LocalClone[]; truncated: boolean }
 /** Um repositório dentro da pasta de um chat, com o que o `git status` diz.
  * `relative` vazio é a própria pasta; `readable` falso, o git não respondeu. */
 export interface RepositoryState {
-  path: string; relative: string; key: string | null; branch: string | null; upstream: string | null;
+  path: string; relative: string; key: string | null;
+  /** As chaves de todos os remotes (`origin` primeiro). */
+  keys: string[];
+  /** A pasta do chat está dentro deste repositório (subpasta de um monorepo). */
+  enclosing: boolean;
+  branch: string | null; upstream: string | null;
   ahead: number; behind: number; changed: number; readable: boolean;
+  /** Por que o git não respondeu: sem git, pasta de outro dono
+   * (`safe.directory`), demora ou outra falha; e o que o git disse. */
+  problem: "noGit" | "unsafe" | "timeout" | "failed" | null;
+  error: string | null;
 }
 
 /** Um arquivo que mudou durante o último pedido do chat; `at` em ms. */

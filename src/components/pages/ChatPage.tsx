@@ -2,14 +2,13 @@ import { useEffect } from "react";
 import { loadLive, useLive } from "@/modules/live";
 import { useFeature } from "@/modules/plans";
 import { findChat, findProject, useWorkspace } from "@/modules/workspace";
-import { ChatUsageBar, Composer, LivePanel, ProgressPanel, RepositoryPanel, Timeline } from "@/components/organisms";
+import { ChatUsageBar, Composer, LivePanel, ProgressPanel, Timeline } from "@/components/organisms";
 
 /** A conversa numa coluna só, de leitura confortável: as mensagens rolam em
  * cima e a caixa de escrita fica presa embaixo, com o gasto do chat logo
  * abaixo dela. À esquerda, junto ao menu lateral, o painel de andamento do
- * JayV e, no chat da organização, os repositórios que ele alcança. Com o
- * painel "Ao vivo" aberto, os arquivos que o agente mexe ficam à direita da
- * conversa. */
+ * JayV. Com o painel de código aberto, à direita da conversa ficam os
+ * arquivos que o agente mexe e os repositórios da pasta do chat. */
 export function ChatPage() {
   const { data, activeProjectId, activeChatId } = useWorkspace();
   const chat = findChat(data, activeChatId);
@@ -24,9 +23,7 @@ export function ChatPage() {
   return (
     <div className="flex min-h-0 flex-1">
       {chat && (
-        <ProgressPanel chat={chat}>
-          {project?.orgId && <RepositoryPanel project={project} chat={chat} />}
-        </ProgressPanel>
+        <ProgressPanel chat={chat} />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Timeline chat={chat} project={project} />
@@ -35,7 +32,7 @@ export function ChatPage() {
           {chat && <ChatUsageBar chatId={chat.id} />}
         </div>
       </div>
-      {chat && live && liveAllowed && project?.rootPath.trim() && <LivePanel chat={chat} />}
+      {chat && live && project?.rootPath.trim() && <LivePanel chat={chat} project={project} files={liveAllowed} />}
     </div>
   );
 }
