@@ -176,6 +176,23 @@ mod tests {
         assert!(pending(store.connection(),100).expect("fila").is_empty());
     }
 
+    /// A linha que desce igual ao que já está não é regravada nem conta; a
+    /// que muda, e a exclusão do que existe, contam.
+    #[test] fn only_what_changes_the_cache_counts() {
+        let mut store=WorkspaceStore::in_memory().expect("store");
+        let projects=table("projects").unwrap();
+        let row=json!({"id":"p1","name":"Remoto","created_at":"2026-09-30T12:00:00+00:00","repo_keys":"[]","org_id":null,"row_deleted_at":null});
+        assert_eq!(apply_remote(store.connection_mut(),projects,&[row.clone()]).expect("aplica"),1);
+        assert_eq!(apply_remote(store.connection_mut(),projects,&[row.clone()]).expect("de novo"),0,"igual ao que já está");
+        let mut renamed=row.clone();
+        renamed["name"]=json!("Outro nome");
+        assert_eq!(apply_remote(store.connection_mut(),projects,&[renamed]).expect("muda"),1);
+        assert_eq!(project_name(&store,"p1").as_deref(),Some("Outro nome"));
+        let gone=|id:&str|json!({"id":id,"name":"x","created_at":"2026-09-30T12:00:00+00:00","row_deleted_at":"2026-09-30T13:00:00Z"});
+        assert_eq!(apply_remote(store.connection_mut(),projects,&[gone("nunca-esteve-aqui")]).expect("apaga"),0);
+        assert_eq!(apply_remote(store.connection_mut(),projects,&[gone("p1")]).expect("apaga"),1);
+    }
+
     /// A escrita local ainda não subiu: quem decide entre as duas é o
     /// servidor, na subida. Aplicar a remota aqui apagaria a local antes disso.
     #[test] fn a_row_with_a_pending_write_is_not_overwritten() {

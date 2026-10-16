@@ -63,3 +63,4 @@ export { McpPanel } from "./McpPanel";
 export { OrganizationExtensions } from "./OrganizationExtensions";
 export { SkillsPanel } from "./SkillsPanel";
 export { McpDraftDialog } from "./McpDraftDialog";
+export { ScreenFailure } from "./ScreenFailure";

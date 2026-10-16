@@ -165,6 +165,9 @@ export interface CoreEvents {
   /** A instalação sozinha dos mods gravou alguma coisa (no login, ou o que
    * outra máquina ou o site decidiu). */
   "mods-changed": null;
+  /** Uma volta do sync baixou o que outra máquina ou o site escreveu (ou o
+   * histórico de um computador novo): a tela relê o que mostra. */
+  "workspace-synced": null;
   /** `now` é falso quando um pedido no ar deixou a troca para o próximo. */
   "settings-applied": { now: boolean };
   "usage-recorded": { projectId: string | null; chatId: string | null };

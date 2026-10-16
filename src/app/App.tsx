@@ -23,8 +23,8 @@ import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
 import { allows, clearEntitlements, startEntitlements, useEntitlements, VIEW_FEATURE } from "@/modules/plans";
 import { ChatPage, ChatsPage, GatePage, LoginPage, NewPasswordPage, OrganizationPage, ProfilePage, ProfileSetupPage, ProjectsPage, SecondFactorPage, SettingsPage } from "@/components/pages";
-import { EnvironmentLoading, FeatureLocked, LaunchUpdate, McpDraftDialog, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
-import { LoadingNote } from "@/components/atoms";
+import { EnvironmentLoading, FeatureLocked, LaunchUpdate, McpDraftDialog, ScreenFailure, TutorialOverlay, UpdateBanner, UpdateDialog, WhatsNewDialog } from "@/components/organisms";
+import { LoadingNote, RenderGuard } from "@/components/atoms";
 import { AppShell } from "@/components/templates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -110,7 +110,15 @@ export function App() {
       ? loading
       : profile && !profile.completedAt
         ? <ProfileSetupPage profile={profile} />
-        : <AppShell>{blocked && locked ? <FeatureLocked feature={locked} /> : <Page />}</AppShell>;
+        : (
+          <AppShell>
+            {blocked && locked
+              ? <FeatureLocked feature={locked} />
+              // Uma tela que falha ao desenhar fica no lugar dela, com o caminho
+              // de volta; trocar de tela tenta de novo.
+              : <RenderGuard resetKey={view} fallback={(error, reset) => <ScreenFailure error={error} onRetry={reset} />}><Page /></RenderGuard>}
+          </AppShell>
+        );
   return (
     <TooltipProvider>
       {/* O aviso de versão nova fica acima de qualquer tela, logada ou não.

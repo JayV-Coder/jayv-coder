@@ -162,10 +162,26 @@ export function statusOf(state: Pick<ModsState, "draft" | "catalog" | "appVersio
   return "active";
 }
 
+/** O rascunho levado para cima do gravado novo: o que a pessoa mudou na aba
+ * (instalou, desinstalou, ligou, desligou) fica, e o resto vem do gravado
+ * novo. O Salvar grava o estado inteiro: sem isto, o mod que outra máquina ou
+ * o site instalou enquanto a aba tinha mudança pendente era desinstalado no
+ * Salvar (e o de fábrica não voltava mais). */
+export function rebaseDraft(before: InstalledMods, draft: InstalledMods, saved: InstalledMods): InstalledMods {
+  const mods: Record<string, InstalledMod> = { ...saved.mods };
+  for (const id of new Set([...Object.keys(before.mods), ...Object.keys(draft.mods)])) {
+    const was = before.mods[id];
+    const wanted = draft.mods[id];
+    if (!wanted) { if (was) delete mods[id]; continue; }
+    if (!was || was.enabled !== wanted.enabled) mods[id] = mods[id] ? { ...mods[id], enabled: wanted.enabled } : wanted;
+  }
+  return { mods, removed: saved.removed.filter((id) => !(id in mods)) };
+}
+
 function apply(snapshot: ModsSnapshot, keepDraft: boolean) {
   useMods.setState((state) => ({
     loaded: true, catalog: snapshot.catalog, fetchedAt: snapshot.fetchedAt, appVersion: snapshot.appVersion, points: snapshot.points,
-    active: snapshot.active, saved: snapshot.state, draft: keepDraft ? state.draft : snapshot.state,
+    active: snapshot.active, saved: snapshot.state, draft: keepDraft ? rebaseDraft(state.saved, state.draft, snapshot.state) : snapshot.state,
   }));
   // O que os mods desligam vale como o que o plano não tem: some do menu, da
   // paleta e das abas.
@@ -243,10 +259,15 @@ export function connectMods() {
     void loadMods();
   });
   const installed = onCore("mods-changed", () => void loadMods());
+  // Ligar ou desligar um mod em outra máquina (ou no site) não instala nem
+  // desinstala nada aqui: só desce o estado novo, e é por este aviso que a aba
+  // e o que fica escondido acompanham.
+  const synced = onCore("workspace-synced", () => void loadMods());
   return () => {
     window.removeEventListener("focus", focus);
     void changed.then((unlisten) => unlisten());
     void installed.then((unlisten) => unlisten());
+    void synced.then((unlisten) => unlisten());
   };
 }
 

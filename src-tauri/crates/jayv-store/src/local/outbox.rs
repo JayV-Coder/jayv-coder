@@ -199,7 +199,10 @@ pub fn refusals(connection:&Connection)->Result<Refusals> {
 
 /// Aplica as linhas baixadas sem acordar os gatilhos. A linha com escrita
 /// local pendente é pulada: o servidor decide entre as duas quando ela subir.
-/// Devolve quantas linhas foram aplicadas.
+/// Devolve quantas linhas mudaram aqui: a que desce igual ao que já está (a
+/// folga do cursor baixa de novo o último minuto, e o que esta máquina subiu
+/// volta do servidor) não conta, e é por essa conta que a tela sabe se há o
+/// que reler.
 pub fn apply_remote(connection:&mut Connection,table:&SyncTable,rows:&[Value])->Result<usize> {
     let transaction=connection.transaction()?;
     transaction.execute("UPDATE sync_flag SET applying=1",[])?;
@@ -217,7 +220,7 @@ pub fn apply_remote(connection:&mut Connection,table:&SyncTable,rows:&[Value])->
         // No SQLite a restrição desfaz só o comando, não a transação: a linha
         // órfã fica de fora e as outras seguem.
         match written {
-            Ok(_)=>applied+=1,
+            Ok(changed)=>applied+=changed,
             Err(rusqlite::Error::SqliteFailure(failure,_)) if failure.code==rusqlite::ErrorCode::ConstraintViolation=>{}
             Err(error)=>return Err(error.into()),
         }
@@ -247,13 +250,16 @@ pub fn set_cursor(connection:&Connection,table:&SyncTable,cursor:&str)->Result<(
 }
 
 /// Um turno baixado é de outra máquina: nasce com `local = 0`, e a fila daqui
-/// nunca o chama.
+/// nunca o chama. A linha que já está igual não é regravada: o comando não
+/// muda nada e não conta.
 fn upsert(table:&SyncTable)->String {
     let arrived=if table.name=="turns" {",local"} else {""};
     let marks=(1..=table.columns.len()).map(|index|format!("?{index}")).collect::<Vec<_>>().join(",");
     let arrived_value=if table.name=="turns" {",0"} else {""};
-    let updates=table.columns.iter().filter(|column|!table.key.contains(column)).map(|column|format!("{column}=excluded.{column}")).collect::<Vec<_>>().join(",");
-    format!("INSERT INTO {}({}{arrived}) VALUES({marks}{arrived_value}) ON CONFLICT({}) DO UPDATE SET {updates}",table.name,table.columns.join(","),table.key.join(","))
+    let values=table.columns.iter().filter(|column|!table.key.contains(column));
+    let updates=values.clone().map(|column|format!("{column}=excluded.{column}")).collect::<Vec<_>>().join(",");
+    let differs=values.map(|column|format!("{}.{column} IS NOT excluded.{column}",table.name)).collect::<Vec<_>>().join(" OR ");
+    format!("INSERT INTO {}({}{arrived}) VALUES({marks}{arrived_value}) ON CONFLICT({}) DO UPDATE SET {updates} WHERE {differs}",table.name,table.columns.join(","),table.key.join(","))
 }
 
 fn matching(table:&SyncTable)->String {

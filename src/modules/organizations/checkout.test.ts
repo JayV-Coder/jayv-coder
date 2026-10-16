@@ -58,6 +58,25 @@ describe("chatReach", () => {
     expect(reach.missing.map((item) => item.repoKey)).toEqual(["github.com/acme/worker"]);
   });
 
+  it("counts the clones found inside the folder even when they are not projects here", () => {
+    const repositories = [{ repoKey: "github.com/acme/api" }, { repoKey: "github.com/acme/web" }, { repoKey: "github.com/acme/worker" }];
+    // `web` foi clonado pelo terminal dentro da pasta, e também é projeto em
+    // outra pasta; `worker` só existe como clone, fundo, dentro da pasta.
+    const projects = [project("/other/web", ["github.com/acme/web"])];
+    const clones = [
+      { path: "/code/acme/web", keys: ["github.com/acme/web"] },
+      { path: "/code/acme/a/b/c/worker", keys: ["github.com/acme/worker"] },
+      { path: "/code/acme-old/api", keys: ["github.com/acme/api"] },
+    ];
+    const reach = chatReach(repositories, projects, "/code/acme", clones);
+    expect(reach.inside.map((item) => [item.repository.repoKey, item.path])).toEqual([
+      ["github.com/acme/web", "/code/acme/web"],
+      ["github.com/acme/worker", "/code/acme/a/b/c/worker"],
+    ]);
+    expect(reach.elsewhere).toEqual([]);
+    expect(reach.missing.map((item) => item.repoKey)).toEqual(["github.com/acme/api"]);
+  });
+
   it("compares Windows paths and does not take a sibling folder for a child", () => {
     const repositories = [{ repoKey: "github.com/acme/api" }, { repoKey: "github.com/acme/web" }];
     const projects = [project("C:\\code\\acme\\api", ["github.com/acme/api"]), project("C:\\code\\acme-old\\web", ["github.com/acme/web"])];

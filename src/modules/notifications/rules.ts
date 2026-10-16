@@ -79,20 +79,25 @@ const questionKey = (chat: Chat) => (chat.question ? `${chat.question.turnId}:${
  * `first`) só aprende: o que já estava pronto ao abrir o app não é novidade.
  *
  * Um turno conta quando sai da fila (ou aparece já fechado); o turno que
- * terminou fazendo uma pergunta vira só a pergunta. */
+ * terminou fazendo uma pergunta vira só a pergunta. Só os pedidos deste
+ * computador contam: o que desce pela sincronização (outra máquina, o
+ * histórico inteiro de um computador novo) já fechado não é novidade daqui —
+ * num computador novo, a primeira releitura depois do login virava uma
+ * notificação por pedido do histórico. */
 export function turnEvents(memory: TurnMemory, chats: Chat[], first: boolean): TurnEvent[] {
   const events: TurnEvent[] = [];
   for (const chat of chats) {
     const asked = questionKey(chat);
     if (asked && !memory.questions.has(asked)) {
       memory.questions.add(asked);
-      if (!first) events.push({ kind: "turn.asking", chat, turnId: chat.question!.turnId });
+      const mine = chat.turns.find((turn) => turn.id === chat.question!.turnId)?.local !== false;
+      if (!first && mine) events.push({ kind: "turn.asking", chat, turnId: chat.question!.turnId });
     }
     for (const turn of chat.turns) {
       const before = memory.statuses.get(turn.id);
       memory.statuses.set(turn.id, turn.status);
       const settled = SETTLED[turn.status];
-      if (first || !settled) continue;
+      if (first || !settled || turn.local === false) continue;
       if (before !== undefined && !OPEN.includes(before)) continue;
       if (turn.id === chat.question?.turnId) continue;
       events.push({ kind: settled, chat, turnId: turn.id });

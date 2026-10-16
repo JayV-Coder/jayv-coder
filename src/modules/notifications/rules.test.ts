@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Chat, TurnStatus } from "@/modules/core";
 import { emptyMemory, targetOf, timeAgo, turnEvents, type AppNotification } from "./rules";
 
-const chat = (id: string, turns: [string, TurnStatus][], question: string | null = null): Chat => ({
+const chat = (id: string, turns: [string, TurnStatus][], question: string | null = null, local = true): Chat => ({
   id, code: id, projectId: "p1", title: "", messages: [], createdAt: "", updatedAt: "", workMode: "auto",
-  turns: turns.map(([turnId, status]) => ({ id: turnId, code: turnId, status, entry: null, exit: null, partial: null, activity: [], route: null, limitWait: null })),
+  turns: turns.map(([turnId, status]) => ({ id: turnId, code: turnId, status, entry: null, exit: null, partial: null, activity: [], route: null, limitWait: null, local })),
   question: question ? { turnId: question, code: "q1", kind: "single", prompt: "", options: [], source: "", status: "open" } : null,
 });
 
@@ -29,6 +29,18 @@ describe("turnEvents", () => {
     const memory = emptyMemory();
     turnEvents(memory, [chat("c1", [])], true);
     expect(kinds(turnEvents(memory, [chat("c1", [["t9", "blocked"]])], false))).toEqual(["turn.blocked:t9"]);
+  });
+
+  it("o que desce de outra máquina já fechado não vira notificação", () => {
+    // O computador novo: a primeira leitura (logo depois do login) ainda não
+    // tem nada, e o histórico chega na volta seguinte do sync.
+    const memory = emptyMemory();
+    turnEvents(memory, [], true);
+    const history = [chat("c1", [["t1", "answered"], ["t2", "failed"], ["t3", "blocked"]], "t2", false)];
+    expect(turnEvents(memory, history, false)).toEqual([]);
+    // O pedido feito aqui, no mesmo chat, continua contando.
+    const mine = { ...history[0], turns: [...history[0].turns, { ...chat("c1", [["t4", "answered"]]).turns[0] }] };
+    expect(kinds(turnEvents(memory, [mine], false))).toEqual(["turn.answered:t4"]);
   });
 
   it("o turno que termina perguntando vira só a pergunta", () => {

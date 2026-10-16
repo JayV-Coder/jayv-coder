@@ -26,6 +26,18 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.104.2", date: "2026-10-16",
+    items: [
+      { kind: "fix", id: "syncRefresh" },
+      { kind: "fix", id: "syncedHistoryQuiet" },
+      { kind: "fix", id: "answerNoBlank" },
+      { kind: "fix", id: "orgChatClones" },
+      { kind: "fix", id: "modsKeepRemote" },
+      { kind: "fix", id: "mcpDraftNoWait" },
+      { kind: "fix", id: "editorNoFreeze" },
+    ],
+  },
+  {
     version: "0.104.1", date: "2026-10-15",
     items: [
       { kind: "fix", id: "planRefusal" },

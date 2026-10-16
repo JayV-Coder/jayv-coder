@@ -195,6 +195,8 @@ export function connectUsage() {
     later();
   });
   const offQuota = onCore("quota-changed", () => later());
+  // O gasto de outra máquina desceu pela sincronização: a tela aberta refaz a conta.
+  const offSynced = onCore("workspace-synced", () => later());
   const offView = bus.on("view:changed", ({ view }) => {
     if (quotaTimer) { clearInterval(quotaTimer); quotaTimer = null; }
     if (view === "profile") void loadAccountUsage();
@@ -209,6 +211,7 @@ export function connectUsage() {
     if (settle) clearTimeout(settle);
     void offRecorded.then((unlisten) => unlisten());
     void offQuota.then((unlisten) => unlisten());
+    void offSynced.then((unlisten) => unlisten());
   };
 }
 

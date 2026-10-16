@@ -101,6 +101,19 @@ const INLINE = new RegExp(
   "g",
 );
 
+/** O destino de um link como caminho, com `%20` e afins decodificados. Um `%`
+ * solto (`docs/100%.md`) fica como veio: o `decodeURI` lança nele, e a exceção
+ * no meio do desenho da resposta deixava a janela inteira em branco — toda vez
+ * que o chat abria. */
+function linkTarget(raw: string): string {
+  const target = raw.replace(/^file:\/\//, "");
+  try {
+    return decodeURI(target);
+  } catch {
+    return target;
+  }
+}
+
 export function parseInline(text: string): Inline[] {
   const out: Inline[] = [];
   let cursor = 0;
@@ -122,7 +135,7 @@ export function parseInline(text: string): Inline[] {
       else if (link) {
         // `[main.rs](src/main.rs:12)`: o destino que é arquivo vira selo; o
         // resto fica só com o texto, sem os colchetes e o endereço cru.
-        const target = decodeURI(link[2].replace(/^file:\/\//, ""));
+        const target = linkTarget(link[2]);
         const path = filePath(target);
         out.push(path ? { type: "file", text: target.replace(/^\.[\\/]/, ""), path } : { type: "text", text: link[1] });
       }

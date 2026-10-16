@@ -38,17 +38,24 @@ impl Connectivity {
     pub fn watch(&self)->watch::Receiver<Link> { self.0.subscribe() }
 }
 
-/// Os mods mudaram no fim de uma volta (a instalação sozinha gravou alguma
-/// coisa): a tela relê a aba Mods e as configurações.
+/// Um aviso que a volta do sync dá à tela, por um evento (ver
+/// `session::announce`).
 #[derive(Clone)]
-pub struct ModsSignal(Arc<watch::Sender<u64>>);
+pub struct Signal(Arc<watch::Sender<u64>>);
 
-impl Default for ModsSignal { fn default()->Self { Self(Arc::new(watch::channel(0).0)) } }
+impl Default for Signal { fn default()->Self { Self(Arc::new(watch::channel(0).0)) } }
 
-impl ModsSignal {
+impl Signal {
     pub fn ring(&self) { self.0.send_modify(|count|*count=count.wrapping_add(1)); }
     pub fn watch(&self)->watch::Receiver<u64> { self.0.subscribe() }
 }
+
+/// O que uma volta avisa: os mods mudaram (a instalação sozinha gravou alguma
+/// coisa) e desceu o que outra máquina ou o site escreveu. Sem o segundo, a
+/// tela só via o que desceu quando relia por outro motivo — num computador
+/// novo, a lista de projetos ficava vazia depois do login.
+#[derive(Clone,Default)]
+pub struct RoundSignals { pub mods:Signal, pub pulled:Signal }
 
 #[derive(Debug,Default,Clone,PartialEq,Eq)]
 pub struct Round { pub pushed:usize, pub failed:usize, pub pulled:usize, pub mods_changed:bool }
@@ -296,7 +303,7 @@ pub fn backoff(previous:Option<Duration>)->Duration {
 /// O laço da sincronização. Roda uma volta quando o sino toca (escrita,
 /// login, sessão renovada), a cada 60 s com conexão, e no fim do backoff sem
 /// ela. Sem usuário, ou com a sessão vencida, só o sino o acorda.
-pub async fn run<F>(store:SharedWorkspace,backend:F,connectivity:Connectivity,bell:Arc<Notify>,queue:Arc<Notify>,mods:ModsSignal)
+pub async fn run<F>(store:SharedWorkspace,backend:F,connectivity:Connectivity,bell:Arc<Notify>,queue:Arc<Notify>,signals:RoundSignals)
 where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
     let mut pause:Option<Duration>=None;
     loop {
@@ -312,7 +319,8 @@ where F:Fn()->Option<Arc<dyn Backend>>+Send+Sync+'static {
             None=>connectivity.set(Link::SignedOut),
             Some(backend)=>match round(&store,backend.as_ref()).await {
                 Ok(done)=>{
-                    if done.mods_changed { mods.ring(); }
+                    if done.mods_changed { signals.mods.ring(); }
+                    if done.pulled>0 { signals.pulled.ring(); }
                     pause=None;
                     connectivity.set(Link::Online);
                     // Com rede, o atendente pode chamar o que esperava por ela.
@@ -566,6 +574,21 @@ mod tests {
         *backend.catalog.lock().unwrap()=Some(Ok(json!({"schema":99,"mods":[]})));
         round(&store,&backend).await.expect("formato novo");
         assert_eq!(store.lock().await.mods_view().unwrap().catalog.expect("cache").len(),2,"fica o último catálogo bom");
+    }
+
+    /// Só conta o que muda o banco: a folga do cursor baixa de novo o último
+    /// minuto, e o que esta máquina subiu volta do servidor. É a linha nova (ou
+    /// mudada) que faz a tela reler; sem esta conta ela releria a cada volta.
+    #[tokio::test] async fn only_rows_that_change_the_database_count_as_pulled() {
+        let store=shared(WorkspaceStore::in_memory().unwrap());
+        let backend=FakeBackend::default();
+        a_chat(&store).await;
+        let first=round(&store,&backend).await.expect("volta");
+        assert_eq!((first.pushed,first.pulled),(2,0),"o que esta máquina subiu e voltou não é novidade");
+        assert_eq!(round(&store,&backend).await.expect("de novo").pulled,0);
+        backend.seed(table("projects").unwrap(),json!({"id":"p9","name":"Da outra máquina","created_at":"x","row_updated_at":"2026-09-30T11:00:00Z","row_deleted_at":null}));
+        assert_eq!(round(&store,&backend).await.expect("desce").pulled,1);
+        assert_eq!(round(&store,&backend).await.expect("de novo").pulled,0,"a mesma linha baixada outra vez não conta");
     }
 
     #[tokio::test] async fn offline_the_queue_stays_whole() {

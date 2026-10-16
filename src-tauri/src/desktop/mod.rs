@@ -13,7 +13,7 @@ mod tray;
 use crate::cloud::remote::{Backend, Remote};
 use crate::local::global::GlobalCache;
 use crate::orchestrator::Orchestrator;
-use crate::sync::{Connectivity, ModsSignal};
+use crate::sync::{Connectivity, RoundSignals};
 use crate::workspace::WorkspaceStore;
 use commands::session::{SessionState, SharedSession};
 use commands::{files, gate, memory, mods, prompts, repositories, session, settings, system, usage, workspace as projects};
@@ -83,6 +83,16 @@ impl Lanes {
     /// Os atendentes extras vão embora: os próximos nascem do zero, sem a
     /// memória de conversa de outro usuário.
     pub(crate) fn retire_extras(&self) { self.extras().clear(); }
+
+    /// Um orquestrador avulso, para uma pergunta curta que não pode esperar o
+    /// atendente ocupado com um pedido (o rascunho do `/mcp`): nasce sem índice
+    /// e sem conversa, divide com os outros o que os pedidos aprendem e some
+    /// depois da pergunta. Quem o usa dá a ele os agentes (`use_llm`).
+    pub(crate) fn spare(&self)->anyhow::Result<Orchestrator> {
+        let mut orchestrator=Orchestrator::unindexed(self.config_path.clone(),self.home_root.clone())?;
+        orchestrator.share(self.shared.clone());
+        Ok(orchestrator)
+    }
 }
 
 /// O retrato do orquestrador que as telas de leitura mostram, guardado fora do
@@ -206,7 +216,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
     let bell:QueueBell=Arc::new(Notify::new());
     let sync_bell=SyncBell(Arc::new(Notify::new()));
     let connectivity=Connectivity::default();
-    let mods_signal=ModsSignal::default();
+    let signals=RoundSignals::default();
     let session:SharedSession=Arc::new(Mutex::new(SessionState{cache,data_dir,identity:None,http:http.clone(),environment:crate::environment::Environment::Personal,relocated_for:None}));
     tauri::Builder::default()
         // Primeiro de todos: o segundo processo — aberto pelo link do login —
@@ -243,9 +253,10 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             let sync_bell=app.state::<SyncBell>().0.clone();
             let connectivity=app.state::<Connectivity>().inner().clone();
             let backend=move ||crate::cloud::session::current().map(|token|Arc::new(Remote::new(http.clone(),Some(token))) as Arc<dyn Backend>);
-            tauri::async_runtime::spawn(crate::sync::run(workspace.clone(),backend,connectivity.clone(),sync_bell,bell.clone(),mods_signal.clone()));
+            tauri::async_runtime::spawn(crate::sync::run(workspace.clone(),backend,connectivity.clone(),sync_bell,bell.clone(),signals.clone()));
             tauri::async_runtime::spawn(session::announce_links(handle.clone(),connectivity.clone()));
-            tauri::async_runtime::spawn(session::announce_mods(handle.clone(),mods_signal.clone()));
+            tauri::async_runtime::spawn(session::announce(handle.clone(),signals.mods.clone(),events::MODS_EVENT));
+            tauri::async_runtime::spawn(session::announce(handle.clone(),signals.pulled.clone(),events::SYNCED_EVENT));
             // A pia do uso: tudo que o núcleo gastar daqui em diante cai no
             // banco do usuário aberto no momento.
             let (sink,entries)=tokio::sync::mpsc::unbounded_channel();
@@ -311,6 +322,33 @@ mod tests {
             assert!(!body.contains("both(")&&!body.contains("state.lock()"),"{command} voltou a esperar o orquestrador");
             assert!(body.contains("forget_chats("),"{command} precisa fazer o orquestrador esquecer o chat");
         }
+    }
+
+    /// O rascunho do `/mcp` não espera o atendente: com um pedido no ar, um
+    /// orquestrador avulso pergunta. Quem voltar a esperar o cadeado traz de
+    /// volta o `/mcp` parado até o pedido terminar.
+    #[test] fn drafting_mcp_does_not_wait_for_the_orchestrator() {
+        let source=include_str!("commands/settings.rs");
+        let body=source.split("async fn draft_mcp").nth(1).expect("falta o comando").split("#[tauri::command]").next().expect("corpo");
+        assert!(!body.contains(".lock().await.orchestrator")&&!body.contains("desk.lock()"),"o rascunho voltou a esperar o orquestrador");
+        assert!(body.contains("try_lock()")&&body.contains("lanes.spare()"));
+    }
+
+    /// O orquestrador avulso nasce com o que os pedidos aprendem e responde
+    /// com os agentes que recebe, mesmo com o primeiro ocupado.
+    #[tokio::test] async fn a_spare_orchestrator_answers_while_the_first_is_busy() {
+        let dir=tempfile::tempdir().expect("pasta");
+        let orchestrator=Orchestrator::unindexed(dir.path().join("missing.yaml"),dir.path().to_path_buf()).expect("orquestrador");
+        let first:SharedDesktopState=Arc::new(Mutex::new(DesktopState{orchestrator,home_root:dir.path().to_path_buf()}));
+        let lanes=Lanes::new(first.clone(),&first.lock().await.orchestrator,dir.path().to_path_buf());
+        let _serving=first.lock().await;
+        let mut spare=lanes.spare().expect("avulso");
+        assert!(Arc::ptr_eq(&spare.shared(),&_serving.orchestrator.shared()),"o mesmo aprendizado");
+        let mut settings=crate::workspace::WorkspaceStore::in_memory().expect("banco").llm_settings().expect("agentes");
+        assert!(spare.mcp_draft_request("add the github server").is_none(),"sem agentes, ninguém monta o rascunho");
+        settings.models.push(crate::llm::AgentModel{agent:crate::llm::AgentId::Claude,model:"sonnet".into(),enabled:true,capabilities:vec!["chat".into()],cost_class:"low".into(),speed:"medium".into(),context_window:200_000});
+        spare.use_llm(&settings);
+        assert!(spare.mcp_draft_request("add the github server").is_some(),"com os agentes do banco, o avulso monta o rascunho");
     }
 
     /// Com o orquestrador ocupado, o chat fica na lista e é esquecido no
