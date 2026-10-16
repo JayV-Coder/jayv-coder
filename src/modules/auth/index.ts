@@ -6,6 +6,7 @@ import { commands, onCore } from "@/modules/core/bridge";
 import { reportError } from "@/modules/feedback";
 import { readCallback } from "./callback";
 import { firstTime } from "./links";
+import { receiveModsLink } from "@/modules/mods/siteLink";
 import { receiveBillingLink } from "@/modules/plans";
 import { CALLBACK_URL, supabase } from "./client";
 import { authFailure } from "./errors";
@@ -107,6 +108,8 @@ function receive(url: string) {
   if (!firstTime(url)) return;
   // A volta do pagamento no Stripe (`jayv://billing/...`) não é de login.
   if (receiveBillingLink(url)) return;
+  // O site acabou de instalar um mod na conta (`jayv://mods/sync`).
+  if (receiveModsLink(url)) return;
   const callback = readCallback(url);
   if (!callback) return;
   if ("failure" in callback) {

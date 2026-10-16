@@ -77,6 +77,8 @@ export const commands = {
   setEnvironment: (environment: string) => invoke<string>("set_environment", { environment }),
   clearSession: () => invoke<void>("clear_session"),
   connectionStatus: () => invoke<ConnectionStatus>("connection_status"),
+  /** Acorda o sync agora (o link `jayv://mods/sync` do site). */
+  syncNow: () => invoke<void>("sync_now"),
   getLocales: () => invoke<{ id: string; name: string; rtl: boolean; position: number }[]>("get_locales"),
   getTranslations: (locale: string) => invoke<Record<string, string | Record<string, string>>>("get_translations", { locale }),
   usageReport: (query: UsageQuery) => invoke<UsageReport>("usage_report", { query }),

@@ -232,6 +232,16 @@ pub(crate) async fn announce(app:AppHandle,signal:crate::sync::Signal,event:&'st
     }
 }
 
+/// Sincroniza agora, sem esperar a próxima volta. O site pede isso pelo link
+/// `jayv://mods/sync` logo depois de gravar, na conta de quem entrou lá, um mod
+/// para instalar: o link não diz o que instalar, só acorda o sync, que desce o
+/// estado dos mods e instala o que ele pede.
+#[tauri::command]
+pub(crate) async fn sync_now(sync:State<'_,SyncBell>)->Result<(),Text> {
+    sync.0.notify_one();
+    Ok(())
+}
+
 /// O ambiente do banco aberto.
 #[tauri::command]
 pub(crate) async fn current_environment(session:State<'_,SharedSession>)->Result<String,Text> {

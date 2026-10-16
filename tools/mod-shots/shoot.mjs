@@ -4,7 +4,7 @@
 // print vai para `mods/<id>/media/<nome>.<idioma>.webp` no repositório de mods,
 // onde a página do mod (`page.json`) o cita.
 //
-//   node tools/mod-shots/shoot.mjs [--mods ../jayv-coder-mods] [--locales en,pt-BR] [--only rea,stats] [--theme light]
+//   node tools/mod-shots/shoot.mjs [--mods ../jayv-coder-mods] [--locales en,pt-BR] [--only rea,stats] [--scenes enable] [--theme light]
 //
 // Precisa do Chromium do Playwright (`playwright-core`, já nas
 // devDependencies) e de um Chrome ou Chromium na máquina: `--chrome <caminho>`
@@ -29,6 +29,8 @@ const CACHE = resolve(option("cache", join(here, ".cache")));
 const THEME = option("theme", "light");
 const OVERLAY = option("overlay", null);
 const ONLY = option("only", "").split(",").filter(Boolean);
+/** Só estes prints de cada mod (`enable`, `chat`…): o que a tela mudou. */
+const ONLY_SCENES = option("scenes", "").split(",").filter(Boolean);
 const PORT = 5199;
 const SUPABASE = "https://exvsozyemolrjbjetqww.supabase.co";
 const KEY = "sb_publishable_7PeIEX0yh_svIEeNw3Gwew_lEbMVtMm";
@@ -198,10 +200,9 @@ const SCENES = {
 };
 
 /** O print `enable`: a aba Mods, filtrada pelo nome do mod, com a linha dele
- * em destaque (a busca também acha outros mods com a mesma palavra). O mod que
- * não vem instalado aparece em Disponíveis no catálogo, com o botão Instalar
- * (`uninstalled` no endereço); o essencial, na aba Essenciais da lista de
- * instalados. */
+ * em destaque (a busca também acha outros mods com a mesma palavra), como fica
+ * depois de instalar pela página dele no site: na aba Instalados, ligado; o
+ * essencial, na aba Essenciais. */
 async function enable(page, catalog, id, locale) {
   const title = titleOf(catalog, id, locale);
   await studio(page, "settings", "mods");
@@ -243,10 +244,8 @@ async function main() {
   try {
     for (const locale of locales) {
       for (const id of ids) {
-        const manifest = catalog.mods.find((mod) => mod.id === id);
-        const optional = !manifest?.preinstalled && !manifest?.required;
         const scenes = { enable: (page) => enable(page, catalog, id, locale), ...(SCENES[id] ?? {}) };
-        for (const [name, scene] of Object.entries(scenes)) {
+        for (const [name, scene] of Object.entries(scenes).filter(([name]) => !ONLY_SCENES.length || ONLY_SCENES.includes(name))) {
           // Uma recarga do vite no meio da cena (dependência otimizada de
           // novo, por exemplo) derruba o contexto da página: a cena roda de
           // novo, numa página nova, antes de desistir do estúdio inteiro.
@@ -257,8 +256,7 @@ async function main() {
               const errors = [];
               page.on("pageerror", (error) => errors.push(error.message));
               await page.clock.setFixedTime(new Date("2026-10-13T14:30:00Z"));
-              const outside = name === "enable" && optional ? `&uninstalled=${encodeURIComponent(id)}` : "";
-              await page.goto(`http://127.0.0.1:${PORT}/tools/mod-shots/index.html?locale=${encodeURIComponent(locale)}&theme=${THEME}${outside}`, { waitUntil: "networkidle" });
+              await page.goto(`http://127.0.0.1:${PORT}/tools/mod-shots/index.html?locale=${encodeURIComponent(locale)}&theme=${THEME}`, { waitUntil: "networkidle" });
               await page.waitForFunction(() => window.__studio, null, { timeout: 30_000 });
               await studio(page, "ready");
               await scene(page);

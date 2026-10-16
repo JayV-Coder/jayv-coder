@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { BookOpenIcon, DownloadIcon, ExternalLinkIcon, GlobeIcon, PlusIcon, SearchIcon, SettingsIcon, Trash2Icon } from "lucide-react";
+import { BookOpenIcon, ExternalLinkIcon, GlobeIcon, PlusIcon, SearchIcon, SettingsIcon, Trash2Icon, Undo2Icon } from "lucide-react";
 import { isApiAgent, isCustomMod, type AgentSettings, type ModManifest } from "@/modules/core";
 import { useEnvironment } from "@/modules/environments";
 import { reportError } from "@/modules/feedback";
 import { formatSince, useLocale, useT, type Key } from "@/modules/i18n";
 import {
-  dependents, findMod, installMod, isInstalled, isOn, isRequired, KNOWN_POINTS, missingRequirements, modAgentIds, modFeatures, modPagePath, modsSitePath, modText,
+  dependents, findMod, isInstalled, isOn, isRequired, keepMod, KNOWN_POINTS, leavingMods, missingRequirements, modAgentIds, modFeatures, modPagePath, modsSitePath, modText,
   ownedAgents, pointsOf, setInstalledTab, setModEnabled, splitInstalled, statusOf, uninstallMod, unknownPoints, usable, useMods, type InstalledTab,
 } from "@/modules/mods";
 import { inPlan, locks, useEntitlements, useFeature, type FeatureKey } from "@/modules/plans";
@@ -24,12 +24,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
  * "outro". */
 const pointLabel = (point: string): Key => ((KNOWN_POINTS as readonly string[]).includes(point) ? `mods.point.${point}` : "mods.point.other") as Key;
 
-/** Configurações › Mods: o gerenciador de mods, como o de um jogo. Todo mod
- * mora no repositório `jayv-coder-mods` e desce pelo catálogo; cada um traz
- * alguma coisa a um ou mais pontos de extensão do app (motores de LLM,
- * recursos, agentes…). Instalar, ligar, desligar e desinstalar mudam o
- * rascunho, como o resto da tela, e valem no Salvar. Os mods que a pessoa cria
- * (agentes de linha de comando ou de API) se criam e editam no site. */
+/** Configurações › Mods: o gerenciador dos mods instalados, como o de um
+ * jogo. Todo mod mora no repositório `jayv-coder-mods` e desce pelo catálogo;
+ * cada um traz alguma coisa a um ou mais pontos de extensão do app (motores de
+ * LLM, recursos, agentes…). Instalar é no site, na página de cada mod, com a
+ * conta aberta lá: o site grava o mod no ambiente e avisa o app para
+ * sincronizar (`@/modules/mods/siteLink`). Aqui se liga, desliga e desinstala;
+ * isso muda o rascunho, como o resto da tela, e vale no Salvar. Os mods que a
+ * pessoa cria (agentes de linha de comando ou de API) se criam e editam no
+ * site. */
 export function ModsPanel() {
   const t = useT();
   const locale = useLocale();
@@ -142,34 +145,24 @@ export function ModsPanel() {
     );
   };
 
-  const availableRow = (manifest: ModManifest) => {
-    const name = modText(manifest.title, locale);
-    const { outside } = planOf(manifest);
-    const newer = !usable(manifest, mods.appVersion, mods.points);
-    const leaving = manifest.id in mods.saved.mods;
-    const why = outside ? t("plans.locked") : newer ? t("mods.needsNewerApp") : undefined;
+  /** Um mod que sai quando a pessoa salvar: fica na lista, apagado, com o
+   * Desfazer, até o Salvar. */
+  const leavingRow = (id: string) => {
+    const manifest = findMod(mods.catalog, id);
+    const name = title(id);
     return (
-      <li key={manifest.id} className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border px-3 py-2.5">
-        <ModIcon icon={manifest.icon} className="size-6 text-foreground" />
+      <li key={id} className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border px-3 py-2.5">
+        <ModIcon icon={manifest?.icon} className="size-6 text-muted-foreground" />
         <div className="grid min-w-0 flex-1 gap-1">
-          <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
+          <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground">
             <span className="truncate">{name}</span>
-            {manifest.version && <Badge variant="outline" className="font-mono text-caption">{t("mods.version", { version: manifest.version })}</Badge>}
-            {pointBadges(manifest)}
-            {outside && <Badge variant="outline">{t("mods.locked")}</Badge>}
-            {newer && <Badge variant="warning">{manifest.minApp && unknownPoints(manifest, mods.points).length === 0 ? t("mods.needsApp", { version: manifest.minApp }) : t("mods.needsNewerApp")}</Badge>}
-            {leaving && <Badge variant="warning">{t("mods.pending.uninstall")}</Badge>}
+            {manifest?.version && <Badge variant="outline" className="font-mono text-caption">{t("mods.version", { version: manifest.version })}</Badge>}
+            <Badge variant="warning">{t("mods.pending.uninstall")}</Badge>
           </span>
-          <span className="text-xs leading-snug text-muted-foreground">{modText(manifest.summary, locale)}</span>
-          {(manifest.author || (manifest.requires ?? []).length > 0) && (
-            <span className="text-caption text-muted-foreground">
-              {[manifest.author ? t("mods.by", { author: manifest.author }) : null, (manifest.requires ?? []).length > 0 ? t("mods.requires", { names: names(manifest.requires ?? []) }) : null].filter(Boolean).join(" · ")}
-            </span>
-          )}
+          {manifest && <span className="text-xs leading-snug text-muted-foreground">{modText(manifest.summary, locale)}</span>}
         </div>
-        {pageButton(manifest, name)}
-        <Button type="button" variant="outline" size="sm" disabled={why !== undefined} title={why} onClick={() => installMod(manifest.id)}>
-          <DownloadIcon aria-hidden="true" />{t("mods.install")}
+        <Button type="button" variant="outline" size="sm" onClick={() => keepMod(id)}>
+          <Undo2Icon aria-hidden="true" />{t("mods.uninstall.undo")}
         </Button>
       </li>
     );
@@ -213,15 +206,16 @@ export function ModsPanel() {
   // Os essenciais têm a aba deles: a lista de Instalados fica com o que a
   // pessoa escolheu instalar.
   const tabs = splitInstalled(installedIds, mods.catalog);
-  const available = catalog.filter((manifest) => !isInstalled(mods, manifest.id) && matches(manifest));
+  // O que sai no Salvar continua na aba Instalados até lá, com o Desfazer.
+  const leaving = leavingMods(mods).filter((id) => { const manifest = findMod(mods.catalog, id); return manifest ? matches(manifest) : !needle || id.includes(needle); });
   const own = ids.filter((id) => isCustomMod(id) && !owned.has(id)).map((id) => agents.find((agent) => agent.id === id)).filter((agent): agent is AgentSettings => agent !== undefined);
   const searching = needle.length > 0 || kind !== "all";
-  // O filtro por ponto: os que esta tela conhece e algum mod do catálogo usa.
-  const kinds = KNOWN_POINTS.filter((point) => catalog.some((manifest) => pointsOf(manifest).includes(point)));
+  // O filtro por ponto: os que esta tela conhece e algum mod instalado usa.
+  const kinds = KNOWN_POINTS.filter((point) => catalog.some((manifest) => isInstalled(mods, manifest.id) && pointsOf(manifest).includes(point)));
 
   return (
     <div className="grid gap-5">
-      <SettingsSection title={t("mods.title")} description={t("mods.description")}>
+      <SettingsSection title={t("mods.title")} description={t("mods.intro")}>
         <div data-tour="settings-mods-search" className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-48 flex-1">
             <SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -254,9 +248,9 @@ export function ModsPanel() {
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="installed" className="grid gap-2">
-                {tabs.installed.length === 0
-                  ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.installedEmpty")}</p>
-                  : <ul className="grid gap-2">{tabs.installed.map((id) => installedRow(id))}</ul>}
+                {tabs.installed.length === 0 && leaving.length === 0
+                  ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.installedEmpty.site")}</p>
+                  : <ul className="grid gap-2">{tabs.installed.map((id) => installedRow(id))}{leaving.map(leavingRow)}</ul>}
               </TabsContent>
               <TabsContent value="essentials" className="grid gap-2">
                 <p className="text-xs leading-snug text-muted-foreground">{t("mods.essentials.description")}</p>
@@ -266,14 +260,6 @@ export function ModsPanel() {
               </TabsContent>
             </Tabs>
           )}
-        {mods.catalog !== null && (
-          <>
-            <h4 className="pt-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t("mods.available")}</h4>
-            {available.length === 0
-              ? <p className="text-sm text-muted-foreground">{searching ? t("mods.noMatch") : t("mods.availableEmpty")}</p>
-              : <ul className="grid gap-2">{available.map(availableRow)}</ul>}
-          </>
-        )}
       </SettingsSection>
 
       <SettingsSection

@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { commands, onCore, type InstalledMod, type InstalledMods, type ModAgent, type ModManifest, type ModSkill, type ModsSnapshot } from "@/modules/core";
 import { compareVersions } from "@/modules/changelog";
-import { reportError } from "@/modules/feedback";
+import { notify, reportError } from "@/modules/feedback";
+import { t, useI18n } from "@/modules/i18n";
 import { useEntitlements, type FeatureKey } from "@/modules/plans";
 
 /** Os recursos opcionais que um mod pode ligar (o `FEATURE_MODS` do núcleo e o
@@ -207,6 +208,29 @@ function apply(snapshot: ModsSnapshot, keepDraft: boolean) {
   // O que os mods desligam vale como o que o plano não tem: some do menu, da
   // paleta e das abas.
   useEntitlements.setState({ disabled: new Set(snapshot.disabled) });
+  settleSiteInstall();
+}
+
+/** Quanto tempo a tela espera o mod que o site instalou descer no sync. */
+const SITE_INSTALL_WAIT = 120_000;
+/** O mod que o site acabou de gravar na conta (o link `jayv://mods/sync`):
+ * quando ele chega ao estado gravado deste ambiente, a tela avisa. */
+let awaited: { id: string; until: number } | null = null;
+
+/** Espera o mod que o site instalou; se ele já está aqui, avisa na hora. */
+export function awaitSiteInstall(id: string) {
+  awaited = { id, until: Date.now() + SITE_INSTALL_WAIT };
+  settleSiteInstall();
+}
+
+function settleSiteInstall() {
+  if (!awaited) return;
+  if (Date.now() > awaited.until) { awaited = null; return; }
+  const state = useMods.getState();
+  if (!(awaited.id in state.saved.mods)) return;
+  const manifest = findMod(state.catalog, awaited.id);
+  notify(t("mods.fromSite.installed", { name: manifest ? modText(manifest.title, useI18n.getState().locale) : awaited.id }));
+  awaited = null;
 }
 
 /** Relê o que o núcleo sabe. Com mudança pendente na aba Mods, o rascunho
@@ -220,9 +244,18 @@ export async function loadMods() {
   }
 }
 
-/** Instala o mod no rascunho, ligado, com as dependências. */
-export function installMod(id: string) {
-  useMods.setState((state) => ({ draft: withInstalled(state.draft, state.catalog, id) }));
+/** Os mods que saem quando a pessoa salvar: gravados, mas fora do rascunho.
+ * Instalar é no site; aqui só se desfaz o desinstalar que ainda não foi
+ * salvo. */
+export const leavingMods = (state: Pick<ModsState, "saved" | "draft">) => Object.keys(state.saved.mods).filter((id) => !(id in state.draft.mods));
+
+/** Desfaz o desinstalar que ainda não foi salvo: o mod volta como estava
+ * gravado. */
+export function keepMod(id: string) {
+  useMods.setState((state) => {
+    const saved = state.saved.mods[id];
+    return saved && !(id in state.draft.mods) ? { draft: { ...state.draft, mods: { ...state.draft.mods, [id]: saved } } } : state;
+  });
 }
 
 /** Tira o mod do rascunho. O núcleo, ao salvar, roda o desinstalar dele e

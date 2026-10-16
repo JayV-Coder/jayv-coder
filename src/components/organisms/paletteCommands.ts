@@ -14,7 +14,7 @@ import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
 import { allows, inPlan, locks, settingsTabFeature, type FeatureKey } from "@/modules/plans";
-import { installMod, isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setInstalledTab, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
+import { isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setInstalledTab, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
 import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
@@ -194,10 +194,9 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     if (features.length > 0 && pointsOf(manifest).length === 1 && features.every((feature) => locks(ctx.rights, feature))) continue;
     const reachable = (manifest.plan === null || inPlan(ctx.rights, manifest.plan as FeatureKey)) && usable(manifest, modsState.appVersion, modsState.points);
     const open = (change: () => void) => () => { openSettingsTab("mods"); change(); };
-    if (!isInstalled(modsState, id)) {
-      if (reachable) all.push({ id: `mod-install-${id}`, group: settings, label: t("palette.modInstall", { name }), run: open(() => installMod(id)) });
-      continue;
-    }
+    // Instalar é na página do mod no site (a entrada acima); aqui, só o que
+    // já está instalado.
+    if (!isInstalled(modsState, id)) continue;
     const on = isOn(modsState, id);
     if (on || reachable) all.push({ id: `mod-toggle-${id}`, group: settings, label: t(on ? "palette.modOff" : "palette.modOn", { name }), run: open(() => setModEnabled(id, !on)) });
     all.push({ id: `mod-uninstall-${id}`, group: settings, label: t("palette.modUninstall", { name }), run: open(() => uninstallMod(id)) });
