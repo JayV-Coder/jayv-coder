@@ -2,7 +2,7 @@
 //! de sessão do orquestrador acompanha o que some dele.
 
 use crate::i18n::{failure, Text};
-use crate::desktop::{forget_chats, SharedDesktopState, SharedForget, SharedWorkspace};
+use crate::desktop::{forget_chats, Cancels, SharedDesktopState, SharedForget, SharedWorkspace};
 use crate::workspace::{ChatRecord, ProjectRecord, WorkspaceData};
 use tauri::State;
 
@@ -27,11 +27,26 @@ pub(crate) async fn create_chat(workspace:State<'_,SharedWorkspace>,project_id:S
 /// Limpar, apagar o chat e apagar o projeto gravam no banco na hora: com um
 /// agente trabalhando, o clique não espera o pedido dele terminar. A memória do
 /// orquestrador esquece os chats agora ou no começo do próximo atendimento.
+///
+/// O pedido no ar desses chats para junto: a conversa dele acabou. Antes o
+/// agente seguia trabalhando sem ninguém ver e, no chat limpo, a resposta
+/// dele aparecia sozinha na conversa nova.
 #[tauri::command]
-pub(crate) async fn clear_chat(state:State<'_,SharedDesktopState>,forget:State<'_,SharedForget>,workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<(),Text>{crate::desktop::require_session()?;
-    workspace.lock().await.clear_chat(&chat_id).map_err(failure)?;
+pub(crate) async fn clear_chat(state:State<'_,SharedDesktopState>,forget:State<'_,SharedForget>,workspace:State<'_,SharedWorkspace>,cancels:State<'_,Cancels>,chat_id:String)->Result<(),Text>{crate::desktop::require_session()?;
+    let flying={
+        let mut store=workspace.lock().await;
+        let flying=store.flying_in(std::slice::from_ref(&chat_id)).map_err(failure)?;
+        store.clear_chat(&chat_id).map_err(failure)?;
+        flying
+    };
+    stop_all(&cancels,flying);
     forget_chats(&state,&forget,vec![chat_id]);
     Ok(())
+}
+
+/// Para os pedidos no ar de chats que acabaram (limpos ou apagados).
+fn stop_all(cancels:&Cancels,turns:Vec<String>) {
+    for turn in turns { cancels.stop(&turn,crate::progress::StopReason::Asked); }
 }
 
 /// Fixa o modo do chat: `auto`, `plan` ou `build`. Vale a partir do próximo
@@ -40,15 +55,26 @@ pub(crate) async fn clear_chat(state:State<'_,SharedDesktopState>,forget:State<'
 pub(crate) async fn set_work_mode(workspace:State<'_,SharedWorkspace>,chat_id:String,mode:String)->Result<(),Text>{crate::desktop::require_session()?;workspace.lock().await.set_work_mode(&chat_id,&mode).map_err(failure)}
 
 #[tauri::command]
-pub(crate) async fn delete_chat(state:State<'_,SharedDesktopState>,forget:State<'_,SharedForget>,workspace:State<'_,SharedWorkspace>,chat_id:String)->Result<(),Text>{crate::desktop::require_session()?;
-    workspace.lock().await.delete_chat(&chat_id).map_err(failure)?;
+pub(crate) async fn delete_chat(state:State<'_,SharedDesktopState>,forget:State<'_,SharedForget>,workspace:State<'_,SharedWorkspace>,cancels:State<'_,Cancels>,chat_id:String)->Result<(),Text>{crate::desktop::require_session()?;
+    let flying={
+        let mut store=workspace.lock().await;
+        let flying=store.flying_in(std::slice::from_ref(&chat_id)).map_err(failure)?;
+        store.delete_chat(&chat_id).map_err(failure)?;
+        flying
+    };
+    stop_all(&cancels,flying);
     forget_chats(&state,&forget,vec![chat_id]);
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn delete_project(state:State<'_,SharedDesktopState>,forget:State<'_,SharedForget>,workspace:State<'_,SharedWorkspace>,project_id:String)->Result<(),Text>{crate::desktop::require_session()?;
-    let chat_ids=workspace.lock().await.delete_project(&project_id).map_err(failure)?;
+pub(crate) async fn delete_project(state:State<'_,SharedDesktopState>,forget:State<'_,SharedForget>,workspace:State<'_,SharedWorkspace>,cancels:State<'_,Cancels>,project_id:String)->Result<(),Text>{crate::desktop::require_session()?;
+    let (chat_ids,flying)={
+        let mut store=workspace.lock().await;
+        let flying=store.flying_in(&store.chat_ids_for_project(&project_id).map_err(failure)?).map_err(failure)?;
+        (store.delete_project(&project_id).map_err(failure)?,flying)
+    };
+    stop_all(&cancels,flying);
     forget_chats(&state,&forget,chat_ids);
     Ok(())
 }

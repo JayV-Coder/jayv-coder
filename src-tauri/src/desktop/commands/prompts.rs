@@ -98,6 +98,10 @@ pub(crate) async fn answer_question(app:AppHandle,workspace:State<'_,SharedWorks
 /// nenhum: o agente já disse o que fez sem o comando.
 async fn answer_permission(app:&AppHandle,workspace:&SharedWorkspace,bell:&QueueBell,question:&turns::QuestionView,answer:&AnswerInput)->Result<Option<Turn>,Text> {
     let mut store=workspace.lock().await;
+    // O cadeado foi solto entre a conferência e aqui: outro clique pode ter
+    // respondido a pergunta nesse meio-tempo, e um segundo "Executar"
+    // mandaria o pedido de novo.
+    if store.question_of(&question.turn_id).map_err(failure)?.is_none_or(|now|now.status!=turns::QUESTION_PENDING) { return Err(Text::new("question.closed")); }
     let commands=question.prompt.lines().map(str::trim).filter(|line|!line.is_empty()).map(String::from).collect::<Vec<_>>();
     let chat_id=store.chat_of_turn(&question.turn_id).map_err(failure)?.ok_or_else(||Text::new("question.originGone"))?;
     let choice=answer.picked.first().map(String::as_str).unwrap_or_default();

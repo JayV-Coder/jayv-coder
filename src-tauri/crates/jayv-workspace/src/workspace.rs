@@ -388,7 +388,12 @@ impl WorkspaceStore {
         // no chat. Só o reenvio do mesmo turno é que não pode escrever de novo
         // o que já está escrito — e isso se decide pelo turno, nunca pelo
         // texto: foi comparar conteúdo que já fez pedido sumir da conversa.
-        if !written(&transaction,&turn.id)? {insert_message(&transaction,chat_id,Some(&turn.id),"user",user,now)?;}
+        if !written(&transaction,&turn.id)? {
+            // O reenvio de um turno cujo pedido saiu do chat (limpo) não tem o
+            // que mandar: sem esta trava ele entrava na fila com o pedido vazio.
+            anyhow::ensure!(!user.trim().is_empty(),Text::new("prompt.empty"));
+            insert_message(&transaction,chat_id,Some(&turn.id),"user",user,now)?;
+        }
         transaction.execute("UPDATE chats SET updated_at=?1 WHERE id=?2",params![now.to_rfc3339(),chat_id])?;
         transaction.commit()?;
         Ok(turn)
@@ -456,10 +461,15 @@ impl WorkspaceStore {
 
     /// Fecha a troca com o que voltou do modelo — ou com o erro que veio no
     /// lugar dele. Enquanto isto não acontece, o pedido fica pendente.
+    ///
+    /// O turno cujo pedido saiu do chat (limpo enquanto o agente trabalhava)
+    /// não escreve nada: a resposta entraria sozinha na conversa nova, sem o
+    /// pedido que ela responde.
     pub fn append_answer(&mut self, chat_id: &str, turn_id: &str, assistant: &str) -> Result<()> {
         anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
         let now=Utc::now();
         let transaction=self.connection.transaction()?;
+        if !written(&transaction,turn_id)? { return Ok(()); }
         insert_message(&transaction,chat_id,Some(turn_id),"assistant",assistant,now)?;
         transaction.execute("UPDATE chats SET updated_at=?1 WHERE id=?2",params![now.to_rfc3339(),chat_id])?;
         transaction.commit()?;
@@ -480,6 +490,7 @@ impl WorkspaceStore {
     /// esse texto crescendo; o fim do pedido não pode apagá-lo.
     pub fn keep_said_before(&mut self, chat_id: &str, turn_id: &str, said: &str) -> Result<()> {
         let transaction=self.connection.transaction()?;
+        if !written(&transaction,turn_id)? { return Ok(()); }
         let first:Option<String>=transaction.query_row("SELECT created_at FROM messages WHERE turn_id=?1 AND role='assistant' ORDER BY created_at,id LIMIT 1",[turn_id],|row|row.get(0)).optional()?;
         let at=first.as_deref().and_then(|at|turns::parse_time(at).ok()).map_or_else(Utc::now,|at|at-chrono::Duration::milliseconds(1));
         insert_message(&transaction,chat_id,Some(turn_id),"assistant",said,at)?;
@@ -570,6 +581,14 @@ impl WorkspaceStore {
         Ok(())
     }
 
+    /// Troca o modo só se o chat ainda está em `expected`. É a troca do Jev
+    /// no fim de um pedido: se a pessoa escolheu outro modo enquanto o pedido
+    /// corria, a escolha dela vale e o Jev não a sobrescreve. Devolve se trocou.
+    pub fn set_work_mode_if(&mut self, chat_id: &str, expected: &str, mode: &str) -> Result<bool> {
+        let mode=work_mode(mode).with_context(||format!("unknown work mode `{mode}`"))?;
+        Ok(self.connection.execute("UPDATE chats SET work_mode=?1 WHERE id=?2 AND work_mode=?3",params![mode,chat_id,expected])?>0)
+    }
+
     pub fn clear_chat(&mut self, chat_id: &str) -> Result<()> {
         anyhow::ensure!(self.contains_chat(chat_id)?,Text::new("chat.notFound"));
         let transaction=self.connection.transaction()?;
@@ -577,6 +596,11 @@ impl WorkspaceStore {
         // Os pedidos que ainda esperavam saem junto com o texto deles: sem o
         // pedido escrito, a fila não teria o que mandar ao agente.
         transaction.execute("UPDATE turns SET status=?1 WHERE chat_id=?2 AND status=?3",params![TurnStatus::Failed.as_str(),chat_id,TurnStatus::Queued.as_str()])?;
+        // A pergunta em aberto era sobre a conversa que saiu: ela não trava a
+        // caixa do chat limpo. E o pedido que esperava o limite do agente não
+        // volta sozinho — voltaria sem texto nenhum.
+        transaction.execute("UPDATE questions SET status=?1,settled_at=?2 WHERE status=?3 AND turn_id IN (SELECT id FROM turns WHERE chat_id=?4)",params![turns::QUESTION_DISMISSED,Utc::now().to_rfc3339(),turns::QUESTION_PENDING,chat_id])?;
+        transaction.execute("DELETE FROM limit_waits WHERE turn_id IN (SELECT id FROM turns WHERE chat_id=?1)",[chat_id])?;
         transaction.execute("UPDATE chats SET title='',named=0,updated_at=?1 WHERE id=?2",params![Utc::now().to_rfc3339(),chat_id])?;
         // Chat limpo é conversa nova: a sessão do agente fica para trás.
         transaction.execute("DELETE FROM agent_sessions WHERE chat_id=?1",[chat_id])?;
@@ -746,6 +770,10 @@ impl WorkspaceStore {
     pub fn previous_answer(&self, turn_id:&str) -> Result<Option<(crate::gatekeeper::EntryVerdict,chrono::DateTime<Utc>)>> {turns::previous_answer(&self.connection,turn_id)}
 
     pub fn answers_gate(&self, turn_id:&str) -> Result<bool> {turns::answers_gate(&self.connection,turn_id)}
+    pub fn has_later_turn(&self, turn_id:&str) -> Result<bool> {turns::has_later_turn(&self.connection,turn_id)}
+    pub fn request_gone(&self, turn_id:&str) -> Result<bool> {turns::request_gone(&self.connection,turn_id)}
+    /// Os turnos no ar dos chats dados (os deste computador).
+    pub fn flying_in(&self, chat_ids:&[String]) -> Result<Vec<String>> {turns::flying_in(&self.connection,chat_ids)}
 
     /// A economia que o bloqueio do pedido anterior do chat registrou, quando
     /// este pedido chegou em até `RESEND_MINUTES` depois dele: foi reenvio, e
@@ -1043,7 +1071,8 @@ fn fail_interrupted_turns(connection:&Connection)->Result<()> {
     let notice=crate::i18n::notice(&[Text::new("turn.interrupted")]);
     for (turn,chat) in turns::fail_interrupted_turns(&transaction)? {
         transaction.execute("DELETE FROM messages WHERE turn_id=?1 AND role='assistant'",[&turn])?;
-        insert_message(&transaction,&chat,Some(&turn),"assistant",&notice,Utc::now())?;
+        // O chat limpo enquanto o pedido estava no ar não ganha o aviso solto.
+        if written(&transaction,&turn)? { insert_message(&transaction,&chat,Some(&turn),"assistant",&notice,Utc::now())?; }
     }
     transaction.commit()?;
     Ok(())
@@ -1172,6 +1201,91 @@ mod tests {
         assert_eq!(contents,vec!["refatora o roteador".to_string(),"Comecei pelo roteador.".into(),"The developer stopped this request before it finished.".into()]);
     }
 
+    /// O chat limpo enquanto o agente trabalhava é conversa nova: o que o
+    /// atendimento ainda devolver (resposta, o dito antes da parada, aviso de
+    /// falha) não entra sozinho nela. Antes a resposta aparecia sem o pedido.
+    #[test]
+    fn an_answer_does_not_land_in_a_chat_cleared_while_it_ran() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let turn=store.enqueue_prompt(&chat.id,"refatora o roteador",None).expect("fila");
+        store.set_turn_status(&turn.id,TurnStatus::Flying).expect("no ar");
+        assert_eq!(store.flying_in(std::slice::from_ref(&chat.id)).expect("no ar"),vec![turn.id.clone()],"limpar sabe quem parar");
+        assert!(!store.request_gone(&turn.id).expect("pedido"));
+
+        store.clear_chat(&chat.id).expect("limpa");
+        store.keep_said_before(&chat.id,&turn.id,"Comecei pelo roteador.").expect("dito");
+        store.append_answer(&chat.id,&turn.id,"Pronto, refatorei.").expect("resposta");
+
+        assert!(store.request_gone(&turn.id).expect("pedido"),"o pedido saiu do chat");
+        assert!(store.conversation(&chat.id).expect("conversa").is_empty(),"a conversa nova continua vazia");
+        let other=store.enqueue_prompt(&chat.id,"novo assunto",None).expect("fila");
+        store.append_answer(&chat.id,&other.id,"feito").expect("resposta");
+        assert_eq!(store.conversation(&chat.id).expect("conversa").len(),2,"o pedido novo responde normalmente");
+    }
+
+    /// A troca de modo do Jev no fim do pedido não passa por cima do modo que
+    /// a pessoa escolheu enquanto o pedido corria.
+    #[test]
+    fn the_jev_does_not_overwrite_a_mode_chosen_during_the_request() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        assert!(store.set_work_mode_if(&chat.id,MODE_AUTO,MODE_BUILD).expect("troca"),"ninguém mexeu: o Jev troca");
+        assert_eq!(store.work_mode(&chat.id).expect("modo"),MODE_BUILD);
+        store.set_work_mode(&chat.id,MODE_PLAN).expect("a pessoa escolhe planejamento");
+        assert!(!store.set_work_mode_if(&chat.id,MODE_AUTO,MODE_BUILD).expect("troca"));
+        assert_eq!(store.work_mode(&chat.id).expect("modo"),MODE_PLAN,"a escolha da pessoa fica");
+    }
+
+    /// Limpar o chat fecha a pergunta em aberto (ela era da conversa que
+    /// saiu e travava a caixa do chat limpo) e tira o pedido falho da espera
+    /// pelo limite (ele voltaria sem texto). Reenviar um pedido que saiu do
+    /// chat é recusado em vez de entrar vazio na fila.
+    #[test]
+    fn clearing_the_chat_closes_its_question_and_its_limit_wait() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let asked=store.enqueue_prompt(&chat.id,"migre o banco",None).expect("fila");
+        store.append_answer(&chat.id,&asked.id,"Qual banco?").expect("resposta");
+        store.set_turn_status(&asked.id,TurnStatus::Answered).expect("respondido");
+        store.ask_question(&asked.id,"noul","Qual banco?",&[],"jev").expect("pergunta");
+        let waiting=store.enqueue_prompt(&chat.id,"rode os testes",None).expect("fila");
+        store.set_turn_status(&waiting.id,TurnStatus::Failed).expect("falho");
+        store.schedule_limit_wait(&waiting.id,"claude",Utc::now(),false).expect("espera");
+        assert!(store.pending_question(&chat.id).expect("pergunta").is_some());
+
+        store.clear_chat(&chat.id).expect("limpa");
+
+        assert!(store.pending_question(&chat.id).expect("pergunta").is_none(),"a caixa do chat limpo fica livre");
+        assert!(store.due_limit_waits(Utc::now()+chrono::Duration::hours(1)).expect("esperas").is_empty(),"nada volta sozinho");
+        let refused=store.enqueue_prompt(&chat.id,"",Some(&waiting.id)).expect_err("sem pedido");
+        assert_eq!(refused.downcast_ref::<Text>().map(|text|text.key.as_str()),Some("prompt.empty"));
+    }
+
+    /// Um pedido mais novo no chat diz que a conversa seguiu: a pergunta que
+    /// a resposta anterior levantaria chega tarde, e o plano dela não vai
+    /// sozinho ao build.
+    #[test]
+    fn a_later_request_means_the_conversation_moved_on() {
+        let root=tempfile::tempdir().expect("root");
+        let mut store=store(&root);
+        let project=store.create_project("Produto",None).expect("project");
+        let chat=store.create_chat(&project.id,None).expect("chat");
+        let other=store.create_chat(&project.id,None).expect("outro chat");
+        let first=store.enqueue_prompt(&chat.id,"planeje a migração",None).expect("fila");
+        store.enqueue_prompt(&other.id,"outro chat não conta",None).expect("fila");
+        assert!(!store.has_later_turn(&first.id).expect("leitura"),"sozinho no chat");
+        let second=store.enqueue_prompt(&chat.id,"na verdade, use filas",None).expect("fila");
+        assert!(store.has_later_turn(&first.id).expect("leitura"),"a pessoa mandou outra coisa depois");
+        assert!(!store.has_later_turn(&second.id).expect("leitura"));
+    }
+
     #[test]
     fn a_request_caught_by_the_shutdown_reopens_failed_with_the_reason() {
         let root=tempfile::tempdir().expect("root");
@@ -1256,6 +1370,35 @@ mod tests {
         let (_,prompt)=store.claim_next_turn_within(2).expect("consulta").expect("a2");
         assert_eq!(prompt,"a2","na ordem da fila");
         assert!(store.claim_next_turn_within(4).expect("consulta").is_none(),"o s1 espera o a2");
+    }
+
+    /// O chat geral da organização trabalha na pasta dela, e o projeto de um
+    /// repositório dela fica numa subpasta: os dois não correm juntos, ou
+    /// seriam dois agentes escrevendo no mesmo repositório. Pastas vizinhas
+    /// correm lado a lado.
+    #[test]
+    fn a_folder_inside_another_projects_folder_waits_for_it() {
+        let root=tempfile::tempdir().expect("root");
+        let org=tempfile::tempdir().expect("pasta da organização");
+        let api=org.path().join("api");
+        let web=tempfile::tempdir().expect("outra pasta");
+        std::fs::create_dir(&api).expect("repositório");
+        let mut store=store(&root);
+        let general=store.create_project("Acme",Some(org.path().display().to_string())).expect("projeto da organização");
+        let repository=store.create_project("api",Some(api.display().to_string())).expect("projeto do repositório");
+        let apart=store.create_project("web",Some(web.path().display().to_string())).expect("projeto vizinho");
+        let (general,repository,apart)=(store.create_chat(&general.id,None).expect("chat"),store.create_chat(&repository.id,None).expect("chat"),store.create_chat(&apart.id,None).expect("chat"));
+        store.enqueue_prompt(&general.id,"geral",None).expect("fila");
+        store.enqueue_prompt(&repository.id,"repositório",None).expect("fila");
+        store.enqueue_prompt(&apart.id,"vizinho",None).expect("fila");
+        let (first,prompt)=store.claim_next_turn_within(3).expect("consulta").expect("geral");
+        assert_eq!(prompt,"geral");
+        let (_,prompt)=store.claim_next_turn_within(3).expect("consulta").expect("vizinho");
+        assert_eq!(prompt,"vizinho","a pasta vizinha não espera");
+        assert!(store.claim_next_turn_within(3).expect("consulta").is_none(),"o repositório espera o chat geral que trabalha na pasta dele");
+        store.set_turn_status(&first.id,TurnStatus::Answered).expect("respondido");
+        assert_eq!(store.claim_next_turn_within(3).expect("consulta").expect("repositório").1,"repositório");
+        assert!(crate::turns::folders_overlap("C:\\acme\\","C:/acme/api")&&!crate::turns::folders_overlap("/acme","/acme-web")&&!crate::turns::folders_overlap("","/acme"));
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub fn command()->tokio::process::Command {
 
 /// Um `git` sem tokio, sem janela de console no Windows.
 pub fn std_command()->std::process::Command {
+    #[cfg_attr(not(windows),allow(unused_mut))]
     let mut process=std::process::Command::new(program());
     #[cfg(windows)] { use std::os::windows::process::CommandExt; process.creation_flags(0x0800_0000); }
     process

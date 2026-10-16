@@ -285,8 +285,13 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         usage::mark(usage::JevMark{kind:crate::workspace::BLOCKED_SAVING.into(),amount:-saved,precision:usage::Precision::Estimated});
     }
     // "Não funcionou": o pedido anterior deste chat não resolveu, ainda que
-    // a resposta tenha vindo inteira. O roteador aprende com isso.
-    if crate::router::is_complaint(prompt) { state.orchestrator.mark_last_failed(chat_id); state.orchestrator.pending_retry=true; }
+    // a resposta tenha vindo inteira. O roteador aprende com isso. A nova
+    // tentativa só vai ao orquestrador logo antes de ele atender (mais
+    // abaixo): marcada aqui, ela ficava no atendente quando a portaria barrava
+    // ou perguntava, e o próximo pedido dele — de qualquer chat — recebia a
+    // nota de "a tentativa anterior não resolveu".
+    state.orchestrator.pending_retry=false;
+    if crate::router::is_complaint(prompt) { state.orchestrator.mark_last_failed(chat_id); }
 
     // Um turno-resposta é julgado — e enviado — em par com a pergunta que o
     // originou. Um `SIM` sozinho seria barrado por faltas que o pedido de origem
@@ -433,9 +438,11 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         }
     }
 
+    state.orchestrator.pending_retry=retries(prompt,&origin);
     // O modo do chat é lido agora, na vez do pedido: trocar de modo com
     // pedidos na fila vale para eles também.
-    state.orchestrator.pending_work_mode=workspace.lock().await.work_mode(chat_id).ok();
+    let chat_mode=workspace.lock().await.work_mode(chat_id).ok();
+    state.orchestrator.pending_work_mode=chat_mode.clone();
     // Permissão dada na conversa — a deste pedido, a do seletor do chat ou o
     // sempre permitido do projeto — é permissão para executar: no automático o
     // pedido vai ao desenvolvimento, onde ela chega ao agente (o planejamento
@@ -466,9 +473,12 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let planned_for_build=std::mem::take(&mut state.orchestrator.planned_for_build)&&result.result.is_some()&&result.validation;
     if planned_for_build { let _=workspace.lock().await.record_beat(&turn.id,"plan_for_build",&serde_json::json!({})); }
     // O Jev tirou o chat do planejamento: o chat fica em build até o
-    // desenvolvedor desfazer ou escolher outro modo.
+    // desenvolvedor desfazer ou escolher outro modo. Se ele escolheu outro
+    // modo enquanto o pedido corria, a escolha dele vale (antes o fim do
+    // pedido a sobrescrevia com o build).
     if state.orchestrator.mode_switch.take().is_some() {
-        if let Err(error)=workspace.lock().await.set_work_mode(chat_id,crate::orchestrator::MODE_BUILD) {eprintln!("modo: não consegui gravar a troca do Jev ({error:#})");}
+        let from=chat_mode.as_deref().unwrap_or(crate::orchestrator::MODE_AUTO);
+        if let Err(error)=workspace.lock().await.set_work_mode_if(chat_id,from,crate::orchestrator::MODE_BUILD) {eprintln!("modo: não consegui gravar a troca do Jev ({error:#})");}
     }
     let assistant=result.result.as_ref().map(|response|response.response.clone()).or_else(||result.error.clone()).unwrap_or_else(||i18n::notice(&[Text::new("turn.noAnswer")]));
     // Os comandos negados viram a pergunta do box; as linhas que os pediam
@@ -519,7 +529,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
             else if !enable_question(&app,&workspace,&turn,&assistant).await && continue_to_build { approve_plan(&app,&workspace,&bell,&turn).await; }
         });
     }
-    if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),chat_id.to_string(),prompt.to_string(),jev_reading(&result));}
+    if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),turn.clone(),prompt.to_string(),jev_reading(&result));}
 }
 
 /// Quanto o JayV espera além da hora que o agente deu: o relógio do agente e o
@@ -582,6 +592,14 @@ pub(crate) async fn serve_limit_waits(app:AppHandle,workspace:SharedWorkspace,be
     }
 }
 
+/// Se o pedido que vai ao agente é uma nova tentativa ("não funcionou"): a
+/// reclamação digitada agora, ou a do pedido de origem quando este responde a
+/// uma pergunta dele — a confirmação da portaria, que manda o próprio pedido
+/// de origem, ou a resposta ao que o agente perguntou sobre ele.
+fn retries(prompt:&str,origin:&[String])->bool {
+    crate::router::is_complaint(prompt)||origin.iter().any(|said|crate::router::is_complaint(&i18n::for_model(said)))
+}
+
 /// No automático, quem deu permissão na conversa quer que o agente execute:
 /// o pedido vai ao desenvolvimento, único modo em que a permissão chega ao
 /// agente. Planejamento e desenvolvimento fixados ficam como o chat os fixou.
@@ -601,8 +619,16 @@ fn approval_line()->String { i18n::notice(&[Text::new("plan.autoApproved")]) }
 
 /// O plano ficou sem pergunta aberta: o Jev o aprova pelo desenvolvedor e o
 /// pedido entra na fila como qualquer outro, passando pela portaria.
+///
+/// Só enquanto o plano é a última palavra do chat: se a pessoa mandou outra
+/// coisa depois dele (ou limpou o chat), é ela quem decide o que vem, e o Jev
+/// não leva o plano ao desenvolvimento por cima.
 async fn approve_plan(app:&AppHandle,workspace:&SharedWorkspace,bell:&QueueBell,turn:&Turn) {
-    let queued=workspace.lock().await.enqueue_prompt(&turn.chat_id,&approval_line(),None);
+    let queued={
+        let mut workspace=workspace.lock().await;
+        if moved_on(&workspace,turn) { return; }
+        workspace.enqueue_prompt(&turn.chat_id,&approval_line(),None)
+    };
     match queued {
         Ok(_)=>{ let _=app.emit(PROMPT_EVENT,PromptEvent{chat_id:turn.chat_id.clone()}); bell.notify_one(); }
         Err(error)=>eprintln!("modo: não consegui levar o plano ao desenvolvimento ({error:#})"),
@@ -610,16 +636,29 @@ async fn approve_plan(app:&AppHandle,workspace:&SharedWorkspace,bell:&QueueBell,
 }
 
 /// Devolve se a resposta ficou com uma pergunta aberta para o desenvolvedor.
+///
+/// A leitura do Jev leva segundos e roda depois de o próximo da fila sair:
+/// se a conversa seguiu nesse meio-tempo (outro pedido entrou no chat, ou ele
+/// foi limpo), a pergunta desta resposta não trava a caixa por cima dela — o
+/// texto da resposta continua no chat, e quem quiser responde escrevendo.
 async fn enable_question(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,answer:&str)->bool {
     let Some(question)=asking::classify(answer).await else {return false};
     let recorded={
         let mut workspace=workspace.lock().await;
+        if moved_on(&workspace,turn) { return false; }
         workspace.ask_question(&turn.id,question.kind.as_str(),&question.prompt,&question.options,&question.source)
     };
     match recorded {
         Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});true}
         Err(error)=>{eprintln!("pergunta: não consegui habilitar a interação do turno `{}` ({error})",turn.id);true}
     }
+}
+
+/// Se a conversa do chat já passou deste turno: há pedido mais novo nele, ou o
+/// pedido deste turno saiu do chat (limpo). Na dúvida (o banco não
+/// respondeu), passou — melhor não perguntar nem construir sozinho.
+fn moved_on(workspace:&crate::workspace::WorkspaceStore,turn:&Turn)->bool {
+    workspace.has_later_turn(&turn.id).unwrap_or(true)||workspace.request_gone(&turn.id).unwrap_or(true)
 }
 
 /// Separa os comandos que o agente pediu entre os que a pessoa pode aprovar e
@@ -639,9 +678,16 @@ async fn split_blocked_permissions(workspace:&SharedWorkspace,chat_id:&str,comma
 /// O agente esbarrou numa permissão: a pergunta não passa pelo Jev — a linha
 /// de permissão já diz o que é —, e o box oferece executar, negar ou sempre
 /// permitir o que foi negado.
+///
+/// A permissão continua valendo mesmo com outro pedido na fila (o comando
+/// negado ainda não rodou); só o chat limpo não pergunta mais nada.
 async fn ask_permission(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,commands:&[String]) {
     let question=asking::permission_question(commands);
-    let recorded=workspace.lock().await.ask_question(&turn.id,question.kind.as_str(),&question.prompt,&question.options,&question.source);
+    let recorded={
+        let mut workspace=workspace.lock().await;
+        if workspace.request_gone(&turn.id).unwrap_or(true) { return; }
+        workspace.ask_question(&turn.id,question.kind.as_str(),&question.prompt,&question.options,&question.source)
+    };
     match recorded {
         Ok(())=>{let _=app.emit(TURN_EVENT,TurnEvent{chat_id:turn.chat_id.clone(),turn_id:turn.id.clone()});}
         Err(error)=>eprintln!("permissão: não consegui perguntar no turno `{}` ({error})",turn.id),
@@ -653,13 +699,18 @@ async fn ask_permission(app:&AppHandle,workspace:&SharedWorkspace,turn:&Turn,com
 /// próximo da fila tem direito ao orquestrador antes de qualquer enfeite. O
 /// batismo só pega o cadeado para montar o pedido; a ida ao modelo roda solta,
 /// e a interface é avisada no fim.
-fn name_in_background(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,chat_id:String,prompt:String,reading:String) {
+fn name_in_background(app:AppHandle,desk:SharedDesktopState,workspace:SharedWorkspace,turn:Turn,prompt:String,reading:String) {
     // O batismo roda noutro task: o escopo do turno vai junto, à mão.
     let scope=usage::current_scope();
     tauri::async_runtime::spawn(usage::within(scope,async move {
         let request=desk.lock().await.orchestrator.title_request(&prompt,&reading);
         let Some(title)=(match request { Some(request)=>request.run().await, None=>None }) else {return};
-        if workspace.lock().await.rename_chat(&chat_id,&title).is_ok() {let _=app.emit(RENAME_EVENT,RenameEvent{chat_id,title});}
+        let mut store=workspace.lock().await;
+        // O chat limpo enquanto o nome era escolhido é conversa nova: o nome
+        // do pedido que saiu dele não volta.
+        if store.request_gone(&turn.id).unwrap_or(true) { return; }
+        let chat_id=turn.chat_id;
+        if store.rename_chat(&chat_id,&title).is_ok() {let _=app.emit(RENAME_EVENT,RenameEvent{chat_id,title});}
     }));
 }
 
@@ -840,6 +891,15 @@ mod tests {
         assert!(!grants_pick_build(true,Some(MODE_PLAN)),"o planejamento fixado não escreve");
         assert!(!grants_pick_build(true,Some(MODE_BUILD)),"já é build");
         assert!(!grants_pick_build(false,Some(MODE_AUTO)),"sem permissão, o Jev escolhe");
+    }
+
+    /// A reclamação vale para o pedido que a fez — e para a confirmação dela
+    /// na portaria, que manda o mesmo pedido —, não para o seguinte.
+    #[test] fn a_complaint_counts_for_its_own_request_only() {
+        assert!(retries("não funcionou, ainda dá erro no login",&[]));
+        assert!(retries("Picked: send as is",&["still fails when the list is empty".into()]),"a confirmação manda a reclamação de origem");
+        assert!(!retries("Picked: send as is",&["add a dark theme".into()]));
+        assert!(!retries("adicione o tema escuro",&[]));
     }
 
     /// O projeto volta ao atendente que já leu a pasta dele, se estiver livre.
