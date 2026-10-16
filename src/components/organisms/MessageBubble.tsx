@@ -3,7 +3,7 @@ import { CheckIcon, CopyIcon, ListChecksIcon, RotateCcwIcon, Undo2Icon, XIcon } 
 import type { TurnView } from "@/modules/core";
 import { answerLines, limitTime, messageLight, routeHint, routeLabel, shownText, type MessageLight } from "@/modules/conversation";
 import { agentLabel } from "@/modules/settings";
-import { ChevronIcon } from "@/components/atoms";
+import { ChevronIcon, RenderGuard } from "@/components/atoms";
 import { formatClock, useT } from "@/modules/i18n";
 import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -227,7 +227,11 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
                     last && tinted && "text-[var(--aspect)]",
                   )}
                 >
-                  <Markdown content={part} onOpenFile={onOpenFile} />
+                  {/* O texto do modelo é o que mais surpreende: se o desenho
+                      dele falhar, fica o texto puro, e o resto do chat segue. */}
+                  <RenderGuard resetKey={part} fallback={() => <p className="whitespace-pre-wrap">{part}</p>}>
+                    <Markdown content={part} onOpenFile={onOpenFile} />
+                  </RenderGuard>
                 </div>
               );
             })}

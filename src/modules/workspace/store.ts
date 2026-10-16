@@ -195,6 +195,9 @@ export async function deleteProject(projectId: string) {
   }
 }
 
+/** Quanto a releitura espera depois de uma volta do sync que trouxe novidade. */
+export const SYNC_SETTLE_MS = 300;
+
 /** O núcleo grava o pedido no banco antes de chamar qualquer modelo e avisa
  * aqui. A partir deste aviso a mensagem existe em disco, e o estado da tela tem
  * de saber disso na hora: sem isto, sair do chat redesenharia a conversa a
@@ -205,7 +208,16 @@ export async function deleteProject(projectId: string) {
  * lateral, o cabeçalho e as referências da portaria passam a mostrar o nome
  * novo sem reler a conversa. */
 export function connectWorkspace() {
+  // O que outra máquina ou o site escreveu desceu pela sincronização — num
+  // computador novo, o histórico inteiro logo depois do login. Sem reler, a
+  // lista ficava como estava antes da volta (vazia, no computador novo) até
+  // outra coisa reler. A folga junta voltas seguidas numa leitura só.
+  let synced: ReturnType<typeof setTimeout> | null = null;
   const offs = [
+    onCore("workspace-synced", () => {
+      if (synced) clearTimeout(synced);
+      synced = setTimeout(() => { synced = null; void refreshWorkspace(); }, SYNC_SETTLE_MS);
+    }),
     onCore("chat-prompt", ({ chatId }) => void refreshChat(chatId)),
     onCore("turn-settled", ({ chatId }) => void refreshChat(chatId)),
     onCore("chat-renamed", ({ chatId, title }) => {
@@ -217,6 +229,7 @@ export function connectWorkspace() {
   ];
   const offSent = bus.on("prompt:sent", ({ chatId }) => void refreshChat(chatId));
   return () => {
+    if (synced) clearTimeout(synced);
     offSent();
     offs.forEach((off) => void off.then((unlisten) => unlisten()));
   };

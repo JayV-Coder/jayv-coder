@@ -53,6 +53,9 @@ export interface TurnView {
   /** O pedido parou no limite de uso do agente e o JayV o reenvia sozinho na
    * hora indicada. */
   limitWait: LimitWait | null;
+  /** Feito neste computador; falso no que desceu pela sincronização (outra
+   * máquina, o histórico de um computador novo). */
+  local?: boolean;
 }
 
 export interface LimitWait {

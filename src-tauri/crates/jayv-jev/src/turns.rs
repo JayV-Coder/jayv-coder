@@ -334,6 +334,9 @@ pub struct TurnView {
     /// O pedido parou porque o agente esgotou o limite de uso e o JayV o
     /// retoma sozinho na hora indicada. Vazio fora dessa espera.
     pub limit_wait:Option<LimitWait>,
+    /// Feito neste computador. Falso no que desceu pela sincronização (outra
+    /// máquina, o histórico de um computador novo): a tela não o anuncia.
+    pub local:bool,
 }
 
 /// A espera de um pedido pelo limite de uso do agente.
@@ -418,12 +421,13 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
            (SELECT e.verdict FROM entry_checks e WHERE e.turn_id=t.id),
            (SELECT CASE WHEN COUNT(*)=0 THEN NULL WHEN SUM(x.verdict='held')>0 THEN 'held' ELSE 'cleared' END FROM exit_checks x WHERE x.turn_id=t.id),
            t.partial,
-           (SELECT v.detail FROM turn_events v WHERE v.turn_id=t.id AND v.kind='route' ORDER BY v.seq DESC LIMIT 1)
+           (SELECT v.detail FROM turn_events v WHERE v.turn_id=t.id AND v.kind='route' ORDER BY v.seq DESC LIMIT 1),
+           t.local
          FROM turns t JOIN chats c ON c.id=t.chat_id WHERE t.chat_id=?1 ORDER BY t.ordinal")?;
     let rows=statement.query_map([chat_id],|row|Ok((
         row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,u32>(2)?,row.get::<_,String>(3)?,
         row.get::<_,Option<String>>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,Option<String>>(6)?,
-        row.get::<_,Option<String>>(7)?,
+        row.get::<_,Option<String>>(7)?,row.get::<_,bool>(8)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut waits:std::collections::HashMap<String,LimitWait>=std::collections::HashMap::new();
     {
@@ -431,7 +435,7 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
         let found=statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,bool>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (turn,provider,at,estimated) in found { if let Ok(resumes_at)=parse_time(&at) { waits.insert(turn,LimitWait{provider,resumes_at,estimated}); } }
     }
-    rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial,route)|{
+    rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial,route,local)|{
         let status=TurnStatus::read(&status);
         let limit_wait=waits.remove(&id).filter(|_|status==TurnStatus::Failed);
         let activity=if status.is_open(){activity(connection,&id)?}else{vec![]};
@@ -443,7 +447,7 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
             partial:partial.filter(|text|!text.is_empty()),activity,
             // Um detalhe ilegível só tira a linha do balão, não o chat.
             route:route.and_then(|detail|serde_json::from_str::<TurnRoute>(&detail).ok()).filter(|route|!route.provider.is_empty()),
-            limit_wait,
+            limit_wait,local,
         })
     }).collect()
 }

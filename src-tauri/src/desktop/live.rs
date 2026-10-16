@@ -119,9 +119,28 @@ pub(crate) async fn editors()->Vec<String> {
 }
 
 /// Abre no editor um arquivo que mudou no último pedido do chat, na linha
-/// pedida. Só arquivos da lista: nada de fora da pasta do chat.
+/// pedida. Só arquivos da lista: nada de fora da pasta do chat. Fora da thread
+/// principal: a sessão do chat fica presa enquanto a olhada roda o `git
+/// status`, e o editor que segue o agente abre a cada arquivo que muda — como
+/// comando síncrono, a janela travava esperando o git.
 #[tauri::command]
-pub(crate) fn open_in_editor(live:State<'_,SharedLive>,chat_id:String,path:String,line:u32,editor:String)->Result<(),Text> {
-    let file=session_of(&live,&chat_id).and_then(|session|hold(&session).absolute(&path)).ok_or_else(||Text::new("live.notChanged").with("path",&path))?;
-    live_files::open_in_editor(&editor,&file,line).map_err(|error|Text::new("live.editor.failed").with("editor",&editor).with("reason",error.to_string()))
+pub(crate) async fn open_in_editor(live:State<'_,SharedLive>,chat_id:String,path:String,line:u32,editor:String)->Result<(),Text> {
+    let live=live.inner().clone();
+    tauri::async_runtime::spawn_blocking(move ||{
+        let file=session_of(&live,&chat_id).and_then(|session|hold(&session).absolute(&path)).ok_or_else(||Text::new("live.notChanged").with("path",&path))?;
+        live_files::open_in_editor(&editor,&file,line).map_err(|error|Text::new("live.editor.failed").with("editor",&editor).with("reason",error.to_string()))
+    }).await.map_err(Text::unexpected)?
+}
+
+#[cfg(test)]
+mod tests {
+    /// Os comandos do painel ao vivo que tocam a sessão de um chat não rodam
+    /// na thread principal: a olhada segura a sessão durante o `git status`.
+    #[test] fn commands_that_touch_a_session_do_not_run_on_the_main_thread() {
+        let source=include_str!("live.rs");
+        for command in ["fn live_file(","fn open_in_editor("] {
+            let line=source.lines().find(|line|line.contains(command)&&line.contains("pub(crate)")).expect(command);
+            assert!(line.contains("async fn"),"{command} voltou a rodar na thread principal");
+        }
+    }
 }

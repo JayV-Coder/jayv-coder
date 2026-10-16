@@ -81,18 +81,27 @@ export interface ChatReach<R> { inside: { repository: R; path: string }[]; elsew
 
 const comparable = (path: string) => pathKey(path).replace(/\\/g, "/");
 
+/** `clones` são os que a busca achou dentro da pasta (`scanFolder`): o chat
+ * enxerga cada um, seja projeto neste computador ou não. Contando só os
+ * projetos, o clone feito pelo terminal (ou por outro programa) aparecia como
+ * "não está neste computador", mesmo dentro da pasta. Um repositório clonado
+ * duas vezes vale pelo clone mais raso. */
 export function chatReach<R extends { repoKey: string }>(
   repositories: R[],
   projects: Pick<Project, "rootPath" | "repoKeys">[],
   folder: string,
+  clones: LocalClone[] = [],
 ): ChatReach<R> {
   const base = comparable(folder);
+  const within = (path: string) => { const key = comparable(path); return key === base || key.startsWith(base + "/"); };
+  const found = clones.filter((clone) => within(clone.path)).sort((a, b) => depth(a.path) - depth(b.path) || a.path.localeCompare(b.path));
   const reach: ChatReach<R> = { inside: [], elsewhere: [], missing: [] };
   for (const repository of repositories) {
+    const clone = found.find((item) => item.keys.includes(repository.repoKey));
+    if (clone) { reach.inside.push({ repository, path: clone.path }); continue; }
     const copy = localCopy(repository.repoKey, projects);
     if (!copy) { reach.missing.push(repository); continue; }
-    const path = comparable(copy.rootPath);
-    (path.startsWith(base + "/") ? reach.inside : reach.elsewhere).push({ repository, path: copy.rootPath });
+    (within(copy.rootPath) ? reach.inside : reach.elsewhere).push({ repository, path: copy.rootPath });
   }
   return reach;
 }

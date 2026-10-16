@@ -4,7 +4,7 @@
 
 use crate::core_settings::{self, CoreSettings};
 use crate::i18n::{failure, Text};
-use crate::desktop::{when_free, SharedDesktopState, SharedFacts, SharedWorkspace};
+use crate::desktop::{when_free, Lanes, SharedDesktopState, SharedFacts, SharedWorkspace};
 use crate::orchestrator::Orchestrator;
 use crate::llm::{self, AgentId, KnownModel, LlmSettings, Probe};
 use serde::Serialize;
@@ -266,11 +266,28 @@ pub(crate) async fn check_mcp_servers(servers:Vec<jayv_agents::mcp::McpServer>)-
 #[serde(rename_all="camelCase")]
 pub struct McpDraft { pub servers:Vec<jayv_agents::mcp::McpServer>, pub from_model:bool }
 
+/// O atendente segura o orquestrador do começo ao fim de um pedido: o rascunho
+/// não espera por ele. Livre, é ele quem pergunta; ocupado, um orquestrador
+/// avulso pergunta, com os agentes do banco e o plano por cima — antes o `/mcp`
+/// ficava parado até o pedido no ar terminar, minutos às vezes.
 #[tauri::command]
-pub(crate) async fn draft_mcp(desk:State<'_,SharedDesktopState>,text:String)->Result<McpDraft,Text>{crate::desktop::require_session()?;
+pub(crate) async fn draft_mcp(lanes:State<'_,Lanes>,workspace:State<'_,SharedWorkspace>,text:String)->Result<McpDraft,Text>{crate::desktop::require_session()?;
     let parsed=jayv_agents::mcp::parse(&text);
     if !parsed.is_empty() { return Ok(McpDraft{servers:parsed,from_model:false}); }
-    let request=desk.lock().await.orchestrator.mcp_draft_request(&text).ok_or_else(||Text::new("mcp.draft.noAgent"))?;
+    let first=lanes.first();
+    let free=first.try_lock().ok().map(|desk|desk.orchestrator.mcp_draft_request(&text));
+    let request=match free {
+        Some(request)=>request,
+        None=>{
+            let settings={
+                let workspace=workspace.lock().await;
+                workspace.entitlements().unwrap_or_default().apply_llm(&workspace.llm_settings().map_err(failure)?)
+            };
+            let mut spare=lanes.spare().map_err(failure)?;
+            spare.use_llm(&settings);
+            spare.mcp_draft_request(&text)
+        }
+    }.ok_or_else(||Text::new("mcp.draft.noAgent"))?;
     let answer=request.run().await.ok_or_else(||Text::new("mcp.draft.failed"))?;
     let servers=jayv_agents::mcp::from_model(&answer);
     if servers.is_empty() { return Err(Text::new("mcp.draft.unknown")); }

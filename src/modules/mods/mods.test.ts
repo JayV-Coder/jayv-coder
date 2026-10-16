@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }), Toaster: () => null }));
 
 const {
-  defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, modPagePath, modSkills, missingRequirements, ownedAgents, restoreModDefaults, setModEnabled, statusOf,
+  defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, modPagePath, modSkills, missingRequirements, ownedAgents, rebaseDraft, restoreModDefaults, setModEnabled, statusOf,
   uninstallMod, unknownPoints, usable, useMods, withInstalled,
 } = await import("./index");
 
@@ -28,6 +28,19 @@ const state = (mods: Record<string, boolean>, removed: string[] = []): State => 
 const on = (value: State) => Object.fromEntries(Object.entries(value.mods).map(([id, item]) => [id, item.enabled]));
 
 describe("the generic mod manager", () => {
+  it("keeps what the tab changed on top of what arrived meanwhile", () => {
+    // Na aba: desligou stats, desinstalou claude e instalou local-ai. Enquanto
+    // isso, o site instalou mcp e desligou nada.
+    const before = state({ stats: true, claude: true });
+    const draft = state({ stats: false, "local-ai": true });
+    const arrived = state({ stats: true, claude: true, mcp: true });
+    expect(on(rebaseDraft(before, draft, arrived))).toEqual({ stats: false, "local-ai": true, mcp: true });
+    // O que a aba não mexeu segue o que chegou, inclusive desligado.
+    expect(on(rebaseDraft(before, before, state({ stats: false, claude: true })))).toEqual({ stats: false, claude: true });
+    // O de fábrica que a pessoa reinstala na aba sai dos removidos.
+    expect(rebaseDraft(state({}, ["claude"]), state({ claude: true }), state({}, ["claude", "mcp"])).removed).toEqual(["mcp"]);
+  });
+
   it("never turns off or uninstalls an essential mod", () => {
     const essential = mod("skills", { features: ["skills"] }, { preinstalled: true, required: true });
     const catalog = [...CATALOG, essential];

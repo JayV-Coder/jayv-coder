@@ -31,6 +31,9 @@ pub const MODELS_EVENT:&str="models-updated";
 /// A instalação sozinha dos mods gravou alguma coisa no fim de uma volta do
 /// sync (no login, ou o que outra máquina ou o site decidiu).
 pub const MODS_EVENT:&str="mods-changed";
+/// Uma volta do sync baixou linhas que mudaram o banco (o que outra máquina ou
+/// o site escreveu, o histórico de um computador novo): a tela relê.
+pub const SYNCED_EVENT:&str="workspace-synced";
 /// As configurações gravadas na tela de Configurações já valem: `now` diz se o
 /// orquestrador as recebeu na hora ou se um pedido no ar as deixou para o próximo.
 pub const SETTINGS_EVENT:&str="settings-applied";
@@ -104,3 +107,17 @@ pub struct TrayAction{pub action:String}
 #[derive(Clone,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct UpdateFound{pub version:String}
+
+#[cfg(test)]
+mod tests {
+    /// Cada aviso do núcleo precisa de nome e formato do lado da tela
+    /// (`CoreEvents`): um aviso novo que só existisse aqui não chegaria a
+    /// ninguém — foi assim que as linhas que o sync baixava não apareciam.
+    #[test] fn every_event_is_known_by_the_screen() {
+        let screen=include_str!("../../../src/modules/core/bridge.ts");
+        let declared=include_str!("events.rs");
+        let names:Vec<&str>=declared.lines().filter(|line|line.starts_with("pub const ")&&line.contains("_EVENT:&str=")).filter_map(|line|line.split('"').nth(1)).collect();
+        assert!(names.len()>=15,"{names:?}");
+        for name in names { assert!(screen.contains(&format!("\"{name}\":")),"a tela não conhece o aviso {name}"); }
+    }
+}

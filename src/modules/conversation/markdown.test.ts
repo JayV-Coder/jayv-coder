@@ -48,6 +48,10 @@ describe("caminhos e código que os modelos escrevem", () => {
 
   it("link com destino de arquivo vira selo, sem os colchetes", () => {
     expect(parseInline("[main](src/main.rs:12)")).toEqual([{ type: "file", text: "src/main.rs:12", path: "src/main.rs" }]);
+    expect(parseInline("[notas](docs/minhas%20notas.md)")).toEqual([{ type: "file", text: "docs/minhas notas.md", path: "docs/minhas notas.md" }]);
+    // Um `%` solto no destino não derruba a resposta (o `decodeURI` lança nele).
+    expect(parseInline("[meta](docs/100%.md)")).toEqual([{ type: "file", text: "docs/100%.md", path: "docs/100%.md" }]);
+    expect(() => parseMarkdown("veja [x](a%zz) e [y](%)")).not.toThrow();
     expect(parseInline("[ajuda](#secao)")).toEqual([{ type: "text", text: "ajuda" }]);
   });
 

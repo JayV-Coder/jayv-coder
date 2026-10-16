@@ -516,6 +516,13 @@ export function connectSettings() {
   const models = onCore("models-updated", reread);
   // A instalação sozinha dos mods criou ou apagou agentes.
   const installed = onCore("mods-changed", reread);
+  // Outra máquina (ou o site) mudou os agentes, o nível ou as configurações
+  // do Jev: a aba sem alteração pendente mostra o que desceu.
+  const synced = onCore("workspace-synced", () => {
+    reread();
+    const state = useSettings.getState();
+    if (state.core && !isCoreDirty(state)) void commands.getCoreSettings().then(applyCore).catch(reportError);
+  });
   // Salvar vale para o app inteiro: o idioma é dito de novo ao núcleo, e quem
   // olha o que foi salvo (a página Sistema) o relê. Com um pedido no ar, a
   // troca fica para o próximo — e a pessoa é avisada disso.
@@ -523,5 +530,9 @@ export function connectSettings() {
     syncLanguage();
     if (!now) notify(t("settings.saved.later"), true);
   });
-  return () => { stop?.(); off(); void models.then((unlisten) => unlisten()); void installed.then((unlisten) => unlisten()); void applied.then((unlisten) => unlisten()); };
+  return () => {
+    stop?.();
+    off();
+    for (const listening of [models, installed, synced, applied]) void listening.then((unlisten) => unlisten());
+  };
 }

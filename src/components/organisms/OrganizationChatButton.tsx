@@ -1,12 +1,13 @@
-import { useState, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { FolderTreeIcon, PlusIcon } from "lucide-react";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { formatSince } from "@/modules/i18n";
 import {
-  chatReach, openOrganizationChat, organizationChatsOf, organizationFolder, organizationRepositories, pickFolder, rememberOrganizationFolder,
+  chatReach, openOrganizationChat, organizationChatsOf, organizationFolder, organizationRepositories, pickFolder, rememberOrganizationFolder, scanFolder,
   type Repository,
 } from "@/modules/organizations";
+import type { LocalClone } from "@/modules/core";
 import { useFeature } from "@/modules/plans";
 import { chatTitle, createChat, openChat, useWorkspace } from "@/modules/workspace";
 import { Eyebrow, PathText } from "@/components/atoms";
@@ -41,7 +42,19 @@ export function OrganizationChatButton({ organization, repositories, size, varia
   const projects = data.projects;
   const generalChats = organizationChatsOf(data, organization.id);
   const loaded = repositories ?? fetched;
-  const reach = folder && loaded ? chatReach(loaded, projects, folder) : null;
+  // Os clones dentro da pasta, como o chat vai enxergá-los: a lista só aparece
+  // depois da busca, para não mostrar como ausente o que está lá.
+  const [clones, setClones] = useState<{ folder: string; found: LocalClone[] } | null>(null);
+  useEffect(() => {
+    if (!folder) return;
+    let current = true;
+    scanFolder(folder)
+      .then((scan) => scan.clones, () => [] as LocalClone[])
+      .then((found) => { if (current) setClones({ folder, found }); });
+    return () => { current = false; };
+  }, [folder]);
+  const scanned = clones && clones.folder === folder ? clones.found : null;
+  const reach = folder && loaded && scanned ? chatReach(loaded, projects, folder, scanned) : null;
 
   const open = async () => {
     if (generalChats.length > 0 && fresh) { await another(); return; }

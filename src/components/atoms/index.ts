@@ -14,3 +14,4 @@ export { UserAvatar } from "./UserAvatar";
 export { ProviderIcon, PROVIDER_NAMES } from "./ProviderIcon";
 export { Kbd } from "./Kbd";
 export { BackMark } from "./BackMark";
+export { RenderGuard } from "./RenderGuard";
