@@ -171,6 +171,14 @@ impl Entitlements {
         settings
     }
 
+    /// Os mods escondem todo agente que quem usa tem: nenhum motor ou agente
+    /// está instalado e ligado na aba Mods. Só os essenciais vêm instalados,
+    /// então é assim que um ambiente novo começa. O mod que a pessoa criou no
+    /// site não é governado pelo catálogo e nunca entra aqui.
+    pub fn hides_every_agent(&self,settings:&LlmSettings)->bool {
+        !settings.agents.is_empty()&&settings.agents.iter().all(|agent|self.disabled.contains(agent.id.key()))
+    }
+
     /// Os servidores MCP só chegam aos agentes com o recurso no plano.
     pub fn mcp_servers<T>(&self,servers:Vec<T>)->Vec<T> { if self.allows(MCP) { servers } else { vec![] } }
 
@@ -289,6 +297,20 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         let agent=|id|crate::llm::AgentSettings{id,enabled:true,command:String::new(),timeout:300,options:serde_json::json!({})};
         let settings=LlmSettings{agents:vec![agent(AgentId::Claude),agent(AgentId::Codex)],models:vec![]};
         assert_eq!(entitlements.apply_llm(&settings).agents.iter().map(|agent|agent.enabled).collect::<Vec<_>>(),[true,false],"o Codex saiu do catálogo");
+    }
+
+    /// Os mods esconderem todo agente é o ambiente sem motor nem agente
+    /// instalado; o mod criado no site não é do catálogo e nunca some.
+    #[test] fn hiding_every_agent_means_no_agent_mod_is_installed() {
+        let agent=|id|crate::llm::AgentSettings{id,enabled:true,command:String::new(),timeout:300,options:serde_json::json!({})};
+        let settings=LlmSettings{agents:vec![agent(AgentId::Claude),agent(AgentId::Codex)],models:vec![]};
+        let hidden=|ids:&[&str]|Entitlements::default().with_disabled(ids.iter().map(|id|id.to_string()).collect());
+        assert!(hidden(&["claude","codex","stats"]).hides_every_agent(&settings));
+        assert!(!hidden(&["codex"]).hides_every_agent(&settings),"o Claude continua instalado");
+        assert!(!hidden(&[]).hides_every_agent(&LlmSettings{agents:vec![],models:vec![]}));
+        let created=AgentId::parse("mod-local").expect("mod criado");
+        let mine=LlmSettings{agents:vec![agent(AgentId::Claude),agent(created)],models:vec![]};
+        assert!(!hidden(&["claude"]).hides_every_agent(&mine),"o mod criado no site não depende do catálogo");
     }
 
     /// Sem catálogo e sem escolha nenhuma, os mods não mudam nada.

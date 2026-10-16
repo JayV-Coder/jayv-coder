@@ -7,7 +7,7 @@ vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), succe
 
 const {
   defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, modPagePath, modSkills, missingRequirements, ownedAgents, rebaseDraft, restoreModDefaults, setModEnabled, statusOf,
-  uninstallMod, unknownPoints, usable, useMods, withInstalled,
+  splitInstalled, uninstallMod, unknownPoints, usable, useMods, withInstalled,
 } = await import("./index");
 
 type Manifest = import("@/modules/core").ModManifest;
@@ -28,6 +28,14 @@ const state = (mods: Record<string, boolean>, removed: string[] = []): State => 
 const on = (value: State) => Object.fromEntries(Object.entries(value.mods).map(([id, item]) => [id, item.enabled]));
 
 describe("the generic mod manager", () => {
+  it("puts the essential mods in their own tab", () => {
+    const essential = mod("skills", { features: ["skills"] }, { preinstalled: true, required: true });
+    const catalog = [...CATALOG, essential];
+    // `gone` saiu do catálogo: só se desinstala, e fica em Instalados.
+    expect(splitInstalled(["claude", "skills", "local-ai", "gone"], catalog)).toEqual({ installed: ["claude", "local-ai", "gone"], essentials: ["skills"] });
+    expect(splitInstalled([], catalog)).toEqual({ installed: [], essentials: [] });
+  });
+
   it("keeps what the tab changed on top of what arrived meanwhile", () => {
     // Na aba: desligou stats, desinstalou claude e instalou local-ai. Enquanto
     // isso, o site instalou mcp e desligou nada.

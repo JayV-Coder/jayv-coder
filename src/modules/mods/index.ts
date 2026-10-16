@@ -41,11 +41,32 @@ interface ModsState {
   /** O rascunho. */
   draft: InstalledMods;
   saving: boolean;
+  /** A aba da lista de instalados: os que a pessoa instalou ou os essenciais. */
+  installedTab: InstalledTab;
 }
 
+/** As abas da lista de instalados: os mods que a pessoa instalou (motores,
+ * agentes, skills) e os essenciais, que o app mantém instalados e ligados. */
+export const INSTALLED_TABS = ["installed", "essentials"] as const;
+export type InstalledTab = (typeof INSTALLED_TABS)[number];
+
 export const useMods = create<ModsState>(() => ({
-  loaded: false, catalog: null, fetchedAt: null, appVersion: "0.0.0", points: [...KNOWN_POINTS], active: [], saved: EMPTY, draft: EMPTY, saving: false,
+  loaded: false, catalog: null, fetchedAt: null, appVersion: "0.0.0", points: [...KNOWN_POINTS], active: [], saved: EMPTY, draft: EMPTY, saving: false, installedTab: "installed",
 }));
+
+/** Troca a aba da lista de instalados (o clique na aba e o Ctrl+K). */
+export function setInstalledTab(tab: InstalledTab) {
+  useMods.setState({ installedTab: tab });
+}
+
+/** Os instalados de cada aba, na ordem em que chegam: o essencial vai para a
+ * dele; o resto, inclusive o que saiu do catálogo, fica em Instalados. */
+export function splitInstalled(ids: string[], catalog: ModManifest[] | null): Record<InstalledTab, string[]> {
+  return {
+    installed: ids.filter((id) => !isRequired(catalog, id)),
+    essentials: ids.filter((id) => isRequired(catalog, id)),
+  };
+}
 
 /** O que importa comparar: quem está instalado e se está ligado. */
 const shape = (state: InstalledMods) => JSON.stringify(Object.keys(state.mods).sort().map((id) => [id, state.mods[id].enabled]));
@@ -273,7 +294,7 @@ export function connectMods() {
 
 /** Ao sair da conta, nada fica: a próxima conta lê o dela. */
 export function clearMods() {
-  useMods.setState({ loaded: false, catalog: null, fetchedAt: null, active: [], saved: EMPTY, draft: EMPTY, saving: false });
+  useMods.setState({ loaded: false, catalog: null, fetchedAt: null, active: [], saved: EMPTY, draft: EMPTY, saving: false, installedTab: "installed" });
 }
 
 /** A página pública do mod no site, no idioma da tela: o que ele faz, como

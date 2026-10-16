@@ -798,6 +798,7 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     // A privacidade vem antes dos agentes: o Claude leva os arquivos
     // protegidos na própria linha de comando.
     state.orchestrator.use_core(&plan.enforce_core(&core));
+    state.orchestrator.no_agent_mods=plan.hides_every_agent(&llm);
     let llm=plan.apply_llm(&llm);
     llm.sync_mcp_files();
     state.orchestrator.use_llm(&llm);

@@ -65,9 +65,10 @@ pub struct Manifest {
 pub const ICON_MAX:usize=16_000;
 
 /// Os motores que vêm instalados de fábrica, para o catálogo antigo, que não
-/// diz: os mesmos que o genérico marca `preinstalled` (regra do dono: dos
-/// mods que não são essenciais, só Claude Code, Codex e Ollama).
-const LEGACY_PREINSTALLED:[&str;2]=["claude","codex"];
+/// diz: os mesmos que o genérico marca `preinstalled`. Regra do dono: só os
+/// essenciais se instalam sozinhos, e motor nenhum é essencial — quem usa
+/// instala o seu (Claude Code, Codex, Ollama…) pelo catálogo.
+const LEGACY_PREINSTALLED:[&str;0]=[];
 
 /// O id de um mod: o nome da pasta no repositório.
 pub fn valid_id(id:&str)->bool {
@@ -104,9 +105,9 @@ impl Manifest {
 
     /// O mod do formato antigo como um mod genérico: o motor de LLM, o recurso
     /// ou o agente do mod pronto. Os recursos ligados de fábrica se instalam
-    /// sozinhos, como no app antigo; dos motores, só os que o catálogo
-    /// genérico também traz de fábrica (`LEGACY_PREINSTALLED`): o formato
-    /// antigo não sabe dizer quais são.
+    /// sozinhos, como no app antigo; dos motores, só os de
+    /// `LEGACY_PREINSTALLED` (hoje nenhum): o formato antigo não sabe dizer
+    /// quais são.
     fn from_legacy(value:&Value)->Option<Self> {
         let legacy:Legacy=serde_json::from_value(value.clone()).ok()?;
         let (point,contribution,preinstalled)=match legacy.kind.as_str() {
@@ -208,7 +209,8 @@ pub fn cached(connection:&Connection)->Result<Option<(Vec<Manifest>,String)>> {
         ]})).expect("v1");
         assert_eq!(old.iter().map(|manifest|manifest.id.as_str()).collect::<Vec<_>>(),["claude","copilot","stats","ollama"],"o tipo desconhecido e o id curto saem");
         assert_eq!(old[0].contributes["llmEngines"],json!(["claude"]));
-        assert!(old[0].preinstalled&&!old[1].preinstalled&&!old[2].preinstalled&&!old[3].preinstalled,"dos motores, só os de fábrica do catálogo genérico");
+        assert!(old.iter().filter(|manifest|!manifest.contributes.contains_key("features")).all(|manifest|!manifest.preinstalled),"motor e agente nenhum se instalam sozinhos: só os essenciais");
+        assert!(!old[2].preinstalled,"o recurso desligado no catálogo antigo também não");
         assert_eq!(old[3].contributes["agents"][0]["baseUrl"],"http://localhost:11434/v1");
     }
 

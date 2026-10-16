@@ -123,6 +123,12 @@ pub struct Orchestrator {
     /// `use_core` com as configurações já restritas) a marca aqui, para a
     /// orientação dizer quem barrou o pedido.
     pub policy_scope: Option<String>,
+    /// Nenhum agente sobrou porque os mods esconderam todos: o motor ou o
+    /// agente de quem usa não foi instalado, ou o mod dele está desligado. Só
+    /// os essenciais vêm instalados, então num ambiente novo é a primeira
+    /// coisa que falta; a orientação manda à aba Mods, não às abas dos
+    /// agentes (que nem aparecem).
+    pub no_agent_mods: bool,
     /// Os comandos que a política da organização bloqueia neste projeto
     /// (`git push`): o agente é avisado de que não pode rodá-los.
     pub blocked_commands: Vec<String>,
@@ -195,7 +201,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, limit_hits:vec![], skills:vec![], llm_base:None, skill_mcp:false })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, no_agent_mods:false, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, limit_hits:vec![], skills:vec![], llm_base:None, skill_mcp:false })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -960,6 +966,8 @@ impl Orchestrator {
         let blocked_by_policy=!self.config.models.is_empty() && (self.providers.is_empty()||selection.provider=="jev");
         let problem=if let Some(org)=self.policy_scope.as_deref().filter(|_|blocked_by_policy) {
             Text::new("guidance.policyBlocked").with("org",org)
+        } else if self.no_agent_mods && self.providers.is_empty() {
+            Text::new("guidance.noAgentMod")
         } else if self.config.models.is_empty() && self.providers.is_empty() {
             Text::new("guidance.nothingConfigured")
         } else if self.config.models.is_empty() {
@@ -979,7 +987,12 @@ impl Orchestrator {
         } else {
             return None;
         };
-        let fix=match problem.key.as_str() { "guidance.agentNoModel"=>Text::new("guidance.agentNoModelFix"), "guidance.policyBlocked"=>Text::new("guidance.policyFix").with("org",self.policy_scope.as_deref().unwrap_or_default()), _=>Text::new("guidance.fix") };
+        let fix=match problem.key.as_str() {
+            "guidance.agentNoModel"=>Text::new("guidance.agentNoModelFix"),
+            "guidance.policyBlocked"=>Text::new("guidance.policyFix").with("org",self.policy_scope.as_deref().unwrap_or_default()),
+            "guidance.noAgentMod"=>Text::new("guidance.noAgentModFix"),
+            _=>Text::new("guidance.fix"),
+        };
         Some(i18n::notice(&[Text::new("guidance.failed").with("problem",problem),fix]))
     }
 
@@ -2811,5 +2824,27 @@ mod tests {
         let lines=crate::i18n::read_notice(&response).expect("aviso");
         assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.agentNoModelFix"]);
         assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.agentNoModel").with("agents","claude"))));
+    }
+    /// Só os essenciais vêm instalados: num ambiente novo, nenhum motor nem
+    /// agente está na aba Mods. A orientação manda instalar o mod, e não
+    /// ligar um agente cuja aba nem aparece.
+    #[tokio::test]
+    async fn without_any_agent_mod_the_guidance_points_to_the_mods_tab() {
+        let root=tempfile::tempdir().expect("temporary repository");
+        let mut orchestrator=Orchestrator::new(root.path().join("missing-config.yaml"),root.path().to_path_buf()).expect("orchestrator");
+        let settings=crate::llm::LlmSettings{
+            agents:vec![crate::llm::AgentSettings{id:crate::llm::AgentId::Claude,enabled:false,command:"claude".into(),timeout:300,options:serde_json::Value::Null}],
+            models:vec![crate::llm::AgentModel{agent:crate::llm::AgentId::Claude,model:"sonnet".into(),enabled:true,capabilities:vec!["chat".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000}],
+        };
+        orchestrator.use_llm(&settings);
+        orchestrator.no_agent_mods=true;
+
+        let result=orchestrator.process("Explique este projeto",Some("test"),&Pulse::silent()).await;
+
+        let response=result.result.expect("orientação").response;
+        let lines=crate::i18n::read_notice(&response).expect("aviso");
+        assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.noAgentModFix"]);
+        assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.noAgentMod"))));
+        assert!(crate::i18n::for_model(&response).contains("Settings › Mods"));
     }
 }
