@@ -170,14 +170,23 @@ naquele pedido). Um tipo novo de funcionalidade que os mods podem trazer é:
 Os mods com `preinstalled` se instalam sozinhos, ligados, no fim da volta do
 sync (a primeira é a do login); o que a pessoa desinstala não volta. Regra do
 dono: só os essenciais vêm instalados — motor de LLM, agente e skill nenhum se
-instala sozinho, e quem usa instala o seu pelo catálogo (o catálogo antigo, que
-não diz, segue a mesma regra: `LEGACY_PREINSTALLED` vazio). Sem mod de agente
-instalado e ligado, o pedido explica que falta instalar um na aba Mods
-(`guidance.noAgentMod`, pelo `Entitlements::hides_every_agent`).
+instala sozinho (o catálogo antigo, que não diz, segue a mesma regra:
+`LEGACY_PREINSTALLED` vazio). Sem mod de agente instalado e ligado, o pedido
+explica que falta instalar um (`guidance.noAgentMod`, pelo
+`Entitlements::hides_every_agent`).
+
+Instalar é no site, regra do dono: o app não lista o catálogo. Na página de
+cada mod, com a pessoa logada no site, o Instalar no JayV grava o mod no estado
+dos mods do ambiente escolhido (`installedMods`, o mesmo que o app sincroniza)
+e abre `jayv://mods/sync?mod=<id>&environment=<ambiente>`. O link não instala
+nada: só acorda o sync (`sync_now`, por `@/modules/mods/siteLink`), que desce o
+estado gravado na conta e instala o que ele pede, e a aba Mods avisa quando o
+mod chega. Não ponha no app nem no link um jeito de instalar sem a conta.
 
 Na aba Mods, os instalados ficam em duas abas: Instalados (o que a pessoa
 instalou) e Essenciais (os `required`), cada uma com a contagem; o Ctrl+K abre
-cada uma.
+cada uma. O que a pessoa desinstala fica na lista, com o Desfazer, até o
+Salvar.
 
 Todo mod traz o seu ícone (o SVG que o catálogo leva em `icon`). A tela o
 mostra sempre por `ModIcon`, como imagem ou máscara, nunca como marcação

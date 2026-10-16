@@ -11,16 +11,7 @@ declare global {
 }
 
 const data = () => window.__studioData;
-/** O mod que o print quer fora dos instalados (`?uninstalled=<id>`). */
-const uninstalled = new URLSearchParams(location.search).get("uninstalled");
-/** As configurações sem o agente do mod que está fora (o motor `copilot` ou o
- * agente `mod-lm-studio`): a aba dele some, como no app. */
-const settings = () => {
-  const snapshot = settingsSnapshot();
-  if (!uninstalled) return snapshot;
-  const gone = (id: string) => id === uninstalled || id === `mod-${uninstalled}`;
-  return { ...snapshot, settings: { ...snapshot.settings, agents: snapshot.settings.agents.filter((agent) => !gone(agent.id)), models: snapshot.settings.models.filter((model) => !gone(model.agent)) } };
-};
+const settings = () => settingsSnapshot();
 const say = (key: string) => data().samples[key] ?? key;
 let cachedChats: ReturnType<typeof chats> | null = null;
 const allChats = () => (cachedChats ??= chats(say));
@@ -36,8 +27,8 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   save_core_settings: () => coreSnapshot(),
   save_expertise: () => coreSnapshot(),
   save_lean_code: () => coreSnapshot(),
-  get_mods: () => modsSnapshot(data().catalog?.mods ?? null, uninstalled),
-  save_mods: () => modsSnapshot(data().catalog?.mods ?? null, uninstalled),
+  get_mods: () => modsSnapshot(data().catalog?.mods ?? null),
+  save_mods: () => modsSnapshot(data().catalog?.mods ?? null),
   get_mcp_servers: () => MCP_SERVERS,
   save_mcp_servers: () => MCP_SERVERS,
   check_mcp_servers: () => MCP_SERVERS,

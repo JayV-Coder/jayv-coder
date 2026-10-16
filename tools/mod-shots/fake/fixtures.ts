@@ -97,11 +97,10 @@ export function coreSnapshot(): CoreSnapshot {
   };
 }
 
-/** Os mods instalados: todos do catálogo, menos o que o print pede fora
- * (`uninstalled`, o mod que não vem instalado, para o print `enable` mostrá-lo
- * em Disponíveis no catálogo, com o botão Instalar). */
-export function modsSnapshot(catalog: ModManifest[] | null, uninstalled: string | null = null): ModsSnapshot {
-  const mods = Object.fromEntries((catalog ?? []).filter((mod) => mod.id !== uninstalled).map((mod) => [mod.id, { enabled: true, version: mod.version ?? null, installedAt: "2026-10-12T20:00:00Z" }]));
+/** Os mods instalados: todos do catálogo, ligados, como depois de instalar
+ * cada um pela página dele no site. */
+export function modsSnapshot(catalog: ModManifest[] | null): ModsSnapshot {
+  const mods = Object.fromEntries((catalog ?? []).map((mod) => [mod.id, { enabled: true, version: mod.version ?? null, installedAt: "2026-10-12T20:00:00Z" }]));
   return { catalog, fetchedAt: at(4), state: { mods, removed: [] }, active: Object.keys(mods), disabled: [], points: ["llmEngines", "features", "agents", "skills"], appVersion: APP_VERSION };
 }
 

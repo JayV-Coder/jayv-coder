@@ -109,16 +109,15 @@ describe("paletteCommands", () => {
     expect(label("mod-toggle-stats")).toBe("Turn on mod: Stats");
     expect(label("mod-toggle-mcp")).toBe("Turn off mod: Mcp");
     expect(label("mod-uninstall-mcp")).toBe("Uninstall mod: Mcp");
-    expect(label("mod-install-ollama")).toBe("Install mod: Ollama");
-    expect(found.map((command) => command.id)).not.toContain("mod-install-future");
-    for (const id of ["mod-install-skills", "mod-toggle-skills", "mod-uninstall-skills"]) expect(found.map((command) => command.id), "o essencial não muda").not.toContain(id);
+    // Instalar é na página do mod no site: a paleta não instala nada.
+    expect(found.some((command) => command.id.startsWith("mod-install-"))).toBe(false);
+    for (const id of ["mod-toggle-skills", "mod-uninstall-skills"]) expect(found.map((command) => command.id), "o essencial não muda").not.toContain(id);
     // Todo mod do catálogo tem a página dele no site, o essencial também.
     expect(label("mod-page-skills")).toBe("Mod page on the site: Skills");
     expect(label("mod-page-ollama")).toBe("Mod page on the site: Ollama");
     expect(label("site-mods")).toBe("Mod catalog on the site");
     const locked = ids({ rights: { features: new Set<string>(), locked: new Set<string>(["stats"]) } });
     expect(locked).not.toContain("mod-toggle-stats");
-    expect(locked).not.toContain("mod-install-ollama");
     expect(locked).toContain("mod-toggle-mcp");
     const empty = { mods: {}, removed: [] };
     useMods.setState({ catalog: null, saved: empty, draft: empty });

@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }), Toaster: () => null }));
 
 const {
-  defaultsOf, dependents, installMod, isModsDirty, isRequired, modAgentIds, modPagePath, modSkills, missingRequirements, ownedAgents, rebaseDraft, restoreModDefaults, setModEnabled, statusOf,
+  defaultsOf, dependents, isModsDirty, keepMod, leavingMods, isRequired, modAgentIds, modPagePath, modSkills, missingRequirements, ownedAgents, rebaseDraft, restoreModDefaults, setModEnabled, statusOf,
   splitInstalled, uninstallMod, unknownPoints, usable, useMods, withInstalled,
 } = await import("./index");
 
@@ -117,7 +117,7 @@ describe("the generic mod manager", () => {
     useMods.setState({ catalog: CATALOG, saved, draft: saved });
     expect(isModsDirty(useMods.getState())).toBe(false);
     setModEnabled("stats", false);
-    installMod("local-ai");
+    setModEnabled("local-ai", true);
     uninstallMod("mcp");
     expect(on(useMods.getState().draft)).toEqual({ stats: false, "local-ai": true });
     expect(isModsDirty(useMods.getState())).toBe(true);
@@ -127,5 +127,19 @@ describe("the generic mod manager", () => {
     expect(on(useMods.getState().draft)).toEqual({ stats: true, mcp: true, "local-ai": true, claude: true });
     useMods.setState({ draft: saved });
     expect(isModsDirty(useMods.getState())).toBe(false);
+  });
+
+  it("keeps an unsaved uninstall in the list, and undoes it as it was saved", () => {
+    const saved = state({ stats: true, mcp: false });
+    useMods.setState({ catalog: CATALOG, saved, draft: saved });
+    uninstallMod("mcp");
+    expect(leavingMods(useMods.getState())).toEqual(["mcp"]);
+    keepMod("mcp");
+    expect(leavingMods(useMods.getState())).toEqual([]);
+    expect(useMods.getState().draft.mods.mcp).toEqual(saved.mods.mcp);
+    expect(isModsDirty(useMods.getState())).toBe(false);
+    // Desfazer só traz de volta o que estava gravado.
+    keepMod("ollama");
+    expect("ollama" in useMods.getState().draft.mods).toBe(false);
   });
 });

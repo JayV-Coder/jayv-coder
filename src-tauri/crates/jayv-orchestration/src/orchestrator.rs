@@ -990,7 +990,9 @@ impl Orchestrator {
         let fix=match problem.key.as_str() {
             "guidance.agentNoModel"=>Text::new("guidance.agentNoModelFix"),
             "guidance.policyBlocked"=>Text::new("guidance.policyFix").with("org",self.policy_scope.as_deref().unwrap_or_default()),
-            "guidance.noAgentMod"=>Text::new("guidance.noAgentModFix"),
+            // Instalar é na página do mod no site (a 0.106.0); a chave antiga
+            // fica para o app de antes.
+            "guidance.noAgentMod"=>Text::new("guidance.installAgentModFix"),
             _=>Text::new("guidance.fix"),
         };
         Some(i18n::notice(&[Text::new("guidance.failed").with("problem",problem),fix]))
@@ -2843,7 +2845,7 @@ mod tests {
 
         let response=result.result.expect("orientação").response;
         let lines=crate::i18n::read_notice(&response).expect("aviso");
-        assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.noAgentModFix"]);
+        assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.installAgentModFix"]);
         assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.noAgentMod"))));
         assert!(crate::i18n::for_model(&response).contains("Settings › Mods"));
     }

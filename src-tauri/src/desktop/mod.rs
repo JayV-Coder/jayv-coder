@@ -270,7 +270,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            session::set_session,session::clear_session,session::connection_status,session::current_environment,session::set_environment,session::get_locales,session::get_translations,
+            session::set_session,session::clear_session,session::connection_status,session::current_environment,session::set_environment,session::sync_now,session::get_locales,session::get_translations,
             prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,prompts::cancel_turn,prompts::cancel_limit_wait,prompts::allowed_commands,prompts::chat_grants,prompts::set_chat_grants,prompts::forget_allowed_command,
             projects::get_workspace,projects::get_chat,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::set_work_mode,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::get_mcp_servers,settings::save_mcp_servers,settings::check_mcp_servers,settings::get_skills,settings::preview_skills,settings::get_org_extensions,settings::install_skill_folder,settings::install_skill_text,settings::search_skill_hub,settings::install_hub_skill,settings::set_skill_enabled,settings::remove_skill,settings::draft_mcp,settings::refresh_models,settings::list_models,settings::check_agent,settings::check_gateway,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,mods::get_mods,mods::save_mods,settings::save_expertise,settings::save_lean_code,
