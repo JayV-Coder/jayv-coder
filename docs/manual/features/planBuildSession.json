@@ -1,0 +1,10 @@
+{
+  "id": "planBuildSession",
+  "category": "agents",
+  "since": "0.107.0",
+  "plan": "planBuildSession",
+  "commands": [],
+  "title": "One session between planning and build",
+  "summary": "The agent's session continues when a chat switches between Planning and Development, so the project is not read again at every switch.",
+  "usage": "Built into Pro, Enterprise and system admin accounts: always on, with no switch in Settings › Jev. The request carries a note saying the mode changed. On other plans the switch in Settings › Jev › Routing works as before."
+}

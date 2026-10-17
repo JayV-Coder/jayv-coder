@@ -63,6 +63,9 @@ pub struct CoreSettings {
     /// O pedido parado pelo limite de uso do agente é retomado quando o limite
     /// volta (ligado por padrão).
     #[serde(default="keep_by_default")] pub resume_after_limit:bool,
+    /// O Jev decide o prazo de cada pedido; o teto em minutos não vale. Só o
+    /// plano liga (`Entitlements::enforce_core`), sem interruptor.
+    #[serde(default)] pub auto_turn_ceiling:bool,
 }
 
 fn keep_by_default()->bool { true }
@@ -86,6 +89,7 @@ impl CoreSettings {
             resume_across_modes:config.jev.resume_across_modes,
             turn_ceiling_minutes:config.jev.turn_ceiling_minutes,
             resume_after_limit:config.jev.resume_after_limit,
+            auto_turn_ceiling:config.jev.auto_turn_ceiling,
         }
     }
 
@@ -110,6 +114,7 @@ impl CoreSettings {
         config.jev.resume_across_modes=self.resume_across_modes;
         config.jev.turn_ceiling_minutes=self.turn_ceiling_minutes;
         config.jev.resume_after_limit=self.resume_after_limit;
+        config.jev.auto_turn_ceiling=self.auto_turn_ceiling;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,
