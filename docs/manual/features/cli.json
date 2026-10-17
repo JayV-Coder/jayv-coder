@@ -12,6 +12,6 @@
     "cliMcp"
   ],
   "title": "JayV on the terminal",
-  "summary": "The same orchestrator runs from a terminal, with the agents and models configured in the app.",
+  "summary": "Run the same orchestrator from a terminal, with the agents and models set up in the app.",
   "usage": "Run jayv followed by a command in the project folder, or pass --root with the folder. --config points to another configuration file."
 }

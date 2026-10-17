@@ -2,7 +2,7 @@ import type { AgentId, Chat, CustomModOptions, Project, View, WorkspaceData } fr
 import { isApiAgent, isCustomMod, isGateway, WORK_MODES } from "@/modules/core";
 import { signOut } from "@/modules/auth";
 import { showChanges } from "@/modules/changelog";
-import { featureActions, requestIntent, type Shortcut } from "@/modules/commands";
+import { featureActions, fuzzyMatch, requestIntent, type Shortcut } from "@/modules/commands";
 import { cancelLimitWait, cancelTurn, openChatFind, sendPrompt } from "@/modules/conversation";
 import { reportError } from "@/modules/feedback";
 import { setLocale, useI18n, type Key, type LocaleOption } from "@/modules/i18n";
@@ -32,8 +32,21 @@ export interface Command {
   label: string;
   /** Texto apagado ao lado do nome: o caminho do projeto, por exemplo. */
   hint?: string;
+  /** A busca também acha o comando pelo `hint` ("acme mcp"): o nome da
+   * organização fica fora do rótulo, mas continua servindo para achar. */
+  findByHint?: boolean;
   shortcut?: Shortcut;
   run: () => void;
+}
+
+/** Onde a busca casa com o comando: no rótulo ou, para quem pede, no `hint`
+ * antes dele. As posições marcadas são sempre as do rótulo. */
+export function matchCommand(query: string, command: Command): ReturnType<typeof fuzzyMatch> {
+  const direct = fuzzyMatch(query, command.label);
+  if (direct || !command.findByHint || !command.hint) return direct;
+  const offset = command.hint.length + 1;
+  const both = fuzzyMatch(query, `${command.hint} ${command.label}`);
+  return both && { score: both.score - 1, positions: both.positions.filter((at) => at >= offset).map((at) => at - offset) };
 }
 
 /** O que a paleta precisa saber do app para listar o que dá para fazer agora. */
@@ -250,10 +263,10 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       // O que a organização dá aos membros (servidores MCP e skills) se cadastra no site.
       if (SITE_URL) {
         all.push(
-          { id: `org-site-mcp-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteMcp", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "mcp")).catch(reportError) },
-          { id: `org-site-permissions-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSitePermissions", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
-          { id: `org-site-chat-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteChat", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
-          { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
+          { id: `org-site-mcp-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteMcp", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "mcp")).catch(reportError) },
+          { id: `org-site-permissions-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSitePermissions", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
+          { id: `org-site-chat-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteChat", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
+          { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
         );
       }
       const general = organizationChatsOf(data, organization.id);
@@ -261,7 +274,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
         all.push({ id: `general-${item.id}`, group: "palette.group.general", label: chatTitle(item), hint: organization.name, run: () => openChat(item.id) });
       }
       if (general[0]) {
-        all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), run: () => void createChat(general[0].projectId) });
+        all.push({ id: `general-new-${organization.id}`, group: "palette.group.general", label: t("palette.generalNew", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void createChat(general[0].projectId) });
       }
     }
     // As abas da organização aberta ou, no ambiente dela, sempre as dela.

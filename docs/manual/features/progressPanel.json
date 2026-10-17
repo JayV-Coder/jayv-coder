@@ -5,6 +5,6 @@
   "plan": null,
   "commands": [],
   "title": "Progress panel",
-  "summary": "A panel next to the side menu shows what JayV is doing now, one step per line, so the conversation keeps the full width.",
-  "usage": "The panel opens by itself while a request runs. Collapse it to a thin strip when you do not need it; in an organization chat it also lists the repositories."
+  "summary": "A panel next to the side menu shows what the app is doing, one step per line, so the conversation keeps its full width.",
+  "usage": "It opens by itself while a request runs. Collapse it to a thin strip when you don't need it. In an organization's general chat, it also lists the repositories."
 }

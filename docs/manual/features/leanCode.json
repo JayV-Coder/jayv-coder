@@ -5,6 +5,6 @@
   "plan": "leanCode",
   "commands": [],
   "title": "Lean code",
-  "summary": "In build mode the agent writes the least code that solves the task and reuses what the language, the platform or an installed library already does.",
+  "summary": "In Development mode the agent writes the least code that solves the task, reusing what the language, the platform or installed libraries already offer.",
   "usage": "On by default. Validation, error handling, security and accessibility are never cut. Turn it off under Your level on the Profile page."
 }

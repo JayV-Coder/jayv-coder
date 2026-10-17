@@ -4,7 +4,7 @@
   "since": "0.72.0",
   "plan": null,
   "commands": [],
-  "title": "MCP servers and skills of the organization",
-  "summary": "Owners and maintainers set up MCP servers and skills for the organization on the JayV site, and every member receives them in the app on top of their own. In the app they are listed in the organization's environment, under MCP and Skills in its side menu, apart from your Settings, and cannot be edited there; in the projects of the organization the agents get the servers and Jev can pick the skills.",
-  "usage": "On the site, open the organization and use the MCP servers and Skills tabs: add a server by form or by pasting an mcpServers JSON, or paste the text of a SKILL.md, and turn each one on or off. In Ctrl+K, choose \"manage MCP servers\" or \"manage skills\" for an organization to open its site tab. Servers can carry tokens, so only owners and maintainers see them on the site and they reach only the members' apps. The change arrives at the next sync. In the app, what the organization gives is listed only in its environment, under MCP and Skills in the side menu (read-only), never in Settings; owners and maintainers get a button to open the matching site tab."
+  "title": "Organization MCP servers and skills",
+  "summary": "Owners and maintainers set up MCP servers and skills for the organization on the site, and every member gets them in the app on top of their own.",
+  "usage": "On the site, open the organization and use the MCP servers and Skills tabs: add a server with the form or by pasting mcpServers JSON, or paste a SKILL.md, and turn each one on or off. Only owners and maintainers see the servers on the site, since they may hold tokens. Changes arrive at the next sync. In the app, they're listed read-only under MCP and Skills in the organization's side menu; owners and maintainers get a button to edit them on the site."
 }

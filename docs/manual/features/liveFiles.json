@@ -5,6 +5,6 @@
   "plan": "liveFiles",
   "commands": [],
   "title": "Live files",
-  "summary": "The Code panel beside the conversation shows, in its Files tab, every file the request changes, newest first, with the diff of each one while the agent writes, and in its Repositories tab the git status of each repository in the chat's folder.",
-  "usage": "Click Code in the chat header (or Ctrl+K › Show or hide the code panel); it also opens by itself, in Files, on the first change. Follow the agent to see each file as soon as it changes. In Repositories, each repository of the folder shows its branch, how far it is ahead of or behind the remote and how many files changed; a folder that is inside a repository shows that repository. When git cannot read one, the line says why: git not found on this computer, a folder git does not trust because it belongs to another user (with the command to allow it, ready to copy) or the message of git. Without this feature in your plan, the panel only has Repositories."
+  "summary": "The Code panel next to the conversation shows each file the request changes, with its diff as the agent writes, and the git status of each repository in the chat's folder.",
+  "usage": "Click Code in the chat header, or use Ctrl+K. The panel opens by itself on the first change. Files lists the changed files, newest first; follow the agent to see each one as it changes. Repositories shows each repository's branch, how far it is ahead of or behind the remote, and how many files changed. If git can't read a repository, the line says why and, when it helps, gives the command to fix it. Without this feature in your plan, the panel only has Repositories."
 }

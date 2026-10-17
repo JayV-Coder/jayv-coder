@@ -5,6 +5,6 @@
   "plan": "planFirst",
   "commands": [],
   "title": "Plan before building",
-  "summary": "In a complex build request, your strongest reasoning model writes a plan first and the agent picked to build receives it with the request.",
-  "usage": "Turn on Plan with one model, build with another in Settings › Jev › Routing. The plan shows up in the progress panel while it is written; if it fails, the build goes ahead as before."
+  "summary": "For a complex Development request, your strongest reasoning model writes a plan first, and the agent that builds receives it with the request.",
+  "usage": "Turn on Plan with one model, build with another in Settings › Jev › Routing. The plan shows in the progress panel as it's written; if planning fails, the build goes ahead without it."
 }

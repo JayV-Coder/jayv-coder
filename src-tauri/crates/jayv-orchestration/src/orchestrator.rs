@@ -2805,7 +2805,9 @@ mod tests {
         let lines=crate::i18n::read_notice(&response).expect("aviso");
         assert_eq!(lines.iter().map(|line|line.key.as_str()).collect::<Vec<_>>(),["guidance.failed","guidance.policyFix"]);
         assert_eq!(lines[0].params.get("problem"),Some(&crate::i18n::Param::Text(Text::new("guidance.policyBlocked").with("org","acme"))));
-        assert!(crate::i18n::for_model(&response).contains("@acme"));
+        let english=crate::i18n::for_model(&response);
+        assert!(english.contains("organization's LLM policy"));
+        assert!(!english.contains('@'));
     }
 
     /// O agente está ligado, mas nenhum modelo dele: a orientação nomeia o

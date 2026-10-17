@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { openChatFind } from "@/modules/conversation";
-import { fuzzyMatch, setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
+import { setPaletteOpen, shortcutFor, shortcutLabel, togglePalette, usePalette, type Shortcut } from "@/modules/commands";
 import { environmentOrganization, useEnvironment } from "@/modules/environments";
 import { useLocale, useLocales, useT } from "@/modules/i18n";
 import { navigate, useNavigation } from "@/modules/navigation";
@@ -13,7 +13,7 @@ import { openStats } from "@/modules/usage";
 import { createChat, findChat, findProject, leaveProject, nextWorkMode, setWorkMode, useWorkspace } from "@/modules/workspace";
 import { Kbd } from "@/components/atoms";
 import { cn } from "@/lib/utils";
-import { paletteCommands, type Command } from "./paletteCommands";
+import { matchCommand, paletteCommands, type Command } from "./paletteCommands";
 
 /** Grifa as letras que a busca casou. */
 function Marked({ text, positions }: { text: string; positions: number[] }) {
@@ -102,8 +102,8 @@ export function CommandPalette() {
 
   const shown = useMemo(() => {
     const matched = commands
-      .map((command) => ({ command, match: fuzzyMatch(query, command.label) }))
-      .filter((item): item is { command: Command; match: NonNullable<ReturnType<typeof fuzzyMatch>> } => item.match !== null);
+      .map((command) => ({ command, match: matchCommand(query, command) }))
+      .filter((item): item is { command: Command; match: NonNullable<ReturnType<typeof matchCommand>> } => item.match !== null);
     // Com busca, o melhor casamento vem primeiro; sem busca, a ordem dos grupos.
     if (query.trim()) matched.sort((a, b) => b.match.score - a.match.score);
     return matched;
