@@ -5,6 +5,6 @@
   "plan": "skills",
   "commands": [],
   "title": "Skills",
-  "summary": "Install skills (folders with a SKILL.md) and let Jev choose which one the agent should use for each request. Jev reads the request and the skills' names and descriptions, picks at most one, and tells the model to follow it.",
-  "usage": "Open Settings › Skills (or Ctrl+K › Settings › Skills) and click Install from folder, choosing a skill folder or a folder of skills; you can also paste the text of a SKILL.md. Turn a skill off to take it out of the choice, or remove it to delete the copy. Each request shows a Skill step when one was picked. Installing, turning on or off and removing take effect only when you click Save settings: the copy is made then, and Discard drops the change. Mods can bring skills too, like REA for reverse engineering: they are managed in Settings › Mods, and Jev picks them the same way. The MCP servers that such a skill brings reach the agent only in the request where Jev picks it, and only if the agent's Approve MCP servers is on."
+  "summary": "Install skills (folders with a SKILL.md), and Jev picks the one that fits each request and tells the agent to follow it.",
+  "usage": "Open Settings › Skills and click Install from folder to choose a skill folder or a folder of skills, or paste the text of a SKILL.md. Turn a skill off to leave it out, or remove it. When a skill is used, the request shows a Skill step. Changes apply only when you click Save settings. Mods can also bring skills; manage those in Settings › Mods. MCP servers that come with a skill reach the agent only when that skill is picked, and only if Approve MCP servers is on for that agent."
 }

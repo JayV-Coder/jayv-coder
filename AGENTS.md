@@ -44,6 +44,14 @@ Nada de texto em português (ou em qualquer idioma) fixo no código.
   parâmetros de uma chave já publicada é chave nova: o app antigo continua
   lendo a antiga.
 
+- **Tom**: o texto é curto, direto e genérico, para quem usa o app. Não cite
+  jogos, não compare o JayV com outros produtos e não escreva o `@` de uma
+  organização (diga "a organização" ou "sua organização"). Nome de marca só
+  onde é preciso para usar a função: o nome de um mod, o protocolo de uma API,
+  a integração com o GitHub. Em alemão, trate a pessoa por "du"; em espanhol,
+  por "tú"; em francês, por "vous". Rótulo citado dentro de um texto usa a
+  mesma tradução do rótulo na tela.
+
 Logs internos (`eprintln!`, `console.error`) e comentários de código não são
 texto para o usuário e não precisam de i18n.
 

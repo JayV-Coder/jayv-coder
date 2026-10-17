@@ -14,7 +14,7 @@ describe("beatLine", () => {
     const sure = beatLine("limit_wait", { provider: "claude", resumesAt: at, estimated: false });
     expect(sure).toContain("usage limit");
     expect(sure).toContain(limitTime(at));
-    expect(beatLine("limit_wait", { provider: "codex", resumesAt: at, estimated: true })).toContain("did not say");
+    expect(beatLine("limit_wait", { provider: "codex", resumesAt: at, estimated: true })).toContain("didn't say");
   });
 
   it("shows only the hour for today and the day for another date", () => {

@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
 vi.mock("@/modules/site", () => ({ SITE_URL: "https://site.test", dashboardUrl: (path = "") => `https://site.test/dashboard${path}`, openDashboard: vi.fn(async () => undefined), openSite: vi.fn(async () => undefined) }));
 
-const { paletteCommands } = await import("./paletteCommands");
+const { matchCommand, paletteCommands } = await import("./paletteCommands");
 const { translate } = await import("@/modules/i18n");
 type Key = Parameters<typeof translate>[1];
 
@@ -41,6 +41,16 @@ const context = (patch = {}) => ({
 const ids = (patch = {}) => paletteCommands(context(patch)).map((command) => command.id);
 
 describe("paletteCommands", () => {
+  it("finds an organization's site entries by the organization's name, which stays out of the label", () => {
+    const commands = paletteCommands(context());
+    const mcp = commands.find((command) => command.id === "org-site-mcp-o1")!;
+    expect(mcp.label).not.toContain("Acme");
+    expect(mcp.hint).toBe("Acme");
+    expect(matchCommand("acme mcp", mcp)?.positions.length).toBeGreaterThan(0);
+    const settings = commands.find((command) => command.id === "settings")!;
+    expect(matchCommand("acme", settings)).toBeNull();
+  });
+
   it("reaches every screen, every settings tab and the project actions", () => {
     const found = ids();
     for (const id of ["projects", "stats", "system", "settings", "profile", "plans", "gate", "chats", "new-chat", "new-project"]) expect(found).toContain(id);

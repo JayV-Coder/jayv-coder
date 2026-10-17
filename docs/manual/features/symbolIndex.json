@@ -6,7 +6,7 @@
   "commands": [
     "cliMcp"
   ],
-  "title": "Symbol index for Claude",
-  "summary": "JayV maps where each function, type and class is defined, on your computer and without spending tokens, and Claude Code can ask that map instead of scanning the folder.",
-  "usage": "Turn on JayV symbol tools in the Claude Code options in Settings, when your plan includes it. The same index is served to any agent by the jayv mcp command."
+  "title": "Symbol index",
+  "summary": "The app maps where each function, type and class is defined, on your computer and without spending tokens, so the agent can look things up instead of scanning the folder.",
+  "usage": "In Settings › Claude Code, turn on Symbol tools, when your plan includes it. Other agents can use the same index through the jayv mcp command."
 }

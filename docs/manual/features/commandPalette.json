@@ -14,6 +14,6 @@
     "workMode"
   ],
   "title": "Command palette and shortcuts",
-  "summary": "Everything that has a button also has a name in the command palette, and the main screens have keyboard shortcuts.",
-  "usage": "Press Ctrl+K (⌘K on Mac) on any screen and type: go to a page or Settings tab, open a project, chat or organization (and its tabs), start a project or chat, search chats, open project notes, show live files, stop a request, change the work mode, theme or language, open notifications, check for updates, copy the diagnostics, open the documentation or sign out."
+  "summary": "Every action with a button also has a name in the command palette, and the main screens have keyboard shortcuts.",
+  "usage": "Press Ctrl+K (⌘K on Mac) on any screen and type what you want: a page, a Settings tab, a project, a chat, an organization, or an action like stopping a request, changing the work mode, theme or language, or checking for updates."
 }

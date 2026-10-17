@@ -32,7 +32,7 @@ describe("evidenceGroups", () => {
 
   it("never lists the agent's answer or the second opinion as observed", () => {
     const { observed, inferred } = evidenceGroups(checked, t);
-    expect(inferred[0]).toContain("not checked by JayV");
+    expect(inferred[0]).toContain("was not checked");
     expect(inferred[1]).toContain("Codex");
     expect(inferred[1]).toContain("not a test");
     expect(observed.join(" ")).not.toContain("Codex");
@@ -41,8 +41,8 @@ describe("evidenceGroups", () => {
   it("always says that no test, build or lint ran, and that the done criterion was not checked", () => {
     const { unverified } = evidenceGroups(checked, t);
     expect(unverified).toEqual([
-      "JayV ran no test, build or lint in this turn.",
-      "The request says how to know it is done, but JayV did not check that criterion.",
+      "No test, build or lint ran in this turn.",
+      "The request says how to know it's done, but that was not checked.",
     ]);
   });
 
@@ -50,7 +50,7 @@ describe("evidenceGroups", () => {
     const bare = evidenceGroups({ entry: { ...checked.entry!, doneCriterion: false }, exits: [], review: { ...checked.review!, arrived: false } }, t);
     expect(bare.observed).toContain("Exit gate: the answer named no command to run and no file to change.");
     expect(bare.inferred[1]).toContain("has not arrived");
-    expect(bare.unverified[1]).toContain("did not say how to know it is done");
+    expect(bare.unverified[1]).toContain("didn't say how to know it's done");
   });
 
   it("reads the exit kinds recorded before the switch to English identifiers", () => {
@@ -59,6 +59,6 @@ describe("evidenceGroups", () => {
       "Exit gate: 1 command in the answer was checked against the house rules.",
       "Held by permissions.shell · ask: make (command).",
     ]);
-    expect(legacy.unverified).toEqual(["JayV ran no test, build or lint in this turn."]);
+    expect(legacy.unverified).toEqual(["No test, build or lint ran in this turn."]);
   });
 });

@@ -5,6 +5,6 @@
   "plan": "gatewayProviders",
   "commands": [],
   "title": "OpenRouter and LiteLLM",
-  "summary": "Two API gateways give Jev access to many models through one address and key. They answer with text: they never edit files or run commands, so Jev uses them for questions, analysis, review and planning. With Approve MCP servers on in their tab, JayV also offers them the tools of your MCP servers and runs the calls they ask for.",
-  "usage": "In Settings › OpenRouter or LiteLLM, enter the base URL and the API key (OpenRouter: openrouter.ai/api/v1; LiteLLM: your proxy, for example http://localhost:4000/v1, key optional), turn the agent on, save, then Check connection and Refresh models. The key stays on this computer and is never synced. Organizations can allow or block each one in the LLM policy."
+  "summary": "Two API gateways that reach many models with one address and key. They only answer with text, so Jev uses them for questions, analysis, review and planning. With Approve MCP servers on, they can also use your MCP servers' tools.",
+  "usage": "In Settings › OpenRouter or LiteLLM, enter the base URL and the API key (OpenRouter: openrouter.ai/api/v1; LiteLLM: your proxy, such as http://localhost:4000/v1, key optional). Turn it on, save, then click Check connection and load the models. The key stays on this computer. Organizations can allow or block each one in the LLM policy."
 }

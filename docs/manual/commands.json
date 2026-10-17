@@ -100,13 +100,13 @@
       "id": "cliBench",
       "kind": "cli",
       "usage": "jayv bench <tasks.yaml>",
-      "detail": "Runs a task file through JayV and straight to the agent, each in its own copy, and compares rounds and cost."
+      "detail": "Runs a task file with and without the app, each in its own copy, and compares rounds and cost."
     },
     {
       "id": "cliMcp",
       "kind": "cli",
       "usage": "jayv mcp",
-      "detail": "Serves the project's symbol index over MCP (stdio) for coding agents."
+      "detail": "Gives coding agents the project's symbol index through MCP."
     }
   ]
 }
