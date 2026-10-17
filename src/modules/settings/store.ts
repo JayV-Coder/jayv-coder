@@ -14,7 +14,7 @@ import { discardSkills, isSkillsDirty, loadSkills, saveSkillChanges, useSkills }
 import { setThemePreference, useTheme, type ThemePreference } from "@/modules/theme";
 import { setAutoTours, useTutorial } from "@/modules/tutorial";
 import { setInstallOnLaunch, useUpdate } from "@/modules/updates";
-import { lineProblem } from "./mods";
+import { lineProblem, modeProblem, MODEL_FIELD } from "./mods";
 
 /** Os mods que vêm com o app, na ordem das abas. Os criados vêm depois, pelo
  * nome (`agentIds`). */
@@ -375,12 +375,19 @@ export function problems(state: Pick<SettingsState, "agents" | "models">, id: Ag
       if (lineProblem(options.args)) found.args = lineProblem(options.args)!;
       if (lineProblem(options.planArgs)) found.planArgs = lineProblem(options.planArgs)!;
       else if (options.edits && options.planArgs.length === 0) found.planArgs = "mods.planArgs.required";
+    } else if (options.kind === "acp") {
+      if (!command) found.command = "agent.command.empty";
+      else if (/\s/.test(command)) found.command = "agent.command.hint";
+      if (lineProblem(options.args, true)) found.args = lineProblem(options.args, true)!;
+      if (modeProblem(options.buildMode)) found.buildMode = "mods.mode.invalid";
+      if (modeProblem(options.planMode)) found.planMode = "mods.mode.invalid";
     } else {
       const url = options.baseUrl.trim();
       if (!url) found.baseUrl = "mods.baseUrl.required";
       else if (!/^https?:\/\/[^\s/@]+/i.test(url)) found.baseUrl = "gateway.baseUrl.invalid";
       if (options.keyRequired && agent.enabled && !options.hasKey && !options.apiKey?.trim()) found.apiKey = "gateway.apiKey.required";
       if (options.apiKey && /\s/.test(options.apiKey)) found.apiKey = "gateway.apiKey.invalid";
+      if (options.protocol === "responses" && options.modelField && !MODEL_FIELD.test(options.modelField)) found.modelField = "mods.modelField.invalid";
     }
   } else if (isGateway(id)) {
     const options = (agent as AgentSettings<"openrouter">).options;

@@ -16,6 +16,7 @@
     "kiloCode",
     "gatewayProviders",
     "llmMods",
+    "acpAgents",
     "modCatalog",
     "workModes",
     "stopRequest",

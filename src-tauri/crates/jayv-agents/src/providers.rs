@@ -79,7 +79,7 @@ impl Workdir {
     pub fn focus(&self,root:PathBuf) { if let Ok(mut current)=self.0.write() {*current=Some(root);} }
     /// A pasta corrente, se houver uma. Um cadeado envenenado não derruba o
     /// pedido: o agente roda onde estiver, como rodava antes.
-    fn current(&self)->Option<PathBuf> { self.0.read().ok().and_then(|current|current.clone()) }
+    pub(crate) fn current(&self)->Option<PathBuf> { self.0.read().ok().and_then(|current|current.clone()) }
 }
 
 pub fn build_providers(configs: &HashMap<String, ProviderConfig>, workdir: &Workdir) -> HashMap<String, Box<dyn Provider>> {
@@ -88,7 +88,10 @@ pub fn build_providers(configs: &HashMap<String, ProviderConfig>, workdir: &Work
             "openai" => Box::new(HttpProvider::openai(name.clone(), config.clone())),
             "anthropic" => Box::new(HttpProvider::anthropic(name.clone(), config.clone())),
             "openai-compatible" => Box::new(HttpProvider::compatible(name.clone(), config.clone())),
+            "responses" => Box::new(HttpProvider::responses(name.clone(), config.clone())),
+            "manus" => Box::new(crate::manus::ManusProvider::new(name.clone(), config.clone())),
             "cli" => Box::new(CliProvider { name:name.clone(), config:config.clone(), workdir:workdir.clone() }),
+            "acp" => Box::new(crate::acp::AcpProvider::new(name.clone(), config.clone(), workdir.clone())),
             _ => return None,
         }; Some((name.clone(),provider))
     }).collect()
@@ -104,13 +107,17 @@ pub async fn discover_models(name: &str, config: &ProviderConfig) -> Result<Vec<
 
 pub async fn discover_listing(name: &str, config: &ProviderConfig) -> Result<Vec<ListedModel>> {
     if config.kind=="cli" { return Err(anyhow!("CLI providers do not offer model discovery")); }
+    // O agente ACP anuncia os modelos ao abrir uma sessão.
+    if config.kind=="acp" { return crate::acp::discover(name,config).await; }
+    // A Manus não lista modelos: os perfis do agente são fixos na API.
+    if config.kind=="manus" { return Ok(crate::manus::PROFILES.iter().map(|id|ListedModel{id:(*id).into(),context:None}).collect()); }
     // O endereço gravado vale também para a Anthropic: um mod criado pode
     // falar com um servidor compatível com a API de mensagens dela.
     let given=config.base_url.as_deref().filter(|value|!value.trim().is_empty());
     let default_base=match config.kind.as_str() {
         "openai"=>"https://api.openai.com/v1",
         "anthropic"=>given.unwrap_or("https://api.anthropic.com/v1"),
-        "openai-compatible"=>config.base_url.as_deref().filter(|value|!value.trim().is_empty()).ok_or_else(||anyhow!("the provider base URL is required"))?,
+        "openai-compatible"|"responses"=>config.base_url.as_deref().filter(|value|!value.trim().is_empty()).ok_or_else(||anyhow!("the provider base URL is required"))?,
         _=>return Err(anyhow!("unsupported provider kind")),
     };
     let client=crate::lockdown::http_client(Duration::from_secs(config.timeout.max(5))).build()?;
@@ -228,19 +235,64 @@ fn read_event(kind:&HttpKind,line:&str,harvest:&mut Harvest)->Option<String> {
     if data.is_empty()||data=="[DONE]" { return None; }
     let event=serde_json::from_str::<Value>(data).ok()?;
     let tokens=|pointer:&str|event.pointer(pointer).and_then(Value::as_u64).map(|value|value as usize);
-    if let Some(input)=tokens("/usage/input_tokens").or_else(||tokens("/message/usage/input_tokens")).or_else(||tokens("/usage/prompt_tokens")) { harvest.input_tokens=input; }
+    if let Some(input)=tokens("/usage/input_tokens").or_else(||tokens("/message/usage/input_tokens")).or_else(||tokens("/usage/prompt_tokens")).or_else(||tokens("/response/usage/input_tokens")) { harvest.input_tokens=input; }
     // O que o cache de prompt serviu e o que gravou nele: a Anthropic diz no
     // `message_start`, a OpenAI dentro de `prompt_tokens_details`.
-    if let Some(read)=tokens("/message/usage/cache_read_input_tokens").or_else(||tokens("/usage/cache_read_input_tokens")).or_else(||tokens("/usage/prompt_tokens_details/cached_tokens")) { harvest.cache_read_tokens=read; }
+    if let Some(read)=tokens("/message/usage/cache_read_input_tokens").or_else(||tokens("/usage/cache_read_input_tokens")).or_else(||tokens("/usage/prompt_tokens_details/cached_tokens")).or_else(||tokens("/response/usage/input_tokens_details/cached_tokens")) { harvest.cache_read_tokens=read; }
     if let Some(written)=tokens("/message/usage/cache_creation_input_tokens").or_else(||tokens("/usage/cache_creation_input_tokens")) { harvest.cache_write_tokens=written; }
-    if let Some(output)=tokens("/usage/output_tokens").or_else(||tokens("/message/usage/output_tokens")).or_else(||tokens("/usage/completion_tokens")) { harvest.output_tokens=output; }
+    if let Some(output)=tokens("/usage/output_tokens").or_else(||tokens("/message/usage/output_tokens")).or_else(||tokens("/usage/completion_tokens")).or_else(||tokens("/response/usage/output_tokens")) { harvest.output_tokens=output; }
     match kind {
         HttpKind::OpenAi=>event.pointer("/choices/0/delta/content").and_then(Value::as_str).map(str::to_string),
         HttpKind::Anthropic=>{
             if event.get("type").and_then(Value::as_str)!=Some("content_block_delta") { return None; }
             event.pointer("/delta/text").and_then(Value::as_str).map(str::to_string)
         }
+        // A API Responses: o texto vem em `response.output_text.delta`; o fim
+        // (`response.completed`) traz a conta dentro de `response` e as
+        // citações do texto, que viram a lista de fontes no fim da resposta.
+        HttpKind::Responses=>match event.get("type").and_then(Value::as_str) {
+            Some("response.output_text.delta")=>event.get("delta").and_then(Value::as_str).map(str::to_string),
+            Some("response.completed")=>event.get("response").map(responses_sources).filter(|sources|!sources.is_empty()),
+            _=>None,
+        },
     }
+}
+
+/// Quantas fontes a lista do fim da resposta mostra.
+const MAX_SOURCES:usize=10;
+
+/// As fontes que o texto de uma resposta da API Responses cita (as anotações
+/// `url_citation` das mensagens), sem repetir endereço, como uma lista de links
+/// depois da resposta. Sem citação, nada.
+fn responses_sources(response:&Value)->String {
+    let mut seen:Vec<(String,String)>=Vec::new();
+    let parts=response.get("output").and_then(Value::as_array).into_iter().flatten()
+        .filter(|item|item.get("type").and_then(Value::as_str)==Some("message"))
+        .flat_map(|item|item.get("content").and_then(Value::as_array).cloned().unwrap_or_default());
+    for annotation in parts.flat_map(|part|part.get("annotations").and_then(Value::as_array).cloned().unwrap_or_default()) {
+        let Some(url)=annotation.get("url").and_then(Value::as_str).map(str::trim).filter(|url|url.starts_with("https://")||url.starts_with("http://")) else {continue};
+        if url.chars().any(|char|char.is_whitespace()||char==')')||seen.iter().any(|(known,_)|known==url) { continue; }
+        let title=annotation.get("title").and_then(Value::as_str).map(str::trim).filter(|title|!title.is_empty()).unwrap_or(url);
+        let title:String=title.chars().filter(|char|!matches!(char,'['|']'|'\n'|'\r')).take(160).collect();
+        seen.push((url.to_string(),title));
+        if seen.len()==MAX_SOURCES { break; }
+    }
+    if seen.is_empty() { return String::new(); }
+    let list=seen.iter().enumerate().map(|(index,(url,title))|format!("{}. [{title}]({url})",index+1)).collect::<Vec<_>>().join("\n");
+    format!("\n\n{list}")
+}
+
+/// O texto de uma resposta inteira da API Responses: o `output_text` que
+/// alguns servidores já somam, ou os pedaços `output_text` das mensagens do
+/// `output`, na ordem.
+fn responses_text(body:&Value)->String {
+    if let Some(text)=body.get("output_text").and_then(Value::as_str).filter(|text|!text.is_empty()) { return text.to_string(); }
+    body.get("output").and_then(Value::as_array).into_iter().flatten()
+        .filter(|item|item.get("type").and_then(Value::as_str)==Some("message"))
+        .flat_map(|item|item.get("content").and_then(Value::as_array).cloned().unwrap_or_default())
+        .filter(|part|part.get("type").and_then(Value::as_str)==Some("output_text"))
+        .filter_map(|part|part.get("text").and_then(Value::as_str).map(str::to_string))
+        .collect::<Vec<_>>().join("\n\n")
 }
 
 /// As mensagens da conversa para a Anthropic, com a penúltima marcada para o
@@ -254,12 +306,13 @@ fn cached_history(chat:&[&ChatMessage])->Value {
     }).collect())
 }
 
-enum HttpKind { OpenAi, Anthropic }
+enum HttpKind { OpenAi, Anthropic, Responses }
 struct HttpProvider { name:String, config:ProviderConfig, kind:HttpKind, client:reqwest::Client }
 impl HttpProvider {
     fn openai(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::OpenAi) }
     fn anthropic(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::Anthropic) }
     fn compatible(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::OpenAi) }
+    fn responses(name:String,config:ProviderConfig)->Self { Self::new(name,config,HttpKind::Responses) }
     fn new(name:String,config:ProviderConfig,kind:HttpKind)->Self { let client=crate::lockdown::http_client(Duration::from_secs(config.timeout)).build().expect("HTTP client"); Self{name,config,kind,client} }
     /// O que um corpo de resposta inteiro carrega. O mesmo leitor serve à
     /// conversa comum e ao provedor que ignorou o pedido de transmissão e
@@ -280,6 +333,13 @@ impl HttpProvider {
                 output_tokens:body.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
                 cache_read_tokens:body.pointer("/usage/cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
                 cache_write_tokens:body.pointer("/usage/cache_creation_input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+            },
+            HttpKind::Responses=>Harvest{
+                text:responses_text(body)+&responses_sources(body),
+                input_tokens:body.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                output_tokens:body.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                cache_read_tokens:body.pointer("/usage/input_tokens_details/cached_tokens").and_then(Value::as_u64).unwrap_or(0) as usize,
+                cache_write_tokens:0,
             },
         }
     }
@@ -312,6 +372,20 @@ impl HttpProvider {
                 let mut payload=json!({"model":model,"max_tokens":4096,"system":system,"messages":cached_history(&chat)});
                 if flowing { payload["stream"]=json!(true); }
                 (format!("{base}/messages"),payload)
+            }
+            // A API Responses: o sistema vai em `instructions` e a conversa em
+            // `input`. O modelo vai no campo que o mod disser — a API de
+            // agentes da Perplexity escolhe a predefinição em `preset`.
+            HttpKind::Responses=>{
+                let base=self.config.base_url.as_deref().unwrap_or("https://api.openai.com/v1").trim_end_matches('/');
+                let instructions=messages.iter().filter(|m|m.role=="system").map(|m|m.content.as_str()).collect::<Vec<_>>().join("\n\n");
+                let input=messages.iter().filter(|m|m.role!="system").map(|m|json!({"role":if m.role=="assistant" {"assistant"} else {"user"},"content":m.content})).collect::<Vec<_>>();
+                let field=self.config.model_field.as_deref().filter(|field|!field.is_empty()).unwrap_or("model");
+                let mut payload=json!({"input":input});
+                payload[field]=json!(model);
+                if !instructions.is_empty() { payload["instructions"]=json!(instructions); }
+                if flowing { payload["stream"]=json!(true); }
+                (format!("{base}/responses"),payload)
             }
         }
     }
@@ -649,7 +723,7 @@ fn refusal_in(event:&Value)->Option<String> {
 
 /// O fim de um texto, até `limit` caracteres, sem cortar no meio de um
 /// caractere. É o pedaço da saída que costuma dizer por que o agente parou.
-fn tail(text:&str,limit:usize)->&str {
+pub(crate) fn tail(text:&str,limit:usize)->&str {
     let text=text.trim();
     let count=text.chars().count();
     if count<=limit { return text; }
@@ -678,11 +752,15 @@ impl CliProvider {
     /// não lê a entrada — é o caso do Copilot, que só aceita `-p`.
     fn inline(&self)->bool { self.config.args.iter().any(|arg|arg==PROMPT) }
 
+    /// O pedido vai num arquivo (`{prompt_file}`): o agente não lê a entrada
+    /// padrão, e o arquivo não tem o teto do argumento.
+    fn uses_prompt_file(&self)->bool { self.config.args.iter().any(|arg|arg==crate::llm::PROMPT_FILE) }
+
     /// Se este pedido cabe no argumento. A linha de comando tem teto — 32.767
     /// caracteres no Windows (o erro 206), 128 KB por argumento no Linux — e
     /// o pedido leva histórico e trechos do repositório. Acima do limite ele vai
     /// pela entrada padrão, que o Copilot lê como lê o `-p`.
-    fn inline_for(&self,prompt:&str)->bool { self.inline() && prompt.chars().count()<=INLINE_LIMIT }
+    fn inline_for(&self,prompt:&str)->bool { self.uses_prompt_file() || (self.inline() && prompt.chars().count()<=INLINE_LIMIT) }
 
     /// A linha de comando deste pedido. O modelo reserva igual ao modelo do
     /// pedido sai inteiro: o Claude recusa os dois iguais, e a reserva é por
@@ -722,7 +800,7 @@ impl CliProvider {
                 match effort { Some(effort)=>args.push(arg.replace(crate::llm::EFFORT,effort)), None=>{ if args.last().is_some_and(|flag:&String|flag.starts_with('-')) { args.pop(); } } }
                 continue;
             }
-            args.push(if arg==PROMPT { prompt.to_string() } else if arg==USAGE_FILE { usage_file.display().to_string() } else { arg.replace("{model}",model) });
+            args.push(if arg==PROMPT { prompt.to_string() } else if arg==USAGE_FILE { usage_file.display().to_string() } else if arg==crate::llm::PROMPT_FILE { prompt_file_of(usage_file).display().to_string() } else { arg.replace("{model}",model) });
         }
         args
     }
@@ -838,6 +916,8 @@ impl CliProvider {
         crate::guard::enter()?;
         crate::guard::check_quota(&self.name,self.config.command.as_deref().unwrap_or(&self.name)).await?;
         let mut watch=crate::guard::Watch::default();
+        // O pedido em arquivo vive só enquanto o agente roda.
+        let _prompt_file=if self.uses_prompt_file() { Some(PromptFile::write(prompt_file_of(&usage_file),&prompt)?) } else { None };
         let mut child=self.open(model,effort,resume,once,&prompt,&usage_file).await?;
         // Daqui em diante, qualquer saída que não seja o agente terminar por
         // conta própria derruba a árvore dele — inclusive o pedido largado.
@@ -967,7 +1047,7 @@ fn session_in(event:&Value)->Option<String> {
 
 /// Uma linha da saída em texto, sem a quebra. O que não é UTF-8 vira o
 /// caractere de substituição em vez de derrubar o pedido.
-fn text_of(bytes:&[u8])->String {
+pub(crate) fn text_of(bytes:&[u8])->String {
     let bytes=bytes.strip_suffix(b"\r").unwrap_or(bytes);
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -981,14 +1061,14 @@ fn text_of(bytes:&[u8])->String {
 ///
 /// Largada sem `release`, a árvore cai: o agente que terminou sozinho é o único
 /// caminho que a deixa em pé.
-struct Tree { pid:Option<u32> }
+pub(crate) struct Tree { pid:Option<u32> }
 
 impl Tree {
-    fn of(child:&tokio::process::Child)->Self { Self{pid:child.id()} }
+    pub(crate) fn of(child:&tokio::process::Child)->Self { Self{pid:child.id()} }
     /// O agente saiu por conta própria: não há o que matar, e o número dele
     /// pode voltar a outro processo.
-    fn release(&mut self) { self.pid=None; }
-    fn kill(&mut self) { if let Some(pid)=self.pid.take() { kill_tree(pid); } }
+    pub(crate) fn release(&mut self) { self.pid=None; }
+    pub(crate) fn kill(&mut self) { if let Some(pid)=self.pid.take() { kill_tree(pid); } }
 }
 
 impl Drop for Tree { fn drop(&mut self) { self.kill(); } }
@@ -1030,6 +1110,27 @@ impl Feeder {
 
 impl Drop for Feeder { fn drop(&mut self) { self.0.abort(); } }
 
+/// O arquivo do pedido (`{prompt_file}`), ao lado do arquivo de uso da mesma
+/// execução: um nome por pedido, sem colisão.
+fn prompt_file_of(usage_file:&std::path::Path)->std::path::PathBuf { usage_file.with_extension("prompt.md") }
+
+/// O pedido gravado para o agente ler. Só quem roda o JayV o lê, e ele some
+/// quando o pedido termina — de qualquer jeito que termine.
+struct PromptFile(std::path::PathBuf);
+
+impl PromptFile {
+    fn write(path:std::path::PathBuf,prompt:&str)->Result<Self> {
+        let mut options=std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+        let mut file=options.open(&path).with_context(||format!("could not write the request file {}",path.display()))?;
+        std::io::Write::write_all(&mut file,prompt.as_bytes())?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for PromptFile { fn drop(&mut self) { let _=std::fs::remove_file(&self.0); } }
+
 /// Fecha a conta da execução com o que o agente gravou no arquivo de uso, se
 /// gravou, e apaga o arquivo.
 fn settle_meter(meter:crate::usage::Meter,prompt:&str,response:&str,success:bool,usage_file:&std::path::Path)->(u64,u64) {
@@ -1037,8 +1138,8 @@ fn settle_meter(meter:crate::usage::Meter,prompt:&str,response:&str,success:bool
     let _=std::fs::remove_file(usage_file);
     meter.settle(prompt,response,success,file.as_ref())
 }
-fn provider_error(body:&Value)->String { body.pointer("/error/message").and_then(Value::as_str).or_else(||body.pointer("/error/type").and_then(Value::as_str)).unwrap_or("unknown error").to_string() }
-fn request_error(provider:&str,error:reqwest::Error)->anyhow::Error {
+pub(crate) fn provider_error(body:&Value)->String { body.pointer("/error/message").and_then(Value::as_str).or_else(||body.pointer("/error/type").and_then(Value::as_str)).unwrap_or("unknown error").to_string() }
+pub(crate) fn request_error(provider:&str,error:reqwest::Error)->anyhow::Error {
     if error.is_timeout() {
         Text::new("provider.timeout").with("provider",provider).into()
     } else if error.is_connect() {
@@ -1083,6 +1184,20 @@ mod tests {
         CliProvider{name:"agente".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),body.into()],..config("cli")},workdir:Workdir::default()}
     }
     fn ask()->Vec<ChatMessage> { vec![ChatMessage{role:"user".into(),content:"oi".into()}] }
+
+    /// `{prompt_file}`: o pedido vai num arquivo que o agente lê, sem o teto
+    /// do argumento, e o arquivo some no fim.
+    #[cfg(unix)]
+    #[tokio::test] async fn the_request_file_holds_the_whole_request_and_goes_away() {
+        let long="x".repeat(INLINE_LIMIT*2);
+        let provider=CliProvider{name:"agente".into(),config:ProviderConfig{command:Some("sh".into()),args:vec!["-c".into(),"wc -c < \"$0\"; echo \"$0\"".into(),crate::llm::PROMPT_FILE.into()],..config("cli")},workdir:Workdir::default()};
+        let answer=provider.chat(&[ChatMessage{role:"user".into(),content:long.clone()}],"modelo").await.expect("responde");
+        let mut lines=answer.response.lines();
+        let size:usize=lines.next().expect("tamanho").trim().parse().expect("número");
+        assert_eq!(size,format!("user: {long}").len());
+        let path=lines.next().expect("caminho");
+        assert!(!std::path::Path::new(path).exists(),"o arquivo some no fim: {path}");
+    }
 
     /// O Claude em `stream-json` explica a falha na saída, não no canal de
     /// erro. É esse texto que tem de chegar à tela.
@@ -1208,6 +1323,49 @@ mod tests {
         assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[{\"delta\":{\"content\":\"oi\"}}]}",&mut gathered),Some("oi".into()));
         assert_eq!(read_event(&HttpKind::OpenAi,"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}",&mut gathered),None);
         assert_eq!((gathered.input_tokens,gathered.output_tokens),(12,7));
+    }
+
+    /// A API Responses (a de agentes da Perplexity): o sistema em
+    /// `instructions`, a conversa em `input` e o modelo no campo que o mod
+    /// diz — `preset`, na Perplexity.
+    #[test] fn the_responses_request_carries_instructions_input_and_the_model_field() {
+        let provider=HttpProvider::responses("perplexity".into(),ProviderConfig{base_url:Some("https://api.perplexity.ai/v1/".into()),model_field:Some("preset".into()),..config("responses")});
+        let messages=vec![ChatMessage{role:"system".into(),content:"be brief".into()},ChatMessage{role:"user".into(),content:"oi".into()},ChatMessage{role:"assistant".into(),content:"olá".into()},ChatMessage{role:"user".into(),content:"e agora?".into()}];
+        let (url,payload)=provider.compose(&messages,"fast",true);
+        assert_eq!(url,"https://api.perplexity.ai/v1/responses");
+        assert_eq!(payload,json!({"preset":"fast","instructions":"be brief","stream":true,"input":[{"role":"user","content":"oi"},{"role":"assistant","content":"olá"},{"role":"user","content":"e agora?"}]}));
+        let (_,plain)=HttpProvider::responses("x".into(),ProviderConfig{base_url:Some("https://api.example.com/v1".into()),..config("responses")}).compose(&messages[1..2],"gpt",false);
+        assert_eq!(plain,json!({"model":"gpt","input":[{"role":"user","content":"oi"}]}));
+    }
+
+    #[test] fn the_responses_stream_and_body_yield_text_and_token_counts() {
+        let mut gathered=Harvest::default();
+        assert_eq!(read_event(&HttpKind::Responses,"data: {\"type\":\"response.output_text.delta\",\"delta\":\"Rust \"}",&mut gathered),Some("Rust ".into()));
+        assert_eq!(read_event(&HttpKind::Responses,"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"web_search_call\"}}",&mut gathered),None);
+        assert_eq!(read_event(&HttpKind::Responses,"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":30,\"output_tokens\":8,\"input_tokens_details\":{\"cached_tokens\":10}}}}",&mut gathered),None);
+        assert_eq!((gathered.input_tokens,gathered.output_tokens,gathered.cache_read_tokens),(30,8,10));
+        let provider=HttpProvider::responses("x".into(),config("responses"));
+        let body=json!({"status":"completed","output":[{"type":"search_results","results":[]},{"type":"message","content":[{"type":"output_text","text":"Answer [1]."}]}],"usage":{"input_tokens":5,"output_tokens":3}});
+        assert_eq!(provider.reap(&body),Harvest{text:"Answer [1].".into(),input_tokens:5,output_tokens:3,cache_read_tokens:0,cache_write_tokens:0});
+    }
+
+    /// As citações da resposta (Perplexity, busca da OpenAI) viram uma lista de
+    /// links no fim, sem repetir endereço e sem o que quebraria o link.
+    #[test] fn the_responses_answer_ends_with_the_sources_it_cites() {
+        let cite=|url:&str,title:&str|json!({"type":"url_citation","url":url,"title":title,"start_index":0,"end_index":4});
+        let response=json!({"output":[{"type":"message","content":[{"type":"output_text","text":"Rust [1][2].","annotations":[
+            cite("https://www.rust-lang.org/","Rust [lang]"),cite("https://doc.rust-lang.org/book/","The Book"),cite("https://www.rust-lang.org/",""),
+            cite("javascript:alert(1)","x"),cite("https://example.com/a b","spaces"),
+        ]}]}],"usage":{"input_tokens":5,"output_tokens":3}});
+        let sources="\n\n1. [Rust lang](https://www.rust-lang.org/)\n2. [The Book](https://doc.rust-lang.org/book/)";
+        assert_eq!(responses_sources(&response),sources);
+        let mut gathered=Harvest::default();
+        let line=format!("data: {}",json!({"type":"response.completed","response":response}));
+        assert_eq!(read_event(&HttpKind::Responses,&line,&mut gathered),Some(sources.to_string()));
+        assert_eq!(gathered.output_tokens,3);
+        let provider=HttpProvider::responses("x".into(),config("responses"));
+        assert_eq!(provider.reap(&response).text,format!("Rust [1][2].{sources}"));
+        assert_eq!(responses_sources(&json!({"output":[{"type":"message","content":[{"type":"output_text","text":"no sources"}]}]})),"");
     }
 
     #[test] fn the_anthropic_stream_yields_text_and_token_counts() {

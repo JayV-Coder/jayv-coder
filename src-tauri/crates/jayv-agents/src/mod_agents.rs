@@ -32,6 +32,12 @@ struct Definition {
     #[serde(default)] plan_args:Vec<String>,
     #[serde(default)] edits:bool,
     #[serde(default)] models:Vec<String>,
+    /// API Responses: o campo do pedido que leva o modelo (`preset`).
+    #[serde(default)] model_field:String,
+    /// ACP: as variáveis do agente e os ids dos modos dele.
+    #[serde(default)] env:std::collections::BTreeMap<String,String>,
+    #[serde(default)] build_mode:String,
+    #[serde(default)] plan_mode:String,
 }
 
 /// Um agente pronto para gravar.
@@ -70,6 +76,7 @@ pub fn agents_of(manifest:&Manifest,value:&Value)->Option<Vec<ModAgent>> {
         let options=CustomOptions{
             name:name(&title,index),kind:definition.kind,args:definition.args,plan_args:definition.plan_args,edits:definition.edits,
             protocol:definition.protocol.unwrap_or_else(||crate::mods::custom::OPENAI.into()),base_url:definition.base_url,key_required:definition.key_required,
+            model_field:definition.model_field,env:definition.env,build_mode:definition.build_mode,plan_mode:definition.plan_mode,
             ..Default::default()
         }.checked().ok()?;
         let command=if options.kind==API { String::new() } else { definition.command.trim().to_string() };
@@ -167,6 +174,25 @@ impl ExtensionPoint for AgentsPoint {
             assert!(agents_of(&mod_,&broken).is_none(),"{broken}");
         }
         assert!(agents_of(&manifest("x".repeat(40).as_str(),json!([api])),&json!([api])).is_none(),"o id do agente passaria de 32");
+    }
+
+    /// Os agentes ACP e os de API com protocolo novo chegam do catálogo com o
+    /// que é deles: as variáveis e os modos, o campo do modelo.
+    #[test] fn acp_and_responses_agents_keep_their_definitions() {
+        let acp=json!({"kind":"acp","command":"opencode","args":["acp"],"env":{"OPENCODE_PERMISSION":"{\"bash\":\"ask\"}"},"buildMode":"build","planMode":"plan","models":["default"]});
+        let responses=json!({"kind":"api","protocol":"responses","baseUrl":"https://api.perplexity.ai/v1","keyRequired":true,"modelField":"preset","models":["fast","high"]});
+        let mod_=manifest("open-agents",json!([acp,responses]));
+        let agents=agents_of(&mod_,&mod_.contributes["agents"]).expect("lê");
+        assert_eq!((agents[0].options.kind.as_str(),agents[0].options.build_mode.as_str(),agents[0].options.plan_mode.as_str()),("acp","build","plan"));
+        assert_eq!(agents[0].options.env.get("OPENCODE_PERMISSION").map(String::as_str),Some("{\"bash\":\"ask\"}"));
+        assert!(agents[0].options.edits,"o agente ACP escreve no projeto");
+        assert_eq!((agents[1].options.protocol.as_str(),agents[1].options.model_field.as_str()),("responses","preset"));
+        let connection=database();
+        AGENTS.install(&connection,&mod_,&mod_.contributes["agents"]).expect("instala");
+        let settings=llm::load(&connection).expect("lê");
+        let model=settings.models.iter().find(|model|model.agent.key()=="mod-open-agents").expect("modelo");
+        assert!(model.capabilities.iter().any(|capability|capability=="code"),"{:?}",model.capabilities);
+        assert!(llm::validate(&settings).is_ok());
     }
 
     #[test] fn installing_creates_what_is_missing_and_uninstalling_removes_it() {

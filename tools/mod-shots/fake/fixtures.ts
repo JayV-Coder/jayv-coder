@@ -38,6 +38,30 @@ const SECOND: Project = { id: "p2", name: "web-dashboard", rootPath: "/home/dev/
 
 const BUILT_IN = ["claude", "codex", "copilot", "cursor", "kilo", "openrouter", "litellm"] as const;
 
+/** Os agentes que os mods do catálogo trazem (o ponto `agents`), como ficam
+ * depois de instalar: a mesma linha, os mesmos modos e protocolos dos
+ * `mod.json`, com a chave já salva nos de API. */
+const MOD_AGENTS: [string, string, string, Record<string, unknown>][] = [
+  ["mod-gemini", "Google Gemini", "gemini", { kind: "acp", args: ["--acp"], buildMode: "default", planMode: "plan" }],
+  ["mod-deepseek", "DeepSeek", "", { kind: "api", protocol: "openai", baseUrl: "https://api.deepseek.com", keyRequired: true, hasKey: true, approveMcps: false }],
+  ["mod-perplexity", "Perplexity", "", { kind: "api", protocol: "responses", baseUrl: "https://api.perplexity.ai/v1", keyRequired: true, hasKey: true, modelField: "preset", approveMcps: false }],
+  ["mod-manus", "Manus", "", { kind: "api", protocol: "manus", baseUrl: "https://api.manus.ai/v2", keyRequired: true, hasKey: true, approveMcps: false }],
+  ["mod-meta-ai", "Meta AI", "muse", {
+    kind: "cli", edits: true, approveMcps: false,
+    args: ["exec", "--model", "{model}", "--trust-workspace", "--disable-approval", "--disable-request-user-input", "--prompt-file", "{prompt_file}"],
+    planArgs: ["exec", "--model", "{model}", "--trust-workspace", "--disable-approval", "--disable-write", "--disable-shell", "--disable-request-user-input", "--prompt-file", "{prompt_file}"],
+  }],
+  ["mod-kimi-code", "Kimi Code", "kimi", { kind: "acp", args: ["acp"], buildMode: "default", planMode: "plan" }],
+  ["mod-opencode", "OpenCode", "opencode", { kind: "acp", args: ["acp"], env: { OPENCODE_PERMISSION: '{"bash":"ask","webfetch":"ask","external_directory":"ask"}' }, buildMode: "build", planMode: "plan" }],
+  ["mod-aider", "Aider", "aider", {
+    kind: "cli", edits: true, approveMcps: false,
+    args: ["--model", "{model}", "--yes-always", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-check-update", "--no-show-release-notes", "--no-analytics", "--no-pretty", "--no-fancy-input", "--no-suggest-shell-commands", "--no-show-model-warnings", "--message-file", "{prompt_file}"],
+    planArgs: ["--model", "{model}", "--yes-always", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-check-update", "--no-show-release-notes", "--no-analytics", "--no-pretty", "--no-fancy-input", "--no-suggest-shell-commands", "--no-show-model-warnings", "--chat-mode", "ask", "--message-file", "{prompt_file}"],
+  }],
+  ["mod-openhands", "OpenHands", "openhands", { kind: "acp", args: ["acp"], buildMode: "always-ask" }],
+  ["mod-devin", "Devin", "devin", { kind: "acp", args: ["acp"], buildMode: "accept-edits", planMode: "plan" }],
+];
+
 function agents(): AgentSettings[] {
   const mechanisms = { claude: ["webSearch", "webFetch"], codex: ["webSearch"], copilot: ["webFetch"] };
   return [
@@ -50,6 +74,7 @@ function agents(): AgentSettings[] {
     { id: "litellm", enabled: true, command: "", timeout: 300, options: { baseUrl: "http://localhost:4000/v1", approveMcps: false, hasKey: true } },
     { id: "mod-ollama", enabled: true, command: "", timeout: 300, options: { name: "Ollama", kind: "api", args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "http://localhost:11434/v1", keyRequired: false, approveMcps: false, hasKey: false } },
     { id: "mod-lm-studio", enabled: true, command: "", timeout: 300, options: { name: "LM Studio", kind: "api", args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "http://localhost:1234/v1", keyRequired: false, approveMcps: false, hasKey: false } },
+    ...MOD_AGENTS.map(([id, name, command, options]) => ({ id, enabled: true, command, timeout: 900, options: { name, args: [], planArgs: [], edits: false, protocol: "openai", baseUrl: "", keyRequired: false, approveMcps: true, hasKey: false, ...options } })),
   ] as AgentSettings[];
 }
 
@@ -63,12 +88,25 @@ const MODELS: [string, string, boolean, "low" | "medium" | "high" | "free", "fas
   ["litellm", "gpt-4o-mini", true, "low", "fast", 128_000],
   ["mod-ollama", "llama3.2", true, "free", "medium", 128_000], ["mod-ollama", "qwen2.5-coder", true, "free", "medium", 32_000],
   ["mod-lm-studio", "qwen2.5-coder-7b-instruct", true, "free", "medium", 32_000],
+  ["mod-gemini", "default", true, "medium", "medium", 1_000_000], ["mod-gemini", "gemini-3.1-pro-preview", true, "medium", "medium", 1_000_000], ["mod-gemini", "gemini-3.8-flash", false, "low", "fast", 1_000_000],
+  ["mod-deepseek", "deepseek-v4-pro", true, "low", "medium", 128_000], ["mod-deepseek", "deepseek-flash", true, "low", "fast", 128_000],
+  ["mod-perplexity", "fast", true, "low", "fast", 128_000], ["mod-perplexity", "low", false, "low", "fast", 128_000], ["mod-perplexity", "medium", true, "medium", "medium", 128_000], ["mod-perplexity", "high", false, "high", "slow", 128_000],
+  ["mod-manus", "standard", true, "medium", "slow", 200_000], ["mod-manus", "lite", true, "low", "medium", 200_000],
+  ["mod-meta-ai", "muse-spark-1.3", true, "medium", "medium", 200_000], ["mod-meta-ai", "muse-wonder-1.0", false, "high", "slow", 200_000],
+  ["mod-kimi-code", "default", true, "low", "medium", 256_000],
+  ["mod-opencode", "default", true, "medium", "medium", 200_000], ["mod-opencode", "anthropic/claude-sonnet-5.5", true, "medium", "medium", 200_000], ["mod-opencode", "openai/gpt-5.5", false, "medium", "medium", 400_000],
+  ["mod-aider", "sonnet", true, "medium", "medium", 200_000], ["mod-aider", "opus", false, "high", "slow", 200_000], ["mod-aider", "gemini", false, "medium", "medium", 1_000_000], ["mod-aider", "deepseek", true, "low", "medium", 128_000],
+  ["mod-openhands", "default", true, "medium", "medium", 200_000],
+  ["mod-devin", "default", true, "medium", "medium", 200_000],
 ];
+
+/** Os agentes que escrevem no projeto: os de API e o Ollama só respondem. */
+const WRITES = new Set(["mod-gemini", "mod-meta-ai", "mod-kimi-code", "mod-opencode", "mod-aider", "mod-openhands", "mod-devin"]);
 
 function models(): AgentModel[] {
   return MODELS.map(([agent, model, enabled, costClass, speed, contextWindow]) => ({
     agent: agent as AgentModel["agent"], model, enabled, costClass, speed, contextWindow,
-    capabilities: agent === "openrouter" || agent === "litellm" || agent.startsWith("mod-") ? ["chat", "reasoning"] : ["chat", "code", "reasoning", "tools"],
+    capabilities: agent === "openrouter" || agent === "litellm" || (agent.startsWith("mod-") && !WRITES.has(agent)) ? ["chat", "reasoning"] : ["chat", "code", "reasoning", "tools"],
   }));
 }
 
@@ -199,6 +237,16 @@ export function chats(say: Say): Chat[] {
     engine("litellm", "litellm", "gpt-4o-mini", 170),
     engine("ollama", "mod-ollama", "llama3.2", 200),
     engine("lmstudio", "mod-lm-studio", "qwen2.5-coder-7b-instruct", 230),
+    engine("gemini", "mod-gemini", "gemini-3.1-pro-preview", 232),
+    engine("deepseek", "mod-deepseek", "deepseek-v4-pro", 234),
+    engine("perplexity", "mod-perplexity", "medium", 236),
+    engine("manus", "mod-manus", "standard", 238),
+    engine("metaai", "mod-meta-ai", "muse-spark-1.3", 240),
+    engine("kimi", "mod-kimi-code", "default", 242),
+    engine("opencode", "mod-opencode", "anthropic/claude-sonnet-5.5", 244),
+    engine("aider", "mod-aider", "sonnet", 246),
+    engine("openhands", "mod-openhands", "default", 248),
+    engine("devin", "mod-devin", "default", 250),
     {
       id: "c-review", title: say("review.title"), route: route("claude", "sonnet"), minutesAgo: 260,
       done: [[say("review.q"), `${say("review.a")}⁣${say("review.r")}`]],
