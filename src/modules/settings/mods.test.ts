@@ -31,6 +31,14 @@ describe("command lines of a created mod", () => {
     expect(lineProblem([""])).toBe("mods.args.invalid");
   });
 
+  it("accept {prompt_file} alone, and only {model} in an ACP line", () => {
+    expect(lineProblem(["--message-file", "{prompt_file}"])).toBeNull();
+    expect(lineProblem(["--message-file={prompt_file}"])).toBe("mods.args.placeholder");
+    expect(lineProblem(["acp", "--model", "{model}"], true)).toBeNull();
+    expect(lineProblem(["acp", "{prompt}"], true)).toBe("mods.args.placeholder");
+    expect(lineProblem(["acp", "{prompt_file}"], true)).toBe("mods.args.placeholder");
+  });
+
   it("make an id from the name that never repeats", () => {
     expect(modId("Meu Modelo Local!", [])).toBe("mod-meu-modelo-local");
     expect(modId("Ação", ["mod-acao"])).toBe("mod-acao-2");
@@ -75,6 +83,23 @@ describe("mods in the settings draft", () => {
     const state = useSettings.getState();
     expect(problems(state, writer)).toEqual({ command: "agent.command.hint", args: "mods.args.placeholder", planArgs: "mods.planArgs.required" });
     expect(problems(state, proxy)).toEqual({ baseUrl: "mods.baseUrl.required", apiKey: "gateway.apiKey.required" });
+    useSettings.setState({ agents: [], models: [] });
+  });
+
+  it("check the modes of an ACP mod and the model field of the Responses API", () => {
+    const acp = "mod-acp" as const;
+    const responses = "mod-responses" as const;
+    const base = { args: [], planArgs: [], edits: false, protocol: "openai" as const, baseUrl: "", keyRequired: false, approveMcps: false, hasKey: false };
+    useSettings.setState({
+      models: [],
+      agents: [
+        { id: acp, enabled: true, command: "kimi", timeout: 300, options: { ...base, name: "Kimi", kind: "acp", args: ["acp", "{prompt}"], buildMode: "default", planMode: "plan mode" } },
+        { id: responses, enabled: true, command: "", timeout: 300, options: { ...base, name: "Search", kind: "api", protocol: "responses", baseUrl: "https://api.example.com/v1", modelField: "Preset" } },
+      ],
+    });
+    const state = useSettings.getState();
+    expect(problems(state, acp)).toEqual({ args: "mods.args.placeholder", planMode: "mods.mode.invalid" });
+    expect(problems(state, responses)).toEqual({ modelField: "mods.modelField.invalid" });
     useSettings.setState({ agents: [], models: [] });
   });
 

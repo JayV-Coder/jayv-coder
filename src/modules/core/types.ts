@@ -287,8 +287,12 @@ export const isGateway = (id: AgentId) => GATEWAY_AGENTS.includes(id);
 
 /** O mod fala por HTTP (endereço e chave): um gateway ou um mod criado de API. */
 export const isApiAgent = (agent: AgentSettings) => isGateway(agent.id) || (isCustomMod(agent.id) && (agent.options as CustomModOptions).kind === "api");
-/** O mod edita o projeto, ou só responde por texto. */
-export const editsProject = (agent: AgentSettings) => (isCustomMod(agent.id) ? (agent.options as CustomModOptions).kind === "cli" && (agent.options as CustomModOptions).edits : !isGateway(agent.id));
+/** O mod edita o projeto, ou só responde por texto. O agente ACP sempre edita. */
+export const editsProject = (agent: AgentSettings) => {
+  if (!isCustomMod(agent.id)) return !isGateway(agent.id);
+  const options = agent.options as CustomModOptions;
+  return options.kind === "acp" || (options.kind === "cli" && options.edits);
+};
 export type CostClass = "free" | "low" | "medium" | "high";
 export type Speed = "fast" | "medium" | "slow";
 export type Capability = "chat" | "code" | "reasoning" | "tools";
@@ -343,25 +347,37 @@ export interface KiloOptions {
   approveMcps: boolean;
 }
 
+/** Os protocolos dos mods de API: chat da OpenAI, mensagens da Anthropic,
+ * Responses da OpenAI (a API de agentes da Perplexity) e tarefas da Manus. */
+export type ModProtocol = "openai" | "anthropic" | "responses" | "manus";
+
 /** A definição de um mod criado (`mods::custom` no núcleo). Linha de comando:
- * o programa é o `command` do agente, e `args` levam `{model}` e, sozinho num
- * argumento, `{prompt}`. API: o endereço compatível com a OpenAI ou com a
- * Anthropic, com a chave guardada só neste computador. */
+ * o programa é o `command` do agente, e `args` levam `{model}` e, sozinhos num
+ * argumento, `{prompt}` ou `{prompt_file}`. ACP: o programa fala o Agent
+ * Client Protocol, e o JayV escolhe o modo e o modelo que ele anuncia. API: o
+ * endereço compatível com um dos protocolos, com a chave guardada só neste
+ * computador. */
 export interface CustomModOptions {
   name: string;
-  kind: "cli" | "api";
+  kind: "cli" | "acp" | "api";
   args: string[];
   /** A linha que não escreve no projeto: o planejamento e a política. */
   planArgs: string[];
   /** O mod escreve no projeto (os modelos podem ter código e ferramentas). */
   edits: boolean;
-  protocol: "openai" | "anthropic";
+  protocol: ModProtocol;
   baseUrl: string;
   keyRequired: boolean;
   approveMcps: boolean;
   hasKey: boolean;
   apiKey?: string;
   clearKey?: boolean;
+  /** API Responses: o campo do pedido que leva o modelo (`preset`). */
+  modelField?: string;
+  /** ACP: as variáveis do agente e os ids dos modos dele. */
+  env?: Record<string, string>;
+  buildMode?: string;
+  planMode?: string;
 }
 
 /** Um agente que um mod do catálogo traz (o ponto `agents`): a definição de
@@ -369,8 +385,9 @@ export interface CustomModOptions {
  * MCP). Instalado, vira o agente `mod-<id do mod>` (`-2`, `-3`… para os
  * seguintes). */
 export type ModAgent =
-  | { kind: "api"; protocol: "openai" | "anthropic"; baseUrl: string; keyRequired: boolean; models?: string[] }
-  | { kind: "cli"; command: string; args: string[]; planArgs?: string[]; edits?: boolean; models?: string[] };
+  | { kind: "api"; protocol: ModProtocol; baseUrl: string; keyRequired: boolean; modelField?: string; models?: string[] }
+  | { kind: "cli"; command: string; args: string[]; planArgs?: string[]; edits?: boolean; models?: string[] }
+  | { kind: "acp"; command: string; args: string[]; env?: Record<string, string>; buildMode?: string; planMode?: string; models?: string[] };
 
 /** O que um mod traz a cada ponto de extensão do app, pela chave do ponto. Os
  * pontos que esta versão conhece têm tipo; um ponto novo chega como

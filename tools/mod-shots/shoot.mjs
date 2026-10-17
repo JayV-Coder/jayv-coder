@@ -109,12 +109,24 @@ const studio = (page, name, ...args) => page.evaluate(([method, values]) => wind
 
 /** As cenas de cada mod: o print `enable` (a aba Mods com o mod) e os de uso,
  * pelo nome que o `page.json` cita. */
-const AGENT_TAB = { claude: "claude", codex: "codex", copilot: "copilot", cursor: "cursor", kilo: "kilo", openrouter: "openrouter", litellm: "litellm", ollama: "mod-ollama", "lm-studio": "mod-lm-studio" };
-const AGENT_CHAT = { claude: "c-claude", codex: "c-codex", copilot: "c-copilot", cursor: "c-cursor", kilo: "c-kilo", openrouter: "c-openrouter", litellm: "c-litellm", ollama: "c-ollama", "lm-studio": "c-lmstudio" };
+const AGENT_TAB = {
+  claude: "claude", codex: "codex", copilot: "copilot", cursor: "cursor", kilo: "kilo", openrouter: "openrouter", litellm: "litellm", ollama: "mod-ollama", "lm-studio": "mod-lm-studio",
+  gemini: "mod-gemini", deepseek: "mod-deepseek", perplexity: "mod-perplexity", manus: "mod-manus", "meta-ai": "mod-meta-ai",
+  "kimi-code": "mod-kimi-code", opencode: "mod-opencode", aider: "mod-aider", openhands: "mod-openhands", devin: "mod-devin",
+};
+const AGENT_CHAT = {
+  claude: "c-claude", codex: "c-codex", copilot: "c-copilot", cursor: "c-cursor", kilo: "c-kilo", openrouter: "c-openrouter", litellm: "c-litellm", ollama: "c-ollama", "lm-studio": "c-lmstudio",
+  gemini: "c-gemini", deepseek: "c-deepseek", perplexity: "c-perplexity", manus: "c-manus", "meta-ai": "c-metaai",
+  "kimi-code": "c-kimi", opencode: "c-opencode", aider: "c-aider", openhands: "c-openhands", devin: "c-devin",
+};
+
+/** Os agentes ACP: o passo deles é carregar os modelos do agente, então o
+ * print mostra a lista de modelos, não o topo da aba. */
+const ACP = new Set(["gemini", "kimi-code", "opencode", "openhands", "devin"]);
 
 const SCENES = {
   ...Object.fromEntries(Object.keys(AGENT_TAB).map((id) => [id, {
-    settings: async (page) => { await studio(page, "settings", AGENT_TAB[id]); },
+    settings: async (page) => { await studio(page, "settings", AGENT_TAB[id]); if (ACP.has(id)) await revealText(page, "model.refresh"); },
     chat: async (page) => { await studio(page, "chat", AGENT_CHAT[id]); },
   }])),
   stats: { stats: async (page) => { await studio(page, "view", "stats"); } },

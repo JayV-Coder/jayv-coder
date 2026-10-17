@@ -35,11 +35,12 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
   const options = agent.options as Partial<CustomModOptions>;
   const name = useSettings((state) => agentLabel(agent.id, state.agents));
   // O mod criado de linha de comando não sabe listar modelos: eles são os que
-  // a pessoa escreve.
+  // a pessoa escreve. O agente ACP anuncia os dele.
   const lists = !(custom && options.kind === "cli");
-  // As ferramentas MCP chegam por linha de comando, arquivo, ambiente ou pelo
-  // cliente MCP do app — este, só no protocolo da OpenAI.
-  const mcp = !custom || (options.kind === "api" && options.protocol === "openai");
+  // As ferramentas MCP chegam por linha de comando, arquivo, ambiente, pelo
+  // protocolo (ACP) ou pelo cliente MCP do app — este, só no protocolo da
+  // OpenAI.
+  const mcp = !custom || options.kind === "acp" || (options.kind === "api" && options.protocol === "openai");
   const probe = useSettings((state) => state.probes[agent.id] ?? null);
   const [min, max] = useSettings((state) => state.timeoutRange);
   const refreshing = useSettings((state) => state.refreshing);
@@ -60,7 +61,7 @@ export function AgentPanel({ agent, models, problems }: { agent: AgentSettings; 
         <AgentIcon agent={agent.id} className="size-11 shrink-0" />
         <div className="min-w-0 flex-1">
           <h3 className="text-xl font-semibold break-words">{name}</h3>
-          <p className="text-sm text-muted-foreground">{custom ? t(owned ? (gateway ? "mods.tagline.catalog.api" : "mods.tagline.catalog.cli") : (gateway ? "mods.tagline.api" : "mods.tagline.cli")) : t(`agent.${agent.id}.tagline` as Key)}</p>
+          <p className="text-sm text-muted-foreground">{custom ? t(`mods.tagline.${owned ? "catalog." : ""}${gateway ? "api" : options.kind === "acp" ? "acp" : "cli"}` as Key) : t(`agent.${agent.id}.tagline` as Key)}</p>
         </div>
         {custom && !owned && (
           <ConfirmAction title={t("mods.remove.title", { name })} description={t("mods.remove.description")} confirm={t("mods.remove")} onConfirm={() => { removeMod(agent.id); setSettingsTab("mods"); }}>

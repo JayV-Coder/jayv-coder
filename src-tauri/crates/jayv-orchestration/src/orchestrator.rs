@@ -1486,7 +1486,7 @@ pub fn mode_notes(signals:&RoutingSignals,mode:&str)->String {
 /// desde que outro ligado esteja: assim o Jev não o escolhe para depois falhar.
 /// Sozinho, ele fica, e o pedido diz que falta instalá-lo.
 fn set_aside_missing(providers:&mut HashMap<String,crate::config::ProviderConfig>,installed:impl Fn(&str)->bool) {
-    let missing:Vec<String>=providers.iter().filter(|(_,provider)|provider.enabled&&provider.kind=="cli"&&provider.command.as_deref().is_some_and(|command|!installed(command))).map(|(name,_)|name.clone()).collect();
+    let missing:Vec<String>=providers.iter().filter(|(_,provider)|provider.enabled&&matches!(provider.kind.as_str(),"cli"|"acp")&&provider.command.as_deref().is_some_and(|command|!installed(command))).map(|(name,_)|name.clone()).collect();
     if providers.values().filter(|provider|provider.enabled).count()>missing.len() {
         for name in missing { if let Some(provider)=providers.get_mut(&name) { provider.enabled=false; } }
     }

@@ -231,6 +231,11 @@ pub const EFFORT:&str="{effort}";
 /// O lugar da sessão do agente a retomar. Sem sessão, o argumento sai junto
 /// da flag que o anuncia, como o `{effort}`.
 pub const RESUME:&str="{resume}";
+/// O argumento que vira o caminho de um arquivo com o texto do pedido, para o
+/// agente que lê o pedido de arquivo e não da entrada padrão (`aider
+/// --message-file`, `muse exec --prompt-file`). Sem o teto do argumento: o
+/// arquivo some quando o pedido termina.
+pub const PROMPT_FILE:&str="{prompt_file}";
 /// O subcomando que retoma uma sessão do Codex (`codex exec … resume <id> -`).
 /// Com sessão, vira `resume` e o id; sem, some. As opções do `exec` vêm antes
 /// dele: o `resume` não aceita `--sandbox`, e o do `exec` vale para a retomada.
@@ -590,8 +595,9 @@ pub(crate) fn remember_secrets(connection:&Connection)->Result<()> {
     Ok(())
 }
 
-/// Os modelos do mod de API, pelo `/models` dele. Quem só responde por texto
-/// nunca leva as capacidades `code` e `tools`.
+/// Os modelos do mod de API, pelo `/models` dele, ou os que o agente ACP
+/// anuncia. Quem só responde por texto nunca leva as capacidades `code` e
+/// `tools`.
 pub async fn discover_gateway(agent:&AgentSettings)->Result<Vec<KnownModel>> {
     let config=agent.module().provider(agent);
     let listed=crate::providers::discover_listing(agent.id.key(),&config).await?;
@@ -606,7 +612,11 @@ pub async fn discover_gateway(agent:&AgentSettings)->Result<Vec<KnownModel>> {
 /// (o mod criado de linha de comando: os modelos dele são os que a pessoa
 /// escreve).
 pub async fn discover_agent(agent:&AgentSettings)->Option<Vec<KnownModel>> {
-    if agent.is_api() {
+    // O agente ACP anuncia os modelos ao abrir uma sessão; sem o programa
+    // instalado, nem abre.
+    let acp=!agent.is_api()&&agent.module().provider(agent).kind=="acp";
+    if acp&&locate(&agent.command).is_none() { return None; }
+    if agent.is_api()||acp {
         return match discover_gateway(agent).await { Ok(found) if !found.is_empty()=>Some(found), Ok(_)=>None, Err(error)=>{ eprintln!("[llm] {} listed no models: {error}",agent.id.key()); None } };
     }
     discover(agent.id,&agent.command).await

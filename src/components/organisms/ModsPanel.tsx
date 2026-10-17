@@ -178,7 +178,7 @@ export function ModsPanel() {
         <div className="grid min-w-0 flex-1 gap-0.5">
           <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
             <span className="truncate">{name}</span>
-            <Badge variant="outline">{t(isApiAgent(agent) ? "mods.kind.api" : "mods.kind.cli")}</Badge>
+            <Badge variant="outline">{t(isApiAgent(agent) ? "mods.kind.api" : (agent.options as { kind?: string }).kind === "acp" ? "mods.kind.acp" : "mods.kind.cli")}</Badge>
             {!savedIds.has(agent.id) && <Badge variant="warning">{t("settings.notSaved")}</Badge>}
           </span>
           <span className="truncate font-mono text-caption text-muted-foreground">{isApiAgent(agent) ? (agent.options as { baseUrl?: string }).baseUrl : agent.command}</span>

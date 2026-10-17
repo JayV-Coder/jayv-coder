@@ -1,10 +1,12 @@
 //! Os agentes e modelos do núcleo do JayV. O crate do app os reexporta com os
 //! mesmos nomes (`crate::llm`, `crate::providers`, `crate::usage`...).
 
+pub mod acp;
 pub mod agents;
 pub mod guard;
 pub mod limits;
 pub mod llm;
+pub mod manus;
 pub mod mcp;
 pub mod mcp_client;
 pub mod mod_agents;
