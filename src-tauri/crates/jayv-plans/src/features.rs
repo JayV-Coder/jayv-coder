@@ -41,6 +41,13 @@ pub const PARALLEL_TASKS:&str="parallelTasks";
 pub const SECRET_REDACTION:&str="secretRedaction";
 pub const SENSITIVE_FILES:&str="sensitiveFiles";
 pub const AGENT_SESSIONS:&str="agentSessions";
+/// As quatro opções do Jev que o plano embute: sem interruptor, sempre ligadas
+/// onde o plano as trava (e para o admin do sistema). Fora delas, valem as
+/// configurações de quem usa, como antes; o plano nunca as tira.
+pub const KEEP_SESSION_MODEL:&str="keepSessionModel";
+pub const LIMIT_RESUME:&str="limitResume";
+pub const PLAN_BUILD_SESSION:&str="planBuildSession";
+pub const AUTO_TURN_CEILING:&str="autoTurnCeiling";
 pub const CONTEXT_CACHE:&str="contextCache";
 pub const ENTRY_GATE:&str="entryGate";
 pub const EXIT_GATE:&str="exitGate";
@@ -138,7 +145,10 @@ impl Entitlements {
             for pattern in SENSITIVE_PATTERNS { if !settings.privacy.deny.iter().any(|known|known==pattern) { settings.privacy.deny.push(pattern.to_string()); } }
         }
         if self.locks(CONTEXT_CACHE) { settings.cache_ttl=settings.cache_ttl.max(MIN_CACHE_TTL); }
-        if self.locks(AGENT_SESSIONS) { settings.keep_session_model=true; }
+        if self.locks(AGENT_SESSIONS)||self.locks(KEEP_SESSION_MODEL) { settings.keep_session_model=true; }
+        if self.locks(LIMIT_RESUME) { settings.resume_after_limit=true; }
+        if self.locks(PLAN_BUILD_SESSION) { settings.resume_across_modes=true; }
+        if self.locks(AUTO_TURN_CEILING) { settings.auto_turn_ceiling=true; }
         if self.locks(ADAPTIVE_ROUTING) { settings.adaptive_routing=true; }
         if self.locks(SECOND_OPINION) { settings.review_changes=true; }
         if self.locks(PLAN_FIRST) { settings.plan_first=true; }
@@ -376,6 +386,22 @@ pub fn load(connection:&Connection)->Result<Entitlements> {
         assert_eq!(enforced.privacy.deny.iter().filter(|pattern|*pattern==".env").count(),1,"sem repetir");
         assert!(enforced.privacy.deny.contains(&"*.sqlite".to_string()),"o que quem usa acrescentou fica");
         assert_eq!(enforced.cache_ttl,7_200,"acima do mínimo, vale o de quem usa");
+    }
+
+    /// As quatro opções embutidas ligam onde o plano as trava; fora dele,
+    /// vale o que quem usa gravou, e o plano nunca as tira.
+    #[test] fn the_built_in_jev_options_are_on_only_where_the_plan_locks_them() {
+        let all=[KEEP_SESSION_MODEL,LIMIT_RESUME,PLAN_BUILD_SESSION,AUTO_TURN_CEILING];
+        let mut mine=everything_off();
+        mine.resume_after_limit=false; mine.resume_across_modes=false; mine.auto_turn_ceiling=false; mine.keep_session_model=false;
+        let locked=Entitlements::from_remote(&RemoteFeatures{managed:true,locked:all.iter().map(|key|key.to_string()).collect(),..remote(&[])}).apply_core(&mine);
+        assert!(locked.keep_session_model&&locked.resume_after_limit&&locked.resume_across_modes&&locked.auto_turn_ceiling);
+        let free=Entitlements::from_remote(&RemoteFeatures{managed:true,..remote(&[])}).apply_core(&mine);
+        assert!(!free.resume_after_limit&&!free.resume_across_modes&&!free.auto_turn_ceiling,"sem o plano, o que quem usa gravou");
+        let mut kept=everything_on();
+        kept.resume_after_limit=true; kept.resume_across_modes=true;
+        let outside=Entitlements::from_remote(&RemoteFeatures{managed:true,..remote(&[])}).apply_core(&kept);
+        assert!(outside.resume_after_limit&&outside.resume_across_modes,"o plano nunca tira a opção");
     }
 
     /// Servidor novo (`managed`): o admin tira até o núcleo de um plano, e a

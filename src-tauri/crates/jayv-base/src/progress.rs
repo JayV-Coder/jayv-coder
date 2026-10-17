@@ -123,6 +123,9 @@ impl Pulse {
     /// consumidora que morreu — não pode derrubar o pedido que está sendo
     /// atendido; o turno vale mais que a narração dele.
     pub fn beat(&self,beat:Beat) {
+        // O sinal de vida vale também para as chamadas de apoio, que não narram.
+        self.stop.touch();
+        if let Beat::Read{complexity,..}=&beat { self.stop.allow(allowance_minutes(complexity)); }
         let Some(sender)=&self.sender else { return };
         let Some(lines)=&self.lines else { let _=sender.send(beat); return };
         let Beat::Chunk{text}=beat else { return };
@@ -185,8 +188,41 @@ impl StopReason {
 #[derive(Clone,Default,Debug)]
 pub struct Stop(std::sync::Arc<StopState>);
 
-#[derive(Default,Debug)]
-struct StopState { reason:std::sync::Mutex<Option<StopReason>>, notify:tokio::sync::Notify }
+#[derive(Debug)]
+struct StopState { reason:std::sync::Mutex<Option<StopReason>>, notify:tokio::sync::Notify, clock:Clock }
+
+impl Default for StopState {
+    fn default()->Self { Self{reason:Default::default(),notify:Default::default(),clock:Clock::new()} }
+}
+
+/// O prazo de um pedido que o Jev decide sozinho: quando o pedido começou, o
+/// último sinal de vida (em segundos desde o começo) e os minutos que o pedido
+/// lido pede (`allowance`).
+#[derive(Debug)]
+struct Clock { started:Instant, last_beat:std::sync::atomic::AtomicU64, allowance:std::sync::atomic::AtomicU64 }
+
+impl Clock {
+    fn new()->Self { Self{started:Instant::now(),last_beat:Default::default(),allowance:std::sync::atomic::AtomicU64::new(DEFAULT_ALLOWANCE_MINUTES)} }
+}
+
+/// Os minutos que um pedido tem antes de o silêncio o parar, quando ainda não
+/// foi lido, e o teto absoluto, com ou sem sinal de vida.
+pub const DEFAULT_ALLOWANCE_MINUTES:u64=30;
+pub const HARD_CEILING_MINUTES:u64=240;
+/// Quanto silêncio do agente, depois do prazo do pedido, o dá por perdido.
+pub const QUIET_MINUTES:u64=10;
+
+/// O pedido passou do prazo: `elapsed` e `last_beat` em segundos desde o começo.
+fn past_deadline(elapsed:u64,last_beat:u64,allowance:u64)->bool {
+    let minutes=elapsed/60;
+    let quiet=elapsed.saturating_sub(last_beat)>=QUIET_MINUTES*60;
+    minutes>=HARD_CEILING_MINUTES||(minutes>=allowance&&quiet)
+}
+
+/// Os minutos que o Jev dá a um pedido, pela complexidade com que o leu.
+pub fn allowance_minutes(complexity:&str)->u64 {
+    match complexity { "trivial"=>10, "simple"=>20, "medium"=>45, "complex"=>90, _=>DEFAULT_ALLOWANCE_MINUTES }
+}
 
 impl Stop {
     pub fn stop(&self,reason:StopReason) {
@@ -195,6 +231,26 @@ impl Stop {
             if current.is_none() { *current=Some(reason); }
         }
         self.0.notify.notify_waiters();
+    }
+
+    /// O pedido deu sinal de vida agora.
+    pub fn touch(&self) {
+        let clock=&self.0.clock;
+        clock.last_beat.store(clock.started.elapsed().as_secs(),std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// O pedido foi lido: o prazo passa a ser o da complexidade dele.
+    pub fn allow(&self,minutes:u64) { self.0.clock.allowance.store(minutes.clamp(1,HARD_CEILING_MINUTES),std::sync::atomic::Ordering::Relaxed); }
+
+    /// O prazo que o Jev decide: o pedido só para por tempo depois dos minutos
+    /// que a complexidade pede E de `QUIET_MINUTES` sem sinal do agente; o que
+    /// continua dando sinal segue até o teto absoluto. Devolve os minutos que
+    /// o pedido já durou, quando ele passou do prazo.
+    pub fn overdue(&self)->Option<u64> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let clock=&self.0.clock;
+        let elapsed=clock.started.elapsed().as_secs();
+        past_deadline(elapsed,clock.last_beat.load(Relaxed),clock.allowance.load(Relaxed)).then_some(elapsed/60)
     }
 
     pub fn reason(&self)->Option<StopReason> { *self.0.reason.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
@@ -343,6 +399,24 @@ mod tests {
         assert_eq!(waiting.await.expect("acordou"),StopReason::Asked);
         assert_eq!(support.stop().stopped().await,StopReason::Asked,"já parado, volta na hora");
         assert_eq!(StopReason::Ceiling{minutes:30}.text().key,"turn.ceiling");
+    }
+
+    /// O prazo que o Jev decide: lido o pedido, o prazo é o da complexidade; o
+    /// silêncio do agente depois dele para o pedido, e o que segue dando sinal
+    /// vai até o teto absoluto.
+    #[test] fn the_request_deadline_follows_the_read_and_the_agents_silence() {
+        let stop=Stop::default();
+        assert_eq!(stop.overdue(),None,"recém-começado");
+        assert!(allowance_minutes("trivial")<allowance_minutes("simple")&&allowance_minutes("simple")<allowance_minutes("medium")&&allowance_minutes("medium")<allowance_minutes("complex"));
+        let pulse=Pulse{stop:stop.clone(),..Default::default()};
+        pulse.beat(Beat::Read{intent:"fix".into(),complexity:"complex".into(),source:"x".into()});
+        assert_eq!(stop.0.clock.allowance.load(std::sync::atomic::Ordering::Relaxed),90);
+        let minute=60;
+        assert!(!past_deadline(20*minute,0,30),"antes do prazo, mesmo em silêncio");
+        assert!(!past_deadline(40*minute,35*minute,30),"passou do prazo mas o agente deu sinal há 5 minutos");
+        assert!(past_deadline(40*minute,29*minute,30),"passou do prazo e o agente calou há 11 minutos");
+        assert!(!past_deadline(200*minute,199*minute,30),"o que dá sinal segue");
+        assert!(past_deadline(HARD_CEILING_MINUTES*minute,HARD_CEILING_MINUTES*minute,30),"o teto absoluto vale com sinal de vida");
     }
 
     /// A fala contada em linhas vira uma etapa por linha, sem as vazias e sem

@@ -1,0 +1,10 @@
+{
+  "id": "autoTurnCeiling",
+  "category": "agents",
+  "since": "0.107.0",
+  "plan": "autoTurnCeiling",
+  "commands": [],
+  "title": "Request time limit set by Jev",
+  "summary": "Jev decides how long each request may run, from the size of the request and the agent's activity, with no setting.",
+  "usage": "Built into Pro, Enterprise and system admin accounts: the time limit field disappears from Settings › Jev. The time starts from how big the request is (10 minutes for a trivial one up to 90 for a complex one); a request past that time stops once the agent has been silent for 10 minutes, and one that stays active runs until a hard limit of 4 hours. On other plans the time limit field in Settings › Jev › Routing works as before."
+}

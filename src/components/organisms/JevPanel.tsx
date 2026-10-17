@@ -1,7 +1,7 @@
 import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
 import { COMPLEXITIES, type AgentId, type CoreSettings, type CoreSnapshot, type Permission } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { useEntitlements, locks, toggleState, MIN_CACHE_TTL, type FeatureKey } from "@/modules/plans";
+import { useEntitlements, locks, toggleState, BUILT_IN_JEV_OPTIONS, MIN_CACHE_TTL, type FeatureKey } from "@/modules/plans";
 import { agentLabel, updateCore, useAgentIds, useSettings } from "@/modules/settings";
 import { AgentIcon } from "@/components/atoms";
 import { FormField, OptionSelect, SettingsSection, ToggleRow } from "@/components/molecules";
@@ -32,6 +32,10 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
     const why = state.reason === "required" ? t("plans.required") : state.reason === "outside" ? t("plans.jevLocked") : state.reason === "mod" ? t("mods.feature.offHint") : null;
     return { checked: state.checked, disabled: state.disabled, hint: why ? `${why} · ${hint}` : hint };
   };
+  // As opções que o plano embute (e o admin do sistema tem) não têm interruptor:
+  // o núcleo as liga por cima do que estiver gravado.
+  const builtIn = (feature: (typeof BUILT_IN_JEV_OPTIONS)[number]) => locks(entitlements, feature);
+  const builtInKeys = BUILT_IN_JEV_OPTIONS.filter(builtIn);
   const cacheFloor = locks(entitlements, "contextCache") ? MIN_CACHE_TTL : 0;
   const [minBudget, maxBudget] = snapshot.budgetRange;
   const duration = (seconds: number) =>
@@ -51,14 +55,23 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
           <ToggleRow id="jev-review" label={t("jev.review")} {...gated("secondOpinion", core.reviewChanges, t("jev.review.hint"))} onChange={(reviewChanges) => updateCore({ reviewChanges })} />
           <ToggleRow id="jev-plan-first" label={t("jev.planFirst")} {...gated("planFirst", core.planFirst, t("jev.planFirst.hint"))} onChange={(planFirst) => updateCore({ planFirst })} />
           <ToggleRow id="jev-parallel" label={t("jev.parallel")} {...gated("parallelTasks", core.parallelTasks, t("jev.parallel.hint"))} onChange={(parallelTasks) => updateCore({ parallelTasks })} />
-          <ToggleRow id="jev-keep-session" label={t("jev.keepSession")} {...gated("agentSessions", core.keepSessionModel, t("jev.keepSession.hint"))} onChange={(keepSessionModel) => updateCore({ keepSessionModel })} />
-          <ToggleRow id="jev-resume-limit" label={t("jev.resumeLimit")} hint={t("jev.resumeLimit.hint")} checked={core.resumeAfterLimit} onChange={(resumeAfterLimit) => updateCore({ resumeAfterLimit })} />
-          <ToggleRow id="jev-resume-modes" label={t("jev.resumeModes")} hint={t("jev.resumeModes.hint")} checked={core.resumeAcrossModes} onChange={(resumeAcrossModes) => updateCore({ resumeAcrossModes })} />
+          {builtIn("keepSessionModel") ? null : (
+            <ToggleRow id="jev-keep-session" label={t("jev.keepSession")} {...gated("agentSessions", core.keepSessionModel, t("jev.keepSession.hint"))} onChange={(keepSessionModel) => updateCore({ keepSessionModel })} />
+          )}
+          {builtIn("limitResume") ? null : (
+            <ToggleRow id="jev-resume-limit" label={t("jev.resumeLimit")} hint={t("jev.resumeLimit.hint")} checked={core.resumeAfterLimit} onChange={(resumeAfterLimit) => updateCore({ resumeAfterLimit })} />
+          )}
+          {builtIn("planBuildSession") ? null : (
+            <ToggleRow id="jev-resume-modes" label={t("jev.resumeModes")} hint={t("jev.resumeModes.hint")} checked={core.resumeAcrossModes} onChange={(resumeAcrossModes) => updateCore({ resumeAcrossModes })} />
+          )}
           <AgentOrderField order={core.agentOrder} />
-          <FormField label={t("jev.ceiling")} htmlFor="jev-ceiling" hint={t("jev.ceiling.hint")}>
-            <OptionSelect id="jev-ceiling" value={String(core.turnCeilingMinutes)} onChange={(value) => updateCore({ turnCeilingMinutes: Number(value) })}
-              options={[...new Set([...CEILINGS, core.turnCeilingMinutes])].sort((a, b) => a - b).map((minutes) => ({ value: String(minutes), label: duration(minutes * 60) }))} />
-          </FormField>
+          {builtIn("autoTurnCeiling") ? null : (
+            <FormField label={t("jev.ceiling")} htmlFor="jev-ceiling" hint={t("jev.ceiling.hint")}>
+              <OptionSelect id="jev-ceiling" value={String(core.turnCeilingMinutes)} onChange={(value) => updateCore({ turnCeilingMinutes: Number(value) })}
+                options={[...new Set([...CEILINGS, core.turnCeilingMinutes])].sort((a, b) => a - b).map((minutes) => ({ value: String(minutes), label: duration(minutes * 60) }))} />
+            </FormField>
+          )}
+          {builtInKeys.length > 0 && <p className="text-xs text-muted-foreground">{t("jev.builtIn", { options: builtInKeys.map((key) => t(`jev.builtIn.${key}` as Key)).join(", ") })}</p>}
         </div>
       </SettingsSection>
 

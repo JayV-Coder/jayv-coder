@@ -554,6 +554,8 @@ export interface CoreSettings {
   /** O teto total de um pedido, em minutos: passou, o pedido para e os
    * agentes abertos caem junto. */
   turnCeilingMinutes: number;
+  /** O Jev decide o prazo do pedido; só o plano liga, sem interruptor. */
+  autoTurnCeiling: boolean;
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */

@@ -1,0 +1,10 @@
+{
+  "id": "keepSessionModel",
+  "category": "agents",
+  "since": "0.107.0",
+  "plan": "keepSessionModel",
+  "commands": [],
+  "title": "Keep the chat on the session's model",
+  "summary": "Once a chat has an agent session, later requests stay on that model so the agent doesn't read the project again.",
+  "usage": "Built into Pro, Enterprise and system admin accounts: always on, with no switch in Settings › Jev. Only a complex request that needs a bigger model switches. On other plans the switch in Settings › Jev › Routing works as before."
+}

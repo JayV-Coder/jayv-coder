@@ -2,9 +2,9 @@
   "id": "limitResume",
   "category": "agents",
   "since": "0.102.0",
-  "plan": null,
+  "plan": "limitResume",
   "commands": [],
   "title": "Resume after the usage limit",
   "summary": "When an agent hits its usage limit and no other agent can take over, the request waits and is sent again when the limit comes back.",
-  "usage": "On by default (Settings › Jev › Resume requests when an agent's usage limit comes back). The request stays in the chat with a note saying which agent stopped and when it will resume, in your local time. If the agent doesn't say when, it tries again in 30 minutes. Click Resume now to send it sooner, or Don't wait to cancel; Resend still works. The wait continues even if you close the app. If another agent is free, it takes the request right away. After three automatic retries that still hit the limit, it stops waiting."
+  "usage": "On by default (Settings › Jev › Resume requests when an agent's usage limit comes back); on Pro, Enterprise and system admin accounts it is built in, always on and without a switch. The request stays in the chat with a note saying which agent stopped and when it will resume, in your local time. If the agent doesn't say when, it tries again in 30 minutes. Click Resume now to send it sooner, or Don't wait to cancel; Resend still works. The wait continues even if you close the app. If another agent is free, it takes the request right away. After three automatic retries that still hit the limit, it stops waiting."
 }

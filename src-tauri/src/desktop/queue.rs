@@ -140,6 +140,19 @@ impl Ceiling {
     }
 }
 
+impl Ceiling {
+    /// O prazo que o Jev decide (`Stop::overdue`): o relógio olha o pedido de
+    /// tempos em tempos, em vez de dormir um número fixo de minutos.
+    fn decided(stop:Stop)->Self {
+        Self(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                if let Some(minutes)=stop.overdue() { stop.stop(StopReason::Ceiling{minutes}); return; }
+            }
+        }))
+    }
+}
+
 impl Drop for Ceiling { fn drop(&mut self) { self.0.abort(); } }
 
 /// A consumidora do barramento. Ela é a única que sabe que existe tela e banco:
@@ -225,7 +238,7 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let mut state=desk.lock().await;
     // O teto conta daqui: a portaria, o plano, o agente e a revisão cabem
     // nele juntos.
-    let _ceiling=Ceiling::start(pulse.stop().clone(),state.orchestrator.config.jev.turn_ceiling_minutes);
+    let _ceiling=if state.orchestrator.config.jev.auto_turn_ceiling { Ceiling::decided(pulse.stop().clone()) } else { Ceiling::start(pulse.stop().clone(),state.orchestrator.config.jev.turn_ceiling_minutes) };
     forget_pending(&mut state,workspace,forget).await;
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
     // A política de LLM do projeto e o plano vêm antes da pasta: eles podem

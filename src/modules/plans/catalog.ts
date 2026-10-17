@@ -32,6 +32,10 @@ export const FEATURES = [
   "gatewayProviders",
   "conversationFind",
   "customMods",
+  "keepSessionModel",
+  "limitResume",
+  "planBuildSession",
+  "autoTurnCeiling",
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number];
@@ -58,6 +62,11 @@ export const SETTINGS_TAB_FEATURE: Partial<Record<string, FeatureKey>> = {
 /** O recurso de uma aba das Configurações: a de cada mod criado (`mod-…`) é o
  * `customMods`; a aba Mods, que lista todos, abre sempre. */
 export const settingsTabFeature = (tab: string): FeatureKey | undefined => SETTINGS_TAB_FEATURE[tab] ?? (tab.startsWith("mod-") ? "customMods" : undefined);
+
+/** As opções do Jev que o plano embute: onde o plano as trava (e para o admin
+ * do sistema) ficam ligadas e sem interruptor; fora dele, as configurações de
+ * quem usa valem como antes, e o plano nunca as tira. */
+export const BUILT_IN_JEV_OPTIONS = ["keepSessionModel", "limitResume", "planBuildSession", "autoTurnCeiling"] as const satisfies readonly FeatureKey[];
 
 /** O núcleo: está em todo plano, travado, e ninguém o desliga — nem o admin.
  * A mesma lista da migração `core_features` e do `CORE` do Rust: sem a lista do
