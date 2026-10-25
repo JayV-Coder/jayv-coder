@@ -188,6 +188,13 @@ impl Meter {
 
     fn elapsed(&self)->u64 { self.started.elapsed().as_millis() as u64 }
 
+    /// A conta que o próprio agente informou no fim (o `usage` da resposta do
+    /// ACP). Vale no lugar da estimativa.
+    pub fn reported(&mut self,input:u64,output:u64,cache_read:u64) {
+        let duration_ms=self.elapsed();
+        self.spends.push(Spend{input_tokens:input,output_tokens:output,cache_read_tokens:cache_read,duration_ms,..Spend::new(self.agent.as_str(),self.model.as_str(),Precision::Reported)});
+    }
+
     /// Fecha a conta e a envia. `usage_file` é o que o Copilot gravou no fim.
     /// Devolve a entrada e a saída somadas, para o resumo do turno.
     pub fn settle(mut self,prompt:&str,response:&str,success:bool,usage_file:Option<&serde_json::Value>)->(u64,u64) {

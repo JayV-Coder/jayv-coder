@@ -41,15 +41,23 @@ const PLACEHOLDER = /\{[A-Za-z0-9_]+\}/g;
 
 /** O que está errado numa linha de comando, ou `null`. A mesma conferência do
  * núcleo (`mods::custom`), mostrada antes de salvar. */
-export function lineProblem(args: string[]): Key | null {
+export function lineProblem(args: string[], acp = false): Key | null {
   if (args.length > 64) return "mods.args.tooMany";
   for (const arg of args) {
     if (arg === "" || arg.length > 1000 || /[\u0000-\u001f\u007f]/.test(arg)) return "mods.args.invalid";
-    const rest = arg === "{prompt}" ? "" : arg.replaceAll("{model}", "");
+    // O agente ACP recebe o pedido pelo protocolo: na linha dele, só `{model}`.
+    const rest = !acp && (arg === "{prompt}" || arg === "{prompt_file}") ? "" : arg.replaceAll("{model}", "");
     if ((rest.match(PLACEHOLDER) ?? []).length > 0) return "mods.args.placeholder";
   }
   return null;
 }
+
+/** O id de um modo do agente ACP (`mods::custom`): vazio fica o do agente. */
+const MODE = /^[A-Za-z0-9_.:-]{1,64}$/;
+export const modeProblem = (mode: string | undefined) => !!mode && !MODE.test(mode);
+
+/** O campo do modelo da API Responses (`preset` na Perplexity). */
+export const MODEL_FIELD = /^[a-z_]{1,32}$/;
 
 /** O id de um mod criado a partir do nome: `mod-` e até 32 letras minúsculas,
  * dígitos ou `-`, sem repetir um id que já existe. */

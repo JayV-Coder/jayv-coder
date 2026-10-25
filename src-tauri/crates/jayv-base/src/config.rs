@@ -99,13 +99,49 @@ pub struct ProviderConfig {
     /// recebe os servidores MCP assim). Postas na hora do pedido, nunca
     /// gravadas: levam os mesmos segredos que os servidores.
     #[serde(skip)] pub env: Vec<(String, String)>,
+    /// API: o campo do pedido que leva o modelo. Vazio é `model`; a API de
+    /// agentes da Perplexity escolhe a predefinição em `preset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub model_field: Option<String>,
+    /// O agente que fala o Agent Client Protocol (`kind` `acp`): os modos dele
+    /// e o que o JayV responde quando ele pede permissão.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub acp: Option<AcpConfig>,
 }
-impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None, mcp:vec![], env:vec![] } } }
+impl Default for ProviderConfig { fn default() -> Self { Self { enabled:yes(), kind:String::new(), api_key:None, base_url:None, command:None, timeout:default_timeout(), args:vec![], plan_args:vec![], local:None, mcp:vec![], env:vec![], model_field:None, acp:None } } }
 impl ProviderConfig {
     /// O mesmo agente, no modo planejamento.
     /// Sem servidores MCP (nem o ambiente que os leva): o planejamento só lê,
-    /// e as ferramentas deles rodam sem pergunta.
-    pub fn for_planning(&self)->Self { Self{args:if self.plan_args.is_empty() { self.args.clone() } else { self.plan_args.clone() },mcp:vec![],env:vec![],..self.clone()} }
+    /// e as ferramentas deles rodam sem pergunta. O agente ACP entra no modo
+    /// só leitura dele, e o JayV recusa o que escreve.
+    pub fn for_planning(&self)->Self {
+        let acp=self.acp.as_ref().map(|acp|AcpConfig{planning:true,granted:vec![],..acp.clone()});
+        Self{args:if self.plan_args.is_empty() { self.args.clone() } else { self.plan_args.clone() },mcp:vec![],env:vec![],acp,..self.clone()}
+    }
+}
+
+/// Como o JayV conduz um agente ACP. Os modos são os ids que o próprio agente
+/// anuncia (`plan`, `default`, `build`…); o que ele não anuncia fica como está.
+/// As permissões não dependem dos modos: o agente pergunta, e o JayV responde
+/// pelo que vale no pedido.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpConfig {
+    /// O modo do desenvolvimento. Vazio, o agente fica no dele.
+    #[serde(default, skip_serializing_if = "String::is_empty")] pub build_mode: String,
+    /// O modo só leitura do agente, usado no planejamento.
+    #[serde(default, skip_serializing_if = "String::is_empty")] pub plan_mode: String,
+    /// As variáveis que o mod põe no agente (deixar as permissões dele em
+    /// "perguntar", por exemplo). Valem nos dois modos; os servidores MCP vão
+    /// pelo protocolo, não por aqui.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub env: Vec<(String, String)>,
+    /// Os comandos rodam sem pedir liberação. Sem isto (a política com
+    /// agentes travados), só rodam os liberados no pedido.
+    #[serde(default)] pub auto: bool,
+    /// Planejamento: só leitura, busca e raciocínio são aprovados.
+    #[serde(skip)] pub planning: bool,
+    /// Os comandos liberados para este pedido (`git add`). Nunca gravados.
+    #[serde(skip)] pub granted: Vec<String>,
+    /// Os comandos que a política da organização bloqueia. Nunca gravados.
+    #[serde(skip)] pub denied: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,7 +162,8 @@ impl ProviderConfig {
         match self.kind.as_str() {
             "openai"|"anthropic"=>self.api_key.as_deref().is_some_and(|value|!value.trim().is_empty()),
             "openai-compatible"=>self.base_url.as_deref().is_some_and(|value|!value.trim().is_empty()),
-            "cli"=>self.command.as_deref().is_some_and(|value|!value.trim().is_empty()),
+            "cli"|"acp"=>self.command.as_deref().is_some_and(|value|!value.trim().is_empty()),
+            "responses"|"manus"=>self.base_url.as_deref().is_some_and(|value|!value.trim().is_empty()),
             _=>false,
         }
     }

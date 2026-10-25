@@ -191,6 +191,17 @@ nada: só acorda o sync (`sync_now`, por `@/modules/mods/siteLink`), que desce o
 estado gravado na conta e instala o que ele pede, e a aba Mods avisa quando o
 mod chega. Não ponha no app nem no link um jeito de instalar sem a conta.
 
+Os agentes que os mods trazem (e os que a pessoa cria no site) são de três
+tipos, todos em `mods::custom`: linha de comando (`cli`, com `{model}`,
+`{prompt}` e `{prompt_file}`), ACP (`acp`, em `jayv-agents::acp`: o JayV é o
+cliente do Agent Client Protocol, escolhe modelo e modo pela sessão, entrega os
+servidores MCP e responde a cada `session/request_permission` pela política do
+pedido — no planejamento só leitura, no desenvolvimento tudo menos os comandos
+bloqueados) e API (`openai`, `anthropic`, `responses` e `manus`). Agente ACP
+não roda sem perguntar: o modo de desenvolvimento do mod é um que ainda pede
+permissão (`default`, `build`, `accept-edits`, `always-ask`), para a política
+do app valer em todo comando.
+
 Na aba Mods, os instalados ficam em duas abas: Instalados (o que a pessoa
 instalou) e Essenciais (os `required`), cada uma com a contagem; o Ctrl+K abre
 cada uma. O que a pessoa desinstala fica na lista, com o Desfazer, até o

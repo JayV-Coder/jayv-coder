@@ -1,0 +1,10 @@
+{
+  "id": "acpAgents",
+  "category": "agents",
+  "since": "0.108.0",
+  "plan": "customMods",
+  "commands": [],
+  "title": "ACP agents",
+  "summary": "Coding agents that speak the Agent Client Protocol (ACP), such as Kimi Code, OpenCode, OpenHands, Devin and Gemini CLI. The app talks to them through the protocol: it picks the model and the mode, gives them your MCP servers and answers each permission they ask for.",
+  "usage": "Install the agent's mod from its page on the site and the agent's own program on this computer, then sign in to it the way its page says. In Settings, open the agent's tab and click Load from the agent: it lists the models the agent offers, and default keeps the agent's own choice. In Development mode the app approves what the agent asks, except the commands your organization blocks. In Planning mode the agent enters its read-only mode, if it has one, and the app refuses anything that edits files or runs commands. With Approve MCP servers on, the agent also gets your MCP servers."
+}
