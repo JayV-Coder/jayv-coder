@@ -796,6 +796,29 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
         }
     }
 
+    /// Os pedidos da análise do custo (v0.54) que, lidos sozinhos, caíam em
+    /// "perguntar" e custavam uma volta a mais: na conversa, as continuações
+    /// herdam o veredito do pedido que atendem, em todos os níveis; o pedido
+    /// novo e vago continua perguntando.
+    #[test]
+    fn the_cases_of_the_cost_analysis_no_longer_cost_a_question_in_a_conversation() {
+        use crate::expertise::Expertise;
+        let follow_ups=["pode implementar","não funcionou","corrige então","sim","Não funcionou, dá erro ao salvar","faz isso"];
+        let fresh_and_vague=["melhora o desempenho do app","faz o login"];
+        for level in Expertise::ALL {
+            for input in follow_ups {
+                let alone=judge_for(&turn_at("c"),input,&heuristic_entry(input),"local",level);
+                assert!(is_continuation(input),"{input}");
+                assert_eq!(alone.inherit(EntryVerdict::Pass).verdict,EntryVerdict::Pass,"{input} ({})",level.as_str());
+            }
+            for input in fresh_and_vague {
+                assert!(!is_continuation(input),"{input}: assunto novo não herda");
+            }
+        }
+        let starter=judge_for(&turn_at("c"),"melhora o desempenho do app",&heuristic_entry("melhora o desempenho do app"),"local",Expertise::Starter);
+        assert_eq!(starter.verdict,EntryVerdict::Ask,"o pedido novo e vago continua perguntando");
+    }
+
     /// A continuação sobe para o veredito melhor da origem e nunca desce.
     #[test]
     fn the_inherited_verdict_only_ever_goes_up() {

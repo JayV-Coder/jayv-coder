@@ -4,7 +4,7 @@ import { signOut } from "@/modules/auth";
 import { showChanges } from "@/modules/changelog";
 import { featureActions, fuzzyMatch, requestIntent, type Shortcut } from "@/modules/commands";
 import { cancelLimitWait, cancelTurn, openChatFind, sendPrompt } from "@/modules/conversation";
-import { reportError } from "@/modules/feedback";
+import { notify, reportError } from "@/modules/feedback";
 import { setLocale, useI18n, type Key, type LocaleOption } from "@/modules/i18n";
 import { environmentOptions, organizationOf, switchEnvironment, useEnvironment } from "@/modules/environments";
 import { setLivePanel, useLive } from "@/modules/live";
@@ -21,6 +21,7 @@ import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
 import { resetTours, setAutoTours, startTour, startTourHere, tourForView, TOURS, useTutorial } from "@/modules/tutorial";
 import { checkForUpdate, setInstallOnLaunch, useUpdate } from "@/modules/updates";
+import { rollbackCheckpoint } from "@/modules/validation";
 import { openStats, setPeriod, type Period } from "@/modules/usage";
 import {
   chatsOf, chatTitle, createChat, findChat, leaveProject, openChat, openProject, openTurns, recentChats, setLayout, setWorkMode, type Layout,
@@ -114,6 +115,17 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
           id: "live", group, label: t("palette.live"),
           run: () => { openChat(chat.id); setLivePanel(chat.id, useLive.getState().panel[chat.id] !== true); },
         });
+      }
+      if (project.rootPath.trim()) {
+        all.push({ id: "project-validation", group, label: t("palette.validation"), hint: project.name, run: () => { openChat(chat.id); requestIntent("projectValidation"); } });
+        const lastBuild = [...chat.turns].reverse().find((turn) => turn.validation?.some((event) => event.kind === "checkpoint"));
+        const back = lastBuild && openTurns(chat).length === 0 && !lastBuild.validation?.some((event) => event.kind === "rolled_back");
+        if (lastBuild && back) {
+          all.push({
+            id: "rollback-build", group, label: t("palette.rollbackBuild"),
+            run: () => { rollbackCheckpoint(lastBuild.id).then((result) => notify(t(result.headMoved ? "validation.rolledBack.moved" : "validation.rolledBack", { count: result.files })), reportError); },
+          });
+        }
       }
       if (can("conversationFind")) all.push({ id: "find-in-chat", group, label: t("find.label"), shortcut: "find", run: () => { openChat(chat.id); openChatFind(); } });
       all.push({ id: "grants", group, label: t("palette.commandPermissions"), run: () => { openChat(chat.id); requestIntent("commandPermissions"); } });

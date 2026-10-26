@@ -51,8 +51,18 @@ pub struct JevConfig {
     /// O Jev decide o prazo do pedido (ver `progress::Stop::overdue`) e
     /// `turn_ceiling_minutes` deixa de valer.
     #[serde(default)] pub auto_turn_ceiling: bool,
+    /// Depois de um build, o JayV roda testes, lint, tipos e build do projeto
+    /// e mostra o que passou (ver `validator`). Desligado por padrão; a
+    /// organização pode exigir.
+    #[serde(default)] pub validate_builds: bool,
+    /// Antes de cada build, o JayV grava a pasta para a pessoa poder voltar a
+    /// ela (ver `snapshot`). Ligado por padrão.
+    #[serde(default = "yes")] pub checkpoint_builds: bool,
+    /// Quantas vezes o JayV devolve ao agente a falha da validação para ele
+    /// consertar, antes de entregar o resultado como falho (0 a 2).
+    #[serde(default = "default_repair_attempts")] pub repair_attempts: u32,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false, turn_ceiling_minutes:default_turn_ceiling(), resume_after_limit:true, auto_turn_ceiling:false } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false, turn_ceiling_minutes:default_turn_ceiling(), resume_after_limit:true, auto_turn_ceiling:false, validate_builds:false, checkpoint_builds:true, repair_attempts:default_repair_attempts() } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {
@@ -238,6 +248,7 @@ fn default_confidence() -> f64 { 0.7 }
 fn default_fork_limit() -> usize { 8_000 }
 fn default_cache_ttl() -> u64 { 3_600 }
 pub fn default_turn_ceiling() -> u64 { 30 }
+pub fn default_repair_attempts() -> u32 { 2 }
 fn default_timeout() -> u64 { 30 }
 fn default_context_window() -> usize { 8_192 }
 fn allow() -> String { "allow".into() }

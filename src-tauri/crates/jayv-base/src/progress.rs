@@ -24,6 +24,10 @@ pub struct ModeSwitch { pub from:String, pub reason:String }
 #[serde(rename_all="camelCase")]
 pub struct SplitTask { pub title:String, pub provider:String, pub model:String }
 
+/// Uma etapa da validação anunciada antes de rodar: o tipo e o comando.
+#[derive(Debug,Clone,PartialEq,Eq,Serialize)]
+pub struct StepPlan { pub kind:String, pub command:String }
+
 /// Um sinal de vida do turno. O `Chunk` é a resposta crescendo; os outros são
 /// etapas com nome próprio, e é por isso que cada um vira uma linha no log
 /// enquanto o `Chunk` vira texto acumulado.
@@ -57,6 +61,25 @@ pub enum Beat {
     /// quem parou, quando o JayV tenta de novo (RFC 3339) e se esse instante é
     /// um palpite (`estimated`: o agente não disse quando volta).
     LimitWait{provider:String,resumes_at:String,estimated:bool},
+    /// A pasta foi gravada antes do build: `commit` é o ponto a que a pessoa
+    /// volta, e `head` o HEAD de então.
+    Checkpoint{id:String,commit:String,head:Option<String>},
+    /// A validação do build começou. `attempt` é 0 na primeira rodada e sobe
+    /// a cada reparo; `steps` são os comandos que vão rodar e `undefined` os
+    /// tipos de etapa sem comando.
+    ValidateStart{attempt:u32,max_repairs:u32,steps:Vec<StepPlan>,undefined:Vec<String>},
+    /// Uma etapa da validação terminou: `status` é `passed`, `failed`,
+    /// `timed_out`, `blocked`, `stopped` ou `could_not_start`, e `tail` o fim da
+    /// saída (vazio quando passou).
+    ValidateStep{attempt:u32,step:String,command:String,status:String,exit_code:Option<i32>,millis:u64,tail:String,blocked_by:Vec<String>},
+    /// A rodada terminou: `passed`, `failed` ou `unproven`.
+    ValidateEnd{attempt:u32,verdict:String},
+    /// Não houve validação: `unchanged` (o build não mudou arquivo nenhum).
+    ValidateSkipped{reason:String},
+    /// A validação falhou e o JayV devolveu a falha ao agente (tentativa `attempt` de `max`).
+    Repair{attempt:u32,max:u32},
+    /// A organização retém estes comandos de Git até a validação passar.
+    CommitHeld{commands:Vec<String>,orgs:Vec<String>},
     Running,
     Agent{line:String},
     Chunk{text:String},
@@ -68,7 +91,7 @@ impl Beat {
     pub fn kind(&self)->&'static str {
         match self {
             Self::Gate{..}=>"gate", Self::Read{..}=>"read", Self::Context{..}=>"context",
-            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::LimitWait{..}=>"limit_wait", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Skill{..}=>"skill", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
+            Self::Route{..}=>"route", Self::Fallback{..}=>"fallback", Self::LimitWait{..}=>"limit_wait", Self::Checkpoint{..}=>"checkpoint", Self::ValidateStart{..}=>"validate_start", Self::ValidateStep{..}=>"validate_step", Self::ValidateEnd{..}=>"validate_end", Self::ValidateSkipped{..}=>"validate_skipped", Self::Repair{..}=>"repair", Self::CommitHeld{..}=>"commit_held", Self::Review{..}=>"review", Self::Plan{..}=>"plan", Self::Skill{..}=>"skill", Self::Split{..}=>"split", Self::Subtask{..}=>"subtask", Self::Running=>"running", Self::Agent{..}=>"agent",
             Self::Chunk{..}=>"chunk", Self::Done{..}=>"done", Self::Failed{..}=>"failed",
         }
     }

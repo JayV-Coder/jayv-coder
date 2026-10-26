@@ -51,6 +51,14 @@ pub struct LlmPolicy {
     pub enabled_grants:Vec<String>,
     /// Quem liga cada permissão (`git` → `["acme"]`).
     pub grant_defaults:BTreeMap<String,Vec<String>>,
+    /// A organização exige a validação do resultado (testes, lint, tipos e
+    /// build) depois de cada build dos projetos dela: a pessoa não a desliga.
+    pub validation_required:bool,
+    /// Os commits e pushes dos agentes ficam retidos enquanto a última
+    /// validação do chat não passou.
+    pub hold_commits:bool,
+    /// Quem exige a validação (`["acme"]`), para a tela dizer "Exigido por acme".
+    pub validation_sources:Vec<String>,
     pub deny:Vec<String>,
     pub local_only:Vec<String>,
     pub safe_agents:bool,
@@ -59,6 +67,10 @@ pub struct LlmPolicy {
     pub min_write:Option<String>,
     pub min_shell:Option<String>,
 }
+
+/// Os comandos de Git que gravam o trabalho; a organização pode reter os dois
+/// até a validação passar.
+pub const HELD_COMMANDS:[&str;2]=["git commit","git push"];
 
 /// A política de um projeto e a organização que a define.
 #[derive(Debug,Clone,PartialEq)]
@@ -138,7 +150,13 @@ impl LlmPolicy {
         settings.privacy.deny=joined(&settings.privacy.deny,&self.deny);
         settings.privacy.local_only=joined(&settings.privacy.local_only,&self.local_only);
         settings.privacy.redact_secrets|=self.redact_secrets;
+        if self.validation_required { settings.validate_builds=true; settings.checkpoint_builds=true; }
         settings
+    }
+
+    /// Os comandos que ficam retidos enquanto a validação do chat não passa.
+    pub fn held_commands(&self)->Vec<String> {
+        if self.validation_required&&self.hold_commits { HELD_COMMANDS.iter().map(|command|command.to_string()).collect() } else { vec![] }
     }
 }
 
@@ -169,7 +187,7 @@ pub fn for_chat(connection:&Connection,chat_id:&str)->Result<Option<ProjectPolic
 
 impl LlmPolicy {
     fn unreadable()->Self {
-        Self{agents:Some(vec![]),safe_agents:true,redact_secrets:true,min_read:Some("deny".into()),min_write:Some("deny".into()),min_shell:Some("deny".into()),..Self::default()}
+        Self{agents:Some(vec![]),safe_agents:true,redact_secrets:true,validation_required:true,min_read:Some("deny".into()),min_write:Some("deny".into()),min_shell:Some("deny".into()),..Self::default()}
     }
 }
 
@@ -324,6 +342,24 @@ impl LlmPolicy {
         assert_eq!(stricter("allow",Some("talvez")),"deny","regra desconhecida aperta");
     }
 
+    /// A organização que exige a validação a liga (e liga o ponto de volta) sem
+    /// deixar a pessoa desligar; sem exigência, quem usa decide. Os commits só
+    /// ficam retidos com as duas regras juntas.
+    #[test] fn a_required_validation_switches_the_validator_on_and_can_hold_commits() {
+        let mut mine=CoreSettings::from_config(&Config::default());
+        assert!(!mine.validate_builds,"desligada por padrão");
+        mine.checkpoint_builds=false;
+        let required=policy(json!({"validation_required":true,"hold_commits":true,"validation_sources":["acme"]}));
+        let restricted=required.restrict_core(&mine);
+        assert!(restricted.validate_builds&&restricted.checkpoint_builds);
+        assert_eq!(required.held_commands(),["git commit","git push"]);
+        assert!(policy(json!({"validation_required":true})).held_commands().is_empty(),"exigir não retém commit");
+        assert!(policy(json!({"hold_commits":true})).held_commands().is_empty(),"reter sem exigir não vale");
+        assert!(!LlmPolicy::default().restrict_core(&mine).validate_builds,"sem política, quem usa decide");
+        let mut keeps=mine.clone(); keeps.validate_builds=true;
+        assert!(LlmPolicy::default().restrict_core(&keeps).validate_builds,"a política nunca desliga o que a pessoa ligou");
+    }
+
     fn database()->Connection {
         let connection=Connection::open_in_memory().expect("banco");
         connection.execute_batch("CREATE TABLE chats (id TEXT PRIMARY KEY, project_id TEXT NOT NULL);").expect("chats");
@@ -350,5 +386,6 @@ impl LlmPolicy {
         let read=for_chat(&connection,"c1").expect("lê").expect("tem política").policy;
         assert!(!read.allows_agent("claude"));
         assert_eq!(read.min_shell.as_deref(),Some("deny"));
+        assert!(read.validation_required,"na dúvida, a validação é exigida");
     }
 }

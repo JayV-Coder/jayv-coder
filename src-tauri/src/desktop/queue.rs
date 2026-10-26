@@ -256,6 +256,8 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         (all,any)
     };
     let plan=apply_project_policy(&mut state,workspace,chat_id,&grants).await;
+    let (held,held_orgs)=held_by_validation(workspace,chat_id).await;
+    if !held.is_empty() { pulse.beat(Beat::CommitHeld{commands:held,orgs:held_orgs}); }
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro
     // computador pela sincronização, vale já para o próximo.
     state.orchestrator.expertise=workspace.lock().await.expertise().unwrap_or_default();
@@ -474,10 +476,9 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     }
     let before=guard.before.await.unwrap_or_default();
     let result=state.orchestrator.process(request,Some(chat_id),pulse).await;
-    let touched={
-        let (root,firewall)=(guard.root.clone(),crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone()));
-        tokio::task::spawn_blocking(move ||gatekeeper::touched(&before,&gatekeeper::guarded(&root,&firewall))).await.unwrap_or_default()
-    };
+    // O ponto de volta que o build gravou antes de o agente mexer na pasta.
+    let checkpoint=state.orchestrator.checkpoint.take();
+    if let Some(point)=&checkpoint { pulse.beat(Beat::Checkpoint{id:point.id.clone(),commit:point.commit.clone(),head:point.head.clone()}); }
     {
         let mut workspace=workspace.lock().await;
         let saved=match state.orchestrator.memory.agent_session(chat_id) { Some(kept)=>workspace.keep_agent_session(chat_id,kept), None=>workspace.forget_agent_session(chat_id) };
@@ -509,8 +510,17 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     // Só a resposta do modelo passa pelo portão de saída; um aviso de falha
     // não pede para rodar nem mexer em nada.
     let mut exits=if result.result.is_some(){exit_checks(&state,turn,&assistant)}else{vec![]};
+    // A validação do build, com os reparos que ela pedir: o que o agente
+    // disser nos reparos entra no fim da resposta.
+    let validated=validate_build(&mut state,workspace,turn,pulse,&result,checkpoint.as_ref()).await;
+    let assistant=format!("{assistant}{}",validated.appended);
+    exits.extend(validated.exits);
     // O protegido mexido entra mesmo no pedido que falhou: o agente pode ter
-    // gravado antes de cair.
+    // gravado antes de cair. Vale para o build e para os reparos dele.
+    let touched={
+        let (root,firewall)=(guard.root.clone(),crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone()));
+        tokio::task::spawn_blocking(move ||gatekeeper::touched(&before,&gatekeeper::guarded(&root,&firewall))).await.unwrap_or_default()
+    };
     exits.extend(gatekeeper::guarded_exits(turn,&touched,&state.orchestrator.firewall));
     {
         let mut workspace=workspace.lock().await;
@@ -742,6 +752,97 @@ fn review_in_background(app:AppHandle,workspace:SharedWorkspace,turn:Turn,review
     }));
 }
 
+/// O que a validação de um build devolve ao atendimento: o que o agente disse
+/// nos reparos (para o fim da resposta) e as saídas que esses reparos tiveram.
+#[derive(Default)]
+struct Validated { appended:String, exits:Vec<ExitCheck> }
+
+/// Se a organização retém o commit e o push neste chat — ela exige a validação
+/// e pede para reter, e a última validação do chat falhou — e quem retém.
+async fn held_by_validation(workspace:&SharedWorkspace,chat_id:&str)->(Vec<String>,Vec<String>) {
+    let workspace=workspace.lock().await;
+    let Some(project)=workspace.chat_policy(chat_id).unwrap_or(None) else { return (vec![],vec![]) };
+    let held=project.policy.held_commands();
+    if held.is_empty()||!workspace.last_validation_failed(chat_id).unwrap_or(false) { return (vec![],vec![]) };
+    let orgs=if project.policy.validation_sources.is_empty() { vec![project.org_slug.clone()] } else { project.policy.validation_sources.clone() };
+    (held,orgs)
+}
+
+/// Roda a validação do build (testes, lint, tipos e build do projeto), etapa
+/// por etapa, e devolve a falha ao agente enquanto houver tentativa de
+/// reparo. Só valida um build que o agente concluiu, com o recurso ligado (a
+/// organização pode exigi-lo) e o pedido ainda de pé.
+async fn validate_build(state:&mut DesktopState,workspace:&SharedWorkspace,turn:&Turn,pulse:&Pulse,result:&model::ProcessResult,checkpoint:Option<&crate::snapshot::Checkpoint>)->Validated {
+    use crate::validator::{self, Judge};
+    let mut done=Validated::default();
+    let built=result.model_selection.mode==crate::orchestrator::MODE_BUILD&&result.result.is_some()&&result.validation;
+    if !state.orchestrator.config.jev.validate_builds||!built||pulse.stop().reason().is_some() { return done; }
+    let chat_id=turn.chat_id.as_str();
+    let folder=std::path::PathBuf::from(state.orchestrator.rag.project_info().root);
+    // Um build que não mudou arquivo nenhum não tem o que validar.
+    if let Some(point)=checkpoint {
+        let (folder,commit)=(folder.clone(),point.commit.clone());
+        let changed=tokio::task::spawn_blocking(move||crate::snapshot::changed_since(&folder,&commit)).await.ok().flatten();
+        if changed.is_some_and(|files|files.is_empty()) { pulse.beat(Beat::ValidateSkipped{reason:"unchanged".into()}); return done; }
+    }
+    let (manual,policy)={
+        let workspace=workspace.lock().await;
+        let manual=serde_json::from_str::<validator::Manual>(&workspace.validation_commands(&folder.to_string_lossy()).unwrap_or_default()).unwrap_or_default();
+        (manual,workspace.chat_policy(chat_id).unwrap_or(None))
+    };
+    let judge:&dyn Judge=match &policy { Some(project)=>project, None=>&validator::Open };
+    let firewall=crate::firewall::ContextFirewall::new(state.orchestrator.config.privacy.clone());
+    let redact=move |text:&str|firewall.redact_secrets(text);
+    let max_repairs=state.orchestrator.config.jev.repair_attempts.min(crate::core_settings::MAX_REPAIRS);
+    let mut attempt=0;
+    loop {
+        let plan=validator::plan(&folder,&validator::Manual{..manual.clone()});
+        pulse.beat(Beat::ValidateStart{
+            attempt,max_repairs,
+            steps:plan.steps.iter().map(|step|crate::progress::StepPlan{kind:step.kind.as_str().into(),command:step.command.clone()}).collect(),
+            undefined:plan.undefined.iter().map(|kind|kind.as_str().to_string()).collect(),
+        });
+        let mut outcomes=Vec::new();
+        for step in &plan.steps {
+            let running=validator::run_step(&folder,step,judge,&redact,pulse.stop(),validator::STEP_TIMEOUT);
+            tokio::pin!(running);
+            // Um teste longo não dá sinal de vida: o relógio do pedido é avisado de que ele segue vivo.
+            let outcome=loop {
+                tokio::select! {
+                    outcome=&mut running=>break outcome,
+                    _=tokio::time::sleep(std::time::Duration::from_secs(20))=>pulse.stop().touch(),
+                }
+            };
+            pulse.beat(Beat::ValidateStep{
+                attempt,step:outcome.kind.as_str().into(),command:outcome.command.clone(),status:outcome.status.as_str().into(),
+                exit_code:outcome.exit_code,millis:outcome.millis,
+                tail:if outcome.status==validator::Status::Passed { String::new() } else { outcome.tail.clone() },
+                blocked_by:outcome.blocked_by.clone(),
+            });
+            outcomes.push(outcome);
+        }
+        let verdict=validator::verdict(&outcomes);
+        usage::mark(usage::JevMark::count(format!("validation:{}",verdict.as_str()),1));
+        pulse.beat(Beat::ValidateEnd{attempt,verdict:verdict.as_str().into()});
+        if verdict!=validator::Verdict::Failed||!validator::repairable(&outcomes)||attempt>=max_repairs||pulse.stop().reason().is_some() { break; }
+        attempt+=1;
+        pulse.beat(Beat::Repair{attempt,max:max_repairs});
+        usage::mark(usage::JevMark::count("validation:repair",1));
+        const SEPARATOR:&str="\n\n---\n\n";
+        pulse.beat(Beat::Chunk{text:SEPARATOR.into()});
+        match state.orchestrator.repair(&validator::repair_prompt(&outcomes,attempt,max_repairs),chat_id,pulse).await {
+            Ok(response)=>{
+                let said=asking::without_permission_marks(&response.response);
+                done.exits.extend(exit_checks(state,turn,&said));
+                done.appended.push_str(SEPARATOR);
+                done.appended.push_str(said.trim());
+            }
+            Err(error)=>{ eprintln!("validação: o reparo não rodou ({error:#})"); break; }
+        }
+    }
+    done
+}
+
 /// O pedido que não sai do lugar: o turno é dado por falho e o motivo entra no
 /// chat como resposta. Sem isto ele ficaria voando até o aplicativo reabrir, e
 /// o balão não ofereceria o reenvio a quem acabou de ver o erro.
@@ -796,10 +897,15 @@ async fn apply_project_policy(state:&mut DesktopState,workspace:&SharedWorkspace
     // cima, e o plano por último.
     // Os comandos que a organização bloqueia nunca chegam ao agente: saem do
     // liberado para o pedido e o agente fica sem poder rodá-los.
-    let (grants,blocked)=match &policy {
+    let (grants,mut blocked)=match &policy {
         Some(project)=>(project.policy.restrict_grants(grants),project.policy.blocked_commands.clone()),
         None=>(grants.clone(),vec![]),
     };
+    // A organização que exige a validação pode reter o commit e o push até a
+    // última validação do chat passar.
+    let (held,_)=held_by_validation(workspace,chat_id).await;
+    let grants=grants.without_blocked(&held);
+    for command in held { if !blocked.contains(&command) { blocked.push(command); } }
     let llm=llm.with_grants(&grants).with_mcp(&servers);
     // Só vale dizer que a política barrou o pedido se ela de fato desligou
     // algum agente ou modelo de quem usa.

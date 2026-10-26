@@ -16,7 +16,7 @@ use crate::orchestrator::Orchestrator;
 use crate::sync::{Connectivity, RoundSignals};
 use crate::workspace::WorkspaceStore;
 use commands::session::{SessionState, SharedSession};
-use commands::{files, gate, memory, mods, prompts, repositories, session, settings, system, usage, workspace as projects};
+use commands::{files, gate, memory, mods, prompts, repositories, session, settings, system, usage, validation, workspace as projects};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::sync::{Mutex, Notify};
@@ -271,7 +271,7 @@ pub fn run_desktop(config_path:PathBuf,root:PathBuf)->anyhow::Result<()> {
         })
         .invoke_handler(tauri::generate_handler![
             session::set_session,session::clear_session,session::connection_status,session::current_environment,session::set_environment,session::sync_now,session::get_locales,session::get_translations,
-            prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,prompts::cancel_turn,prompts::cancel_limit_wait,prompts::allowed_commands,prompts::chat_grants,prompts::set_chat_grants,prompts::forget_allowed_command,
+            prompts::enqueue_prompt,prompts::answer_question,prompts::dismiss_question,prompts::cancel_turn,prompts::cancel_limit_wait,validation::validation_setup,validation::save_validation_commands,validation::rollback_checkpoint,prompts::allowed_commands,prompts::chat_grants,prompts::set_chat_grants,prompts::forget_allowed_command,
             projects::get_workspace,projects::get_chat,projects::create_project,projects::organization_project,projects::create_chat,projects::clear_chat,projects::set_work_mode,projects::delete_chat,projects::delete_project,
             settings::get_settings,settings::save_settings,settings::get_mcp_servers,settings::save_mcp_servers,settings::check_mcp_servers,settings::get_skills,settings::preview_skills,settings::get_org_extensions,settings::install_skill_folder,settings::install_skill_text,settings::search_skill_hub,settings::install_hub_skill,settings::set_skill_enabled,settings::remove_skill,settings::draft_mcp,settings::refresh_models,settings::list_models,settings::check_agent,settings::check_gateway,settings::set_reply_language,settings::get_core_settings,settings::save_core_settings,mods::get_mods,mods::save_mods,settings::save_expertise,settings::save_lean_code,
             system::system_status,

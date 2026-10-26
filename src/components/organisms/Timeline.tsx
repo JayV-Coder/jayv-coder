@@ -79,6 +79,8 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
   // Só a troca de modo mais recente do Jev pode ser desfeita, e só enquanto o
   // chat continua no modo em que ela o deixou.
   const lastSwitch = [...(chat?.turns ?? [])].reverse().find((turn) => turn.route?.switched);
+  // A volta ao estado anterior é só do build mais recente, com o chat parado.
+  const rollbackTurn = open.length === 0 ? [...(chat?.turns ?? [])].reverse().find((turn) => turn.validation?.some((event) => event.kind === "checkpoint"))?.id : undefined;
   const undoable = chat?.workMode === "build" ? lastSwitch?.id : undefined;
 
   const toBottom = (smooth = false) => {
@@ -147,6 +149,7 @@ export function Timeline({ chat, project }: { chat: Chat | null; project: Projec
                         onCancelWait={chat && turn?.limitWait ? () => void cancelLimitWait(turn.id, chat.id) : undefined}
                         onCancel={chat && turn ? () => void cancelTurn(turn.id, chat.id) : undefined}
                         onUndoMode={chat && turn && turn.id === undoable && turn.route?.switched ? () => void setWorkMode(chat.id, turn.route?.switched?.from ?? "auto") : undefined}
+                        canRollback={turn !== null && turn.id === rollbackTurn}
                         onOpenFile={project?.rootPath ? (path) => void openFile(chat.id, path) : undefined}
                       />
                     ))}

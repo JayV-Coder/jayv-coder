@@ -9,6 +9,7 @@ import { Markdown } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EvidencePanel } from "./EvidencePanel";
+import { ValidationBlock } from "./ValidationBlock";
 
 /** Onde uma mensagem do agente termina e a próxima começa (o
  * `MESSAGE_BREAK` do núcleo). */
@@ -47,7 +48,7 @@ function Verdict({ light }: { light: MessageLight }) {
  * o veredito, e a saída embaixo. A cor que a portaria deu pinta a margem do
  * bloco (no `Timeline`) e, quando não é verde, a borda do pedido e o veredito
  * escrito. */
-export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onCancelWait, onCancel, onOpenFile, onUndoMode, children }: {
+export function MessageBubble({ role, content, turn, at, meta, pending, onRetry, onCancelWait, onCancel, onOpenFile, onUndoMode, canRollback, children }: {
   role: "user" | "assistant";
   content: string;
   turn: TurnView | null;
@@ -67,6 +68,8 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
   onOpenFile?: (path: string) => void;
   /** Devolve o chat ao modo de onde o Jev o tirou neste pedido. */
   onUndoMode?: () => void;
+  /** Este é o último build do chat e nada corre: dá para voltar ao estado de antes dele. */
+  canRollback?: boolean;
   children?: ReactNode;
 }) {
   const t = useT();
@@ -238,6 +241,7 @@ export function MessageBubble({ role, content, turn, at, meta, pending, onRetry,
           </div>
         )}
         {children}
+        {!user && !pending && turn && (turn.validation?.length ?? 0) > 0 && <ValidationBlock events={turn.validation ?? []} turnId={turn.id} canRollback={canRollback === true} />}
         {checkable && checked && <EvidencePanel turnId={turn.id} />}
         {!pending && (meta || answer || checkable) && (
           <div className="flex min-h-6 items-center gap-2 text-caption text-muted-foreground">

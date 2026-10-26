@@ -1,0 +1,10 @@
+{
+  "id": "buildCheckpoint",
+  "category": "chat",
+  "since": "0.109.0",
+  "plan": null,
+  "commands": [],
+  "title": "Checkpoint and rollback",
+  "summary": "Before each development request Jev saves the project folder, so one click returns to how it was.",
+  "usage": "Saved automatically before every development request (Settings › Jev › Save a checkpoint before each build; on by default). The checkpoint does not touch your commits, staging area or stash. On the latest build's answer, click Go back to before this build (or Ctrl+K › Roll back the last build) and confirm: the files return to how they were, and the state just before the rollback is kept so it can still be recovered. If the agent made commits, they stay in the history. Only the latest build can be rolled back, and only while no request is running. JayV keeps the 30 most recent checkpoints."
+}
