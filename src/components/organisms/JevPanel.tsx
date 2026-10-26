@@ -75,6 +75,17 @@ export function JevPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
         </div>
       </SettingsSection>
 
+      <SettingsSection title={t("jev.section.validation")} description={t("jev.section.validation.description")}>
+        <div className="grid gap-3">
+          <ToggleRow id="jev-validate" label={t("jev.validate")} hint={t("jev.validate.hint")} checked={core.validateBuilds} onChange={(validateBuilds) => updateCore({ validateBuilds })} />
+          <ToggleRow id="jev-checkpoint" label={t("jev.checkpoint")} hint={t("jev.checkpoint.hint")} checked={core.checkpointBuilds} onChange={(checkpointBuilds) => updateCore({ checkpointBuilds })} />
+          <FormField label={t("jev.repairs")} htmlFor="jev-repairs" hint={t("jev.repairs.hint")}>
+            <OptionSelect id="jev-repairs" value={String(core.repairAttempts)} onChange={(value) => updateCore({ repairAttempts: Number(value) })}
+              options={[0, 1, 2].map((count) => ({ value: String(count), label: t("jev.repairs.count", { count }) }))} />
+          </FormField>
+        </div>
+      </SettingsSection>
+
       <SettingsSection title={t("jev.section.budgets")} description={t("jev.section.budgets.description", { min: minBudget, max: maxBudget })}>
         <div className="grid gap-4 sm:grid-cols-2">
           {COMPLEXITIES.map((level) => {

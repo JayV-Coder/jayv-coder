@@ -11,7 +11,7 @@ pub use jayv_code::{context_engine, graph, project_map, rag, search, symbols};
 pub use jayv_memory::{memory, project_memory};
 pub use jayv_workspace::{environments, workspace};
 pub use jayv_live::live_files;
-pub use jayv_orchestration::{orchestrator, parallel, review, split};
+pub use jayv_orchestration::{orchestrator, parallel, review, snapshot, split, validator};
 
 pub mod bench;
 pub mod desktop;

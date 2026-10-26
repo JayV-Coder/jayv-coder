@@ -53,6 +53,9 @@ export interface TurnView {
   /** O pedido parou no limite de uso do agente e o JayV o reenvia sozinho na
    * hora indicada. */
   limitWait: LimitWait | null;
+  /** Os eventos da validação do build: o ponto de volta, a última rodada de
+   * etapas, os reparos e a volta (ver `modules/validation`). */
+  validation?: Activity[];
   /** Feito neste computador; falso no que desceu pela sincronização (outra
    * máquina, o histórico de um computador novo). */
   local?: boolean;
@@ -573,6 +576,28 @@ export interface CoreSettings {
   turnCeilingMinutes: number;
   /** O Jev decide o prazo do pedido; só o plano liga, sem interruptor. */
   autoTurnCeiling: boolean;
+  /** Depois de um build, roda testes, lint, tipos e build do projeto. A
+   * organização pode exigir. */
+  validateBuilds: boolean;
+  /** Antes de cada build, grava a pasta para voltar a ela. */
+  checkpointBuilds: boolean;
+  /** Tentativas de reparo automático quando a validação falha (0 a 2). */
+  repairAttempts: number;
+}
+
+/** O que a volta ao ponto gravado fez. */
+export interface Rollback {
+  files: number;
+  /** O agente fez commits depois da foto: continuam no histórico. */
+  headMoved: boolean;
+  /** A ref que guarda a pasta como estava antes da volta. */
+  safety: string;
+}
+
+export interface ValidationCommands { test: string; lint: string; typecheck: string; build: string }
+export interface ValidationSetup {
+  manual: ValidationCommands;
+  detected: { steps: { kind: "test" | "lint" | "typecheck" | "build"; command: string }[]; undefined: ("test" | "lint" | "typecheck" | "build")[] };
 }
 
 /** Os números da portaria, que chegam do Supabase e só se leem aqui. */

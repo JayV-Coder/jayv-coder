@@ -1,0 +1,10 @@
+{
+  "id": "orgValidation",
+  "category": "team",
+  "since": "0.109.0",
+  "plan": null,
+  "commands": [],
+  "title": "Organization validation policy",
+  "summary": "Owners and maintainers can require the build validator for the whole organization and hold commits until it passes.",
+  "usage": "On the site, open the organization's Permissions tab and, under Build validation, turn on Require validation. Members' projects then always validate builds and save checkpoints, regardless of their own settings. Optionally turn on Hold commits until validation passes: while the last validation of a chat failed, git commit and git push are blocked in that chat, and the answer says why. A project with no test command is not held, since nothing failed. Changes arrive at the next sync."
+}

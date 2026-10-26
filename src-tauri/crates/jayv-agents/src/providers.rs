@@ -1061,14 +1061,14 @@ pub(crate) fn text_of(bytes:&[u8])->String {
 ///
 /// Largada sem `release`, a árvore cai: o agente que terminou sozinho é o único
 /// caminho que a deixa em pé.
-pub(crate) struct Tree { pid:Option<u32> }
+pub struct Tree { pid:Option<u32> }
 
 impl Tree {
-    pub(crate) fn of(child:&tokio::process::Child)->Self { Self{pid:child.id()} }
+    pub fn of(child:&tokio::process::Child)->Self { Self{pid:child.id()} }
     /// O agente saiu por conta própria: não há o que matar, e o número dele
     /// pode voltar a outro processo.
-    pub(crate) fn release(&mut self) { self.pid=None; }
-    pub(crate) fn kill(&mut self) { if let Some(pid)=self.pid.take() { kill_tree(pid); } }
+    pub fn release(&mut self) { self.pid=None; }
+    pub fn kill(&mut self) { if let Some(pid)=self.pid.take() { kill_tree(pid); } }
 }
 
 impl Drop for Tree { fn drop(&mut self) { self.kill(); } }

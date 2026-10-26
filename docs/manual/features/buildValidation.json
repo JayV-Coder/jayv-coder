@@ -1,0 +1,10 @@
+{
+  "id": "buildValidation",
+  "category": "chat",
+  "since": "0.109.0",
+  "plan": null,
+  "commands": [],
+  "title": "Build validation",
+  "summary": "After each development request, Jev runs the project's tests, lint, typecheck and build, and shows what passed or failed.",
+  "usage": "Turn it on in Settings › Jev › Validate builds (optional; an organization can require it). After a development request that changed files, the answer shows one line per step with the command, the time and, for steps that did not pass, the end of the output. The project's commands are detected from package.json, Cargo.toml, pyproject.toml, go.mod or the Makefile; use the Validation button under the chat box (or Ctrl+K › Validation commands) to write your own, or type off to skip a step. A project with no test command shows \"no test defined\" and the answer is never marked as validated. If a step fails, Jev sends the failure back to the agent for up to the number of repairs set in Settings (0 to 2, two by default); the counter is shown on screen. Commands follow the organization's command permissions: a blocked command is not run and the step says who blocked it."
+}

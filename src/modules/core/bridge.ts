@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, KnownModel, LlmSettings, ModelsRefresh, NoteDraft, Project,
+  AgentId, AgentProbe, GatewayCheck, Chat, CoreSettings, Rollback, ValidationCommands, ValidationSetup, Grants, McpDraft, McpServer, OrgExtensions, Skill, SkillHit, SkillPreview, CoreSnapshot, Expertise, EntryCheck, ExitCheck, GateFeed, KnownModel, LlmSettings, ModelsRefresh, NoteDraft, Project,
   InstalledMods, ModsSnapshot, ProjectMemory, QuotaView, SearchHit, SettingsSnapshot, SystemStatus, Turn, TurnEvidence, TurnUsage, UsageReport, UsageScope, WorkMode, WorkspaceData,
 } from "./types";
 import type { Text } from "@/modules/i18n";
@@ -44,6 +44,9 @@ export const commands = {
   dismissQuestion: (questionTurnId: string) => invoke<void>("dismiss_question", { questionTurnId }),
   cancelTurn: (turnId: string) => invoke<void>("cancel_turn", { turnId }),
   cancelLimitWait: (turnId: string) => invoke<void>("cancel_limit_wait", { turnId }),
+  validationSetup: (chatId: string) => invoke<ValidationSetup>("validation_setup", { chatId }),
+  saveValidationCommands: (chatId: string, manual: ValidationCommands) => invoke<ValidationSetup>("save_validation_commands", { chatId, manual }),
+  rollbackCheckpoint: (turnId: string) => invoke<Rollback>("rollback_checkpoint", { turnId }),
   gateFeed: (projectId: string | null) => invoke<GateFeed>("gate_feed", { projectId }),
   scopedGateFeed: (projectIds: string[], chatId: string | null) => invoke<GateFeed>("scoped_gate_feed", { projectIds, chatId }),
   turnEvidence: (turnId: string) => invoke<TurnEvidence>("turn_evidence", { turnId }),

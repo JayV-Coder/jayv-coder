@@ -18,6 +18,8 @@ pub const CONFIDENCE_RANGE:(f64,f64)=(0.5,0.95);
 pub const BUDGET_RANGE:(usize,usize)=(500,200_000);
 pub const CACHE_TTL_RANGE:(u64,u64)=(0,86_400);
 pub const TURN_CEILING_RANGE:(u64,u64)=(5,240);
+/// O teto das tentativas de reparo automático depois de uma validação que falhou.
+pub const MAX_REPAIRS:u32=2;
 const PATTERN_MAX:usize=200;
 
 #[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
@@ -66,7 +68,16 @@ pub struct CoreSettings {
     /// O Jev decide o prazo de cada pedido; o teto em minutos não vale. Só o
     /// plano liga (`Entitlements::enforce_core`), sem interruptor.
     #[serde(default)] pub auto_turn_ceiling:bool,
+    /// Depois de um build, roda testes, lint, tipos e build do projeto. A
+    /// organização pode exigir (`LlmPolicy::validation`).
+    #[serde(default)] pub validate_builds:bool,
+    /// Antes de cada build, grava a pasta para voltar a ela com um clique.
+    #[serde(default="keep_by_default")] pub checkpoint_builds:bool,
+    /// Tentativas de reparo automático quando a validação falha (0 a `MAX_REPAIRS`).
+    #[serde(default="repair_by_default")] pub repair_attempts:u32,
 }
+
+fn repair_by_default()->u32 { crate::config::default_repair_attempts() }
 
 fn keep_by_default()->bool { true }
 
@@ -90,6 +101,9 @@ impl CoreSettings {
             turn_ceiling_minutes:config.jev.turn_ceiling_minutes,
             resume_after_limit:config.jev.resume_after_limit,
             auto_turn_ceiling:config.jev.auto_turn_ceiling,
+            validate_builds:config.jev.validate_builds,
+            checkpoint_builds:config.jev.checkpoint_builds,
+            repair_attempts:config.jev.repair_attempts,
         }
     }
 
@@ -115,6 +129,9 @@ impl CoreSettings {
         config.jev.turn_ceiling_minutes=self.turn_ceiling_minutes;
         config.jev.resume_after_limit=self.resume_after_limit;
         config.jev.auto_turn_ceiling=self.auto_turn_ceiling;
+        config.jev.validate_builds=self.validate_builds;
+        config.jev.checkpoint_builds=self.checkpoint_builds;
+        config.jev.repair_attempts=self.repair_attempts;
     }
 
     /// Confere tudo e devolve a versão limpa: padrões sem espaço nas pontas,
@@ -137,6 +154,7 @@ impl CoreSettings {
         for (rule,value) in [("read",&self.exit_rules.read),("write",&self.exit_rules.write),("shell",&self.exit_rules.shell)] {
             if !PERMISSIONS.contains(&value.as_str()) { bail!(Text::new("core.permission").with("rule",rule).with("value",value)); }
         }
+        self.repair_attempts=self.repair_attempts.min(MAX_REPAIRS);
         self.privacy.deny=patterns(&self.privacy.deny)?;
         self.privacy.local_only=patterns(&self.privacy.local_only)?;
         let mut order:Vec<String>=Vec::new();
@@ -213,6 +231,14 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         assert_eq!((loaded.confidence_threshold,loaded.agent_order.len()),(0.8,0));
         assert!(loaded.keep_session_model&&!loaded.resume_across_modes,"o gravado antes das opções de sessão abre com os padrões");
         assert_eq!(loaded.turn_ceiling_minutes,30,"o gravado antes do teto abre com 30 minutos");
+        assert!(!loaded.validate_builds&&loaded.checkpoint_builds&&loaded.repair_attempts==2,"o gravado antes da validação abre com o validador desligado");
+    }
+
+    /// As tentativas de reparo nunca passam do teto, e o JayV não pergunta por isso.
+    #[test] fn the_repair_attempts_are_capped() {
+        let base=CoreSettings::from_config(&Config::default());
+        assert_eq!(CoreSettings{repair_attempts:9,..base.clone()}.validate().expect("limpa").repair_attempts,MAX_REPAIRS);
+        assert_eq!(CoreSettings{repair_attempts:0,..base}.validate().expect("limpa").repair_attempts,0);
     }
 
     #[test] fn values_outside_the_ranges_never_reach_the_database() {

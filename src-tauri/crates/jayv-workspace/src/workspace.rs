@@ -740,6 +740,24 @@ impl WorkspaceStore {
     pub fn gate_feed(&self, chats:Option<&BTreeSet<String>>) -> Result<GateFeed> {turns::feed(&self.connection,chats)}
 
     pub fn record_beat(&mut self, turn_id:&str, kind:&str, detail:&serde_json::Value) -> Result<u32> {turns::record_beat(&self.connection,turn_id,kind,detail)}
+    /// A última validação do chat falhou e nenhum build depois a refez.
+    pub fn last_validation_failed(&self, chat_id:&str) -> Result<bool> {turns::last_validation_failed(&self.connection,chat_id)}
+    pub fn latest_checkpoint_turn(&self, chat_id:&str) -> Result<Option<String>> {turns::latest_checkpoint_turn(&self.connection,chat_id)}
+    pub fn has_open_turn(&self, chat_id:&str) -> Result<bool> {turns::has_open_turn(&self.connection,chat_id)}
+    /// O ponto de volta do turno (o evento `checkpoint`) e se a pasta já voltou a ele.
+    pub fn checkpoint_of(&self, turn_id:&str) -> Result<Option<(serde_json::Value,bool)>> {turns::checkpoint_of(&self.connection,turn_id)}
+    /// Os comandos de validação que a pessoa escreveu para a pasta, em JSON
+    /// (vazio sem nenhum). Ficam neste computador, por pasta.
+    pub fn validation_commands(&self, root:&str) -> Result<String> {
+        use rusqlite::OptionalExtension;
+        Ok(self.connection.query_row("SELECT value FROM app_metadata WHERE key=?1",[format!("validation_commands:{root}")],|row|row.get(0)).optional()?.unwrap_or_default())
+    }
+    pub fn save_validation_commands(&mut self, root:&str, json:&str) -> Result<()> {
+        let key=format!("validation_commands:{root}");
+        if json.trim().is_empty() { self.connection.execute("DELETE FROM app_metadata WHERE key=?1",[key])?; return Ok(()); }
+        self.connection.execute("INSERT INTO app_metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",rusqlite::params![key,json])?;
+        Ok(())
+    }
 
     pub fn turn_activity(&self, turn_id:&str) -> Result<Vec<turns::Activity>> {turns::activity(&self.connection,turn_id)}
 

@@ -1,6 +1,7 @@
 import type { Activity, Aspect, EntryVerdict, ExitVerdict, RouteMode, TurnRoute, TurnStatus } from "@/modules/core";
 import { t, type Key } from "@/modules/i18n";
 import { agentLabel as modLabel } from "@/modules/settings";
+import { validationOf } from "@/modules/validation";
 import { shownText, sourceLabel } from "./notice";
 
 const GATE_WORDS: Record<string, Key> = { pass: "beat.gate.pass", ask: "beat.gate.ask", block: "beat.gate.block" };
@@ -52,6 +53,14 @@ export function beatLine(kind: string, detail: Record<string, unknown>): string 
     case "dismissed": return t("beat.dismissed", { prompt: d.prompt ?? "" });
     case "permission_denied": return t("beat.permissionDenied", { commands: Array.isArray(d.commands) ? d.commands.join(", ") : "" });
     case "permission_blocked": return t("beat.permissionBlocked", { commands: Array.isArray(d.commands) ? d.commands.join(", ") : "", org: Array.isArray(d.orgs) ? d.orgs.join(", ") : "" });
+    case "checkpoint": return t("beat.checkpoint");
+    case "validate_start": return t("beat.validateStart", { count: Array.isArray(detail.steps) ? detail.steps.length : 0, attempt: Number(d.attempt ?? 0) + 1 });
+    case "validate_step": return t(`beat.validateStep.${String(d.status ?? "failed")}` as Key, { step: t(`validation.kind.${String(d.step ?? "test")}` as Key), command: String(d.command ?? "") });
+    case "validate_end": return t(`beat.validateEnd.${String(d.verdict ?? "unproven")}` as Key);
+    case "validate_skipped": return t("beat.validateSkipped");
+    case "repair": return t("beat.repair", { attempt: d.attempt ?? 0, max: d.max ?? 0 });
+    case "commit_held": return t("beat.commitHeld", { commands: Array.isArray(d.commands) ? d.commands.join(", ") : "" });
+    case "rolled_back": return t("beat.rolledBack");
     default: return null;
   }
 }
@@ -159,10 +168,15 @@ export type MessageLight = { aspect: Aspect | null; label: Key };
  * teste, build nem lint, então ela não fica verde — fica "não verificada", sem
  * cor. Um pedido barrado tinge os dois balões: quem respondeu foi a própria
  * portaria. */
-export function messageLight(role: "user" | "assistant", turn: { status: TurnStatus; entry: EntryVerdict | null; exit: ExitVerdict | null }): MessageLight | null {
+export function messageLight(role: "user" | "assistant", turn: { status: TurnStatus; entry: EntryVerdict | null; exit: ExitVerdict | null; validation?: Activity[] }): MessageLight | null {
   if (role === "user") return turn.entry ? ENTRY_VERDICTS[turn.entry] : null;
   if (turn.status === "blocked") return { aspect: "stop", label: "verdict.blocked" };
   if (turn.status === "failed") return { aspect: "ask", label: "verdict.failed" };
   if (turn.status === "flying" || turn.status === "queued") return null;
-  return turn.exit === "held" ? EXIT_VERDICTS.held : { aspect: null, label: "verdict.unverified" };
+  if (turn.exit === "held") return EXIT_VERDICTS.held;
+  // Só o validador prova: passou nos testes é verde; falhou é vermelho.
+  const state = turn.validation?.length ? validationOf(turn.validation) : null;
+  if (state?.verdict === "failed") return { aspect: "stop", label: "verdict.validationFailed" };
+  if (state?.verdict === "passed" && state.steps.some((step) => step.kind === "test" && step.status === "passed")) return { aspect: "go", label: "verdict.validated" };
+  return { aspect: null, label: "verdict.unverified" };
 }

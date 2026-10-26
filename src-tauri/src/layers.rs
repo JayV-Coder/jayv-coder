@@ -22,7 +22,7 @@ pub const LAYERS:&[(&str,&[&str])]=&[
     ("memory",&["memory","project_memory"]),
     ("workspace",&["workspace","environments"]),
     ("live",&["live_files"]),
-    ("orchestration",&["orchestrator","parallel","split","review"]),
+    ("orchestration",&["orchestrator","parallel","split","review","snapshot","validator"]),
     ("app",&["desktop","mcp","sync","bench","layers","outbox_tests","usage_tests"]),
 ];
 

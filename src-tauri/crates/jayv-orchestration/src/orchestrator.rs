@@ -169,6 +169,13 @@ pub struct Orchestrator {
     /// (`ReviewRequest`): quem atende a fila a leva e a roda fora do
     /// cadeado, e o pedido seguinte não espera a segunda opinião.
     pub pending_review: Option<ReviewRequest>,
+    /// O ponto de volta gravado antes do último build (`snapshot`): quem
+    /// atende o lê depois do `process` e o narra. Vazio fora do build, sem
+    /// git ou com o recurso desligado.
+    pub checkpoint: Option<crate::snapshot::Checkpoint>,
+    /// Como o último build correu, para devolver a falha da validação ao
+    /// mesmo agente (`repair`).
+    last_build: Option<LastBuild>,
     /// Os agentes que pararam no limite de uso durante o último pedido. Só
     /// ficam se o pedido terminou em falha: quem atende o lê para esperar o
     /// limite voltar e retomar.
@@ -201,7 +208,7 @@ impl Orchestrator {
         let workdir=Workdir::default();
         workdir.focus(root.clone());
         let rag=RepositoryRag::new(root);
-        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, no_agent_mods:false, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, limit_hits:vec![], skills:vec![], llm_base:None, skill_mcp:false })
+        Ok(Self { config_path, cache:SemanticCache::new(config.jev.context.cache_ttl,1000), providers:build_providers(&config.providers,&workdir), planners:build_planners(&config.providers,&workdir), workdir, config, memory:MemoryManager::default(), rag, firewall, agents:AgentRegistry::default(), graph:ExecutionGraph::default(), shared:Arc::new(Shared::load(performance_path)), routing_mode:default_routing_mode(), pending_gate_note:None, pending_brief:None, pending_gate_passed:None, pending_plan:None, plan_answered:false, planned_for_build:false, expertise:Default::default(), policy_scope:None, no_agent_mods:false, blocked_commands:vec![], pending_routing:None, project_notes:None, lean_code:true, pending_context:vec![], pending_work_mode:None, mode_switch:None, pending_retry:false, last_decision:None, llm_built:None, pending_review:None, checkpoint:None, last_build:None, limit_hits:vec![], skills:vec![], llm_base:None, skill_mcp:false })
     }
 
     /// Os agentes e modelos que o banco guarda. O arquivo de configuração não
@@ -432,6 +439,13 @@ impl Orchestrator {
         // Só o pedido médio ou complexo ganha a segunda opinião: no simples, ela
         // custava mais que a mudança.
         self.pending_review=None;
+        self.checkpoint=None;
+        self.last_build=None;
+        // O ponto de volta sai antes do agente tocar em qualquer arquivo.
+        if self.config.jev.checkpoint_builds&&mode==MODE_BUILD&&self.config.permissions.write!="deny" {
+            let (folder,id)=(PathBuf::from(self.rag.project_info().root),uuid::Uuid::new_v4().simple().to_string());
+            self.checkpoint=tokio::task::spawn_blocking(move||crate::snapshot::take(&folder,&id)).await.ok().flatten();
+        }
         let watch=if self.config.jev.review_changes&&mode==MODE_BUILD&&wants_review(&complexity) { self.start_watch().await } else { None };
         let started=Instant::now();
         // Pedido complexo no build, com a divisão ligada: partes do pedido vão
@@ -493,6 +507,9 @@ impl Orchestrator {
         let resumed=execution.as_ref().is_ok_and(|(_,resumed,_)|*resumed);
         let instructions=execution.as_ref().map_or(0,|(_,_,instructions)|*instructions);
         let execution=execution.map(|(response,_,_)|response);
+        if mode==MODE_BUILD&&execution.as_ref().is_ok_and(usable_response) {
+            self.last_build=Some(LastBuild{selection:selection.clone(),context:Context{snippets:vec![],relevant_files:vec![],..context.clone()},effort:effort.to_string()});
+        }
         self.remember_agent_session(session_id,&selection,execution.as_ref().ok(),resumed,instructions);
         match &execution {
             Ok(response)=>pulse.beat(Beat::Done{input_tokens:response.input_tokens,output_tokens:response.output_tokens,latency_ms:response.latency_ms}),
@@ -505,6 +522,25 @@ impl Orchestrator {
         self.shared.record(PerformanceRecord { task_type:intent.intent.clone(), strategy_used:strategy.clone(), model_used:selection.model_name.clone(), success:valid, response_time_ms:started.elapsed().as_millis(), input_tokens:result.as_ref().map_or(0,|r|r.input_tokens), output_tokens:result.as_ref().map_or(0,|r|r.output_tokens), estimated_cost:0.0, timestamp:Utc::now(), chat:Some(session_id.to_string()) });
         self.last_decision=Some(decision.clone());
         ProcessResult { user_input:user_input.into(), normalized_input:normalized, intent_analysis:intent, complexity, context_plan:plan, context, strategy, model_selection:selection, result, validation:valid, decision, routing:signals, error }
+    }
+
+    /// Devolve a falha da validação ao agente que acabou de construir, na
+    /// mesma sessão quando ela pode ser retomada. O pedido é só o texto do
+    /// reparo: o contexto do projeto já está com o agente. Sem build recente
+    /// neste atendente, não há a quem devolver.
+    pub async fn repair(&mut self,prompt:&str,session_id:&str,pulse:&Pulse)->Result<ProviderResponse> {
+        let last=self.last_build.clone().ok_or_else(||anyhow!("there is no recent build to repair"))?;
+        self.memory.add_message(session_id,"user",prompt.to_string());
+        let execution=self.execute(prompt,&[],&[],&last.effort,&last.context,&last.selection,session_id,pulse).await;
+        // O agente mexeu nos arquivos: o índice lido antes dele já não vale.
+        self.rag.invalidate();
+        let (response,resumed,instructions)=match execution {
+            Ok(done)=>done,
+            Err(error)=>{ self.note_limit(&error,&last.selection.provider); return Err(error); }
+        };
+        self.remember_agent_session(session_id,&last.selection,Some(&response),resumed,instructions);
+        if !response.response.trim().is_empty() { self.memory.add_message(session_id,"assistant",response.response.clone()); }
+        Ok(response)
     }
 
     /// Guarda o agente que parou no limite de uso, com a hora em que ele volta
@@ -1233,6 +1269,10 @@ fn skill_note(skill:&jayv_agents::skills::Skill)->Option<String> {
 /// A revisão pronta para sair depois da resposta, já sem depender do
 /// orquestrador. Devolve o texto que entra no chat, no mesmo turno, como uma
 /// mensagem própria — ou nada, se o revisor falhar.
+/// O agente, o contexto (sem os arquivos) e o esforço do último build bem-sucedido.
+#[derive(Clone)]
+struct LastBuild { selection:ModelSelection, context:Context, effort:String }
+
 pub struct ReviewRequest { provider:Box<dyn Provider>, name:String, model:String, messages:Vec<ChatMessage>, effort:&'static str }
 
 impl ReviewRequest {
@@ -2139,6 +2179,52 @@ mod tests {
         let quiet=orchestrator.process("adicione um teste ao roteador",Some("quiet"),&Pulse::silent()).await;
         assert_eq!(quiet.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("só-li"));
         assert!(orchestrator.rag.paths().any(|path|path=="added.rs"),"o arquivo que o build criou entra no índice do pedido seguinte");
+    }
+
+    /// O build grava o ponto de volta antes do agente mexer na pasta (só com o
+    /// recurso ligado) e a falha da validação volta ao mesmo agente, sem
+    /// reabrir leitura nem roteamento.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_build_leaves_a_checkpoint_and_a_repair_goes_back_to_the_same_agent() {
+        let dir=repository(&[("router.rs",filler("router",200))]);
+        for args in [&["init","-q"][..],&["add","."],&["-c","user.email=t@t","-c","user.name=t","commit","-qm","fixture"]] {
+            assert!(std::process::Command::new("git").current_dir(dir.path()).args(args).output().expect("git").status.success());
+        }
+        let mut orchestrator=orchestrator(&dir);
+        let script=|build:&str|crate::config::ProviderConfig{enabled:true,kind:"cli".into(),command:Some("sh".into()),args:vec!["-c".into(),build.into()],plan_args:vec!["-c".into(),"cat >/dev/null; echo plan".into()],..Default::default()};
+        let model=crate::config::ModelConfig{enabled:true,provider:"maker".into(),model:"maker-model".into(),capabilities:vec!["chat".into(),"code".into(),"reasoning".into(),"tools".into()],cost_class:"medium".into(),speed:"medium".into(),context_window:200_000};
+        let install=|orchestrator:&mut Orchestrator,body:&str|{
+            let providers=HashMap::from([("maker".to_string(),script(body))]);
+            orchestrator.providers=build_providers(&providers,&orchestrator.workdir);
+            orchestrator.config.providers=providers;
+        };
+        install(&mut orchestrator,"cat >/dev/null; echo 'fn broken() {}' > added.rs; echo built");
+        orchestrator.config.models=HashMap::from([("maker/m".to_string(),model)]);
+        orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("code",0.93,"medium",0.9)));
+
+        orchestrator.config.jev.checkpoint_builds=false;
+        orchestrator.process("adicione um teste ao roteador",Some("c"),&Pulse::silent()).await;
+        assert!(orchestrator.checkpoint.is_none(),"desligado, não grava");
+        std::fs::remove_file(dir.path().join("added.rs")).expect("limpa");
+
+        orchestrator.config.jev.checkpoint_builds=true;
+        let built=orchestrator.process("adicione um teste ao roteador",Some("c"),&Pulse::silent()).await;
+        assert_eq!(built.result.map(|answer|answer.response.trim().to_string()).as_deref(),Some("built"));
+        let checkpoint=orchestrator.checkpoint.take().expect("ponto de volta");
+        assert!(crate::snapshot::changed_since(dir.path(),&checkpoint.commit).is_some_and(|changed|changed.contains(&"added.rs".to_string())),"o ponto é de antes do agente");
+
+        install(&mut orchestrator,"cat > received.txt; echo fixed");
+        let fixed=orchestrator.repair("repair attempt 1 of 2: fix the failing test","c",&Pulse::silent()).await.expect("reparo");
+        assert_eq!(fixed.response.trim(),"fixed");
+        let received=std::fs::read_to_string(dir.path().join("received.txt")).expect("o agente recebeu");
+        assert!(received.contains("repair attempt 1 of 2: fix the failing test"),"{received}");
+        assert!(received.contains("adicione um teste ao roteador"),"a conversa vai junto numa sessão nova: {received}");
+        assert!(!received.contains("RELEVANT FILES")&&!received.contains("REPOSITORY CONTEXT"),"o reparo não reenvia o contexto do projeto");
+
+        // Sem build neste atendente não há a quem devolver a falha.
+        let mut idle=Orchestrator::new(dir.path().join("missing-config.yaml"),dir.path().to_path_buf()).expect("orchestrator");
+        assert!(idle.repair("repair","c",&Pulse::silent()).await.is_err());
     }
 
     /// Com o plano ligado, o pedido complexo do build passa antes por um

@@ -26,6 +26,14 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.109.0", date: "2026-10-26",
+    items: [
+      { kind: "feature", id: "buildValidation" },
+      { kind: "feature", id: "buildCheckpoint" },
+      { kind: "feature", id: "orgValidation" },
+    ],
+  },
+  {
     version: "0.108.0", date: "2026-10-25",
     items: [
       { kind: "feature", id: "newAgentMods" },

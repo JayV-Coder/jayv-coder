@@ -43,6 +43,8 @@ export const TOURS: Tour[] = [
       { feature: "chatSearch" },
       { feature: "conversationFind" },
       { feature: "consumptionGuard" },
+      { feature: "buildValidation" },
+      { feature: "buildCheckpoint" },
       { feature: "limitResume" },
       { feature: "keepSessionModel" },
       { feature: "planBuildSession" },
@@ -53,6 +55,7 @@ export const TOURS: Tour[] = [
       { feature: "orgChat", target: "general-chats" },
       { feature: "commandPermissions", target: "composer-grants" },
       { feature: "chatPermissions", target: "composer-grants" },
+      { feature: "orgValidation" },
     ],
   },
   {

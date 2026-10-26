@@ -64,3 +64,5 @@ export { OrganizationExtensions } from "./OrganizationExtensions";
 export { SkillsPanel } from "./SkillsPanel";
 export { McpDraftDialog } from "./McpDraftDialog";
 export { ScreenFailure } from "./ScreenFailure";
+export { ValidationBlock } from "./ValidationBlock";
+export { ValidationDialog } from "./ValidationDialog";

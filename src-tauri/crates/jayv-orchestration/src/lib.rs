@@ -1,11 +1,13 @@
 //! A orquestração, a camada de cima do núcleo do JayV. O crate do app a
 //! reexporta com os mesmos nomes (`crate::orchestrator`, `crate::parallel`,
-//! `crate::split`, `crate::review`).
+//! `crate::split`, `crate::review`, `crate::snapshot`, `crate::validator`).
 
 pub mod orchestrator;
 pub mod parallel;
 pub mod review;
+pub mod snapshot;
 pub mod split;
+pub mod validator;
 
 // As camadas de baixo com os nomes de sempre dentro deste crate.
 use jayv_agents::{agents, llm, mcp, providers, router, usage};

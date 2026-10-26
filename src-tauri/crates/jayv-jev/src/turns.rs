@@ -334,6 +334,11 @@ pub struct TurnView {
     /// O pedido parou porque o agente esgotou o limite de uso e o JayV o
     /// retoma sozinho na hora indicada. Vazio fora dessa espera.
     pub limit_wait:Option<LimitWait>,
+    /// A validação do build, em eventos: o ponto de volta, a última rodada de
+    /// etapas, os reparos e a volta. A tela monta o balão de validação a
+    /// partir deles, nos turnos abertos e nos fechados.
+    #[serde(default)]
+    pub validation:Vec<Activity>,
     /// Feito neste computador. Falso no que desceu pela sincronização (outra
     /// máquina, o histórico de um computador novo): a tela não o anuncia.
     pub local:bool,
@@ -435,10 +440,12 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
         let found=statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,bool>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (turn,provider,at,estimated) in found { if let Ok(resumes_at)=parse_time(&at) { waits.insert(turn,LimitWait{provider,resumes_at,estimated}); } }
     }
+    let mut validations=validation_events(connection,chat_id)?;
     rows.into_iter().map(|(id,chat_code,ordinal,status,entry,exit,partial,route,local)|{
         let status=TurnStatus::read(&status);
         let limit_wait=waits.remove(&id).filter(|_|status==TurnStatus::Failed);
         let activity=if status.is_open(){activity(connection,&id)?}else{vec![]};
+        let validation=validations.remove(&id).unwrap_or_default();
         Ok(TurnView{
             id,code:turn_code(&chat_code,ordinal),status,
             // Veredito desconhecido só tira o selo do balão.
@@ -447,7 +454,7 @@ pub fn views_for_chat(connection:&Connection,chat_id:&str)->Result<Vec<TurnView>
             partial:partial.filter(|text|!text.is_empty()),activity,
             // Um detalhe ilegível só tira a linha do balão, não o chat.
             route:route.and_then(|detail|serde_json::from_str::<TurnRoute>(&detail).ok()).filter(|route|!route.provider.is_empty()),
-            limit_wait,local,
+            limit_wait,validation,local,
         })
     }).collect()
 }
@@ -476,6 +483,68 @@ pub fn activity(connection:&Connection,turn_id:&str)->Result<Vec<Activity>> {
         // aparece sem corpo, e o resto da narração continua legível.
         detail:serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
     })).collect()
+}
+
+/// Os eventos que contam a validação de um build. `validate_*` e `repair` são
+/// narrados pelo atendente; `rolled_back` é gravado pelo comando que devolve a
+/// pasta ao ponto de volta.
+pub const VALIDATION_EVENTS:[&str;8]=["checkpoint","validate_start","validate_step","validate_end","validate_skipped","repair","rolled_back","commit_held"];
+
+/// Os eventos de validação dos turnos de um chat, por turno. De cada turno
+/// ficam o ponto de volta, os reparos e a última rodada de etapas: as rodadas
+/// anteriores já foram devolvidas ao agente e não pesam em todo retrato do chat.
+fn validation_events(connection:&Connection,chat_id:&str)->Result<std::collections::HashMap<String,Vec<Activity>>> {
+    let marks=VALIDATION_EVENTS.iter().map(|kind|format!("'{kind}'")).collect::<Vec<_>>().join(",");
+    let rows={
+        let mut statement=connection.prepare(&format!("SELECT e.turn_id,e.at,e.seq,e.kind,e.detail FROM turn_events e JOIN turns t ON t.id=e.turn_id WHERE t.chat_id=?1 AND e.kind IN ({marks}) ORDER BY e.turn_id,e.seq"))?;
+        statement.query_map([chat_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,u32>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut found:std::collections::HashMap<String,Vec<Activity>>=std::collections::HashMap::new();
+    for (turn,at,seq,kind,detail) in rows {
+        let Ok(at)=parse_time(&at) else { continue };
+        found.entry(turn).or_default().push(Activity{at,seq,kind,detail:serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null)});
+    }
+    for events in found.values_mut() {
+        let last_round=events.iter().rev().find(|event|event.kind=="validate_start").map_or(0,|event|event.seq);
+        events.retain(|event|!matches!(event.kind.as_str(),"validate_start"|"validate_step"|"validate_end")||event.seq>=last_round);
+    }
+    Ok(found)
+}
+
+/// A última validação do chat falhou e nada a refez: o build mais recente
+/// (o que gravou ponto de volta ou validou) terminou com a rodada final
+/// `failed`. Um build seguinte que passou, que nada mudou ou que não validou
+/// solta o chat.
+pub fn last_validation_failed(connection:&Connection,chat_id:&str)->Result<bool> {
+    let latest:Option<String>=connection.query_row(
+        "SELECT t.id FROM turns t WHERE t.chat_id=?1 AND EXISTS (SELECT 1 FROM turn_events e WHERE e.turn_id=t.id AND e.kind IN ('checkpoint','validate_start')) ORDER BY t.ordinal DESC LIMIT 1",
+        [chat_id],|row|row.get(0)).optional()?;
+    let Some(turn)=latest else { return Ok(false) };
+    let verdict:Option<String>=connection.query_row(
+        "SELECT json_extract(e.detail,'$.verdict') FROM turn_events e WHERE e.turn_id=?1 AND e.kind='validate_end' ORDER BY e.seq DESC LIMIT 1",
+        [&turn],|row|row.get(0)).optional()?.flatten();
+    Ok(verdict.as_deref()==Some("failed"))
+}
+
+/// O turno mais recente do chat que gravou ponto de volta: só a volta dele é
+/// segura, porque uma volta mais antiga desfaria também o que veio depois.
+pub fn latest_checkpoint_turn(connection:&Connection,chat_id:&str)->Result<Option<String>> {
+    Ok(connection.query_row(
+        "SELECT t.id FROM turns t WHERE t.chat_id=?1 AND EXISTS (SELECT 1 FROM turn_events e WHERE e.turn_id=t.id AND e.kind='checkpoint') ORDER BY t.ordinal DESC LIMIT 1",
+        [chat_id],|row|row.get(0)).optional()?)
+}
+
+/// O chat tem pedido na fila ou no ar.
+pub fn has_open_turn(connection:&Connection,chat_id:&str)->Result<bool> {
+    Ok(connection.query_row("SELECT COUNT(*) FROM turns WHERE chat_id=?1 AND status IN ('queued','flying')",[chat_id],|row|row.get::<_,u32>(0))?>0)
+}
+
+/// O ponto de volta mais recente do turno e se a pasta já voltou a ele.
+pub fn checkpoint_of(connection:&Connection,turn_id:&str)->Result<Option<(serde_json::Value,bool)>> {
+    let found:Option<(u32,String)>=connection.query_row("SELECT seq,detail FROM turn_events WHERE turn_id=?1 AND kind='checkpoint' ORDER BY seq DESC LIMIT 1",[turn_id],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
+    let Some((seq,detail))=found else { return Ok(None) };
+    let back:u32=connection.query_row("SELECT COUNT(*) FROM turn_events WHERE turn_id=?1 AND kind='rolled_back' AND seq>?2",params![turn_id,seq],|row|row.get(0))?;
+    Ok(Some((serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),back>0)))
 }
 
 /// O evento gravado quando a segunda opinião chega ao chat. O `review` da
@@ -1083,6 +1152,39 @@ mod tests {
         assert_eq!(views[0].status,TurnStatus::Answered);
         assert_eq!(views[0].entry,Some(check.verdict));
         assert_eq!(views[0].exit,Some(ExitVerdict::Held),"uma regra tocada pinta a resposta inteira, mesmo com outra saída limpa");
+    }
+
+    /// O retrato do chat leva o ponto de volta, os reparos e só a última
+    /// rodada de etapas; o chat só fica retido enquanto a última validação falhou.
+    #[test]
+    fn the_view_keeps_the_last_validation_round_and_the_chat_is_held_only_while_it_failed() {
+        use serde_json::json;
+        let connection=bench("XY4T9B");
+        assert!(!last_validation_failed(&connection,"chat-1").expect("sem build"),"sem build, nada retido");
+        let first=open_turn(&connection,"chat-1").expect("turno");
+        record_beat(&connection,&first.id,"checkpoint",&json!({"id":"a","commit":"c1","head":null})).expect("ponto");
+        record_beat(&connection,&first.id,"validate_start",&json!({"attempt":0,"maxRepairs":2,"steps":[],"undefined":[]})).expect("início");
+        record_beat(&connection,&first.id,"validate_step",&json!({"attempt":0,"step":"test","status":"failed"})).expect("etapa");
+        record_beat(&connection,&first.id,"validate_end",&json!({"attempt":0,"verdict":"failed"})).expect("fim");
+        record_beat(&connection,&first.id,"repair",&json!({"attempt":1,"max":2})).expect("reparo");
+        record_beat(&connection,&first.id,"validate_start",&json!({"attempt":1,"maxRepairs":2,"steps":[],"undefined":[]})).expect("início");
+        record_beat(&connection,&first.id,"validate_end",&json!({"attempt":1,"verdict":"failed"})).expect("fim");
+        set_status(&connection,&first.id,TurnStatus::Answered).expect("estado");
+        let kinds:Vec<String>=views_for_chat(&connection,"chat-1").expect("visões")[0].validation.iter().map(|event|format!("{}:{}",event.kind,event.detail.get("attempt").map_or(String::new(),|attempt|attempt.to_string()))).collect();
+        assert_eq!(kinds,["checkpoint:","repair:1","validate_start:1","validate_end:1"],"a rodada 0 já foi devolvida ao agente");
+        assert!(last_validation_failed(&connection,"chat-1").expect("falhou"));
+        assert_eq!(checkpoint_of(&connection,&first.id).expect("ponto").map(|(point,back)|(point["commit"].as_str().map(String::from),back)),Some((Some("c1".into()),false)));
+        record_beat(&connection,&first.id,"rolled_back",&json!({"files":1})).expect("volta");
+        assert_eq!(checkpoint_of(&connection,&first.id).expect("ponto").map(|(_,back)|back),Some(true));
+
+        let second=open_turn(&connection,"chat-1").expect("turno");
+        set_status(&connection,&first.id,TurnStatus::Answered).expect("estado");
+        record_beat(&connection,&second.id,"checkpoint",&json!({"id":"b","commit":"c2","head":null})).expect("ponto");
+        record_beat(&connection,&second.id,"validate_skipped",&json!({"reason":"unchanged"})).expect("nada mudou");
+        assert!(!last_validation_failed(&connection,"chat-1").expect("solto"),"um build seguinte que não mudou nada solta o chat");
+        record_beat(&connection,&second.id,"validate_start",&json!({"attempt":0,"maxRepairs":2,"steps":[],"undefined":[]})).expect("início");
+        record_beat(&connection,&second.id,"validate_end",&json!({"attempt":0,"verdict":"passed"})).expect("fim");
+        assert!(!last_validation_failed(&connection,"chat-1").expect("verde"));
     }
 
     #[test]
