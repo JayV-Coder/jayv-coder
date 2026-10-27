@@ -14,6 +14,10 @@ jayv bench src-tauri/bench/tasks.yaml
   se ela ficou pronta (`verify`, saída 0 = pronta). Os dois lados mandam um
   pedido por volta até o comando passar ou acabarem as voltas
   (`max_rounds`, padrão 5). Acabando o roteiro, o último pedido se repete.
+- Sem `verify`, quem decide é o validador de builds do app: ele detecta os
+  testes, o lint, o typecheck e o build do projeto (package.json, Cargo,
+  pyproject, Makefile) e a tarefa fica pronta quando todas as etapas passam.
+  Projeto sem nenhum comando detectado nunca conta como pronto.
 - Cada lado roda numa cópia própria do projeto (`git worktree` quando a pasta
   é um repositório; cópia da pasta quando não é). O projeto original não é
   tocado.

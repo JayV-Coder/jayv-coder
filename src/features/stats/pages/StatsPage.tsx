@@ -1,7 +1,7 @@
 import { useT } from "@/modules/i18n";
 import { setScope, sourceLabel, useUsage } from "@/modules/usage";
 import { LoadingNote } from "@/components/atoms";
-import { JevUsagePanel, QuotaPanel, UsageCharts, UsageSummary, UsageTable } from "@/components/organisms";
+import { JevUsagePanel, OutcomesPanel, QuotaPanel, UsageCharts, UsageSummary, UsageTable } from "@/components/organisms";
 import { StatsToolbar } from "../components/StatsToolbar";
 import { ScrollPage } from "@/components/templates";
 
@@ -17,6 +17,7 @@ export function StatsPage() {
       {!report ? <LoadingNote>{t("usage.loading")}</LoadingNote> : (
         <>
           <UsageSummary totals={report.totals} />
+          <OutcomesPanel report={report} />
           <QuotaPanel quotas={report.quotas} />
           {report.totals.calls === 0 && <p className="mb-6 text-sm text-muted-foreground">{t("usage.empty")}</p>}
           <UsageCharts daily={report.daily} byModel={report.byModel} />

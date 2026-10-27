@@ -5,6 +5,7 @@ import { useIntentHandler } from "@/modules/commands";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
 import { SEARCH_MIN_CHARS, searchChats, snippetParts } from "@/modules/memory";
+import { track } from "@/modules/telemetry";
 import { chatTitle, openChat } from "@/modules/workspace";
 import { Input } from "@/components/ui/input";
 
@@ -23,6 +24,7 @@ export function ChatSearch({ projectId }: { projectId: string }) {
     if (text.length < SEARCH_MIN_CHARS) { setHits(null); return; }
     let current = true;
     const timer = setTimeout(() => {
+      track("chatSearch");
       searchChats(projectId, text).then((found) => { if (current) setHits(found); }, reportError);
     }, DEBOUNCE_MS);
     return () => { current = false; clearTimeout(timer); };

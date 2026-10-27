@@ -1,4 +1,5 @@
 import { useEffect, useState, type ComponentProps } from "react";
+import { track } from "@/modules/telemetry";
 import { FolderTreeIcon, PlusIcon } from "lucide-react";
 import { reportError } from "@/modules/feedback";
 import { useT } from "@/modules/i18n";
@@ -57,6 +58,7 @@ export function OrganizationChatButton({ organization, repositories, size, varia
   const reach = folder && loaded && scanned ? chatReach(loaded, projects, folder, scanned) : null;
 
   const open = async () => {
+    track("orgChat");
     if (generalChats.length > 0 && fresh) { await another(); return; }
     if (generalChats.length > 0) { setPicking(true); return; }
     if (!repositories) setFetched(await organizationRepositories(organization.id));

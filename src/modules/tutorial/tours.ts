@@ -29,6 +29,8 @@ export const TOURS: Tour[] = [
       { feature: "environments", target: "environment-switch" },
       { feature: "notifications", target: "notification-bell" },
       { feature: "stats", target: "nav-stats" },
+      { feature: "taskOutcomes", target: "nav-stats" },
+      { feature: "modelPrices" },
       { feature: "updates" },
       { feature: "tutorials", target: "help-tutorial" },
     ],
@@ -65,6 +67,7 @@ export const TOURS: Tour[] = [
       { feature: "exitGate" },
       { feature: "gateBoard", target: "nav-gate" },
       { feature: "answerEvidence" },
+      { feature: "savingsBaseline" },
     ],
   },
   {
@@ -89,6 +92,7 @@ export const TOURS: Tour[] = [
       { feature: "symbolIndex" },
       { feature: "secretRedaction" },
       { feature: "sensitiveFiles" },
+      { feature: "featureTelemetry" },
       { feature: "cli" },
     ],
   },
@@ -98,12 +102,14 @@ export const TOURS: Tour[] = [
       { feature: "organizations" },
       { feature: "orgRepositories" },
       { feature: "orgExtensions" },
+      { feature: "teamUsage" },
     ],
   },
   {
     id: "plans", view: "plans",
     steps: [
       { feature: "plans", target: "nav-plans" },
+      { feature: "jevDailyRequests" },
     ],
   },
   {

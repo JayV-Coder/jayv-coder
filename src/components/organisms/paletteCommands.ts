@@ -13,7 +13,8 @@ import { clearRead, markAllRead } from "@/modules/notifications";
 import {
   acceptInvite, declineInvite, openOrganization, ORGANIZATION_TABS, organizationChatsOf, type IncomingInvite, type Organization,
 } from "@/modules/organizations";
-import { allows, inPlan, locks, settingsTabFeature, type FeatureKey } from "@/modules/plans";
+import { allows, inPlan, locks, settingsTabFeature, useEntitlements, type FeatureKey } from "@/modules/plans";
+import { setConsent, useTelemetry } from "@/modules/telemetry";
 import { isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setInstalledTab, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
 import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
@@ -279,6 +280,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
           { id: `org-site-permissions-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSitePermissions", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
           { id: `org-site-chat-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteChat", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
           { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
+          { id: `org-site-usage-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteUsage", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "usage")).catch(reportError) },
         );
       }
       const general = organizationChatsOf(data, organization.id);
@@ -342,6 +344,19 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
       { id: "site-dashboard", group: help, label: t("org.site.manage"), run: () => void openDashboard().catch(reportError) },
       { id: "site-account", group: help, label: t("palette.siteAccount"), run: () => void openDashboard("/account").catch(reportError) },
     );
+    // O que o admin do sistema acompanha no site: preços, custo do Jev e uso dos recursos.
+    if (useEntitlements.getState().admin) {
+      all.push(
+        { id: "admin-prices", group: help, label: t("palette.adminPrices"), run: () => void openDashboard("/admin?tab=prices").catch(reportError) },
+        { id: "admin-jev-cost", group: help, label: t("palette.adminJevCost"), run: () => void openDashboard("/admin?tab=jevCost").catch(reportError) },
+        { id: "admin-feature-usage", group: help, label: t("palette.adminFeatureUsage"), run: () => void openDashboard("/admin?tab=featureUsage").catch(reportError) },
+      );
+    }
+  }
+  // O consentimento da telemetria vale na hora, como na tela.
+  const telemetry = useTelemetry.getState().granted;
+  if (telemetry !== null) {
+    all.push({ id: "telemetry-toggle", group: settings, label: t(telemetry ? "palette.telemetry.off" : "palette.telemetry.on"), run: () => void setConsent(!telemetry).catch(reportError) });
   }
   return all;
 }

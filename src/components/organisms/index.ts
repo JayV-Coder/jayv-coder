@@ -30,6 +30,7 @@ export { UsageSummary } from "./UsageSummary";
 export { QuotaPanel } from "./QuotaPanel";
 export { UsageCharts } from "./UsageCharts";
 export { JevUsagePanel } from "./JevUsagePanel";
+export { OutcomesPanel } from "./OutcomesPanel";
 export { UpdateDialog } from "./UpdateDialog";
 export { LivePanel } from "./LivePanel";
 export { ProgressPanel } from "./ProgressPanel";

@@ -1,0 +1,10 @@
+{
+  "id": "featureTelemetry",
+  "category": "privacy",
+  "since": "0.110.0",
+  "plan": null,
+  "commands": [],
+  "title": "Share feature usage",
+  "summary": "Optional: send how often each app feature is opened, to help decide what to improve or remove.",
+  "usage": "Off by default. Turn it on in Settings › App › Privacy (or Ctrl+K › Share feature usage); it takes effect at once, without Save. The app then sends, every 5 minutes, only counts per feature and day (for example, Statistics opened 3 times today), plus the counts the Jev already records for the gate, secret protection, sessions, cache and memory. No text, path, file or project name is sent. Turning it off stops sending and deletes what was sent. System admins see the totals per feature, in 30 and 60 days, in Administration › Feature usage on the site."
+}

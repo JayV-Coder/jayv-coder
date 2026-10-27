@@ -216,3 +216,4 @@ export function connectUsage() {
 }
 
 export { agentLabel, formatCost, formatDuration, formatPercent, formatReset, formatTokens, sourceColor, sourceLabel, windowLabel } from "./format";
+export { estimateMoney, loadPrices, priceFor, taskNumbers, usePrices, type MoneyEstimate, type ModelPrice, type TaskNumbers } from "./prices";

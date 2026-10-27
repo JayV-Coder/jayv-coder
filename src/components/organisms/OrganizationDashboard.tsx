@@ -14,6 +14,7 @@ import { EntryItem } from "./EntryItem";
 import { ExitItem } from "./ExitItem";
 import { GateLane } from "./GateLane";
 import { JevUsagePanel } from "./JevUsagePanel";
+import { OutcomesPanel } from "./OutcomesPanel";
 import { UsageCharts } from "./UsageCharts";
 import { UsageSummary } from "./UsageSummary";
 import { UsageTable } from "./UsageTable";
@@ -112,6 +113,7 @@ export function OrganizationStats({ orgId }: { orgId: string }) {
       {!report ? <LoadingNote>{t("usage.loading")}</LoadingNote> : (
         <>
           <UsageSummary totals={report.totals} />
+          <OutcomesPanel report={report} />
           {report.totals.calls === 0 && <p className="mb-6 text-sm text-muted-foreground">{t("usage.empty")}</p>}
           <UsageCharts daily={report.daily} byModel={report.byModel} />
           <JevUsagePanel report={report} />

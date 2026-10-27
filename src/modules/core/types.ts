@@ -683,6 +683,11 @@ export interface UsageTotals {
   durationMs: number;
   /** Tokens (entrada + saída) que não foram informados pela ferramenta. */
   estimatedTokens: number;
+  /** Os tokens das chamadas sem custo informado, que a tabela de preços estima. */
+  unpricedInputTokens: number;
+  unpricedOutputTokens: number;
+  unpricedCacheReadTokens: number;
+  unpricedCacheWriteTokens: number;
 }
 
 export interface UsageBreakdown { key: string; label: string | null; parent: string | null; totals: UsageTotals }
@@ -697,8 +702,13 @@ export interface UsageReport {
   byProject: UsageBreakdown[];
   byChat: UsageBreakdown[];
   quotas: QuotaView[];
-  jev: { work: Record<string, number>; saved: Record<string, number> };
+  jev: { work: Record<string, number>; saved: Record<string, number>; baselineSamples: number; baselineReady: boolean };
+  outcomes: UsageOutcomes;
 }
+
+/** Os resultados do período: um chat é um objetivo, e cada turno validado vale
+ * pelo último veredito. `agentTokens` são entrada + saída dos agentes, sem o Jev. */
+export interface UsageOutcomes { objectives: number; turns: number; verified: number; failed: number; unproven: number; agentTokens: number }
 
 export interface TurnUsage { turnId: string; inputTokens: number; outputTokens: number; costUsd: number | null; durationMs: number; estimated: boolean }
 

@@ -14,7 +14,9 @@
 //!   veredito, o barrado conta a volta sem chamar agente, e o "perguntar" é
 //!   confirmado com o pedido reescrito (contado à parte);
 //! - o veredito sai do custo em dólar que os agentes informam; sem ele, dos
-//!   tokens ponderados (o cache lido custa um décimo).
+//!   tokens ponderados (o cache lido custa um décimo);
+//! - a tarefa sem `verify` é julgada pelo validador do app (testes, lint,
+//!   typecheck e build detectados na cópia): pronta só quando ele comprova.
 
 use crate::{gatekeeper::{self, EntryVerdict}, orchestrator::Orchestrator, parallel, progress::Pulse, turns::{Turn, TurnStatus}, usage::{self, Entry, Scope, Spend}};
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -45,8 +47,9 @@ pub struct Task {
     /// Os pedidos, um por volta. Acabando o roteiro antes das voltas, o último
     /// se repete — é o que um iniciante faz.
     pub script: Vec<String>,
-    /// Roda na pasta da cópia (`sh -c` ou `cmd /C`); saída 0 é pronta.
-    pub verify: String,
+    /// Roda na pasta da cópia (`sh -c` ou `cmd /C`); saída 0 é pronta. Vazio:
+    /// quem julga é o validador (passou com teste = pronta).
+    #[serde(default)] pub verify: String,
     #[serde(default = "default_rounds")] pub max_rounds: usize,
 }
 
@@ -59,7 +62,6 @@ pub fn load(path:&Path,root:&Path)->Result<(Suite,PathBuf)> {
     if suite.tasks.is_empty() { bail!("{} has no tasks",path.display()); }
     for task in &suite.tasks {
         if task.script.iter().all(|prompt|prompt.trim().is_empty()) { bail!("task `{}` has no requests",task.id); }
-        if task.verify.trim().is_empty() { bail!("task `{}` has no verify command",task.id); }
         if task.max_rounds==0 { bail!("task `{}` has no rounds",task.id); }
     }
     let project=match &suite.repository { Some(folder)=>path.parent().unwrap_or(Path::new(".")).join(folder), None=>root.to_path_buf() };
@@ -180,7 +182,7 @@ async fn run_jayv(orchestrator:&mut Orchestrator,task:&Task,session:&str,folder:
         let (result,spends)=collect(orchestrator.process(&prompt,Some(session),&Pulse::silent())).await;
         tally(&mut run,&spends);
         if result.result.is_none() { eprintln!("bench: {} volta {} falhou ({})",task.id,round+1,result.error.unwrap_or_default()); }
-        if verify(&task.verify,folder)? { run.passed=true; break; }
+        if done(task,folder).await? { run.passed=true; break; }
     }
     Ok(run)
 }
@@ -210,9 +212,28 @@ async fn run_direct(orchestrator:&mut Orchestrator,task:&Task,session:&str,folde
         let (result,spends)=collect(orchestrator.direct(&prompt,session,&selection)).await;
         tally(&mut run,&spends);
         if let Err(error)=result { eprintln!("bench: {} volta {} do lado direto falhou ({error:#})",task.id,round+1); }
-        if verify(&task.verify,folder)? { run.passed=true; break; }
+        if done(task,folder).await? { run.passed=true; break; }
     }
     Ok(run)
+}
+
+/// A tarefa ficou pronta: pelo `verify` dela ou, sem ele, pelo validador.
+async fn done(task:&Task,folder:&Path)->Result<bool> {
+    if !task.verify.trim().is_empty() { return verify(&task.verify,folder); }
+    Ok(validate(folder).await==crate::validator::Verdict::Passed)
+}
+
+/// O validador do app na cópia, sem política de organização: as etapas
+/// detectadas no projeto, uma depois da outra. Sem teste definido, nunca passa.
+async fn validate(folder:&Path)->crate::validator::Verdict {
+    use crate::validator;
+    let plan=validator::plan(folder,&validator::Manual::default());
+    let pulse=Pulse::silent();
+    let mut outcomes=Vec::new();
+    for step in &plan.steps {
+        outcomes.push(validator::run_step(folder,step,&validator::Open,&|text:&str|text.to_string(),pulse.stop(),validator::STEP_TIMEOUT).await);
+    }
+    validator::verdict(&outcomes)
 }
 
 fn tally(run:&mut Run,entries:&[Entry]) {
@@ -302,7 +323,7 @@ pub fn report(results:&[TaskResult])->String {
         _=>{ let (mine,theirs)=(jayv.weighted_tokens(),direct.weighted_tokens()); if theirs>0.0 { lines.push(format!("Cost: not every call reported dollars; weighted tokens JayV {mine:.0} vs direct {theirs:.0} ({:.1}%).",mine*100.0/theirs)); } }
     }
     lines.push(format!("Jev (paid by JayV, not your quota): {} calls, {} input tokens.",jev.calls,jev.input_tokens));
-    lines.push("¹ ran first. tokens* = input + output + cache read × 0.1 + cache write × 1.25. asked = confirmed/blocked at the gate.".into());
+    lines.push("¹ ran first. tokens* = input + output + cache read × 0.1 + cache write × 1.25. asked = confirmed/blocked at the gate. done = the task's verify command, or the validator (tests passed) when it has none.".into());
     lines.join("\n")
 }
 
@@ -328,8 +349,10 @@ mod tests {
         let (suite,project)=load(&file,Path::new(".")).expect("arquivo válido");
         assert_eq!((suite.tasks[0].max_rounds,project.ends_with("project")),(DEFAULT_ROUNDS,true));
         assert_eq!((prompt_at(&suite.tasks[0],0),prompt_at(&suite.tasks[0],1),prompt_at(&suite.tasks[0],4)),("fix it","still fails","still fails"),"o último pedido se repete");
-        std::fs::write(&file,"tasks:\n  - id: one\n    script: [\"fix it\"]\n    verify: \"\"\n").unwrap();
-        assert!(load(&file,&dir).is_err(),"sem comando de verificação não há o que medir");
+        std::fs::write(&file,"tasks:\n  - id: one\n    script: [\"fix it\"]\n").unwrap();
+        assert_eq!(load(&file,&dir).expect("sem verify, quem julga é o validador").0.tasks[0].verify,"");
+        std::fs::write(&file,"tasks:\n  - id: one\n    script: [\"  \"]\n").unwrap();
+        assert!(load(&file,&dir).is_err(),"sem pedido não há o que medir");
         let _=std::fs::remove_dir_all(&dir);
     }
 
@@ -341,6 +364,22 @@ mod tests {
         assert_eq!(suite.tasks.len(),10);
         assert!(project.join("tests").is_dir()&&project.join("shop").is_dir());
         for task in &suite.tasks { assert!(task.script.len()>=2&&task.verify.contains("unittest"),"{}",task.id); }
+    }
+
+    /// Sem `verify`, a tarefa só está pronta quando o validador comprova: um
+    /// Makefile com `test` que passa conta; sem teste nenhum, nunca.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn without_a_verify_command_the_validator_decides() {
+        let dir=std::env::temp_dir().join(format!("jayv-bench-{}",uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let task=Task{id:"t".into(),script:vec!["x".into()],verify:String::new(),max_rounds:1};
+        assert!(!done(&task,&dir).await.unwrap(),"sem teste definido não passa");
+        std::fs::write(dir.join("Makefile"),"test:\n\ttrue\n").unwrap();
+        assert!(done(&task,&dir).await.unwrap(),"o teste do Makefile passou");
+        std::fs::write(dir.join("Makefile"),"test:\n\tfalse\n").unwrap();
+        assert!(!done(&task,&dir).await.unwrap(),"o teste falhou");
+        let _=std::fs::remove_dir_all(&dir);
     }
 
     /// Um agente de mentira que só termina a tarefa na segunda volta: os dois

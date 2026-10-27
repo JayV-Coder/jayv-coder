@@ -163,6 +163,12 @@ pub struct Totals {
     pub duration_ms:u64,
     /// Tokens (entrada + saída) que não foram informados pela ferramenta.
     pub estimated_tokens:u64,
+    /// Os tokens das chamadas sem custo informado, por tipo: é sobre eles que
+    /// a tabela de preços do site estima o dinheiro que falta.
+    pub unpriced_input_tokens:u64,
+    pub unpriced_output_tokens:u64,
+    pub unpriced_cache_read_tokens:u64,
+    pub unpriced_cache_write_tokens:u64,
 }
 
 #[derive(Debug,Clone,PartialEq,Serialize)]
@@ -185,6 +191,32 @@ pub struct JevSummary {
     /// Tokens poupados por causa (`blocked`, `cache`, `context`), sempre
     /// estimados.
     pub saved:BTreeMap<String,f64>,
+    /// Quantas respostas informadas formam a linha de base da economia (a
+    /// saída média de uma resposta, que um pedido barrado não gastou).
+    pub baseline_samples:u64,
+    /// A linha de base existe: sem ela, a tela não mostra tokens evitados.
+    pub baseline_ready:bool,
+}
+
+/// Respostas informadas que a linha de base precisa para valer.
+pub const BASELINE_MIN_SAMPLES:u64=20;
+/// Quantas respostas, das mais recentes, entram na linha de base.
+const BASELINE_WINDOW:u64=200;
+
+/// O resultado dos pedidos: quantos objetivos (um chat é um objetivo),
+/// quantos turnos foram precisos e quantas tarefas o validador comprovou.
+/// Um turno vale pelo último veredito da validação dele (depois dos reparos).
+#[derive(Debug,Clone,Default,PartialEq,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct Outcomes {
+    pub objectives:u64,
+    pub turns:u64,
+    pub verified:u64,
+    pub failed:u64,
+    pub unproven:u64,
+    /// Entrada + saída dos agentes (sem o Jev), de todos os turnos do
+    /// período: o custo de chegar às tarefas comprovadas, tentativas incluídas.
+    pub agent_tokens:u64,
 }
 
 #[derive(Debug,Clone,Default,PartialEq,Serialize)]
@@ -198,6 +230,7 @@ pub struct Report {
     pub by_chat:Vec<Breakdown>,
     pub quotas:Vec<QuotaView>,
     pub jev:JevSummary,
+    pub outcomes:Outcomes,
 }
 
 /// O filtro comum às duas tabelas com escopo, e os valores dele em ordem.
@@ -222,11 +255,14 @@ fn filter(query:&Query)->(String,Vec<Box<dyn ToSql>>) {
 
 const SUMS:&str="COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0),COALESCE(SUM(cache_read_tokens),0),COALESCE(SUM(cache_write_tokens),0),
     SUM(cost_usd),SUM(requests),COUNT(*),COALESCE(SUM(1-success),0),COUNT(DISTINCT turn_id),COALESCE(SUM(duration_ms),0),
-    COALESCE(SUM(CASE WHEN precision<>'reported' THEN input_tokens+output_tokens ELSE 0 END),0)";
+    COALESCE(SUM(CASE WHEN precision<>'reported' THEN input_tokens+output_tokens ELSE 0 END),0),
+    COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN input_tokens ELSE 0 END),0),COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN output_tokens ELSE 0 END),0),
+    COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN cache_read_tokens ELSE 0 END),0),COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN cache_write_tokens ELSE 0 END),0)";
 
 fn totals_at(row:&rusqlite::Row,first:usize)->rusqlite::Result<Totals> {
     let int=|index:usize|row.get::<_,i64>(first+index).map(|value|value.max(0) as u64);
-    Ok(Totals{input_tokens:int(0)?,output_tokens:int(1)?,cache_read_tokens:int(2)?,cache_write_tokens:int(3)?,cost_usd:row.get(first+4)?,requests:row.get(first+5)?,calls:int(6)?,failures:int(7)?,turns:int(8)?,duration_ms:int(9)?,estimated_tokens:int(10)?})
+    Ok(Totals{input_tokens:int(0)?,output_tokens:int(1)?,cache_read_tokens:int(2)?,cache_write_tokens:int(3)?,cost_usd:row.get(first+4)?,requests:row.get(first+5)?,calls:int(6)?,failures:int(7)?,turns:int(8)?,duration_ms:int(9)?,estimated_tokens:int(10)?,
+        unpriced_input_tokens:int(11)?,unpriced_output_tokens:int(12)?,unpriced_cache_read_tokens:int(13)?,unpriced_cache_write_tokens:int(14)?})
 }
 
 fn grouped(connection:&Connection,query:&Query,group:&str,label:&str,parent:&str)->Result<Vec<Breakdown>> {
@@ -275,7 +311,44 @@ pub fn report(connection:&Connection,query:&Query)->Result<Report> {
             match kind.strip_prefix("saved_tokens:") { Some(cause)=>{ jev.saved.insert(cause.to_string(),amount); } None=>{ jev.work.insert(kind,amount); } }
         }
     }
-    Ok(Report{totals,daily,by_source,by_model,by_project,by_chat,quotas,jev})
+    jev.baseline_samples=baseline_samples(connection)?;
+    jev.baseline_ready=jev.baseline_samples>=BASELINE_MIN_SAMPLES;
+    let outcomes=outcomes(connection,query)?;
+    Ok(Report{totals,daily,by_source,by_model,by_project,by_chat,quotas,jev,outcomes})
+}
+
+/// Os objetivos, os turnos e o veredito final de cada turno validado, no
+/// escopo e no período.
+pub fn outcomes(connection:&Connection,query:&Query)->Result<Outcomes> {
+    let (where_sql,values)=filter(query);
+    let twice=||rusqlite::params_from_iter(values.iter().chain(values.iter()).map(|value|value.as_ref()));
+    let once=||rusqlite::params_from_iter(values.iter().map(|value|value.as_ref()));
+    let (objectives,turns):(i64,i64)=connection.query_row(&format!(
+        "SELECT COUNT(DISTINCT chat_id),COUNT(DISTINCT turn_id) FROM (
+           SELECT chat_id,turn_id FROM usage_records WHERE {where_sql} AND turn_id IS NOT NULL
+           UNION SELECT chat_id,turn_id FROM jev_records WHERE {where_sql} AND turn_id IS NOT NULL)"),twice(),|row|Ok((row.get(0)?,row.get(1)?)))?;
+    let mut outcome=Outcomes{objectives:objectives.max(0) as u64,turns:turns.max(0) as u64,..Outcomes::default()};
+    let mut statement=connection.prepare(&format!(
+        "SELECT kind,COUNT(*) FROM (
+           SELECT kind,ROW_NUMBER() OVER (PARTITION BY turn_id ORDER BY created_at DESC,rowid DESC) AS position FROM jev_records
+           WHERE {where_sql} AND turn_id IS NOT NULL AND kind IN ('validation:passed','validation:failed','validation:unproven'))
+         WHERE position=1 GROUP BY kind"))?;
+    let rows=statement.query_map(once(),|row|Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?.max(0) as u64)))?;
+    for row in rows {
+        let (kind,count)=row?;
+        match kind.as_str() { "validation:passed"=>outcome.verified=count, "validation:failed"=>outcome.failed=count, _=>outcome.unproven=count }
+    }
+    let tokens:i64=connection.query_row(&format!("SELECT COALESCE(SUM(input_tokens+output_tokens),0) FROM usage_records WHERE {where_sql} AND source NOT LIKE 'jev:%'"),once(),|row|row.get(0))?;
+    outcome.agent_tokens=tokens.max(0) as u64;
+    Ok(outcome)
+}
+
+/// Quantas respostas informadas entram na linha de base (no máximo
+/// `BASELINE_WINDOW`).
+fn baseline_samples(connection:&Connection)->Result<u64> {
+    let count:i64=connection.query_row(&format!(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM usage_records WHERE precision='reported' AND source NOT LIKE 'jev:%' AND turn_id IS NOT NULL GROUP BY turn_id ORDER BY MAX(created_at) DESC LIMIT {BASELINE_WINDOW})"),[],|row|row.get(0))?;
+    Ok(count.max(0) as u64)
 }
 
 /// A saída média de uma resposta de modelo, no que foi informado. É a base

@@ -100,7 +100,7 @@
       "id": "cliBench",
       "kind": "cli",
       "usage": "jayv bench <tasks.yaml>",
-      "detail": "Runs a task file with and without the app, each in its own copy, and compares rounds and cost."
+      "detail": "Runs a task file with and without the app, each in its own copy, and compares rounds and cost. A task without a verify command is judged by the build validator."
     },
     {
       "id": "cliMcp",

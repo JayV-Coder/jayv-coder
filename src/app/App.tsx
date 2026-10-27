@@ -18,6 +18,7 @@ import { connectLive } from "@/modules/live";
 import { clearMods, connectMods, loadMods } from "@/modules/mods";
 import { connectTray } from "@/modules/tray";
 import { connectUsage, refreshQuotas } from "@/modules/usage";
+import { connectTelemetry } from "@/modules/telemetry";
 import { connectEnvironments, finishSwitch, loadEnvironment } from "@/modules/environments";
 import { connectWorkspace, loadWorkspace } from "@/modules/workspace";
 import { connectFeatures, featurePages, loadStatus } from "@/features";
@@ -59,7 +60,7 @@ export function App() {
   const profileLoading = useProfile((state) => state.loading);
 
   useEffect(() => {
-    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectEnvironments(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray(), connectMods(), connectTutorial(tutorialBlocked)];
+    const disconnect = [connectI18n(), connectAuth(), connectConnection(), connectWorkspace(), connectEnvironments(), connectConversation(), connectGate(), connectFeatures(), connectSettings(), connectUsage(), connectTelemetry(), connectNotifications(), connectUpdates(), connectOrganizationDashboard(), connectLive(), connectTray(), connectMods(), connectTutorial(tutorialBlocked)];
     return () => disconnect.forEach((off) => off());
   }, []);
 
