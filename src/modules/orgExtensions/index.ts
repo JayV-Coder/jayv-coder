@@ -19,4 +19,4 @@ export async function loadOrgExtensions() {
 }
 
 /** O caminho do painel do site onde a organização cadastra o que dá. */
-export const orgExtensionsPath = (orgId: string, tab: "mcp" | "skills" | "permissions" | "usage") => `/organizations/${orgId}?tab=${tab}`;
+export const orgExtensionsPath = (orgId: string, tab: "mcp" | "skills" | "permissions" | "usage" | "access" | "audit") => `/organizations/${orgId}?tab=${tab}`;

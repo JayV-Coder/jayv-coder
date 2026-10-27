@@ -71,6 +71,7 @@ function problems(root = process.cwd()) {
     if (!Array.isArray(value.commands)) found.push(`${file}: commands must be a list`);
     for (const command of value.commands ?? []) if (!commandIds.has(command)) found.push(`${file}: unknown command ${command}`);
     for (const text of TEXTS) if (typeof value[text] !== "string" || !value[text].trim()) found.push(`${file}: missing ${text}`);
+    if (value.example !== undefined && (typeof value.example !== "string" || !value.example.trim())) found.push(`${file}: example must be text`);
   }
 
   for (const id of listed) if (!ids.has(id)) found.push(`index.json lists ${id}, which has no file`);

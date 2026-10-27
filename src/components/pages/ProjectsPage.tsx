@@ -7,7 +7,7 @@ import { setLayout, useWorkspace } from "@/modules/workspace";
 import { useT, type Key } from "@/modules/i18n";
 import { EmptyText } from "@/components/atoms";
 import { LayoutSwitch, PageHeading } from "@/components/molecules";
-import { NewProjectDialog, OrganizationChatButton, ProjectScopeSection } from "@/components/organisms";
+import { FirstSteps, NewProjectDialog, OrganizationChatButton, ProjectScopeSection } from "@/components/organisms";
 import { ScrollPage } from "@/components/templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,7 @@ export function ProjectsPage() {
           ? <OrganizationChatButton organization={{ id: organization.key, name: organization.name }} />
           : !inOrganization && <NewProjectDialog><Button>{t("projects.new")}</Button></NewProjectDialog>}
       </PageHeading>
+      {!inOrganization && <FirstSteps className="mb-6" />}
       {data.projects.length === 0 && group.scope.kind === "personal"
         ? <EmptyText>{t("projects.empty")}</EmptyText>
         : (

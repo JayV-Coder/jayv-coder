@@ -67,3 +67,4 @@ export { McpDraftDialog } from "./McpDraftDialog";
 export { ScreenFailure } from "./ScreenFailure";
 export { ValidationBlock } from "./ValidationBlock";
 export { ValidationDialog } from "./ValidationDialog";
+export { FirstSteps } from "./FirstSteps";

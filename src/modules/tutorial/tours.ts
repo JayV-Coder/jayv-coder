@@ -23,6 +23,7 @@ export const TOURS: Tour[] = [
   {
     id: "projects", view: "projects",
     steps: [
+      { feature: "firstSteps", target: "first-steps" },
       { feature: "agents" },
       { feature: "commandPalette" },
       { feature: "organizations", target: "environment-switch" },
@@ -93,7 +94,9 @@ export const TOURS: Tour[] = [
       { feature: "secretRedaction" },
       { feature: "sensitiveFiles" },
       { feature: "featureTelemetry" },
+      { feature: "securityPage" },
       { feature: "cli" },
+      { feature: "ciRun" },
     ],
   },
   {
@@ -103,6 +106,8 @@ export const TOURS: Tour[] = [
       { feature: "orgRepositories" },
       { feature: "orgExtensions" },
       { feature: "teamUsage" },
+      { feature: "memberAccess" },
+      { feature: "auditLog" },
     ],
   },
   {

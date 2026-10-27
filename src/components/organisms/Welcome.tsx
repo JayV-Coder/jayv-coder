@@ -4,6 +4,7 @@ import { createChat } from "@/modules/workspace";
 import { useT } from "@/modules/i18n";
 import { BrandMark, Eyebrow } from "@/components/atoms";
 import { Button } from "@/components/ui/button";
+import { FirstSteps } from "./FirstSteps";
 
 /** A conversa vazia: convida a escrever ou a abrir um projeto, no meio da
  * coluna, onde os olhos estão antes da primeira mensagem. */
@@ -19,6 +20,7 @@ export function Welcome({ project, chat }: { project: Project | null; chat: Chat
       </p>
       {project && !chat && <Button className="mt-5" onClick={() => void createChat(project.id)}>{t("common.newChat")}</Button>}
       {!project && <Button className="mt-5" onClick={() => navigate("projects")}>{t("welcome.viewProjects")}</Button>}
+      <FirstSteps className="mt-8 w-full text-start" />
     </article>
   );
 }

@@ -23,7 +23,7 @@ pub const LAYERS:&[(&str,&[&str])]=&[
     ("workspace",&["workspace","environments"]),
     ("live",&["live_files"]),
     ("orchestration",&["orchestrator","parallel","split","review","snapshot","validator"]),
-    ("app",&["desktop","mcp","sync","bench","layers","outbox_tests","usage_tests"]),
+    ("app",&["desktop","mcp","sync","bench","ci","layers","outbox_tests","usage_tests"]),
 ];
 
 #[cfg(test)]

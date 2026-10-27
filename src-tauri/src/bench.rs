@@ -74,7 +74,7 @@ pub fn load(path:&Path,root:&Path)->Result<(Suite,PathBuf)> {
 pub struct Tally { pub calls: u64, pub input_tokens: u64, pub cache_read_tokens: u64, pub cache_write_tokens: u64, pub output_tokens: u64, pub cost_usd: Option<f64>, pub unpriced: u64, pub failures: u64 }
 
 impl Tally {
-    fn add(&mut self, spend:&Spend) {
+    pub(crate) fn add(&mut self, spend:&Spend) {
         self.calls+=1;
         self.input_tokens+=spend.input_tokens;
         self.cache_read_tokens+=spend.cache_read_tokens;
@@ -188,7 +188,7 @@ async fn run_jayv(orchestrator:&mut Orchestrator,task:&Task,session:&str,folder:
 }
 
 /// A portaria do pedido: o Jev quando há sessão, as heurísticas quando não.
-async fn gate(orchestrator:&Orchestrator,turn:&Turn,prompt:&str,session:&str)->gatekeeper::EntryCheck {
+pub(crate) async fn gate(orchestrator:&Orchestrator,turn:&Turn,prompt:&str,session:&str)->gatekeeper::EntryCheck {
     let level=orchestrator.expertise;
     if crate::jev::is_configured() {
         let project=orchestrator.rag.project_info();
@@ -248,7 +248,7 @@ fn tally(run:&mut Run,entries:&[Entry]) {
 }
 
 /// Roda `work` com uma pia só dele e devolve o que foi gasto lá dentro.
-async fn collect<F:std::future::Future>(work:F)->(F::Output,Vec<Entry>) {
+pub(crate) async fn collect<F:std::future::Future>(work:F)->(F::Output,Vec<Entry>) {
     let (sink,mut received)=tokio::sync::mpsc::unbounded_channel();
     let output=usage::within_sink(Scope::default(),sink,work).await;
     let mut entries=vec![];

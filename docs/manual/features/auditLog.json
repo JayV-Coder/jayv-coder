@@ -1,0 +1,10 @@
+{
+  "id": "auditLog",
+  "category": "team",
+  "since": "0.111.0",
+  "plan": "organizations",
+  "commands": [],
+  "title": "Organization audit log",
+  "summary": "Owners and maintainers download who asked for what, in which project, with which agent and model, the commands validated and the result, as CSV or JSON.",
+  "usage": "On the site, open the organization and the Audit tab (or Ctrl+K › Audit log on the site). Pick a period of up to one year and download CSV (for spreadsheets) or JSON. Each line is one request: date, member, project, status, entry gate verdict, agent, model and mode, the validator's commands, the tools the agent used, the validation result, repairs, tokens and cost. The text of the requests and answers is not included. Up to 5,000 requests per file, newest first; split the period to get more. Data comes from what members' apps sync for the organization's projects."
+}

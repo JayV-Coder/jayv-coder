@@ -26,6 +26,16 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.111.0", date: "2026-10-27",
+    items: [
+      { kind: "feature", id: "firstSteps" },
+      { kind: "feature", id: "ciRun" },
+      { kind: "feature", id: "auditLog" },
+      { kind: "feature", id: "memberAccess" },
+      { kind: "feature", id: "securityPage" },
+    ],
+  },
+  {
     version: "0.110.0", date: "2026-10-27",
     items: [
       { kind: "feature", id: "taskOutcomes" },

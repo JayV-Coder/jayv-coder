@@ -81,8 +81,8 @@
     {
       "id": "cliRun",
       "kind": "cli",
-      "usage": "jayv run <request>",
-      "detail": "Sends one request through the gate and the router and prints the answer."
+      "usage": "jayv run [--validate] <request>",
+      "detail": "Sends one request through the gate and the agent in build mode; with --validate, runs the project's checks and repairs, and exits with a code for CI."
     },
     {
       "id": "cliIndex",

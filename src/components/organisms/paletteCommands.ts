@@ -15,6 +15,7 @@ import {
 } from "@/modules/organizations";
 import { allows, inPlan, locks, settingsTabFeature, useEntitlements, type FeatureKey } from "@/modules/plans";
 import { setConsent, useTelemetry } from "@/modules/telemetry";
+import { restartFirstSteps } from "@/modules/firstSteps";
 import { isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setInstalledTab, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
 import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
@@ -281,6 +282,8 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
           { id: `org-site-chat-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteChat", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "permissions")).catch(reportError) },
           { id: `org-site-skills-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteSkills", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "skills")).catch(reportError) },
           { id: `org-site-usage-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteUsage", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "usage")).catch(reportError) },
+          { id: `org-site-access-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteAccess", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "access")).catch(reportError) },
+          { id: `org-site-audit-${organization.id}`, group: "palette.group.organizations", label: t("palette.orgSiteAudit", { org: organization.name }), hint: organization.name, findByHint: true, run: () => void openDashboard(orgExtensionsPath(organization.id, "audit")).catch(reportError) },
         );
       }
       const general = organizationChatsOf(data, organization.id);
@@ -332,6 +335,7 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
     ...TOURS.map((tour) => ({ id: `tutorial-${tour.id}`, group: help, label: t("tutorial.palette", { name: t(`tutorial.tour.${tour.id}` as never) }), run: () => startTour(tour.id) })),
     { id: "tutorial-auto", group: help, label: t("tutorial.auto"), run: () => setAutoTours(!useTutorial.getState().auto) },
     { id: "tutorial-reset", group: help, label: t("tutorial.reset"), run: () => resetTours() },
+    { id: "first-steps", group: help, label: t("palette.firstSteps"), run: () => { restartFirstSteps(); navigate("projects"); } },
     { id: "system-copy", group: help, label: t("system.copy"), run: () => void featureActions.copySystemReport?.().catch(reportError) },
   );
   // Reler o sistema abre a tela Sistema, que só existe no ambiente pessoal.
@@ -339,6 +343,8 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   if (SITE_URL) {
     all.push(
       { id: "site-docs", group: help, label: t("palette.docs"), run: () => void openSite("/docs").catch(reportError) },
+      { id: "site-docs-ci", group: help, label: t("palette.docsCi"), run: () => void openSite("/docs#ciRun").catch(reportError) },
+      { id: "site-security", group: help, label: t("palette.security"), run: () => void openSite("/security").catch(reportError) },
       { id: "site-releases", group: help, label: t("palette.releases"), run: () => void openSite("/releases").catch(reportError) },
       { id: "site-mods", group: help, label: t("palette.modsCatalog"), run: () => void openSite(modPagePath(useI18n.getState().locale)).catch(reportError) },
       { id: "site-dashboard", group: help, label: t("org.site.manage"), run: () => void openDashboard().catch(reportError) },

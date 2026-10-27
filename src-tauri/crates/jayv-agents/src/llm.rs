@@ -287,6 +287,18 @@ pub(crate) fn with_mechanism(mechanisms:&[String],mechanism:&str)->Vec<String> {
     all
 }
 
+/// Um agente e um modelo só, escolhidos na linha de comando: o `jayv run` no
+/// CI roda sem o banco do app, onde os agentes e modelos moram.
+pub fn single(agent:&str,model:&str)->Result<LlmSettings> {
+    let id=AgentId::parse(agent)?;
+    let model=model.trim();
+    if !valid_id(model) { anyhow::bail!("invalid model id: {model}"); }
+    let mut settings=AgentSettings::fresh(id);
+    settings.enabled=true;
+    let known=KnownModel::named(id,model,None,None);
+    Ok(LlmSettings{agents:vec![settings],models:vec![AgentModel{agent:id,model:model.into(),enabled:true,capabilities:known.capabilities,cost_class:known.cost_class,speed:known.speed,context_window:known.context_window}]})
+}
+
 impl AgentSettings {
     /// O agente como nasce: as opções de fábrica do mod e, para o de linha de
     /// comando, ligado só se o executável está no PATH.
@@ -1171,6 +1183,16 @@ pub async fn probe_agent(agent:AgentId,command:&str)->Probe {
 mod tests {
     use super::*;
     use crate::mods::{claude::{parse_claude_listing, SYMBOL_SERVER_TOOLS}, codex::parse_codex_listing, copilot::parse_copilot_listing, cursor::parse_cursor_listing, kilo::parse_kilo_listing};
+
+    #[test] fn a_single_agent_from_the_command_line() {
+        let settings=single("claude","sonnet").expect("claude");
+        assert_eq!(settings.agents.len(),1);
+        assert!(settings.agents[0].enabled);
+        assert_eq!(settings.models[0].model,"sonnet");
+        assert!(settings.models[0].capabilities.iter().any(|capability|capability=="code"));
+        assert!(single("nobody","sonnet").is_err());
+        assert!(single("claude","bad model").is_err());
+    }
     use serde_json::json;
 
     fn read_login(agent:AgentId,success:bool,stdout:&str,stderr:&str)->Option<Login> { agent.module().read_login(success,stdout,stderr) }
