@@ -111,6 +111,8 @@ fn status_error(status:u16,body:&str)->anyhow::Error {
 }
 /// A função `jev` responde 429 com `code: daily_limit` quando o usuário gastou
 /// as chamadas do dia — diferente do 429 passageiro da TypeSafe.
+/// Um id de turno que a função aceita: letras, números, `-` e `_`, até 64.
+fn valid_turn_id(id:&str)->bool { !id.is_empty()&&id.len()<=64&&id.bytes().all(|byte|byte.is_ascii_alphanumeric()||byte==b'-'||byte==b'_') }
 fn is_daily_limit(body:&str)->bool { serde_json::from_str::<Value>(body).ok().and_then(|value|value.get("code").and_then(Value::as_str).map(|code|code=="daily_limit")).unwrap_or(false) }
 fn worth_retrying(status:u16,body:&str)->bool { retryable_status(status) && !is_daily_limit(body) }
 fn transport_error(error:reqwest::Error)->anyhow::Error {
@@ -135,6 +137,10 @@ pub const HOT_ATTEMPTS:u32=2;
 /// O cabeçalho que identifica a chamada. É o mesmo em todas as repetições: a
 /// função conta a chamada uma vez no limite do dia.
 pub const REQUEST_HEADER:&str="x-jev-request";
+/// O turno a que a chamada pertence: o teto diário do plano pode contar
+/// pedidos (turnos distintos) em vez de chamadas, e as chamadas de um mesmo
+/// pedido entram nele uma vez só.
+pub const TURN_HEADER:&str="x-jev-turn";
 
 /// Um cliente HTTP só para o app inteiro: cada chamada abria uma conexão e
 /// pagava o TLS de novo. O prazo de cada chamada vai no pedido.
@@ -193,6 +199,8 @@ impl Client {
         let endpoint=endpoint.as_str();
         let request_id=uuid::Uuid::new_v4().to_string();
         let request_id=request_id.as_str();
+        let turn=crate::usage::current_scope().turn_id.filter(|id|valid_turn_id(id));
+        let turn=turn.as_deref();
         let started=std::time::Instant::now();
         // Como terminou a última tentativa, para o disjuntor.
         let last=std::sync::atomic::AtomicU8::new(OUTCOME_OK);
@@ -200,6 +208,7 @@ impl Client {
         let deadline=self.deadline;
         let work=with_retry(retry_policy(self.attempts),move |_attempt| async move {
             let mut request=self.http.post(endpoint).header("apikey",crate::cloud::PUBLISHABLE_KEY).header(REQUEST_HEADER,request_id).bearer_auth(&self.token).json(body);
+            if let Some(turn)=turn { request=request.header(TURN_HEADER,turn); }
             if let Some(deadline)=deadline { request=request.timeout(deadline.saturating_sub(started.elapsed()).max(Duration::from_millis(1))); }
             let response=match request.send().await {
                 Ok(response)=>response,
@@ -289,7 +298,11 @@ pub fn spend_of(set:&str,evaluation:Option<&Evaluation>,duration_ms:u64)->crate:
 /// `usadas/limite`, que é o que a tela mostra.
 pub fn daily_quota(headers:&reqwest::header::HeaderMap,now:chrono::DateTime<chrono::Utc>)->Option<crate::usage::Quota> {
     let read=|name:&str|headers.get(name).and_then(|value|value.to_str().ok()).and_then(|value|value.trim().parse::<u64>().ok());
-    let (used,limit)=(read("x-jev-calls-used")?,read("x-jev-daily-limit")?);
+    // O teto em pedidos, quando o plano tem um, é o que corta primeiro.
+    let (used,limit)=match (read("x-jev-requests-used"),read("x-jev-request-limit")) {
+        (Some(used),Some(limit)) if limit>0=>(used,limit),
+        _=>(read("x-jev-calls-used")?,read("x-jev-daily-limit")?),
+    };
     if limit==0 { return None; }
     let midnight=(now.date_naive()+chrono::Days::new(1)).and_hms_opt(0,0,0)?.and_utc();
     Some(crate::usage::Quota{agent:"jev".into(),window:"day".into(),used_percent:Some((used as f64*100.0/limit as f64).min(100.0)),resets_at:Some(midnight.to_rfc3339_opts(chrono::SecondsFormat::Secs,true)),plan:Some(format!("{used}/{limit}"))})
@@ -491,6 +504,30 @@ impl RoutingDecision {
         assert_eq!(quota.used_percent,Some(25.0));
         assert_eq!(quota.plan.as_deref(),Some("125/500"));
         assert_eq!(quota.resets_at.as_deref(),Some("2026-10-02T00:00:00Z"));
+        // Com teto em pedidos, é ele que a tela mostra.
+        headers.insert("x-jev-requests-used","5".parse().unwrap());
+        headers.insert("x-jev-request-limit","20".parse().unwrap());
+        let quota=daily_quota(&headers,now).unwrap();
+        assert_eq!((quota.used_percent,quota.plan.as_deref()),(Some(25.0),Some("5/20")));
+    }
+
+    #[test] fn only_plain_turn_ids_go_in_the_header() {
+        assert!(valid_turn_id("6f1c-turn_2"));
+        assert!(!valid_turn_id(""));
+        assert!(!valid_turn_id("a b"));
+        assert!(!valid_turn_id(&"x".repeat(65)));
+    }
+
+    /// A chamada feita dentro de um atendimento leva o turno: a função conta
+    /// o pedido uma vez, por mais chamadas que ele faça.
+    #[tokio::test]
+    async fn a_call_inside_a_turn_carries_the_turn_id() {
+        let (address,seen)=server(Some("HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")).await;
+        let client=Client::for_session("jwt").expect("cliente").at(&address).with_attempts(1);
+        let scope=crate::usage::Scope{project_id:None,chat_id:None,turn_id:Some("turn-1".into())};
+        let (sink,_received)=tokio::sync::mpsc::unbounded_channel();
+        let _=crate::usage::within_sink(scope,sink,client.evaluate("entry",json!({}),None)).await;
+        assert!(seen.lock().unwrap().contains(&"turn:turn-1".to_string()),"{:?}",seen.lock().unwrap());
     }
 
     /// O seed mora no repositório `JayV-Coder/supabase`, clonado ao lado deste
@@ -748,6 +785,7 @@ impl RoutingDecision {
                     let read=socket.read(&mut buffer).await.unwrap_or(0);
                     let head=String::from_utf8_lossy(&buffer[..read]).to_lowercase();
                     if let Some(id)=head.lines().find_map(|line|line.strip_prefix(&format!("{REQUEST_HEADER}: "))) { kept.lock().unwrap().push(id.trim().to_string()); }
+                    if let Some(turn)=head.lines().find_map(|line|line.strip_prefix(&format!("{TURN_HEADER}: "))) { kept.lock().unwrap().push(format!("turn:{}",turn.trim())); }
                     match reply {
                         Some(reply)=>{ let _=socket.write_all(reply.as_bytes()).await; }
                         None=>tokio::time::sleep(Duration::from_secs(30)).await,

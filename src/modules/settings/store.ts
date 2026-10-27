@@ -170,6 +170,22 @@ export function updateCore(patch: Partial<CoreSettings>) {
   useSettings.setState((state) => (state.core ? { core: { ...state.core, ...patch } } : state));
 }
 
+/** Grava um campo das abas do Jev na hora, sem levar junto o que a pessoa
+ * ainda está editando nelas (o caminho dos primeiros passos liga a validação
+ * sem abrir as Configurações). */
+export async function saveCoreField(patch: Partial<CoreSettings>) {
+  if (!useSettings.getState().coreSnapshot) await loadSettings();
+  const state = useSettings.getState();
+  const saved = state.savedCore ? (JSON.parse(state.savedCore) as CoreSettings) : state.core;
+  if (!saved) return;
+  const snapshot = await commands.saveCoreSettings({ ...saved, ...patch });
+  useSettings.setState((current) => ({
+    core: current.core ? { ...current.core, ...patch } : snapshot.settings,
+    coreSnapshot: snapshot,
+    savedCore: JSON.stringify(snapshot.settings),
+  }));
+}
+
 /** Volta as abas do Jev e do app aos valores de partida (sem salvar): o
  * idioma fica, e os servidores MCP, as skills e os agentes não mudam. */
 export function restoreDefaults() {

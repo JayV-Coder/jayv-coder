@@ -1,0 +1,10 @@
+{
+  "id": "teamUsage",
+  "category": "team",
+  "since": "0.110.0",
+  "plan": "organizations",
+  "commands": [],
+  "title": "Team usage by week",
+  "summary": "Owners and maintainers see the organization's requests, goals, verified tasks, tokens and cost per week on the site.",
+  "usage": "On the site, open the organization and the Usage tab (or Ctrl+K › Team usage on the site). Each week shows requests, goals (chats), active members, verified, failed and not proven tasks, agent tokens and cost: reported by the tools, plus the price table estimate for the rest. The Jev is not included, since it is not paid by the team. Below, each member's requests, verified tasks, tokens and cost for the whole period. Data comes from what members' apps sync for the organization's projects."
+}

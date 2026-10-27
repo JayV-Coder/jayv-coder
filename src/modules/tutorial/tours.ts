@@ -23,12 +23,15 @@ export const TOURS: Tour[] = [
   {
     id: "projects", view: "projects",
     steps: [
+      { feature: "firstSteps", target: "first-steps" },
       { feature: "agents" },
       { feature: "commandPalette" },
       { feature: "organizations", target: "environment-switch" },
       { feature: "environments", target: "environment-switch" },
       { feature: "notifications", target: "notification-bell" },
       { feature: "stats", target: "nav-stats" },
+      { feature: "taskOutcomes", target: "nav-stats" },
+      { feature: "modelPrices" },
       { feature: "updates" },
       { feature: "tutorials", target: "help-tutorial" },
     ],
@@ -65,6 +68,7 @@ export const TOURS: Tour[] = [
       { feature: "exitGate" },
       { feature: "gateBoard", target: "nav-gate" },
       { feature: "answerEvidence" },
+      { feature: "savingsBaseline" },
     ],
   },
   {
@@ -89,7 +93,10 @@ export const TOURS: Tour[] = [
       { feature: "symbolIndex" },
       { feature: "secretRedaction" },
       { feature: "sensitiveFiles" },
+      { feature: "featureTelemetry" },
+      { feature: "securityPage" },
       { feature: "cli" },
+      { feature: "ciRun" },
     ],
   },
   {
@@ -98,12 +105,16 @@ export const TOURS: Tour[] = [
       { feature: "organizations" },
       { feature: "orgRepositories" },
       { feature: "orgExtensions" },
+      { feature: "teamUsage" },
+      { feature: "memberAccess" },
+      { feature: "auditLog" },
     ],
   },
   {
     id: "plans", view: "plans",
     steps: [
       { feature: "plans", target: "nav-plans" },
+      { feature: "jevDailyRequests" },
     ],
   },
   {

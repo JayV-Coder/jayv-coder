@@ -1,0 +1,10 @@
+{
+  "id": "savingsBaseline",
+  "category": "gate",
+  "since": "0.110.0",
+  "plan": "stats",
+  "commands": [],
+  "title": "Savings baseline",
+  "summary": "Tokens avoided by the Jev only show once there is a baseline to compare with.",
+  "usage": "Tokens avoided = requests the Jev blocked × the average output of your last 200 answers that the tools reported. Until 20 reported answers exist, Statistics shows how many are missing instead of a number. The value is always an estimate and is never added to the real totals; to measure savings on your own project, run jayv bench."
+}

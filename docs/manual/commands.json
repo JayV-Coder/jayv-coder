@@ -81,8 +81,8 @@
     {
       "id": "cliRun",
       "kind": "cli",
-      "usage": "jayv run <request>",
-      "detail": "Sends one request through the gate and the router and prints the answer."
+      "usage": "jayv run [--validate] <request>",
+      "detail": "Sends one request through the gate and the agent in build mode; with --validate, runs the project's checks and repairs, and exits with a code for CI."
     },
     {
       "id": "cliIndex",
@@ -100,7 +100,7 @@
       "id": "cliBench",
       "kind": "cli",
       "usage": "jayv bench <tasks.yaml>",
-      "detail": "Runs a task file with and without the app, each in its own copy, and compares rounds and cost."
+      "detail": "Runs a task file with and without the app, each in its own copy, and compares rounds and cost. A task without a verify command is judged by the build validator."
     },
     {
       "id": "cliMcp",

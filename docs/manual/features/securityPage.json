@@ -1,0 +1,10 @@
+{
+  "id": "securityPage",
+  "category": "privacy",
+  "since": "0.111.0",
+  "plan": null,
+  "commands": [],
+  "title": "Security page",
+  "summary": "The site's Security page lists the controls that protect code, secrets and teams today, who processes data, and the plan toward SOC 2.",
+  "usage": "Open the Security page from the site footer or Ctrl+K › Security. Each control links to its page in this manual: local projects, secret redaction, sensitive files, command and LLM policies, the validation policy, member access, the audit log, two-step verification, row-level security in the database and opt-in telemetry. The compliance plan says what is in progress (inventory of systems and data, written policies) and what comes next; JayV is not SOC 2 certified yet."
+}

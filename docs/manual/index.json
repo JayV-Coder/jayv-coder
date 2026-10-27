@@ -12,6 +12,7 @@
     "app"
   ],
   "features": [
+    "firstSteps",
     "agents",
     "kiloCode",
     "gatewayProviders",
@@ -45,13 +46,18 @@
     "parallelTasks",
     "entryGate",
     "exitGate",
+    "savingsBaseline",
     "gateBoard",
     "answerEvidence",
     "secretRedaction",
     "sensitiveFiles",
+    "featureTelemetry",
+    "securityPage",
     "liveFiles",
     "projectNotes",
     "stats",
+    "taskOutcomes",
+    "modelPrices",
     "organizations",
     "environments",
     "notifications",
@@ -61,12 +67,17 @@
     "commandPermissions",
     "chatPermissions",
     "orgValidation",
+    "teamUsage",
+    "memberAccess",
+    "auditLog",
     "profilePhoto",
     "twoFactor",
     "plans",
+    "jevDailyRequests",
     "commandPalette",
     "updates",
     "tutorials",
-    "cli"
+    "cli",
+    "ciRun"
   ]
 }

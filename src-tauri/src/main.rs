@@ -23,7 +23,30 @@ struct Cli { #[arg(short,long,global=true)] config:Option<PathBuf>, #[arg(long,g
 #[derive(Debug,Subcommand)]
 enum Commands {
     Status,
-    Run { #[arg(required=true,num_args=1..)] task:Vec<String> },
+    /// Runs one request without the window: entry gate, the agent in build mode and, with --validate, the project's checks with automatic repairs. Exit code: 0 passed, 1 agent failed, 2 validation failed, 3 blocked, 4 needs an answer, 5 no test proved it (--require-tests).
+    Run {
+        #[arg(required=true,num_args=1..)] task:Vec<String>,
+        /// Run the build validator (tests, lint, typecheck, build) after the agent.
+        #[arg(long)] validate:bool,
+        /// Repairs after a failed validation.
+        #[arg(long,default_value_t=2)] max_repairs:u32,
+        /// Confirm the gate's questions instead of stopping with exit code 4.
+        #[arg(long,short='y')] yes:bool,
+        /// Exit with 5 when nothing failed but no test ran.
+        #[arg(long)] require_tests:bool,
+        /// Markdown summary file (default: $GITHUB_STEP_SUMMARY when set).
+        #[arg(long)] summary:Option<PathBuf>,
+        /// JSON report file.
+        #[arg(long)] json:Option<PathBuf>,
+        /// The agent to use (claude, codex, ...) instead of the app's settings; needs --model.
+        #[arg(long,requires="model")] agent:Option<String>,
+        /// The agent's model, with --agent.
+        #[arg(long,requires="agent")] model:Option<String>,
+        #[arg(long)] test_command:Option<String>,
+        #[arg(long)] lint_command:Option<String>,
+        #[arg(long)] typecheck_command:Option<String>,
+        #[arg(long)] build_command:Option<String>,
+    },
     Index,
     Version,
     /// Runs a task file (YAML: a beginner's script and a verify command per task) through JayV and straight to the agent, each side in its own copy, and compares rounds until done and dollars spent.
@@ -86,7 +109,22 @@ fn run(cli:Cli)->Result<()> {
             let runtime=tokio::runtime::Runtime::new()?;
             runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,project.clone())?;let results=jayv_lib::bench::run(&mut orchestrator,&suite,&project).await?;println!("{}",jayv_lib::bench::report(&results));Ok(())})
         },
-        Some(Commands::Run{task})=>{let runtime=tokio::runtime::Runtime::new()?;runtime.block_on(async move {let mut orchestrator=orchestrator(config_path,root)?;let result=orchestrator.process(&task.join(" "),Some("cli"),&jayv_lib::progress::Pulse::silent()).await;if let Some(response)=result.result{println!("{}",response.response);Ok(())}else{Err(anyhow::anyhow!(result.error.unwrap_or_else(||"task failed".into())))}})},
+        Some(Commands::Run{task,validate,max_repairs,yes,require_tests,summary,json,agent,model,test_command,lint_command,typecheck_command,build_command})=>{
+            // No CI não há o banco do app: o agente e o modelo vêm da linha de comando.
+            let single=match (agent,model) { (Some(agent),Some(model))=>Some(jayv_lib::llm::single(&agent,&model)?), _=>None };
+            let options=jayv_lib::ci::Options{validate,max_repairs,assume_yes:yes,require_tests,manual:jayv_lib::validator::Manual{test:test_command.unwrap_or_default(),lint:lint_command.unwrap_or_default(),typecheck:typecheck_command.unwrap_or_default(),build:build_command.unwrap_or_default()}};
+            let runtime=tokio::runtime::Runtime::new()?;
+            let report=runtime.block_on(async {let mut orchestrator=orchestrator(config_path,root.clone())?;if let Some(settings)=&single { orchestrator.use_llm(settings); }if orchestrator.executable_model_count()==0 { anyhow::bail!("no agent model is set up: pass --agent and --model, or set them up in the app"); }anyhow::Ok(jayv_lib::ci::run(&mut orchestrator,&task.join(" "),&root,&options).await)})?;
+            if let Some(answer)=&report.answer { println!("{answer}"); }
+            let text=jayv_lib::ci::summary(&report);
+            eprintln!("{text}");
+            // No GitHub Actions o resumo vai também para a página do job.
+            if let Some(path)=summary.or_else(||std::env::var_os("GITHUB_STEP_SUMMARY").map(PathBuf::from)) {
+                fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut file|file.write_all(text.as_bytes())).with_context(||format!("cannot write {}",path.display()))?;
+            }
+            if let Some(path)=json { fs::write(&path,serde_json::to_vec_pretty(&report)?).with_context(||format!("cannot write {}",path.display()))?; }
+            std::process::exit(report.exit.code())
+        },
     }
 }
 
@@ -103,5 +141,7 @@ mod tests {
         assert!(cli.command.is_none());
         assert!(parse(["jayv"]).expect("sem nada").command.is_none());
         assert!(matches!(parse(["jayv","status"]).expect("subcomando").command,Some(Commands::Status)));
+        let Some(Commands::Run{task,validate,max_repairs,..})=parse(["jayv","run","--validate","fix","the","bug"]).expect("run").command else { panic!("run") };
+        assert_eq!((task.join(" "),validate,max_repairs),("fix the bug".to_string(),true,2));
     }
 }

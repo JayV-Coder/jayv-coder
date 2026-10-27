@@ -1,0 +1,10 @@
+{
+  "id": "memberAccess",
+  "category": "team",
+  "since": "0.111.0",
+  "plan": "organizations",
+  "commands": [],
+  "title": "What a member can do",
+  "summary": "One screen on the site shows, for any member, what they can and cannot do in the organization and the rule that decides each item.",
+  "usage": "On the site, open the organization and the Access tab (or Ctrl+K › Member access on the site), then pick a member. The list covers the role (invite, edit policies, export the audit log, change roles, delete the organization), the plan's features, each agent and the LLM policy rules (read, write, shell, blocked models and mechanisms, secret redaction), the chat permissions, the blocked commands and the validation policy. Each line says allowed, limited, blocked or required, and why: the role, the plan, a feature turned off by an admin, the organization policy or a repository policy. Only owners and maintainers see it."
+}

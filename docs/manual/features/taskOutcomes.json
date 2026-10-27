@@ -1,0 +1,10 @@
+{
+  "id": "taskOutcomes",
+  "category": "project",
+  "since": "0.110.0",
+  "plan": "stats",
+  "commands": [],
+  "title": "Results per task",
+  "summary": "The Statistics page shows how many goals you worked on, how many turns each took and how many tasks the validator proved, with tokens and money per verified task.",
+  "usage": "Open Statistics (or Ctrl+K › Statistics) and look at Results. A chat is one goal, and turns per goal is how many requests it took. A task is verified when the build validation passed, after repairs; failed and not proven tasks are counted apart. Tokens per verified task divide all agent tokens of the period (attempts included, Jev excluded) by the verified tasks. Cost in money adds what the tools reported to an estimate from the price table for the calls that reported no cost, and lists the models that have no price yet. Without build validation turned on (Settings › Jev), there are no verified tasks to count. The same panel appears in the organization's Statistics tab for the projects on this computer."
+}

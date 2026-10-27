@@ -20,6 +20,8 @@ const WORK: [string, Key][] = [
 // O contexto cortado pelo orçamento não entra: era texto que o próprio Jev
 // escolheu e depois tirou, não token que o modelo gastaria.
 const SAVED: [string, Key][] = [["blocked", "usage.jev.saved.blocked"]];
+/** As respostas informadas que a linha de base precisa (`BASELINE_MIN_SAMPLES` no núcleo). */
+const BASELINE_MIN_SAMPLES = 20;
 
 /** O desempenho do Jev em três blocos: o que ele fez (contado), o que ele
  * custou (informado pela função) e o que ele poupou (sempre estimado, e por
@@ -53,9 +55,17 @@ export function JevUsagePanel({ report }: { report: UsageReport }) {
         </Card>
         <Card className="gap-2 px-5 py-4">
           <strong className="text-xs text-muted-foreground">{t("usage.jev.saved")}</strong>
-          <p className="text-xs text-warning">{t("usage.jev.saved.hint")}</p>
-          {SAVED.map(([kind, label]) => <Row key={kind} label={t(label)} value={`≈ ${count(report.jev.saved[kind] ?? 0)}`} />)}
-          <Row label={t("usage.jev.saved.total")} value={`≈ ${count(saved)}`} strong />
+          <p className="text-xs text-muted-foreground">{t("usage.jev.baseline.definition")}</p>
+          {/* Sem linha de base o número seria chute: a tela diz quanto falta. */}
+          {!report.jev.baselineReady ? (
+            <p className="text-xs text-warning">{t("usage.jev.baseline.missing", { samples: String(report.jev.baselineSamples), needed: String(BASELINE_MIN_SAMPLES) })}</p>
+          ) : (
+            <>
+              <p className="text-xs text-warning">{t("usage.jev.saved.hint")}</p>
+              {SAVED.map(([kind, label]) => <Row key={kind} label={t(label)} value={`≈ ${count(report.jev.saved[kind] ?? 0)}`} />)}
+              <Row label={t("usage.jev.saved.total")} value={`≈ ${count(saved)}`} strong />
+            </>
+          )}
         </Card>
       </div>
     </section>

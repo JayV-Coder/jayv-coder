@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { track } from "@/modules/telemetry";
 import { DownloadIcon, FolderPlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
 import { useT } from "@/modules/i18n";
 import { useIntentHandler } from "@/modules/commands";
@@ -66,7 +67,7 @@ export function SkillsPanel() {
         <p className="text-xs leading-snug text-muted-foreground">{t("skills.notes")}</p>
       </SettingsSection>
       {hubAllowed && <SettingsSection title={t("skills.hub.title")} description={t("skills.hub.description")}>
-        <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); void searchSkillHub(query); }}>
+        <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); track("skillsHub"); void searchSkillHub(query); }}>
           <Input ref={searchBox} value={query} placeholder={t("skills.hub.placeholder")} aria-label={t("skills.hub.placeholder")} onChange={(event) => setQuery(event.target.value)} />
           <Button type="submit" variant="outline" disabled={searching || query.trim().length < 2}><SearchIcon aria-hidden="true" />{t(searching ? "skills.hub.searching" : "skills.hub.search")}</Button>
         </form>

@@ -14,6 +14,7 @@ pub use jayv_live::live_files;
 pub use jayv_orchestration::{orchestrator, parallel, review, snapshot, split, validator};
 
 pub mod bench;
+pub mod ci;
 pub mod desktop;
 pub mod layers;
 pub mod mcp;

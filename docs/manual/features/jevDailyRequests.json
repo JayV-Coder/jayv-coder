@@ -1,0 +1,10 @@
+{
+  "id": "jevDailyRequests",
+  "category": "account",
+  "since": "0.110.0",
+  "plan": null,
+  "commands": [],
+  "title": "Daily Jev requests",
+  "summary": "Each plan can cap how many requests per day go through the full Jev; after the cap the app keeps working with local rules.",
+  "usage": "Every request sends the Jev a few calls (gate, routing, questions); the cap counts requests, not calls. The Free plan starts with 20 requests per day; paid plans have no fixed cap. After the cap, the gate and routing use the app's local rules until midnight UTC, without blocking you, and Statistics shows the daily use of the Jev. System admins change the cap per plan on the site in Administration › Plans › Jev requests per day, and follow the Jev's cost per plan in Administration › Jev cost."
+}

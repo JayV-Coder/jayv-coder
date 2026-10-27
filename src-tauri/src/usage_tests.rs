@@ -192,4 +192,49 @@ mod tests {
         assert_eq!(turns[0].input_tokens,30);
         assert!(!turns[0].estimated);
     }
+
+    /// Um chat é um objetivo; o turno vale pelo último veredito (o reparo que
+    /// passou depois de uma falha conta como comprovado), e os tokens por
+    /// tarefa comprovada somam as tentativas, sem o Jev.
+    #[test] fn outcomes_count_objectives_turns_and_the_last_verdict_of_each_turn() {
+        let (store,project,chat)=store_with_chat();
+        let connection=store.connection();
+        write(connection,&Entry::Spend(scoped(&project,&chat,"t1"),spend("claude",100,20,Precision::Reported))).unwrap();
+        write(connection,&Entry::Jev(scoped(&project,&chat,"t1"),JevMark::count("validation:failed",1))).unwrap();
+        write(connection,&Entry::Jev(scoped(&project,&chat,"t1"),JevMark::count("validation:repair",1))).unwrap();
+        write(connection,&Entry::Jev(scoped(&project,&chat,"t1"),JevMark::count("validation:passed",1))).unwrap();
+        write(connection,&Entry::Spend(scoped(&project,&chat,"t2"),spend("claude",50,10,Precision::Reported))).unwrap();
+        write(connection,&Entry::Jev(scoped(&project,&chat,"t2"),JevMark::count("validation:unproven",1))).unwrap();
+        write(connection,&Entry::Spend(scoped(&project,&chat,"t2"),spend("jev:entry",900,9,Precision::Reported))).unwrap();
+        write(connection,&Entry::Jev(scoped(&project,"c2","t3"),JevMark::count("entry:block",1))).unwrap();
+        let outcomes=report(connection,&query(ReportScope::Global)).unwrap().outcomes;
+        assert_eq!((outcomes.objectives,outcomes.turns),(2,3),"o pedido barrado também é um turno");
+        assert_eq!((outcomes.verified,outcomes.failed,outcomes.unproven),(1,0,1));
+        assert_eq!(outcomes.agent_tokens,180,"o Jev fica de fora");
+        let chat_only=report(connection,&query(ReportScope::Chat(chat.clone()))).unwrap().outcomes;
+        assert_eq!((chat_only.objectives,chat_only.turns),(1,2));
+    }
+
+    /// Sem 20 respostas informadas não há linha de base, e a tela esconde os
+    /// tokens evitados.
+    #[test] fn the_baseline_needs_twenty_reported_answers() {
+        let (store,project,chat)=store_with_chat();
+        let connection=store.connection();
+        for turn in 0..19 { write(connection,&Entry::Spend(scoped(&project,&chat,&format!("t{turn}")),spend("claude",1,10,Precision::Reported))).unwrap(); }
+        write(connection,&Entry::Spend(scoped(&project,&chat,"estimated"),spend("copilot",1,10,Precision::Estimated))).unwrap();
+        let jev=report(connection,&query(ReportScope::Global)).unwrap().jev;
+        assert_eq!((jev.baseline_samples,jev.baseline_ready),(19,false));
+        write(connection,&Entry::Spend(scoped(&project,&chat,"t19"),spend("claude",1,10,Precision::Reported))).unwrap();
+        assert!(report(connection,&query(ReportScope::Global)).unwrap().jev.baseline_ready);
+    }
+
+    /// Os tokens sem custo informado ficam à parte, para a tabela de preços.
+    #[test] fn unpriced_tokens_are_kept_apart() {
+        let (store,project,chat)=store_with_chat();
+        let connection=store.connection();
+        write(connection,&Entry::Spend(scoped(&project,&chat,"t1"),Spend{cost_usd:Some(0.5),cache_read_tokens:7,..spend("claude",10,1,Precision::Reported)})).unwrap();
+        write(connection,&Entry::Spend(scoped(&project,&chat,"t2"),Spend{cache_read_tokens:3,cache_write_tokens:2,..spend("codex",20,4,Precision::Reported)})).unwrap();
+        let totals=report(connection,&query(ReportScope::Global)).unwrap().totals;
+        assert_eq!((totals.unpriced_input_tokens,totals.unpriced_output_tokens,totals.unpriced_cache_read_tokens,totals.unpriced_cache_write_tokens),(20,4,3,2));
+    }
 }

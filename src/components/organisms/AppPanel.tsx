@@ -5,6 +5,8 @@ import { updateCore, updatePrefs, useAppPrefs } from "@/modules/settings";
 import { locks, SENSITIVE_PATTERNS, toggleState, useEntitlements } from "@/modules/plans";
 import { resetTours, startTour, TOURS, useTutorial } from "@/modules/tutorial";
 import { checkForUpdate, isUpdateBusy, useUpdate } from "@/modules/updates";
+import { reportError } from "@/modules/feedback";
+import { setConsent, useTelemetry } from "@/modules/telemetry";
 import { FormField, LanguageSelect, SettingsSection, ThemeSelect, ToggleRow } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +18,7 @@ const lines = (text: string) => text.split("\n");
  * e a versão instalada. Toda escolha daqui espera o Salvar da página; os
  * botões (rever um tutorial, procurar atualização) são ações e agem na hora. */
 export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: CoreSnapshot }) {
+  const telemetry = useTelemetry();
   const t = useT();
   // O botão abre a mesma janela da abertura do app; enquanto ela trabalha,
   // clicar de novo só a traz de volta.
@@ -45,6 +48,10 @@ export function AppPanel({ core, snapshot }: { core: CoreSettings; snapshot: Cor
           <ToggleRow id="app-redact" label={t("app.redact")} hint={redact.reason === "required" ? `${t("plans.required")} · ${t("app.redact.hint")}` : t("app.redact.hint")}
             checked={redact.checked} disabled={redact.disabled}
             onChange={(redactSecrets) => updateCore({ privacy: { ...core.privacy, redactSecrets } })} />
+          {/* Vale na hora, sem o Salvar: o consentimento mora na conta, no servidor. */}
+          <ToggleRow id="app-telemetry" label={t("telemetry.share")} hint={t("telemetry.share.hint")}
+            checked={telemetry.granted === true} disabled={telemetry.granted === null || telemetry.saving}
+            onChange={(granted) => void setConsent(granted).catch(reportError)} />
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label={t("app.deny")} htmlFor="app-deny"
               hint={`${t("app.deny.hint")} ${sensitive ? `${t("plans.sensitiveAlways", { patterns: SENSITIVE_PATTERNS.join(", ") })} ` : ""}${t("app.deny.agents")}`}>

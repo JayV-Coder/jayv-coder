@@ -1,0 +1,10 @@
+{
+  "id": "modelPrices",
+  "category": "project",
+  "since": "0.110.0",
+  "plan": null,
+  "commands": [],
+  "title": "Model prices",
+  "summary": "A price table per model, kept on the site, turns the tokens of calls without a reported cost into money.",
+  "usage": "System admins edit the table on the site in Administration › Model prices (or Ctrl+K › Model prices on the site): a pattern that is part of the model id (for example sonnet or gpt-5-mini) and the price in dollars per million tokens for input, output and, optionally, cache read and cache write. The longest pattern contained in the model id wins. Without a cache price, a cache read costs a tenth of the input price and a cache write 1.25 times. The cost a tool reported always wins over the table. The app reads the table when Statistics opens; the organization's usage page on the site uses it too."
+}
