@@ -236,9 +236,6 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
     let prompt=i18n::for_model(prompt);
     let prompt=prompt.as_str();
     let mut state=desk.lock().await;
-    // O teto conta daqui: a portaria, o plano, o agente e a revisão cabem
-    // nele juntos.
-    let _ceiling=if state.orchestrator.config.jev.auto_turn_ceiling { Ceiling::decided(pulse.stop().clone()) } else { Ceiling::start(pulse.stop().clone(),state.orchestrator.config.jev.turn_ceiling_minutes) };
     forget_pending(&mut state,workspace,forget).await;
     let unnamed=workspace.lock().await.chat_is_unnamed(chat_id).unwrap_or(false);
     // A política de LLM do projeto e o plano vêm antes da pasta: eles podem
@@ -256,6 +253,10 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         (all,any)
     };
     let plan=apply_project_policy(&mut state,workspace,chat_id,&grants).await;
+    // O teto conta daqui: a portaria, o plano, o agente e a revisão cabem
+    // nele juntos. Ele é lido depois do plano e da política, que podem trocar
+    // o teto: antes disso valia a configuração do pedido anterior.
+    let _ceiling=if state.orchestrator.config.jev.auto_turn_ceiling { Ceiling::decided(pulse.stop().clone()) } else { Ceiling::start(pulse.stop().clone(),state.orchestrator.config.jev.turn_ceiling_minutes) };
     let (held,held_orgs)=held_by_validation(workspace,chat_id).await;
     if !held.is_empty() { pulse.beat(Beat::CommitHeld{commands:held,orgs:held_orgs}); }
     // O nível é lido a cada pedido: a troca na tela, ou a que chegou de outro

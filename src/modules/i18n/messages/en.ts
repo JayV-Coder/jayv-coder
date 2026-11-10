@@ -2549,6 +2549,8 @@ export const en = {
   "whatsNew.item.securityPage.detail": "The site now lists the controls in place, who processes data and the plan toward SOC 2.",
   "whatsNew.item.whyLeftover.title": "Next request after /why",
   "whatsNew.item.whyLeftover.detail": "The request that follows a /why now goes to the agent exactly as typed.",
+  "whatsNew.item.ceilingFirstRequest.title": "Time limit on the first request",
+  "whatsNew.item.ceilingFirstRequest.detail": "The first request after opening the app now uses your plan and organization time limit instead of the 30 minute default.",
   "whatsNew.item.gateFollowUp.title": "Stricter follow-up detection",
   "whatsNew.item.gateFollowUp.detail": "A new short request that merely mentions \"this\" or \"it\" is now scored by the entry gate instead of inheriting the previous result.",
   "docs.firstSteps.title": "First steps",
