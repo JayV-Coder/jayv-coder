@@ -2549,6 +2549,8 @@ export const en = {
   "whatsNew.item.securityPage.detail": "The site now lists the controls in place, who processes data and the plan toward SOC 2.",
   "whatsNew.item.whyLeftover.title": "Next request after /why",
   "whatsNew.item.whyLeftover.detail": "The request that follows a /why now goes to the agent exactly as typed.",
+  "whatsNew.item.ceilingFirstRequest.title": "Time limit on the first request",
+  "whatsNew.item.ceilingFirstRequest.detail": "The first request after opening the app now uses your plan and organization time limit instead of the 30 minute default.",
   "docs.firstSteps.title": "First steps",
   "docs.firstSteps.summary": "A short path on the Projects page takes a new install from an empty app to its first verified result: add a folder, send a request, see the validator pass.",
   "docs.firstSteps.usage": "On a new install, the Projects page shows First steps with three items. Add a project folder; open a chat in it and send a request; then turn on build validation (one click) and wait for a development request whose tests pass. Each item is ticked by itself when it happens, and the next one shows its button. When the last one is done, the card says how long it took and can be closed; Skip hides it at any time, and Ctrl+K › First steps brings it back. If you allowed feature telemetry, only the number of seconds to the first verified result is sent, to measure the goal of under ten minutes; nothing about the project or the request.",
