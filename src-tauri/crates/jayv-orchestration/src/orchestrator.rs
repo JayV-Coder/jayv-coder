@@ -369,6 +369,11 @@ impl Orchestrator {
         if normalized.starts_with("/why") {
             self.pending_routing=None;
             self.pending_context.clear();
+            // O que o portão deixou para este pedido não pode sobrar para o
+            // seguinte: o pedido reescrito e a nota valem só para quem os pediu.
+            self.pending_brief=None;
+            self.pending_gate_note=None;
+            self.pending_gate_passed=None;
             let result=self.explanation_result(user_input,&normalized);
             if let Some(response)=&result.result { pulse.beat(Beat::Chunk{text:response.response.clone()}); }
             pulse.beat(Beat::Done{input_tokens:0,output_tokens:0,latency_ms:0});
@@ -2103,6 +2108,17 @@ mod tests {
     /// Dois orquestradores que dividem o `Shared` veem o mesmo desempenho e o
     /// mesmo plano guardado: o pedido de um chat atendido pelo segundo
     /// atendente segue o que o primeiro aprendeu.
+    /// O `/why` não leva o pedido reescrito do portão para o pedido seguinte.
+    #[tokio::test] async fn why_does_not_leave_the_gate_leftovers_for_the_next_request() {
+        let dir=tempfile::tempdir().unwrap();
+        let mut orchestrator=orchestrator(&dir);
+        orchestrator.pending_brief=Some("REQUEST: /why x".into());
+        orchestrator.pending_gate_note=Some("note".into());
+        orchestrator.pending_gate_passed=Some(false);
+        let _=orchestrator.process("/why",Some("chat"),&Pulse::silent()).await;
+        assert!(orchestrator.pending_brief.is_none()&&orchestrator.pending_gate_note.is_none()&&orchestrator.pending_gate_passed.is_none());
+    }
+
     #[test] fn orchestrators_that_share_see_the_same_learning() {
         let dir=repository(&[("router.rs",filler("router",200))]);
         let first=orchestrator(&dir);
