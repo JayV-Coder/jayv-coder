@@ -172,8 +172,17 @@ pub fn is_continuation(prompt:&str)->bool {
     let (place,..)=regexes();
     if place.find_iter(trimmed).any(|found|found.as_str().contains('/')||found.as_str().contains('.')) { return false; }
     let cues=CUES.get_or_init(||Regex::new(r"(?i)^\s*(?:sim|s|ok|okay|beleza|blz|certo|isso|claro|pode|podes|manda|segue|siga|continua|continue|prossiga|vai|bora|yes|yep|yeah|sure|go|proceed|n[ãa]o|nao|nope|ainda|still|again|de novo|outra vez|mesmo erro|same)\b|\b(?:então|entao|isso|isto|esse|essa|aquilo|assim|ele|ela|it|that|this|them|then|there|anyway|anyways|funcionou|funciona|resolveu|deu certo|deu erro|quebrou|work|works|worked|fixed|broke|broken|fails|failed|error)\b").unwrap());
-    cues.is_match(trimmed)
+    let Some(found)=cues.find(trimmed) else { return false };
+    // Um sinal no meio da frase ("this", "it", "error") não faz de um pedido
+    // novo com verbo e objeto uma continuação: "remove everything from this
+    // repo" é assunto novo e passa pela própria pontuação.
+    let (_,_,action,..)=regexes();
+    !(found.start()>0&&words>NEW_REQUEST_WORDS&&action.is_match(trimmed))
 }
+
+/// A partir de quantas palavras um pedido que começa por verbo de ação deixa de
+/// ser lido como continuação só por citar "isso" ou "it" no meio.
+const NEW_REQUEST_WORDS:usize=4;
 
 /// Um critério do portão, já normalizado para a barrinha de 0 a 100% da tela.
 /// `band` é a faixa tolerada; fora dela o critério é o que segura o pedido.
@@ -791,7 +800,8 @@ pub struct GateFeed{pub entries:Vec<EntryCheck>,pub exits:Vec<ExitCheck>,pub tal
             assert!(is_continuation(follow),"{follow}");
         }
         for fresh in ["faz o login","cria uma tela de login com email e senha","corrige o bug em src/lib.rs então","explica o roteamento","",
-            "adicione validação de email no formulário e depois escreva os testes do login com todos os casos de erro"] {
+            "adicione validação de email no formulário e depois escreva os testes do login com todos os casos de erro",
+            "remove everything from this repo","remova tudo isso do projeto"] {
             assert!(!is_continuation(fresh),"{fresh}");
         }
     }
