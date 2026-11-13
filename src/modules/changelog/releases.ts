@@ -26,6 +26,12 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: "0.113.0", date: "2026-11-13",
+    items: [
+      { kind: "feature", id: "levelAuto" },
+    ],
+  },
+  {
     version: "0.112.0", date: "2026-11-13",
     items: [
       { kind: "feature", id: "resumeModesDefault" },

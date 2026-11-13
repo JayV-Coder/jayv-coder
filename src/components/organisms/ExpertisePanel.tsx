@@ -1,6 +1,6 @@
 import type { CoreSnapshot, Expertise } from "@/modules/core";
 import { useT, type Key } from "@/modules/i18n";
-import { saveExpertise, saveLeanCode } from "@/modules/settings";
+import { saveExpertise, saveExpertiseAuto, saveLeanCode, undoExpertiseChange } from "@/modules/settings";
 import { toggleState, useEntitlements } from "@/modules/plans";
 import { SettingsSection } from "@/components/molecules";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
   const t = useT();
   const suggestion = snapshot.suggestion;
+  // O último ajuste do Jev que ainda dá para desfazer.
+  const change = snapshot.auto.lastChange?.auto && !snapshot.auto.lastChange.undone ? snapshot.auto.lastChange : null;
   // O código enxuto segue o plano: travado ligado, fora dele desabilitado.
   const lean = toggleState(useEntitlements(), "leanCode", snapshot.leanCode);
   return (
@@ -33,6 +35,14 @@ export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
           <Button size="sm" variant="outline" onClick={() => void saveExpertise(suggestion.level)}>
             {t("expertise.suggestion.apply", { level: t(`expertise.${suggestion.level}` as Key) })}
           </Button>
+        </div>
+      )}
+      {change && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-info/30 bg-info/10 px-3.5 py-2.5">
+          <span className="min-w-0 flex-1 text-sm text-foreground">
+            {t("expertise.auto.notice.panel", { from: t(`expertise.${change.from}` as Key), to: t(`expertise.${change.to}` as Key), date: new Date(change.at).toLocaleDateString() })}
+          </span>
+          <Button size="sm" variant="outline" onClick={() => void undoExpertiseChange()}>{t("expertise.auto.undo")}</Button>
         </div>
       )}
       <RadioGroup value={snapshot.expertise} onValueChange={(value) => void saveExpertise(value as Expertise)} className="gap-2">
@@ -64,6 +74,17 @@ export function ExpertisePanel({ snapshot }: { snapshot: CoreSnapshot }) {
           );
         })}
       </RadioGroup>
+      <Label
+        htmlFor="expertise-auto"
+        data-tour="expertise-auto"
+        className="mt-3 grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 rounded-md border border-border px-3.5 py-3 font-normal hover:bg-secondary"
+      >
+        <Switch id="expertise-auto" checked={snapshot.auto.enabled} onCheckedChange={(enabled) => void saveExpertiseAuto(enabled)} className="mt-0.5" />
+        <span className="grid gap-1">
+          <strong className="text-sm">{t("expertise.auto")}</strong>
+          <span className="text-xs text-muted-foreground">{t("expertise.auto.hint")}</span>
+        </span>
+      </Label>
       <Label
         htmlFor="expertise-lean"
         className="mt-3 grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 rounded-md border border-border px-3.5 py-3 font-normal hover:bg-secondary"

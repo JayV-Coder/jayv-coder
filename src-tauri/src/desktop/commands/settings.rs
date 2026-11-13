@@ -136,12 +136,23 @@ pub struct CoreSnapshot {
     /// O nível que o histórico da portaria sugere, com o histórico que o
     /// justifica. Só sugestão: a troca é de quem usa.
     pub suggestion:Option<LevelSuggestion>,
+    /// O ajuste automático do nível: ligado ou não, e a última troca (do Jev
+    /// ou de quem usa), que o Desfazer restaura.
+    pub auto:LevelAuto,
     /// A regra de código enxuto no modo build, ligada ou não na conta.
     pub lean_code:bool,
     pub confidence_range:(f64,f64),
     pub budget_range:(usize,usize),
     pub cache_ttl_range:(u64,u64),
     pub version:&'static str,
+}
+
+#[derive(Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct LevelAuto { pub enabled:bool, pub last_change:Option<crate::expertise::LevelChange> }
+
+fn level_auto(workspace:&crate::workspace::WorkspaceStore)->LevelAuto {
+    LevelAuto{enabled:workspace.expertise_auto().unwrap_or(true),last_change:workspace.last_level_change().unwrap_or(None)}
 }
 
 #[derive(Debug,Serialize)]
@@ -165,13 +176,13 @@ pub struct LevelView {
     pub destructive_threshold:f64,
 }
 
-fn core_snapshot(settings:CoreSettings,defaults:CoreSettings,expertise:crate::expertise::Expertise,suggestion:Option<LevelSuggestion>,lean_code:bool)->CoreSnapshot {
+fn core_snapshot(settings:CoreSettings,defaults:CoreSettings,expertise:crate::expertise::Expertise,suggestion:Option<LevelSuggestion>,auto:LevelAuto,lean_code:bool)->CoreSnapshot {
     let gate=crate::gatekeeper::current_parameters();
     let levels=crate::expertise::Expertise::ALL.into_iter().map(|level|{
         let adjusted=level.gate(&gate);
         LevelView{id:level,scope_demand:adjusted.scope_demand,block_margin:adjusted.block_margin,confidence:level.confidence(settings.confidence_threshold),build_ceiling:level.build_ceiling(),destructive_threshold:level.destructive_threshold()}
     }).collect();
-    CoreSnapshot{settings,defaults,gate:expertise.gate(&gate),expertise,levels,suggestion,lean_code,confidence_range:core_settings::CONFIDENCE_RANGE,budget_range:core_settings::BUDGET_RANGE,cache_ttl_range:core_settings::CACHE_TTL_RANGE,version:env!("CARGO_PKG_VERSION")}
+    CoreSnapshot{settings,defaults,gate:expertise.gate(&gate),expertise,levels,suggestion,auto,lean_code,confidence_range:core_settings::CONFIDENCE_RANGE,budget_range:core_settings::BUDGET_RANGE,cache_ttl_range:core_settings::CACHE_TTL_RANGE,version:env!("CARGO_PKG_VERSION")}
 }
 
 /// Lê sem o orquestrador: os valores de partida vêm do `config.yaml`, e o
@@ -182,7 +193,7 @@ pub(crate) async fn get_core_settings(known:State<'_,SharedFacts>,workspace:Stat
     let workspace=workspace.lock().await;
     let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
     let expertise=workspace.expertise().map_err(failure)?;
-    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
+    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),level_auto(&workspace),workspace.lean_code().map_err(failure)?))
 }
 
 fn defaults(known:&SharedFacts)->CoreSettings {
@@ -210,7 +221,7 @@ pub(crate) async fn save_core_settings(app:tauri::AppHandle,desk:State<'_,Shared
     let now=when_free(&desk,|orchestrator|orchestrator.use_core(&effective));
     let _=app.emit(SETTINGS_EVENT,SettingsEvent{now});
     let expertise=workspace.expertise().map_err(failure)?;
-    Ok(core_snapshot(saved,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
+    Ok(core_snapshot(saved,defaults,expertise,level_suggestion(&workspace,expertise),level_auto(&workspace),workspace.lean_code().map_err(failure)?))
 }
 
 /// Grava o nível na conta. A sincronização o leva para os outros computadores,
@@ -222,7 +233,29 @@ pub(crate) async fn save_expertise(desk:State<'_,SharedDesktopState>,known:State
     let expertise=workspace.save_expertise(&level).map_err(failure)?;
     when_free(&desk,|orchestrator|orchestrator.expertise=expertise);
     let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
-    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),workspace.lean_code().map_err(failure)?))
+    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),level_auto(&workspace),workspace.lean_code().map_err(failure)?))
+}
+
+/// Liga ou desliga o ajuste automático do nível. Anda com a conta.
+#[tauri::command]
+pub(crate) async fn save_expertise_auto(known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>,enabled:bool)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+    let defaults=defaults(&known);
+    let mut workspace=workspace.lock().await;
+    workspace.save_expertise_auto(enabled).map_err(failure)?;
+    let expertise=workspace.expertise().map_err(failure)?;
+    let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
+    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),level_auto(&workspace),workspace.lean_code().map_err(failure)?))
+}
+
+/// Desfaz o último ajuste que o Jev fez no nível. Vale na hora.
+#[tauri::command]
+pub(crate) async fn undo_expertise_change(desk:State<'_,SharedDesktopState>,known:State<'_,SharedFacts>,workspace:State<'_,SharedWorkspace>)->Result<CoreSnapshot,Text>{crate::desktop::require_session()?;
+    let defaults=defaults(&known);
+    let mut workspace=workspace.lock().await;
+    let expertise=workspace.undo_expertise_change().map_err(failure)?;
+    when_free(&desk,|orchestrator|orchestrator.expertise=expertise);
+    let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
+    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),level_auto(&workspace),workspace.lean_code().map_err(failure)?))
 }
 
 /// Liga ou desliga a regra de código enxuto. Vale na hora, como o nível, e
@@ -235,7 +268,7 @@ pub(crate) async fn save_lean_code(desk:State<'_,SharedDesktopState>,known:State
     when_free(&desk,|orchestrator|orchestrator.lean_code=lean_code);
     let expertise=workspace.expertise().map_err(failure)?;
     let settings=workspace.core_settings(&seeded(&workspace,&defaults)).map_err(failure)?;
-    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),lean_code))
+    Ok(core_snapshot(settings,defaults,expertise,level_suggestion(&workspace,expertise),level_auto(&workspace),lean_code))
 }
 
 /// Os servidores MCP configurados neste computador.

@@ -84,11 +84,69 @@ pub fn load(connection:&Connection)->Result<Expertise> {
 
 pub fn save(connection:&Connection,level:&str)->Result<Expertise> {
     let Some(level)=Expertise::parse(level) else { bail!(crate::i18n::Text::new("expertise.invalid").with("value",level)) };
+    let before=load(connection)?;
+    store(connection,KEY,level.as_str())?;
+    if before!=level { record_change(connection,&LevelChange{from:before,to:level,at:chrono::Utc::now(),auto:false,undone:false})?; }
+    Ok(level)
+}
+
+fn store(connection:&Connection,key:&str,value:&str)->Result<()> {
     connection.execute(
         "INSERT INTO account_settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
-        params![KEY,level.as_str(),chrono::Utc::now().to_rfc3339()],
+        params![key,value,chrono::Utc::now().to_rfc3339()],
     )?;
-    Ok(level)
+    Ok(())
+}
+
+const AUTO_KEY:&str="expertise_auto";
+const CHANGE_KEY:&str="expertise_change";
+
+/// A última troca de nível da conta, de quem escolheu ou do Jev. Ela marca
+/// onde a janela do histórico recomeça e é o que o "Desfazer" restaura.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct LevelChange { pub from:Expertise, pub to:Expertise, pub at:chrono::DateTime<chrono::Utc>, pub auto:bool, pub undone:bool }
+
+fn record_change(connection:&Connection,change:&LevelChange)->Result<()> { store(connection,CHANGE_KEY,&serde_json::to_string(change)?) }
+
+/// A última troca gravada; um valor ilegível vale como nenhuma.
+pub fn last_change(connection:&Connection)->Result<Option<LevelChange>> {
+    let value:Option<String>=connection.query_row("SELECT value FROM account_settings WHERE key=?1",[CHANGE_KEY],|row|row.get(0)).optional()?;
+    Ok(value.and_then(|text|serde_json::from_str(&text).ok()))
+}
+
+/// Se o Jev ajusta o nível sozinho. Ligado até alguém desligar na conta.
+pub fn load_auto(connection:&Connection)->Result<bool> {
+    let value:Option<String>=connection.query_row("SELECT value FROM account_settings WHERE key=?1",[AUTO_KEY],|row|row.get(0)).optional()?;
+    Ok(value.as_deref()!=Some("off"))
+}
+
+pub fn save_auto(connection:&Connection,enabled:bool)->Result<bool> { store(connection,AUTO_KEY,if enabled {"on"} else {"off"})?; Ok(enabled) }
+
+/// O Jev troca o nível, um degrau, quando o histórico da portaria desde a
+/// última troca (no máximo `SUGGESTION_DAYS` dias) pede. Devolve a troca feita,
+/// para o chat avisar; nada com o ajuste desligado ou sem histórico bastante.
+pub fn auto_adjust(connection:&Connection)->Result<Option<LevelChange>> {
+    if !load_auto(connection)? { return Ok(None); }
+    let current=load(connection)?;
+    let now=chrono::Utc::now();
+    let window=now-chrono::Duration::days(SUGGESTION_DAYS);
+    let since=last_change(connection)?.map_or(window,|change|change.at.max(window));
+    let history=gate_history_since(connection,since)?;
+    let Some(next)=suggestion(current,&history) else { return Ok(None) };
+    store(connection,KEY,next.as_str())?;
+    let change=LevelChange{from:current,to:next,at:now,auto:true,undone:false};
+    record_change(connection,&change)?;
+    Ok(Some(change))
+}
+
+/// Desfaz o último ajuste do Jev: o nível volta ao de antes, e o histórico
+/// recomeça daí, para o mesmo ajuste não voltar no pedido seguinte.
+pub fn undo_auto_change(connection:&Connection)->Result<Expertise> {
+    let Some(change)=last_change(connection)?.filter(|change|change.auto&&!change.undone) else { bail!(crate::i18n::Text::new("expertise.nothingToUndo")) };
+    store(connection,KEY,change.from.as_str())?;
+    record_change(connection,&LevelChange{from:change.to,to:change.from,at:chrono::Utc::now(),auto:false,undone:true})?;
+    Ok(change.from)
 }
 
 /// Se a regra de código enxuto vai junto no modo build. Ligada até alguém
@@ -125,8 +183,11 @@ const RAISE_PASS_RATE:f64=0.9;
 /// A portaria segura muito: o nível pode descer, para o agente planejar mais.
 const LOWER_HELD_RATE:f64=0.4;
 
-pub fn gate_history(connection:&Connection,days:i64)->Result<GateHistory> {
-    let since=(chrono::Utc::now()-chrono::Duration::days(days)).to_rfc3339();
+pub fn gate_history(connection:&Connection,days:i64)->Result<GateHistory> { gate_history_since(connection,chrono::Utc::now()-chrono::Duration::days(days)) }
+
+/// O histórico da portaria desde um instante.
+pub fn gate_history_since(connection:&Connection,since:chrono::DateTime<chrono::Utc>)->Result<GateHistory> {
+    let since=since.to_rfc3339();
     let mut statement=connection.prepare("SELECT verdict,COUNT(*) FROM entry_checks WHERE at>=?1 GROUP BY verdict")?;
     let mut history=GateHistory::default();
     for row in statement.query_map([since],|row|Ok((row.get::<_,String>(0)?,row.get::<_,u32>(1)?)))? {
@@ -170,6 +231,47 @@ mod tests {
     }
 
     use super::*;
+
+    fn account_with_checks(passed:u32,asked:u32)->Connection {
+        let connection=Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.execute_batch("CREATE TABLE entry_checks(turn_id TEXT PRIMARY KEY,at TEXT NOT NULL,verdict TEXT NOT NULL);").unwrap();
+        let at=chrono::Utc::now().to_rfc3339();
+        for index in 0..passed+asked {
+            connection.execute("INSERT INTO entry_checks VALUES(?1,?2,?3)",params![format!("t{index}"),at,if index<passed {"pass"} else {"ask"}]).unwrap();
+        }
+        connection
+    }
+
+    #[test] fn the_gate_moves_the_level_one_step_by_itself_and_the_window_restarts() {
+        let connection=account_with_checks(25,0);
+        assert_eq!(load(&connection).unwrap(),Expertise::Mid);
+        let change=auto_adjust(&connection).unwrap().expect("sobe");
+        assert_eq!((change.from,change.to,change.auto),(Expertise::Mid,Expertise::Senior,true));
+        assert_eq!(load(&connection).unwrap(),Expertise::Senior);
+        assert_eq!(auto_adjust(&connection).unwrap(),None,"o histórico anterior à troca não vale de novo");
+        assert_eq!(last_change(&connection).unwrap().map(|saved|saved.to),Some(Expertise::Senior));
+    }
+
+    #[test] fn the_automatic_adjustment_can_be_turned_off_and_undone() {
+        let connection=account_with_checks(25,0);
+        save_auto(&connection,false).unwrap();
+        assert!(!load_auto(&connection).unwrap());
+        assert_eq!(auto_adjust(&connection).unwrap(),None,"desligado, nada muda");
+        save_auto(&connection,true).unwrap();
+        auto_adjust(&connection).unwrap().expect("sobe");
+        assert_eq!(undo_auto_change(&connection).unwrap(),Expertise::Mid);
+        assert_eq!(load(&connection).unwrap(),Expertise::Mid);
+        assert!(undo_auto_change(&connection).is_err(),"só se desfaz uma vez");
+        assert_eq!(auto_adjust(&connection).unwrap(),None,"desfeito, o histórico recomeça");
+    }
+
+    #[test] fn a_manual_choice_restarts_the_window_and_cannot_be_undone() {
+        let connection=account_with_checks(25,0);
+        save(&connection,"junior").unwrap();
+        assert_eq!(auto_adjust(&connection).unwrap(),None,"quem escolheu à mão não é trocado de imediato");
+        assert!(undo_auto_change(&connection).is_err());
+    }
 
     #[test] fn mid_is_what_the_gate_always_did() {
         let base=JevParameters::default();
