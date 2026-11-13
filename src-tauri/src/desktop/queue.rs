@@ -529,6 +529,16 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         let _=workspace.record_exit_checks(turn,&exits);
         let _=workspace.set_turn_status(&turn.id,if result.result.is_some(){TurnStatus::Answered}else{TurnStatus::Failed});
     }
+    // O nível aprende com o histórico da portaria: com o ajuste ligado, o Jev
+    // troca um degrau e avisa no chat, com o caminho para desfazer.
+    {
+        let mut workspace=workspace.lock().await;
+        match workspace.auto_adjust_expertise() {
+            Ok(Some(change))=>{ let _=workspace.append_answer(chat_id,&turn.id,&level_notice(&change)); }
+            Ok(None)=>{}
+            Err(error)=>eprintln!("nível: não consegui ajustar ({error:#})"),
+        }
+    }
     for exit in &exits { usage::mark(usage::JevMark::count(format!("exit:{}",exit.verdict.as_str()),1)); }
     // A portaria de saída segurou o que o modelo devolveu: não resolveu.
     if exits.iter().any(|exit|exit.verdict==ExitVerdict::Held) { state.orchestrator.mark_last_failed(chat_id); }
@@ -554,6 +564,12 @@ async fn attend(app:&AppHandle,desk:&SharedDesktopState,workspace:&SharedWorkspa
         });
     }
     if unnamed {name_in_background(app.clone(),desk.clone(),workspace.clone(),turn.clone(),prompt.to_string(),jev_reading(&result));}
+}
+
+/// O aviso do chat quando o Jev troca o nível: de qual para qual, e onde desfazer.
+fn level_notice(change:&crate::expertise::LevelChange)->String {
+    let level=|level:crate::expertise::Expertise|Text::new(&format!("expertise.{}",level.as_str()));
+    i18n::notice(&[Text::new("expertise.auto.notice").with("from",level(change.from)).with("to",level(change.to))])
 }
 
 /// Quanto o JayV espera além da hora que o agente deu: o relógio do agente e o

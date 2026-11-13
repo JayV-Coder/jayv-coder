@@ -631,6 +631,8 @@ export interface CoreSnapshot {
   levels: LevelView[];
   /** O nível que o histórico da portaria sugere, ou nada. */
   suggestion: LevelSuggestion | null;
+  /** O ajuste automático do nível e a última troca, que o Desfazer restaura. */
+  auto: LevelAuto;
   /** A regra de código enxuto no modo build. */
   leanCode: boolean;
   confidenceRange: [number, number];
@@ -715,6 +717,8 @@ export interface TurnUsage { turnId: string; inputTokens: number; outputTokens: 
 /** Como os pedidos passaram pela portaria numa janela de dias. */
 export interface GateHistory { checks: number; passed: number; asked: number; blocked: number }
 export interface LevelSuggestion { level: Expertise; history: GateHistory; days: number }
+export interface LevelChange { from: Expertise; to: Expertise; at: string; auto: boolean; undone: boolean }
+export interface LevelAuto { enabled: boolean; lastChange: LevelChange | null }
 
 /** Uma nota ou receita da memória do projeto. */
 export type NoteKind = "note" | "recipe";

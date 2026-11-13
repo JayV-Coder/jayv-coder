@@ -17,7 +17,7 @@ import { allows, inPlan, locks, settingsTabFeature, useEntitlements, type Featur
 import { setConsent, useTelemetry } from "@/modules/telemetry";
 import { restartFirstSteps } from "@/modules/firstSteps";
 import { isInstalled, isOn, isRequired, modFeatures, modPagePath, modsSitePath, modText, pointsOf, setInstalledTab, setModEnabled, uninstallMod, usable, useMods } from "@/modules/mods";
-import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveSettings, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
+import { agentIds, agentLabel, checkGateway, discardChanges, MAX_MODS, openSettingsTab, restoreDefaults, saveExpertiseAuto, saveSettings, undoExpertiseChange, updateOptions, useSettings, type SettingsTab } from "@/modules/settings";
 import { orgExtensionsPath } from "@/modules/orgExtensions";
 import { openDashboard, openSite, SITE_URL } from "@/modules/site";
 import { setThemePreference, THEME_PREFERENCES } from "@/modules/theme";
@@ -165,6 +165,9 @@ export function paletteCommands(ctx: PaletteContext): Command[] {
   all.push(
     { id: "settings", group: go, label: t("nav.settings"), shortcut: "settings", run: () => navigate("settings") },
     { id: "profile", group: go, label: t("nav.profile"), run: () => navigate("profile") },
+    { id: "level-auto-on", group: go, label: t("palette.levelAutoOn"), run: () => void saveExpertiseAuto(true) },
+    { id: "level-auto-off", group: go, label: t("palette.levelAutoOff"), run: () => void saveExpertiseAuto(false) },
+    { id: "level-auto-undo", group: go, label: t("palette.levelAutoUndo"), run: () => void undoExpertiseChange() },
   );
   if (!orgId) all.push({ id: "plans", group: go, label: t("nav.plans"), run: () => navigate("plans") });
 

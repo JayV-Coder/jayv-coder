@@ -121,6 +121,7 @@ export const TOURS: Tour[] = [
     id: "profile", view: "profile",
     steps: [
       { feature: "profilePhoto" },
+      { feature: "levelAuto", target: "expertise-auto" },
       { feature: "twoFactor" },
     ],
   },

@@ -68,6 +68,8 @@ export const commands = {
   getMods: () => invoke<ModsSnapshot>("get_mods"),
   saveMods: (state: InstalledMods) => invoke<ModsSnapshot>("save_mods", { state }),
   saveExpertise: (level: Expertise) => invoke<CoreSnapshot>("save_expertise", { level }),
+  saveExpertiseAuto: (enabled: boolean) => invoke<CoreSnapshot>("save_expertise_auto", { enabled }),
+  undoExpertiseChange: () => invoke<CoreSnapshot>("undo_expertise_change"),
   saveLeanCode: (enabled: boolean) => invoke<CoreSnapshot>("save_lean_code", { enabled }),
   setReplyLanguage: (language: { tag: string; name: string } | null) => invoke<void>("set_reply_language", { language }),
   checkAgent: (command: string, agent: AgentId | null = null) => invoke<AgentProbe>("check_agent", { command, agent }),

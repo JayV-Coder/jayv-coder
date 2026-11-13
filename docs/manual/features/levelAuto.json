@@ -1,0 +1,10 @@
+{
+  "id": "levelAuto",
+  "category": "gate",
+  "since": "0.113.0",
+  "plan": null,
+  "commands": [],
+  "title": "Automatic level",
+  "summary": "The entry gate learns with you: after enough requests, the Jev moves your level one step up or down and tells you in the chat.",
+  "usage": "On by default. With at least 20 requests since your last level change (within 30 days), your level rises one step when 90% or more passed the gate on the first try, and falls one step when 40% or more were held or blocked. The Jev adds a note to the chat; use Undo on the Profile page (Your level) or Ctrl+K to go back, and the count starts again. Turn it off in the same place to choose your level only by hand."
+}

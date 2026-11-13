@@ -484,6 +484,28 @@ export async function saveExpertise(level: Expertise) {
   }
 }
 
+/** O ajuste automático do nível liga e desliga na hora. */
+export async function saveExpertiseAuto(enabled: boolean) {
+  try {
+    const coreSnapshot = await commands.saveExpertiseAuto(enabled);
+    useSettings.setState({ coreSnapshot });
+    notify(t(enabled ? "expertise.auto.on" : "expertise.auto.off"));
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** Desfaz o último ajuste que o Jev fez no nível. */
+export async function undoExpertiseChange() {
+  try {
+    const coreSnapshot = await commands.undoExpertiseChange();
+    useSettings.setState({ coreSnapshot });
+    notify(t("expertise.auto.undone", { level: t(`expertise.${coreSnapshot.expertise}` as Key) }));
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 /** A regra de código enxuto vale na hora, como o nível. */
 export async function saveLeanCode(enabled: boolean) {
   try {

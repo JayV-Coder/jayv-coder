@@ -869,6 +869,18 @@ impl WorkspaceStore {
 
     pub fn save_expertise(&mut self, level:&str) -> Result<crate::expertise::Expertise> {crate::expertise::save(&self.connection,level)}
 
+    /// O Jev ajusta o nível sozinho? A última troca (dele ou de quem usa) e o
+    /// ajuste que o histórico da portaria pede agora.
+    pub fn expertise_auto(&self) -> Result<bool> {crate::expertise::load_auto(&self.connection)}
+
+    pub fn save_expertise_auto(&mut self, enabled:bool) -> Result<bool> {crate::expertise::save_auto(&self.connection,enabled)}
+
+    pub fn last_level_change(&self) -> Result<Option<crate::expertise::LevelChange>> {crate::expertise::last_change(&self.connection)}
+
+    pub fn auto_adjust_expertise(&mut self) -> Result<Option<crate::expertise::LevelChange>> {crate::expertise::auto_adjust(&self.connection)}
+
+    pub fn undo_expertise_change(&mut self) -> Result<crate::expertise::Expertise> {crate::expertise::undo_auto_change(&self.connection)}
+
     pub fn lean_code(&self) -> Result<bool> {crate::expertise::load_lean(&self.connection)}
 
     pub fn save_lean_code(&mut self, enabled:bool) -> Result<bool> {crate::expertise::save_lean(&self.connection,enabled)}
