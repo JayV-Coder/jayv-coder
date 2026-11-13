@@ -2550,6 +2550,7 @@ mod tests {
         orchestrator.config.models=models;
         orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
         let call=|name:&str|std::fs::read_to_string(calls.path().join(name)).unwrap_or_else(|_|panic!("{name} não rodou"));
+        orchestrator.config.jev.resume_across_modes=false;
 
         orchestrator.pending_work_mode=Some(MODE_PLAN.into());
         orchestrator.process("explain how route_request works",Some("chat"),&Pulse::silent()).await;
@@ -2578,6 +2579,7 @@ mod tests {
         orchestrator.config.providers=providers;
         orchestrator.config.models=models;
         orchestrator.routing_mode=RoutingMode::Fixed(Box::new(routed("review",0.93,"medium",0.9)));
+        orchestrator.config.jev.resume_across_modes=false;
         let (sink,mut entries)=tokio::sync::mpsc::unbounded_channel();
         crate::usage::within_sink(crate::usage::Scope::default(),sink,async {
             orchestrator.pending_work_mode=Some(MODE_PLAN.into());
