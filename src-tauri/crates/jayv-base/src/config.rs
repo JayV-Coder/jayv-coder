@@ -40,7 +40,7 @@ pub struct JevConfig {
     /// A sessão aberta no planejamento é retomada no build (e o contrário),
     /// com uma nota dizendo que o modo mudou. Desligado, cada lado da escrita
     /// tem a sua sessão — o comportamento desde a v0.52.4.
-    #[serde(default)] pub resume_across_modes: bool,
+    #[serde(default = "yes")] pub resume_across_modes: bool,
     /// O teto total de um pedido, em minutos, do começo ao fim — o plano, o
     /// agente e a revisão juntos. Passou, o pedido para e os agentes abertos
     /// caem. O prazo de silêncio do provedor continua valendo por linha.
@@ -62,7 +62,7 @@ pub struct JevConfig {
     /// consertar, antes de entregar o resultado como falho (0 a 2).
     #[serde(default = "default_repair_attempts")] pub repair_attempts: u32,
 }
-impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:false, turn_ceiling_minutes:default_turn_ceiling(), resume_after_limit:true, auto_turn_ceiling:false, validate_builds:false, checkpoint_builds:true, repair_attempts:default_repair_attempts() } } }
+impl Default for JevConfig { fn default() -> Self { Self { default_strategy:default_strategy(), optimization:OptimizationConfig::default(), adaptive_routing:AdaptiveConfig::default(), context:ContextConfig::default(), agent_order:vec![], review_changes:false, plan_first:false, parallel_tasks:false, keep_session_model:true, resume_across_modes:true, turn_ceiling_minutes:default_turn_ceiling(), resume_after_limit:true, auto_turn_ceiling:false, validate_builds:false, checkpoint_builds:true, repair_attempts:default_repair_attempts() } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationConfig {

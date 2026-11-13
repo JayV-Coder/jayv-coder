@@ -58,8 +58,8 @@ pub struct CoreSettings {
     #[serde(default)] pub parallel_tasks:bool,
     /// Num chat com sessão viva, o modelo da sessão fica (ligado por padrão).
     #[serde(default="keep_by_default")] pub keep_session_model:bool,
-    /// A sessão do agente atravessa a troca entre planejamento e build.
-    #[serde(default)] pub resume_across_modes:bool,
+    /// A sessão do agente atravessa a troca entre planejamento e build (ligado por padrão).
+    #[serde(default="keep_by_default")] pub resume_across_modes:bool,
     /// O teto total de um pedido, em minutos (30 por padrão).
     #[serde(default="crate::config::default_turn_ceiling")] pub turn_ceiling_minutes:u64,
     /// O pedido parado pelo limite de uso do agente é retomado quando o limite
@@ -229,7 +229,7 @@ pub fn save(connection:&Connection,settings:&CoreSettings)->Result<CoreSettings>
         connection.execute("INSERT INTO app_metadata(key,value) VALUES(?1,?2)",params![KEY,old.to_string()]).expect("grava");
         let loaded=load(&connection,&CoreSettings::from_config(&Config::default())).expect("load");
         assert_eq!((loaded.confidence_threshold,loaded.agent_order.len()),(0.8,0));
-        assert!(loaded.keep_session_model&&!loaded.resume_across_modes,"o gravado antes das opções de sessão abre com os padrões");
+        assert!(loaded.keep_session_model&&loaded.resume_across_modes,"o gravado antes das opções de sessão abre com os padrões");
         assert_eq!(loaded.turn_ceiling_minutes,30,"o gravado antes do teto abre com 30 minutos");
         assert!(!loaded.validate_builds&&loaded.checkpoint_builds&&loaded.repair_attempts==2,"o gravado antes da validação abre com o validador desligado");
     }
