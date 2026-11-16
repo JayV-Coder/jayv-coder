@@ -23,7 +23,7 @@ const number = (value: number | string | null) => (value === null || value === "
 /** Lê a tabela de preços do site. Sem rede ou sem sessão, a conta fica só com
  * o custo que as ferramentas informaram. */
 export async function loadPrices() {
-  const { data, error } = await supabase.from("model_prices").select("pattern, input_usd, output_usd, cache_read_usd, cache_write_usd");
+  const { data, error } = await supabase.schema("coder").from("model_prices").select("pattern, input_usd, output_usd, cache_read_usd, cache_write_usd");
   if (error) {
     usePrices.setState({ loaded: true });
     return;

@@ -33,7 +33,7 @@ export function track(feature: string | undefined) {
 }
 
 export async function loadConsent() {
-  const { data, error } = await supabase.from("usage_telemetry").select("user_id").maybeSingle();
+  const { data, error } = await supabase.schema("coder").from("usage_telemetry").select("user_id").maybeSingle();
   useTelemetry.setState({ granted: error ? false : data !== null });
 }
 
