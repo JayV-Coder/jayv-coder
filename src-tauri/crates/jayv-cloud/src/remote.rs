@@ -110,6 +110,26 @@ pub fn conflict_target(table:&SyncTable)->String {
     }
 }
 
+/// O schema das tabelas que são só do app (o resto fica em `public`, compartilhado com
+/// outros apps do projeto).
+const CODER_SCHEMA:&str="coder";
+
+/// As tabelas movidas para `coder`. `organization_git_connections` e
+/// `organization_repositories` ficam em `public` até o Realtime escutar `coder`.
+const CODER_TABLES:&[&str]=&[
+    "chats","entry_checks","exit_checks","first_results",
+    "jev_calls","jev_parameters","jev_questions","jev_records","jev_turns","jev_usage",
+    "llm_agents","llm_models","messages","model_prices",
+    "organization_chat_permissions","organization_command_rules","organization_llm_policies",
+    "organization_mcp_servers","organization_skills","organization_validation",
+    "project_notes","projects","questions","quota_snapshots",
+    "turn_events","turns","usage_records","usage_telemetry",
+];
+
+/// `path` é o caminho depois de `/rest/v1/`: `rpc/...` fica em `public`, e uma tabela só
+/// vai para `coder` se estiver na lista acima.
+fn is_coder_table(path:&str)->bool { CODER_TABLES.contains(&path) }
+
 /// A cota é da conta do provedor, igual em todo ambiente; as outras tabelas
 /// têm ambiente.
 fn scoped(table:&SyncTable)->bool { table.name!="quota_snapshots" }
@@ -123,7 +143,10 @@ impl Remote {
 
     fn request(&self,method:Method,path:&str)->reqwest::RequestBuilder {
         let bearer=self.token.as_deref().unwrap_or(&self.key);
-        self.http.request(method,format!("{}/rest/v1/{path}",self.base)).header("apikey",&self.key).bearer_auth(bearer)
+        let builder=self.http.request(method,format!("{}/rest/v1/{path}",self.base)).header("apikey",&self.key).bearer_auth(bearer);
+        // PostgREST escolhe o schema pelo perfil: `Accept-Profile` nas leituras,
+        // `Content-Profile` nas escritas. As tabelas do app moram em `coder`.
+        if is_coder_table(path) {builder.header("Accept-Profile",CODER_SCHEMA).header("Content-Profile",CODER_SCHEMA)} else {builder}
     }
 
     pub fn push_request(&self,environment:&Environment,table:&SyncTable,rows:&[Value])->reqwest::Result<Request> {
@@ -339,6 +362,17 @@ mod tests {
         assert_eq!(asked,[0,1000,2000,2500]);
         let small=all_pages(|offset|{let page:Vec<usize>=all.iter().copied().skip(offset).take(300).collect(); async move {Ok::<_,RemoteError>(page)}}).await.unwrap();
         assert_eq!(small.len(),2500,"um max_rows menor que a página não para no meio");
+    }
+
+    #[test] fn app_tables_use_the_coder_profile_and_shared_ones_stay_in_public() {
+        let moved=remote().push_request(&Environment::Personal,table("projects").unwrap(),&[json!({"id":"p1"})]).unwrap();
+        assert_eq!(moved.headers()["Content-Profile"],"coder");
+        assert_eq!(moved.headers()["Accept-Profile"],"coder");
+        assert_eq!(remote().moved_projects_request(0,10).unwrap().headers()["Accept-Profile"],"coder");
+        let account=remote().push_request(&Environment::Personal,table("account_settings").unwrap(),&[]).unwrap();
+        assert!(account.headers().get("Content-Profile").is_none());
+        assert!(remote().features_request().unwrap().headers().get("Content-Profile").is_none());
+        assert!(remote().environments_request().unwrap().headers().get("Accept-Profile").is_none());
     }
 
     fn query(request:&Request)->Vec<(String,String)> { request.url().query_pairs().map(|(key,value)|(key.into_owned(),value.into_owned())).collect() }

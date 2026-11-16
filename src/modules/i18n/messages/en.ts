@@ -2033,6 +2033,8 @@ export const en = {
   "palette.levelAutoUndo": "Undo the last automatic level change",
   "whatsNew.item.levelAuto.title": "Your level adjusts itself",
   "whatsNew.item.levelAuto.detail": "The entry gate learns with you: after enough requests the Jev moves your level one step up or down, tells you in the chat and lets you undo it.",
+  "whatsNew.item.coderSchema.title": "Sync uses the app's own data area",
+  "whatsNew.item.coderSchema.detail": "Chats, projects and usage now sync through the data area reserved for the app, so the account data shared with other apps stays separate. Nothing changes in what you see.",
   "whatsNew.item.leanCode.title": "Less code in build mode",
   "whatsNew.item.leanCode.detail": "In Development mode the agent writes less code, reusing what already exists. Validation, error handling, security and accessibility are never cut. Turn it off under Your level.",
   "whatsNew.item.symbolIndex.title": "A symbol index of your project",

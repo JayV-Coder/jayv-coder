@@ -184,7 +184,7 @@ export async function loadDetail(id: string) {
     call<Row[]>("organization_members_view", { org: id }),
     can.manage(mine) ? call<Row[]>("organization_invites_view", { org: id }) : Promise.resolve([] as Row[]),
     supabase.from("organization_repositories").select(REPOSITORY_COLUMNS).eq("org_id", id).order("repo_key"),
-    supabase.from("organization_llm_policies").select("*").eq("org_id", id),
+    supabase.schema("coder").from("organization_llm_policies").select("*").eq("org_id", id),
     supabase.from("organization_git_connections").select("provider, account, connected_at").eq("org_id", id),
   ]);
   if (repositories.error) throw failure(repositories.error);
@@ -225,7 +225,7 @@ export async function organizationRules(orgId: string): Promise<{ repositories: 
   try {
     const [repositories, policies] = await Promise.all([
       organizationRepositories(orgId),
-      supabase.from("organization_llm_policies").select("*").eq("org_id", orgId)
+      supabase.schema("coder").from("organization_llm_policies").select("*").eq("org_id", orgId)
         .then(({ data, error }) => (error ? [] : (data ?? []).map((row) => storedPolicy(row as Row)))),
     ]);
     return { repositories, policies };
